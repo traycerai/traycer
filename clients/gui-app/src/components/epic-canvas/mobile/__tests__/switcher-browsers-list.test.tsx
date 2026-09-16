@@ -22,6 +22,7 @@ import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/br
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
 import {
+  fakePrepareOpenTab,
   sessionInfo,
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
@@ -110,6 +111,9 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState }>(() => ({
     errorMessage: null,
     retry: vi.fn(),
     openTab: forwardOpenTab,
+    prepareOpenTab: () => {
+      throw new Error("not used in this test");
+    },
     closeTab: forwardCloseTab,
     attachTab: vi.fn(() => Promise.reject(new Error("not used"))),
     moveTab: vi.fn(() => Promise.reject(new Error("not used"))),
@@ -160,6 +164,11 @@ function seedCanvasTab(): void {
     tabsById: {
       [TAB_ID]: { tabId: TAB_ID, epicId: "epic-1", name: "Epic 1" },
     },
+    // A pending tab open is only counted "present" while its view tab is in
+    // `openTabOrder` (see `preparePendingBrowserTile`'s observer) - a tab
+    // registered only in `tabsById` reads as never opened and the pending
+    // tile is dismissed the instant it is created.
+    openTabOrder: [TAB_ID],
   });
 }
 
@@ -202,6 +211,13 @@ describe("SwitcherBrowsersList", () => {
     closeTab.mockReset();
     openTab.mockReset();
     navigateNested.mockClear();
+    sessionsState.value = {
+      ...sessionsState.value,
+      prepareOpenTab: fakePrepareOpenTab({
+        hostId: () => sessionsState.value.hostId ?? "host-1",
+        openTab: forwardOpenTab,
+      }),
+    };
     replaceSessions(
       [
         session({
@@ -284,7 +300,6 @@ describe("SwitcherBrowsersList", () => {
   });
 
   it("offers Add browser on a list that already has rows, and closes on the tile", async () => {
-    const user = userEvent.setup();
     const onClose = vi.fn();
     openTab.mockResolvedValue({
       sessionId: "sess-2",
@@ -296,7 +311,19 @@ describe("SwitcherBrowsersList", () => {
     // A list with rows renders no empty state, so the header "+" is the only
     // control carrying this name here - the two-match case is pinned by its own
     // test below.
-    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+
+    // Synchronous with the click: a pending placeholder, not yet the real
+    // tab, so no sessionId/tabId is assignable to it yet. (`fireEvent`, not
+    // `userEvent`, so this assertion lands before the already-resolved
+    // `openTab` mock's microtask settles the rebind.)
+    expect(openTiles()).toMatchObject([
+      { type: "browser-session", sessionId: null, tabId: null },
+    ]);
+    const pendingInstanceId = Object.keys(
+      useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId ??
+        {},
+    ).at(0);
 
     await waitFor(() => {
       expect(openTab).toHaveBeenCalledWith(null, "about:blank");
@@ -304,6 +331,17 @@ describe("SwitcherBrowsersList", () => {
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
     });
+    // The host's answer rebinds the SAME tile rather than opening a second
+    // one: one row, same instance id, now pointing at the real tab.
+    expect(openTiles()).toMatchObject([
+      { type: "browser-session", sessionId: "sess-2", tabId: "tab-9" },
+    ]);
+    expect(
+      Object.keys(
+        useEpicCanvasStore.getState().canvasByTabId[TAB_ID]
+          ?.tilesByInstanceId ?? {},
+      ),
+    ).toEqual([pendingInstanceId]);
   });
 
   it("opens one browser for two taps while the host is still answering", async () => {
@@ -342,7 +380,7 @@ describe("SwitcherBrowsersList", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
-  it("keeps the sheet open when the host refuses the new tab", async () => {
+  it("the sheet is already dismissed once when the host refuses the new tab", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     openTab.mockRejectedValue(new Error("no runtime"));
@@ -350,10 +388,16 @@ describe("SwitcherBrowsersList", () => {
 
     await user.click(screen.getByRole("button", { name: "Add browser" }));
 
+    // `onClose` (the hook's `onOpened`) fires synchronously with the pending
+    // tile at click - before the host has answered at all - so a refusal
+    // arriving later does not get a second dismiss, and the sheet does not
+    // reopen for it either.
+    expect(onClose).toHaveBeenCalledOnce();
+
     await waitFor(() => {
       expect(openTab).toHaveBeenCalled();
     });
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("closes a tab from the row's own action", async () => {

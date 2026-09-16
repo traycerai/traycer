@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
   parseTileRef,
   serializeTileRef,
@@ -6,6 +7,7 @@ import {
 import {
   browserSessionTileSchema,
   makeBrowserSessionTileRef,
+  makePendingBrowserSessionTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
 import {
@@ -81,6 +83,53 @@ describe("browserSessionTileSchema / parseTileRef", () => {
     ).toBeNull();
     expect(
       browserSessionTileSchema.parse({ ...base, type: "browser-peek" }),
+    ).toBeNull();
+  });
+});
+
+describe("makePendingBrowserSessionTileRef", () => {
+  const pending: PendingBrowserTabRequest = {
+    requestId: "req-1",
+    hostId: HOST,
+    scope: { kind: "epic", epicId: "epic-1" },
+    requestedUrl: "https://example.test/",
+    clickedAt: 0,
+  };
+
+  it("mints a null-session/tab placeholder carrying the request", () => {
+    const ref = makePendingBrowserSessionTileRef(pending);
+
+    expect(ref.type).toBe(TILE_KIND_BROWSER_SESSION);
+    expect(ref.sessionId).toBeNull();
+    expect(ref.tabId).toBeNull();
+    expect(ref.pending).toBe(pending);
+    expect(ref.hostId).toBe(HOST);
+    expect(ref.id).toContain(pending.requestId);
+  });
+
+  it("never survives a serialize/parse round trip - a reload must never replay a stale request", () => {
+    const ref = makePendingBrowserSessionTileRef(pending);
+
+    const serialized = browserSessionTileSchema.serialize(ref);
+    expect(serialized).toBeNull();
+    expect(parseTileRef(serializeTileRef(ref))).toBeNull();
+  });
+
+  it("is rejected by parse even if a pending-shaped record were ever persisted", () => {
+    // No sessionId/tabId string, same as any other malformed record - the
+    // pending union member is never a thing `parse` can produce.
+    expect(
+      browserSessionTileSchema.parse({
+        id: "browser-session:pending:req-1",
+        instanceId: "inst-1",
+        type: TILE_KIND_BROWSER_SESSION,
+        name: "Browser",
+        hostId: HOST,
+        sessionId: null,
+        tabId: null,
+        viewportPreset: "responsive",
+        pending,
+      }),
     ).toBeNull();
   });
 });

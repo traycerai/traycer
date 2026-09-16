@@ -1,4 +1,5 @@
 import type {
+  BrowserOpenedTab,
   BrowserSessionInfo,
   BrowserSessionsOpenRequest,
   BrowserTabInfo,
@@ -7,6 +8,8 @@ import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import {
   browserSessionsCoordinatorKey,
   type BrowserSessionsOwner,
+  type BrowserSessionsState,
+  type PendingBrowserTabRequest,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 
 /**
@@ -84,4 +87,55 @@ export function coordinatorKey(
   ownerOverrides: Partial<BrowserSessionsOwner>,
 ): string {
   return browserSessionsCoordinatorKey(scope, owner(ownerOverrides));
+}
+
+/**
+ * A `prepareOpenTab` fake that mirrors the real coordinator's contract
+ * (`browser-sessions-coordinator.ts:816`) closely enough for a surface test
+ * to drive the pending-tile flow end to end: `send()` routes through the
+ * suite's own `openTab` fake, then rebinds or removes the presentation on
+ * settlement exactly like the real `prepareOpenTab` does.
+ *
+ * `hostId` is a getter, not a plain string, because a suite can repoint the
+ * fixture's `hostId` between tests (a filtered-host case) after this fake was
+ * constructed - reading it eagerly would freeze pending requests to whatever
+ * host was current at setup.
+ */
+export function fakePrepareOpenTab(args: {
+  readonly hostId: () => string;
+  readonly scope?: HostResourceScope;
+  readonly openTab: BrowserSessionsState["openTab"];
+}): BrowserSessionsState["prepareOpenTab"] {
+  return (url, presentation) => {
+    const request: PendingBrowserTabRequest = {
+      requestId: crypto.randomUUID(),
+      hostId: args.hostId(),
+      scope: args.scope ?? independentScope(),
+      requestedUrl: url,
+      clickedAt: 0,
+    };
+    let dismissed = false;
+    let result: Promise<BrowserOpenedTab> | null = null;
+    return {
+      ...request,
+      dismiss: () => {
+        dismissed = true;
+        presentation.remove();
+      },
+      send: () => {
+        if (result !== null) return result;
+        result = args.openTab(null, url).then(
+          (opened) => {
+            if (!dismissed) presentation.rebind(opened);
+            return opened;
+          },
+          (error: unknown) => {
+            presentation.remove();
+            throw error;
+          },
+        );
+        return result;
+      },
+    };
+  };
 }

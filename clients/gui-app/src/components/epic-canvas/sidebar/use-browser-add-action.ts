@@ -1,5 +1,16 @@
+import { preparePendingBrowserTile } from "@/lib/browser-view/tiles/pending-browser-tab";
+import type { PreparedBrowserTabOpen } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import {
+  tilePlacementForCategory,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 import { useCallback } from "react";
-import { useIsMutating, useMutation } from "@tanstack/react-query";
+import { flushSync } from "react-dom";
+import {
+  useIsMutating,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
@@ -13,6 +24,7 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /** The host that answered, and the tab it opened there. */
 interface OpenedBrowserTab {
+  readonly pending: boolean;
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
@@ -24,44 +36,38 @@ export interface AddBrowserAction {
   readonly add: () => void;
 }
 
-/**
- * Opens a fresh browser tab on the panel's host and focuses it in the tab.
- *
- * `onOpened` runs only once the tile is on the canvas, never on the refusals
- * that report themselves with a toast and open nothing. A surface that
- * dismisses itself on create has to key that on the tile, or a refusal takes
- * away the very list the error is about - including its Retry. `null` for the
- * surfaces that outlive the tab they opened.
- *
- * The disconnected refusal is raised from inside the request rather than short-
- * circuiting ahead of it, so both ways an add can fail arrive at one reporting
- * path. `openTab` normalizes every rejection to an `Error` at the coordinator
- * boundary, so its message is always the one to show.
- *
- * `isAdding` is what keeps a second tap from opening a second tab: the host
- * round-trip is long enough on a phone for the button to be pressed twice, and
- * nothing downstream deduplicates - two answers mean two tabs and two tiles.
- * `add` re-checks it instead of relying on the caller's `disabled`, so the hook
- * holds that invariant for any surface that renders its own affordance.
- */
 export function useAddBrowserAction(
   tabId: string,
   onOpened: (() => void) | null,
 ): AddBrowserAction {
   const sessions = useBrowserSessionsContext();
+  const queryClient = useQueryClient();
   const { openTile } = useEpicTileNavigation();
   const openTabKey = browserMutationKeys.openTab(sessions.hostId);
-  const addMutation = useMutation<OpenedBrowserTab>({
+  const addMutation = useMutation<
+    OpenedBrowserTab,
+    Error,
+    PreparedBrowserTabOpen | null
+  >({
     mutationKey: openTabKey,
-    mutationFn: async () => {
+    retry: false,
+    mutationFn: async (request) => {
       const hostId = sessions.hostId;
       if (sessions.lifecycle !== "live" || hostId === null) {
         throw new Error(browserSessionsRefusal(sessions));
       }
-      const opened = await sessions.openTab(null, DEFAULT_BROWSER_TILE_URL);
-      return { hostId, sessionId: opened.sessionId, tabId: opened.tabId };
+      const opened = await (request === null
+        ? sessions.openTab(null, DEFAULT_BROWSER_TILE_URL)
+        : request.send());
+      return {
+        hostId,
+        sessionId: opened.sessionId,
+        tabId: opened.tabId,
+        pending: request !== null,
+      };
     },
     onSuccess: (opened) => {
+      if (opened.pending) return;
       openTile(
         tileIntent(
           makeBrowserSessionTileRef(opened),
@@ -72,7 +78,8 @@ export function useAddBrowserAction(
       );
       onOpened?.();
     },
-    onError: (cause) => {
+    onError: (cause, request) => {
+      request?.dismiss();
       toast.error(cause.message);
     },
   });
@@ -82,8 +89,27 @@ export function useAddBrowserAction(
   const isAdding = useIsMutating({ mutationKey: openTabKey }) > 0;
   const mutate = addMutation.mutate;
   const add = useCallback(() => {
-    if (isAdding) return;
-    mutate();
-  }, [isAdding, mutate]);
+    if (queryClient.isMutating({ mutationKey: openTabKey }) > 0) return;
+    const placement = useSettingsStore.getState().tilePlacement;
+    if (
+      sessions.lifecycle !== "live" ||
+      sessions.hostId === null ||
+      tilePlacementForCategory(placement, "browser") === "pip"
+    ) {
+      mutate(null);
+      return;
+    }
+    const pending = preparePendingBrowserTile(
+      sessions,
+      DEFAULT_BROWSER_TILE_URL,
+    );
+    // Commit the new stream consumer before a mobile sheet releases its own.
+    flushSync(() => {
+      openTile(tileIntent(pending.node, { tabId }, "explicit", "direct_ui"));
+    });
+    pending.observe();
+    mutate(pending.request);
+    onOpened?.();
+  }, [queryClient, openTabKey, sessions, openTile, tabId, mutate, onOpened]);
   return { isAdding, add };
 }

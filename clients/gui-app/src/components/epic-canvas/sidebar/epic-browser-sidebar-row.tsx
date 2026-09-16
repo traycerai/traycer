@@ -1,6 +1,7 @@
+import { measureProvisioningRow } from "@/lib/browser-view/sessions/browser-open-perf";
 import { useDraggable } from "@dnd-kit/core";
 import { Bot, Moon, TriangleAlert, X } from "lucide-react";
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo } from "react";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -84,6 +85,12 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
     onOpenDrivingChat,
     onCloseTab,
   } = props;
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() =>
+      measureProvisioningRow(session.hostId, session.sessionId),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [session.hostId, session.sessionId]);
   const title = identity.title;
   const isFailed = tab.status === "crashed";
   const visibleDrivers = useCoalescedBrowserTabDrivers(tab.drivenBy);
@@ -121,7 +128,11 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
     if (activeInstanceId === null) return false;
     const active = canvas.tilesByInstanceId[activeInstanceId];
     if (active?.hostId !== session.hostId) return false;
-    return active.id === tile.id;
+    return (
+      active.type === "browser-session" &&
+      active.sessionId === session.sessionId &&
+      active.tabId === tab.tabId
+    );
   });
   const dragTile = tile;
   const dragData = useMemo<EpicCanvasBrowserTileDragData>(

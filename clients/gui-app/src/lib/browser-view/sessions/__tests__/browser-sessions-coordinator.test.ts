@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import {
   FakeStreamClient,
@@ -15,6 +15,7 @@ import {
   browserSessionsCoordinatorState,
   browserSessionsCoordinatorsForEpic,
   hasBrowserSessionsCoordinator,
+  type PendingBrowserTabPresentation,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
   consumeIndependentPageOpenedTab,
@@ -30,7 +31,13 @@ import {
   independentScope,
   owner,
   sessionInfo,
+  tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { measureProvisioningRow } from "@/lib/browser-view/sessions/browser-open-perf";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * One `openTransport` per acquire, recording the {@link FakeStreamClient} it
@@ -132,6 +139,11 @@ describe("browser sessions coordinator registry", () => {
     for (const release of releasers.splice(0)) release();
     resetIndependentPageOpensForTests();
     resetHandoffTokensForTests();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useSettingsStore.setState({
+      agentTabSurfacing: useSettingsStore.getInitialState().agentTabSurfacing,
+    });
+    window.localStorage.removeItem("traycer:perf:telemetry");
   });
 
   function acquire(args: {
@@ -1094,5 +1106,529 @@ describe("browser sessions coordinator registry", () => {
         tabId: "tab-1",
       }),
     ).toBeNull();
+  });
+
+  describe("prepareOpenTab", () => {
+    function presentation(rebindReturns: boolean): {
+      readonly rebind: Mock<PendingBrowserTabPresentation["rebind"]>;
+      readonly remove: Mock<PendingBrowserTabPresentation["remove"]>;
+    } {
+      return {
+        rebind: vi.fn<PendingBrowserTabPresentation["rebind"]>(
+          () => rebindReturns,
+        ),
+        remove: vi.fn<PendingBrowserTabPresentation["remove"]>(),
+      };
+    }
+
+    it("sends no frame at all until send() is called", () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+
+      const request = state.prepareOpenTab(
+        "https://example.com",
+        presentation(true),
+      );
+
+      expect(session.sentFrames.some((frame) => frame.kind === "openTab")).toBe(
+        false,
+      );
+      expect(request.requestedUrl).toBe("https://example.com");
+
+      // This test only cares that the frame went out, not how the request
+      // eventually settles - no `openTabResult` is emitted here, so the
+      // promise is deliberately left unresolved.
+      void request.send();
+      expect(sentFrameOfKind(session, "openTab")).toBeDefined();
+    });
+
+    it("rebinds the presentation once the host answers", async () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const shown = presentation(true);
+
+      const request = state.prepareOpenTab("https://example.com", shown);
+      const sendPromise = request.send();
+      const requestId = requestIdOf(sentFrameOfKind(session, "openTab"));
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId,
+          result: {
+            ok: true,
+            sessionId: "session-1",
+            tabId: "tab-1",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+
+      await expect(sendPromise).resolves.toMatchObject({
+        sessionId: "session-1",
+        tabId: "tab-1",
+      });
+      expect(shown.rebind).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-1", tabId: "tab-1" }),
+      );
+      expect(shown.remove).not.toHaveBeenCalled();
+    });
+
+    it("removes the presentation and rejects send() when the host refuses", async () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const shown = presentation(true);
+
+      const request = state.prepareOpenTab("https://example.com", shown);
+      const sendPromise = request.send();
+      const requestId = requestIdOf(sentFrameOfKind(session, "openTab"));
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId,
+          result: { ok: false, reason: "device refused" },
+        },
+        null,
+      );
+
+      await expect(sendPromise).rejects.toThrow("device refused");
+      expect(shown.remove).toHaveBeenCalledOnce();
+      expect(shown.rebind).not.toHaveBeenCalled();
+    });
+
+    it("dismissing before the result arrives closes the late-arriving tab instead of rebinding", async () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const shown = presentation(true);
+
+      const request = state.prepareOpenTab("https://example.com", shown);
+      const sendPromise = request.send();
+      const openRequestId = requestIdOf(sentFrameOfKind(session, "openTab"));
+
+      request.dismiss();
+      expect(shown.remove).toHaveBeenCalledOnce();
+
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId: openRequestId,
+          result: {
+            ok: true,
+            sessionId: "session-late",
+            tabId: "tab-late",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+      await sendPromise;
+
+      // The tile is already gone, so the late tab must never be shown - the
+      // coordinator closes it on the host instead of a second rebind.
+      expect(shown.rebind).not.toHaveBeenCalled();
+      const closeFrame = sentFrameOfKind(session, "closeTab");
+      expect(closeFrame).toMatchObject({
+        sessionId: "session-late",
+        tabId: "tab-late",
+      });
+    });
+
+    it("a false rebind (tile already gone another way) also closes the late-arriving tab", async () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const shown = presentation(false);
+
+      const request = state.prepareOpenTab("https://example.com", shown);
+      const sendPromise = request.send();
+      const requestId = requestIdOf(sentFrameOfKind(session, "openTab"));
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId,
+          result: {
+            ok: true,
+            sessionId: "session-1",
+            tabId: "tab-1",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+      await sendPromise;
+
+      expect(shown.rebind).toHaveBeenCalledOnce();
+      expect(sentFrameOfKind(session, "closeTab")).toMatchObject({
+        sessionId: "session-1",
+        tabId: "tab-1",
+      });
+    });
+
+    it("a disconnect before the result arrives drops the presentation with no retry", async () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const shown = presentation(true);
+
+      const request = state.prepareOpenTab("https://example.com", shown);
+      const sendPromise = request.send();
+      expect(sentFrameOfKind(session, "openTab")).toBeDefined();
+
+      session.emitStatus("closed");
+
+      await expect(sendPromise).rejects.toThrow(
+        "Browser sessions stream closed.",
+      );
+      // Called from both the direct disconnect sweep and the rejected
+      // in-flight request's own handler - idempotent on the presentation
+      // side, so at-least-once is the contract, not exactly-once.
+      expect(shown.remove).toHaveBeenCalled();
+      expect(shown.rebind).not.toHaveBeenCalled();
+      // No frame is ever sent again on this request's behalf.
+      expect(
+        session.sentFrames.filter((frame) => frame.kind === "openTab"),
+      ).toHaveLength(1);
+    });
+
+    it("calling send() twice sends only one frame and returns the same promise", () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+
+      const request = state.prepareOpenTab(
+        "https://example.com",
+        presentation(true),
+      );
+      const first = request.send();
+      const second = request.send();
+
+      expect(second).toBe(first);
+      expect(
+        session.sentFrames.filter((frame) => frame.kind === "openTab"),
+      ).toHaveLength(1);
+    });
+
+    it("correlates two same-URL requests by requestId alone - never by URL, and an inventory frame in between changes nothing", async () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const shownA = presentation(true);
+      const shownB = presentation(true);
+
+      const requestA = state.prepareOpenTab("https://example.com", shownA);
+      const sendA = requestA.send();
+      const requestB = state.prepareOpenTab("https://example.com", shownB);
+      const sendB = requestB.send();
+      expect(requestA.requestId).not.toBe(requestB.requestId);
+
+      const openFrames = session.sentFrames.filter(
+        (frame) => frame.kind === "openTab",
+      );
+      expect(openFrames).toHaveLength(2);
+      const requestIdA = requestIdOf(openFrames[0] ?? {});
+      const requestIdB = requestIdOf(openFrames[1] ?? {});
+      expect(new Set([requestIdA, requestIdB])).toEqual(
+        new Set([requestA.requestId, requestB.requestId]),
+      );
+
+      // An unrelated inventory event lands in between - it must not disturb
+      // either pending open, since correlation is the requestId alone.
+      session.emit(
+        {
+          kind: "sessionCreated",
+          hasBinaryPayload: false,
+          session: sessionInfo({
+            sessionId: "bystander-session",
+            hostId: "host-1",
+            scope: independentScope(),
+            tabs: [tabInfo({ tabId: "bystander-tab", status: "ready" })],
+          }),
+        },
+        null,
+      );
+
+      // Answered in REVERSE order - B's host round-trip finished first - and
+      // each result must still land on the request that actually sent it.
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId: requestIdB,
+          result: {
+            ok: true,
+            sessionId: "session-b",
+            tabId: "tab-b",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId: requestIdA,
+          result: {
+            ok: true,
+            sessionId: "session-a",
+            tabId: "tab-a",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+
+      await expect(sendB).resolves.toMatchObject({
+        sessionId: "session-b",
+        tabId: "tab-b",
+      });
+      await expect(sendA).resolves.toMatchObject({
+        sessionId: "session-a",
+        tabId: "tab-a",
+      });
+      expect(shownB.rebind).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-b", tabId: "tab-b" }),
+      );
+      expect(shownA.rebind).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-a", tabId: "tab-a" }),
+      );
+      // Neither ever saw the other's tab - a same-URL mismatch would show up
+      // exactly as a cross-wired rebind here.
+      expect(shownA.rebind).not.toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-b" }),
+      );
+      expect(shownB.rebind).not.toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "session-a" }),
+      );
+    });
+  });
+
+  describe("provisioning inventory vs. tile surfacing", () => {
+    it("a provisioning sessionCreated is recorded and enters inventory, but surfaces no tile - a later tabOpened still surfaces once", () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+
+      window.localStorage.setItem("traycer:perf:telemetry", "1");
+      const warn = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+
+      session.emit(
+        {
+          kind: "sessionCreated",
+          hasBinaryPayload: false,
+          session: sessionInfo({
+            sessionId: "device-session",
+            hostId: "host-1",
+            scope: independentScope(),
+            tabs: [tabInfo({ tabId: "popup-tab", status: "provisioning" })],
+          }),
+        },
+        null,
+      );
+
+      // Inventory, not a surfaced tile: nothing has adopted this identity as
+      // an opened tab yet.
+      expect(
+        browserSessionsCoordinatorState(key)?.items.some(
+          (item) => item.sessionId === "device-session",
+        ),
+      ).toBe(true);
+      expect(
+        consumeIndependentPageOpenedTab({
+          hostId: "host-1",
+          sessionId: "device-session",
+          tabId: "popup-tab",
+        }),
+      ).toBeNull();
+
+      // The receipt was recorded - `measureProvisioningRow` (the sidebar
+      // row's own effect) can now log `receipt-to-row` against it.
+      measureProvisioningRow("host-1", "device-session");
+      expect(warn).toHaveBeenCalledOnce();
+      const line = String(warn.mock.calls[0]?.[0]);
+      expect(line).toContain("receipt-to-row");
+      warn.mockRestore();
+
+      // The tab now actually opens - the earlier provisioning bookkeeping
+      // must not have consumed or blocked this frame.
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      session.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "device-session",
+          tabId: "popup-tab",
+          source: "page",
+          openerTabId: "opener-tab",
+        },
+        null,
+      );
+      hasFocus.mockRestore();
+
+      expect(
+        consumeIndependentPageOpenedTab({
+          hostId: "host-1",
+          sessionId: "device-session",
+          tabId: "popup-tab",
+        }),
+      ).toEqual({ openerTabId: "opener-tab", raisedWhileFocused: true });
+      // Consumed exactly once, same as any other tabOpened.
+      expect(
+        consumeIndependentPageOpenedTab({
+          hostId: "host-1",
+          sessionId: "device-session",
+          tabId: "popup-tab",
+        }),
+      ).toBeNull();
+    });
+
+    it("a provisioning sessionCreated on an EPIC stream never surfaces a tile or touches the canvas - a later agent-source tabOpened still surfaces once through the registered presenter", () => {
+      useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+      useEpicCanvasStore.setState({
+        tabsById: {
+          "view-tab-1": {
+            tabId: "view-tab-1",
+            epicId: "epic-1",
+            name: "Epic 1",
+          },
+        },
+        openTabOrder: ["view-tab-1"],
+      });
+      useSettingsStore.setState({ agentTabSurfacing: "surface" });
+
+      const harness = createTransportHarness();
+      const scope = epicScope("epic-1");
+      const navigateNested = vi.fn<NavigateNestedFocus>(
+        (_epicId, _tabId, prepare) => prepare(),
+      );
+      const key = coordinatorKey(scope, {});
+      const release = acquireBrowserSessionsCoordinator({
+        key,
+        consumerId: Symbol("consumer"),
+        scope,
+        owner: owner({}),
+        runtime: {
+          browserView: null,
+          userId: "user-1",
+          localHostId: null,
+          presentation: {
+            viewTabId: "view-tab-1",
+            visible: true,
+            focused: true,
+          },
+          navigateNested,
+          openTransport: harness.openTransport,
+        },
+        createIfMissing: true,
+      });
+      releasers.push(release);
+
+      const session = soleSession(soleClient(harness.clients));
+
+      const browserTiles = () =>
+        Object.values(
+          useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
+            ?.tilesByInstanceId ?? {},
+        ).filter((tile) => tile !== undefined && isBrowserSessionTileRef(tile));
+
+      session.emit(
+        {
+          kind: "sessionCreated",
+          hasBinaryPayload: false,
+          session: sessionInfo({
+            sessionId: "agent-session",
+            hostId: "host-1",
+            scope,
+            tabs: [tabInfo({ tabId: "agent-tab", status: "provisioning" })],
+          }),
+        },
+        null,
+      );
+
+      // Recorded into inventory (the same reducer path as the independent-scope
+      // case above), but a `sessionCreated` frame reaches only the reducer -
+      // it never calls `surfaceHostOpenedTab`, so an epic/agent-only regression
+      // in that surfacing path is exactly what an independent-scope test
+      // cannot see.
+      expect(
+        browserSessionsCoordinatorState(key)?.items.some(
+          (item) => item.sessionId === "agent-session",
+        ),
+      ).toBe(true);
+      expect(browserTiles()).toHaveLength(0);
+      expect(navigateNested).not.toHaveBeenCalled();
+
+      session.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "agent-session",
+          tabId: "agent-tab",
+          source: "agent",
+          openerTabId: null,
+        },
+        null,
+      );
+
+      expect(browserTiles()).toMatchObject([
+        { hostId: "host-1", sessionId: "agent-session", tabId: "agent-tab" },
+      ]);
+      expect(navigateNested).toHaveBeenCalledOnce();
+    });
   });
 });
