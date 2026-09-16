@@ -90,6 +90,43 @@ function pastSeconds(): number {
   return Date.now() / 1_000 - 60;
 }
 
+/** One entry of the ticket-04 per-cookie decision batch. */
+interface ObservedCookieDecision {
+  readonly domain: string;
+  readonly name: string;
+  readonly path: string;
+  readonly outcome: string;
+  readonly valueChanged: boolean | null;
+  readonly expiryChanged: boolean | null;
+  readonly attributesChanged: boolean | null;
+}
+
+interface ObservedCookieDecisionsLog {
+  readonly source: string;
+  readonly hostId: string;
+  readonly domain: string;
+  readonly decisions: readonly ObservedCookieDecision[];
+  readonly omitted: number;
+}
+
+/**
+ * The most recent `[browser-view] observed cookie decisions` batch this test
+ * logged, decoded from the JSON string `applyBrowserObservedProfile` writes
+ * exactly once per call, in its `finally` block, on every path through it.
+ */
+function lastDecisionsLog(): ObservedCookieDecisionsLog {
+  const calls = vi
+    .mocked(log.debug)
+    .mock.calls.filter(
+      ([message]) => message === "[browser-view] observed cookie decisions",
+    );
+  const body = calls.at(-1)?.[1];
+  if (typeof body !== "string") {
+    throw new Error("expected a decisions log with a JSON string body");
+  }
+  return JSON.parse(body) as ObservedCookieDecisionsLog;
+}
+
 /**
  * One desktop's worth of the apply path: the jar, the per-connection governor,
  * and the serial queue every jar write goes through. `apply` mirrors the IPC
@@ -1287,5 +1324,286 @@ describe("observed sign-in echo", () => {
     expect(deltas).toHaveLength(1);
 
     observer.dispose();
+  });
+});
+
+describe("observed sign-in debug drop (ticket 04)", () => {
+  afterEach(() => {
+    delete process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS;
+  });
+
+  it("drops an observed frame for a domain named in TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS", async () => {
+    // Comma-separated, trimmed, and case-folded through the same
+    // `registrableDomain` the frame's own claim goes through - so a dev
+    // pointing the list at "Example.COM" still matches "example.com".
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS =
+      "other.test, Example.COM";
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("debug-dropped");
+    expect(harness.jar.names()).toEqual([]);
+    expect(harness.jar.flushes).toBe(0);
+    // Not a real refusal a support log's aggregate trace should carry.
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+    // The jar was never read, so the decision batch carries no verdict on any
+    // of the three change flags - only the refusal.
+    expect(lastDecisionsLog().decisions).toEqual([
+      {
+        domain: "example.com",
+        name: "sid",
+        path: "/",
+        outcome: "refused:debug-dropped",
+        valueChanged: null,
+        expiryChanged: null,
+        attributesChanged: null,
+      },
+    ]);
+  });
+
+  it("leaves a frame alone when its domain is not named in the drop list", async () => {
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS = "other.test";
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("applied");
+    expect(harness.jar.names()).toEqual(["sid"]);
+  });
+
+  it("does not drop a seed even when its domain is named in the drop list - only the observed door is gated", async () => {
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS = "example.com";
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.applySeed({
+      domain: "example.com",
+      cookies: [
+        observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+      ],
+      connectionId: "connection-1",
+    });
+
+    expect(result.outcome).toBe("applied");
+    expect(harness.jar.names()).toEqual(["sid"]);
+  });
+});
+
+describe("observed sign-in decision log (ticket 04 instrumentation)", () => {
+  it("emits one decision per cookie: identical, value/expiry/attributes-only changes, a brand-new key, and an owned refusal", async () => {
+    const harness = new ObservedApplyHarness();
+    // Seeded directly into the jar, not through an apply - so no observation
+    // ever claimed it, and it is desktop-owned exactly like a real sign-in
+    // performed on this machine.
+    harness.jar.seed(
+      seededCookie({
+        name: "owned",
+        value: "desktop-owns-it",
+        domain: "example.com",
+      }),
+    );
+    const expiresSoon = Math.floor(Date.now() / 1_000) + 3_600;
+    const expiresLater = expiresSoon + 3_600;
+
+    // Establishes the baseline every "changed" case in the next frame is
+    // compared against.
+    await harness.applyFrame([
+      observedCookie({
+        name: "unchanged",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "will-change-value",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "will-change-expiry",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "will-change-attrs",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+    ]);
+
+    await harness.applyFrame([
+      observedCookie({
+        name: "unchanged",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      {
+        ...observedCookie({
+          name: "will-change-value",
+          domain: "example.com",
+          expires: expiresSoon,
+        }),
+        value: "rotated",
+      },
+      observedCookie({
+        name: "will-change-expiry",
+        domain: "example.com",
+        expires: expiresLater,
+      }),
+      {
+        ...observedCookie({
+          name: "will-change-attrs",
+          domain: "example.com",
+          expires: expiresSoon,
+        }),
+        httpOnly: true,
+      },
+      observedCookie({
+        name: "brand-new",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "owned",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+    ]);
+
+    // Exactly one decision batch per apply call - the baseline frame and the
+    // mixed frame above - never one per cookie and never skipped.
+    expect(
+      vi
+        .mocked(log.debug)
+        .mock.calls.filter(
+          ([message]) => message === "[browser-view] observed cookie decisions",
+        ),
+    ).toHaveLength(2);
+
+    const decisionsLog = lastDecisionsLog();
+    expect(decisionsLog.decisions).toHaveLength(6);
+    expect(decisionsLog.omitted).toBe(0);
+    const byName = new Map(
+      decisionsLog.decisions.map((decision) => [decision.name, decision]),
+    );
+
+    expect(byName.get("unchanged")).toMatchObject({
+      outcome: "identical",
+      valueChanged: false,
+      expiryChanged: false,
+      attributesChanged: false,
+    });
+    expect(byName.get("will-change-value")).toMatchObject({
+      outcome: "applied",
+      valueChanged: true,
+      expiryChanged: false,
+      attributesChanged: false,
+    });
+    expect(byName.get("will-change-expiry")).toMatchObject({
+      outcome: "applied",
+      valueChanged: false,
+      expiryChanged: true,
+      attributesChanged: false,
+    });
+    expect(byName.get("will-change-attrs")).toMatchObject({
+      outcome: "applied",
+      valueChanged: false,
+      expiryChanged: false,
+      attributesChanged: true,
+    });
+    // Never seen before: absent from the jar snapshot means every flag reads
+    // "changed", per contract.
+    expect(byName.get("brand-new")).toMatchObject({
+      outcome: "applied",
+      valueChanged: true,
+      expiryChanged: true,
+      attributesChanged: true,
+    });
+    const owned = byName.get("owned");
+    expect(owned?.outcome).toBe("refused:owned-by-desktop");
+    // The jar WAS read for this cookie (it lost to the ownership rule, not to
+    // an early whole-frame refusal), so its flags are real booleans, not null.
+    expect(owned?.valueChanged).not.toBeNull();
+
+    // No cookie value ever reaches the log line - only the seven documented
+    // keys per decision.
+    for (const decision of decisionsLog.decisions) {
+      expect(Object.keys(decision).sort()).toEqual([
+        "attributesChanged",
+        "domain",
+        "expiryChanged",
+        "name",
+        "outcome",
+        "path",
+        "valueChanged",
+      ]);
+    }
+  });
+
+  it("caps the decision batch at 64 entries and reports the rest as omitted", async () => {
+    const harness = new ObservedApplyHarness();
+    const cookies = Array.from({ length: 70 }, (_unused, index) =>
+      observedCookie({
+        name: `sid-${index}`,
+        domain: "example.com",
+        expires: -1,
+      }),
+    );
+
+    await harness.applyFrame(cookies);
+
+    const decisionsLog = lastDecisionsLog();
+    expect(decisionsLog.decisions).toHaveLength(64);
+    expect(decisionsLog.omitted).toBe(6);
+    expect(decisionsLog.decisions[63]?.name).toBe("sid-63");
+  });
+
+  it("leaves every decision's change flags null when the whole frame is refused before the jar is read", async () => {
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.apply({
+      domain: ".",
+      cookies: [observedCookie({ name: "sid", domain: ".", expires: -1 })],
+      connectionId: "connection-1",
+    });
+
+    expect(result.outcome).toBe("domain-mismatch");
+    expect(lastDecisionsLog().decisions).toEqual([
+      {
+        domain: ".",
+        name: "sid",
+        path: "/",
+        outcome: "refused:domain-mismatch",
+        valueChanged: null,
+        expiryChanged: null,
+        attributesChanged: null,
+      },
+    ]);
+  });
+
+  it("leaves flags null for a ledger-unacked refusal too, even though that check runs inside the domain's queue", async () => {
+    const harness = new ObservedApplyHarness();
+    harness.forgottenPendingAck.add("connection-1 example.com");
+
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("ledger-unacked");
+    expect(lastDecisionsLog().decisions).toEqual([
+      {
+        domain: "example.com",
+        name: "sid",
+        path: "/",
+        outcome: "refused:ledger-unacked",
+        valueChanged: null,
+        expiryChanged: null,
+        attributesChanged: null,
+      },
+    ]);
   });
 });

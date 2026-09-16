@@ -998,3 +998,57 @@ describe("BrowserCookieChangeObserver write attribution", () => {
     observer.dispose();
   });
 });
+
+describe("BrowserCookieChangeObserver witnessed-removal event log (ticket 04 instrumentation)", () => {
+  it("logs a witnessed removal's key and cause at DEBUG, and nowhere else", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(cookie);
+
+    // Fired at the moment the removal is WITNESSED, not deferred to the
+    // window's flush - so this assertion runs before any flush timer.
+    expect(log.debug).toHaveBeenCalledWith(
+      "[browser-view] witnessed cookie removal",
+      { domain: "example.com", name: "sid", path: "/", cause: "explicit" },
+    );
+    expect(log.debug).toHaveBeenCalledTimes(1);
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    observer.dispose();
+  });
+
+  it("never logs a removal event for a suppressed removal (housekeeping cause)", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    // `evicted` is Chromium's own housekeeping cause - suppressed before the
+    // event ever reaches the witnessed-removal log line.
+    source.removeWithCause(cookie, "evicted");
+
+    expect(log.debug).not.toHaveBeenCalledWith(
+      "[browser-view] witnessed cookie removal",
+      expect.anything(),
+    );
+
+    // The flush's own aggregate suppression trace fires under a DIFFERENT
+    // message; it must not be mistaken for the removal event this describes.
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    expect(log.debug).not.toHaveBeenCalledWith(
+      "[browser-view] witnessed cookie removal",
+      expect.anything(),
+    );
+
+    observer.dispose();
+  });
+});

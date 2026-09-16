@@ -391,6 +391,15 @@ export class BrowserCookieChangeObserver {
     // The maps stay disjoint: Chromium can fire several removal events for one
     // key inside a burst, and the witnessed one wins rather than being counted
     // in both places.
+    log.debug(
+      "[browser-view] witnessed cookie removal",
+      sanitizeLogFields({
+        domain: normalized.domain,
+        name: normalized.name,
+        path: normalized.path,
+        cause,
+      }),
+    );
     window.suppressedRemovals.delete(keyId);
     window.removedKeys.set(keyId, {
       domain: normalized.domain,
