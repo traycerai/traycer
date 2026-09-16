@@ -252,7 +252,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   if (reportError !== null) {
     return (
       <div className="space-y-2">
-        <div className="rounded-md border border-rose-700/40 bg-rose-900/20 px-3 py-2 text-ui-sm text-rose-200">
+        <div className="rounded-md border border-destructive/40 bg-destructive/20 px-3 py-2 text-ui-sm text-destructive">
           Doctor could not run: {reportError.message}
         </div>
         {/* The retry belongs on THIS arm above all others. The commonest way
@@ -285,7 +285,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
 
   if (issues.length === 0) {
     return (
-      <div className="rounded-md border border-emerald-700/40 bg-emerald-900/20 px-3 py-2 text-ui-sm text-emerald-200">
+      <div className="rounded-md border border-success/40 bg-success/20 px-3 py-2 text-ui-sm text-success-foreground">
         Doctor: no issues detected.
       </div>
     );

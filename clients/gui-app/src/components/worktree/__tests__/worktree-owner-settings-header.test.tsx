@@ -270,13 +270,13 @@ function permissionIconClass(): string {
 }
 
 /**
- * The `AccentDot` itself, found by its inline accent color - the wrapper's
- * `textContent` is unusable here because the harness brand SVG carries its own
- * `<title>`.
+ * The `AccentDot` itself, found by the custom property that carries its accent
+ * color - the wrapper's `textContent` is unusable here because the harness
+ * brand SVG carries its own `<title>`.
  */
 function accentDotText(): string | null {
   const mark = screen.getByTestId("owner-settings-harness-mark");
-  const dot = mark.querySelector('span[style*="background-color"]');
+  const dot = mark.querySelector('span[style*="--swatch"]');
   return dot === null ? null : dot.textContent;
 }
 
@@ -512,7 +512,9 @@ describe("WorktreeOwnerSettingsHeader", () => {
 
     const zap = screen.getByLabelText("Fast mode");
     expect(zap.getAttribute("class") ?? "").toMatch(/lucide-zap/);
-    expect(zap.getAttribute("class") ?? "").toContain("text-amber-500");
+    expect(zap.getAttribute("class") ?? "").toContain(
+      "text-warning-foreground",
+    );
     expect(screen.queryByText("Fast")).toBeNull();
     expect(screen.queryByTestId("owner-settings-fast-mode")).toBeNull();
   });

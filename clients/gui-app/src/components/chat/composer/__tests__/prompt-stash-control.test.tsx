@@ -192,7 +192,9 @@ describe("PromptStashControl", () => {
     expect(rail?.className).not.toContain("bg-muted");
     expect(trigger.className).not.toContain("absolute");
     expect(trigger.className).not.toContain("translate");
-    expect(trigger.getAttribute("data-variant")).toBe("outline");
+    // `muted-outline` since ticket 04: the border and the label colour are
+    // independent axes, and this pill wants a quiet label on a bordered chip.
+    expect(trigger.getAttribute("data-variant")).toBe("muted-outline");
     expect(trigger.className).toContain("px-2");
     expect(trigger.className).toContain("rounded-full");
     expect(trigger.getAttribute("data-size")).toBe("xs");

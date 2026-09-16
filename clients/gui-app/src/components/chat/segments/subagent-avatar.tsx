@@ -172,7 +172,7 @@ export function SubagentAvatar(props: SubagentAvatarProps) {
     <canvas
       ref={canvasRef}
       aria-hidden
-      className={cn("shrink-0 rounded-[2px]", className)}
+      className={cn("shrink-0 rounded-xs", className)}
       style={{ width: size, height: size }}
     />
   );

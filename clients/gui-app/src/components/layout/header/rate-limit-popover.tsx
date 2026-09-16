@@ -469,7 +469,8 @@ export function RateLimitPopover({
       collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
       aria-label="Usage limits"
-      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
+      layout="panel"
+      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)]"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
       // (keyboard a11y) - so it would pop open the instant the popover mounts
@@ -1723,9 +1724,7 @@ function SingleProfileRateLimitProviderBlock({
             {providerDisplayName(providerId)}
           </span>
           {planLabel !== null ? (
-            <Badge variant="secondary" className="font-normal">
-              {planLabel}
-            </Badge>
+            <Badge variant="secondary">{planLabel}</Badge>
           ) : null}
           <ManageProviderLink
             providerId={providerId}
@@ -2492,15 +2491,9 @@ function RateLimitProviderProfileStatusBadges({
         {profileDisplayLabel(profile)}
       </span>
       {planLabel !== null ? (
-        <Badge variant="secondary" className="font-normal">
-          {planLabel}
-        </Badge>
+        <Badge variant="secondary">{planLabel}</Badge>
       ) : null}
-      {!profile.enabled ? (
-        <Badge variant="outline" className="font-normal">
-          Disabled
-        </Badge>
-      ) : null}
+      {!profile.enabled ? <Badge variant="outline">Disabled</Badge> : null}
     </div>
   );
 }
@@ -2917,17 +2910,13 @@ function TraycerAccountCards({
                     keeps its account name, its Active state and the whole
                     usage body underneath; only the tier goes. */}
                 {isMobileApp() ? null : (
-                  <Badge variant="secondary" className="font-normal">
+                  <Badge variant="secondary">
                     {subscriptionPlanLabel(
                       account.subscription.subscriptionStatus,
                     )}
                   </Badge>
                 )}
-                {active ? (
-                  <Badge variant="outline" className="font-normal">
-                    Active
-                  </Badge>
-                ) : null}
+                {active ? <Badge variant="outline">Active</Badge> : null}
               </div>
               <ProfileUsageUpdatedLabel
                 updatedAt={
@@ -3010,7 +2999,7 @@ function RateLimitErrorMessage({
       <ReportIssueAction
         context={reportContext}
         presentation="link"
-        className="h-auto p-0 text-current"
+        className={undefined}
       />
     </div>
   );

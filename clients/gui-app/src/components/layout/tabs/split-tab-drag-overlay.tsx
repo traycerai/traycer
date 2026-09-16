@@ -95,7 +95,7 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
               className={cn(
                 SPLIT_TAB_CONTROL_CLASS,
                 props.isActive
-                  ? "text-blue-600 dark:text-blue-300"
+                  ? "text-info-foreground"
                   : "text-muted-foreground",
               )}
             >

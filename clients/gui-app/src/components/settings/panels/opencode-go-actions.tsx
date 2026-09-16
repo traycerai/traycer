@@ -10,13 +10,7 @@ export function OpenModelProvidersButton({
   readonly onClick: () => void;
 }): ReactNode {
   return (
-    <Button
-      type="button"
-      variant="link"
-      size="xs"
-      className="h-auto p-0"
-      onClick={onClick}
-    >
+    <Button type="button" variant="link" size="inline-xs" onClick={onClick}>
       Open Model Providers
     </Button>
   );
@@ -28,8 +22,8 @@ export function OpenCodeGoManageLink(): ReactNode {
     <Button
       type="button"
       variant="link"
-      size="xs"
-      className="h-auto w-fit p-0"
+      size="inline-xs"
+      className="w-fit"
       onClick={(event) => {
         void openLink(OPENCODE_GO_MANAGE_URL, "account", event);
       }}

@@ -108,7 +108,10 @@ export function ProviderSkillDetailDialog(props: {
         else close();
       }}
     >
-      <DialogContent className="grid h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,52rem)]">
+      <DialogContent
+        layout="banded"
+        className="grid h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(92vw,52rem)]"
+      >
         {editableContent === null ? (
           <ReadOnlySkillDetail
             skill={props.skill}
@@ -392,9 +395,10 @@ function EditableSkillDetail(props: {
                             : undefined
                         }
                         className={cn(
-                          "col-start-1 row-start-1 max-h-24 min-h-16 resize-none text-ui-sm leading-relaxed",
+                          "col-start-1 row-start-1 max-h-24 min-h-16 resize-none leading-relaxed",
                           editing ? null : "invisible pointer-events-none",
                         )}
+                        size="sm"
                       />
                     </div>
                     {editing && help !== null ? (
@@ -459,7 +463,7 @@ function EditableSkillDetail(props: {
                   <div
                     ref={bodyEditor}
                     className={cn(
-                      "col-start-1 row-start-1 min-h-0 overflow-hidden rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+                      "col-start-1 row-start-1 min-h-0 overflow-hidden rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
                       editing ? null : "invisible pointer-events-none",
                     )}
                   >
@@ -479,7 +483,7 @@ function EditableSkillDetail(props: {
           </form.Field>
         </div>
 
-        <DialogFooter className="mx-0 mb-0 flex-row items-center gap-3 rounded-none border-t border-border/40 px-5 py-3 sm:justify-between">
+        <DialogFooter className="flex-row items-center gap-3 rounded-none sm:justify-between">
           <StartTruncatedText className="block min-w-0 flex-1 font-mono text-ui-xs text-muted-foreground">
             {props.skill.path}
           </StartTruncatedText>
@@ -582,15 +586,17 @@ function EditableSkillHeader(props: {
   readonly onRequestUpdate: () => void;
 }): ReactNode {
   return (
-    <DialogHeader className="border-b border-border/40 px-5 py-4 text-left">
+    <DialogHeader className="text-left">
       <DialogTitle className="sr-only">{props.skill.name}</DialogTitle>
       <DialogDescription className="sr-only">
         {props.skill.description ?? "Skill details"}
       </DialogDescription>
       <div className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] items-start gap-x-4 gap-y-3 pe-7">
         <Label
-          className="pt-1.5 text-ui-xs font-medium text-muted-foreground"
+          className="pt-1.5"
           htmlFor="skill-detail-name"
+          size="xs"
+          variant="muted"
         >
           Name
         </Label>
@@ -602,8 +608,10 @@ function EditableSkillHeader(props: {
         </div>
 
         <Label
-          className="pt-1 text-ui-xs font-medium text-muted-foreground"
+          className="pt-1"
           htmlFor="skill-detail-description"
+          size="xs"
+          variant="muted"
         >
           When to use
         </Label>
@@ -656,8 +664,9 @@ function UnsavedSkillChangesDialog(props: {
       }}
     >
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
         data-testid="skill-unsaved-changes-dialog"
       >
         <div className="flex min-w-0 items-start gap-3 p-5">
@@ -665,10 +674,8 @@ function UnsavedSkillChangesDialog(props: {
             <AlertTriangle className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-1.5">
-            <DialogTitle className="text-ui font-semibold leading-snug">
-              Discard unsaved changes?
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed">
+            <DialogTitle>Discard unsaved changes?</DialogTitle>
+            <DialogDescription>
               Your edits to this skill will be lost.
             </DialogDescription>
           </div>
@@ -760,7 +767,7 @@ function ReadOnlySkillHeader(props: {
   readonly onRequestUpdate: () => void;
 }): ReactNode {
   return (
-    <DialogHeader className="border-b border-border/40 px-5 py-4 text-left">
+    <DialogHeader className="text-left">
       <DialogTitle className="sr-only">{props.skill.name}</DialogTitle>
       <DialogDescription className="sr-only">
         {props.skill.description ?? "Skill details"}
@@ -858,7 +865,7 @@ function ReadOnlySkillFooter(props: {
   readonly onRequestRemove: () => void;
 }): ReactNode {
   return (
-    <DialogFooter className="mx-0 mb-0 flex-row items-center gap-3 rounded-none border-t border-border/40 px-5 py-3 sm:justify-between">
+    <DialogFooter className="flex-row items-center gap-3 rounded-none sm:justify-between">
       <StartTruncatedText className="block min-w-0 flex-1 font-mono text-ui-xs text-muted-foreground">
         {props.path}
       </StartTruncatedText>
@@ -904,7 +911,7 @@ function SkillBody(props: {
   }
   if (props.error !== null || props.content === null) {
     return (
-      <div className="flex min-h-0 flex-1 items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm text-amber-900 dark:text-amber-200">
+      <div className="flex min-h-0 flex-1 items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground">
         <FileWarning className="mt-0.5 size-3.5 shrink-0" aria-hidden />
         <span className="min-w-0">
           {props.error ?? `Could not read ${SKILL_ENTRY_FILE}.`}

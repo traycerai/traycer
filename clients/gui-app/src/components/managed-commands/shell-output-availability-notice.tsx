@@ -121,9 +121,10 @@ function PanelNotice(props: {
     >
       {busy ? (
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
       ) : null}
       <p className="max-w-md">{panelSentence(availability)}</p>
@@ -234,9 +235,10 @@ function BannerNotice(props: {
         aria-busy
       >
         <AgentSpinningDots
-          className="shrink-0 text-muted-foreground/70"
+          className="shrink-0"
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
         <span>Reconnecting…</span>
       </div>

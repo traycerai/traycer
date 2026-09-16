@@ -81,7 +81,8 @@ export function GitChangedFilesView(
           clearLabel="Clear filter"
           closeLabel=""
           testIdPrefix="git-changed-files-filter"
-          className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35"
+          variant="filter"
+          className="h-7"
         />
       </div>
       <FileList

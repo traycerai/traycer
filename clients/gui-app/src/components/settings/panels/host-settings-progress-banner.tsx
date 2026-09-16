@@ -46,7 +46,7 @@ export function HostProgressBanner(props: HostProgressBannerProps) {
       {percent !== null ? (
         <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
           <div
-            className="h-full bg-emerald-500 transition-[width] duration-150"
+            className="h-full bg-success transition-[width] duration-150"
             style={{ width: `${percent}%` }}
           />
         </div>

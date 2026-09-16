@@ -163,7 +163,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
             // muted-fill-ok: the meter is in the PopoverTrigger, not the
             // content, and its own inner disc below is bg-canvas - the one
             // surface --muted never collapses with
-            className="hidden size-5 rounded-full bg-[conic-gradient(currentColor_var(--context-usage-percent),var(--muted)_0)] p-[3px] @max-[28rem]:inline-flex"
+            className="hidden size-5 rounded-full bg-[conic-gradient(currentColor_var(--context-usage-percent),var(--muted)_0)] p-0.75 @max-[28rem]:inline-flex"
             style={meterStyle}
           >
             <span className="size-full rounded-full bg-canvas" />
@@ -200,7 +200,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
           side="top"
           sideOffset={6}
           aria-label="Context usage breakdown"
-          className="w-[min(90vw,18rem)] gap-2.5 p-2.5"
+          className="w-[min(90vw,18rem)]"
           onOpenAutoFocus={(event) => {
             if (preserveFocusOnOpenRef.current) {
               event.preventDefault();
@@ -337,11 +337,11 @@ function CompactAction({ onCompact }: CompactActionProps) {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-xs"
         aria-label="Compact conversation"
         data-testid="context-usage-compact-action"
-        className="shrink-0 self-center text-muted-foreground hover:text-foreground"
+        className="shrink-0 self-center"
         onClick={onCompact}
       >
         <FoldVertical className="size-3.5" aria-hidden />
@@ -472,10 +472,9 @@ function ContextUsagePinnedStrip({
           <Button
             ref={actionRef}
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-xs"
             aria-label="Unpin context usage breakdown"
-            className="text-muted-foreground hover:text-foreground"
             onClick={(event) => {
               onUnpin(document.activeElement === event.currentTarget);
             }}

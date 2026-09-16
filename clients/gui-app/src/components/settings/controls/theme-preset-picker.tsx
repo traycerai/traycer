@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
 import { ChevronsUpDown } from "lucide-react";
 import {
@@ -93,18 +94,20 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
         </button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="end"
         container={dialogContainer ?? undefined}
         collisionBoundary={dialogContainer ?? undefined}
         collisionPadding={8}
-        className="w-[min(85vw,17rem)] overflow-hidden p-0"
+        className="w-[min(85vw,17rem)] overflow-hidden"
         ref={contentRef}
         onOpenAutoFocus={coarseOpenAutoFocus}
       >
         <Command
           value={commandValue}
           onValueChange={setCommandValue}
-          className="rounded-none bg-transparent p-0"
+          variant="embedded"
+          selection="flat"
         >
           <CommandInput
             aria-label="Search theme presets"
@@ -122,7 +125,7 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
                   onChange(preset.id);
                   setOpen(false);
                 }}
-                className="gap-2.5 rounded-md py-1.5 data-[selected=true]:border-transparent data-[selected=true]:bg-accent data-[selected=true]:text-foreground data-[selected=true]:shadow-none data-[checked=true]:text-primary"
+                className="gap-2.5"
               >
                 <PresetSwatch preset={preset} />
                 <span className="min-w-0 flex-1 truncate">{preset.label}</span>
@@ -145,9 +148,14 @@ function PresetSwatch(props: PresetSwatchProps) {
     <span
       aria-hidden="true"
       className={cn(
-        "inline-flex size-6 shrink-0 items-center justify-center rounded-md font-semibold text-ui-xs ring-1 ring-foreground/10 ring-inset",
+        "inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--swatch)] font-semibold text-ui-xs text-[var(--swatch-fg)] ring-1 ring-foreground/10 ring-inset",
       )}
-      style={{ backgroundColor: preset.swatch, color: preset.accent }}
+      style={
+        {
+          "--swatch": preset.swatch,
+          "--swatch-fg": preset.accent,
+        } as CSSProperties
+      }
     >
       Aa
     </span>

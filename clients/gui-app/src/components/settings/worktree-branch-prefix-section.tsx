@@ -268,7 +268,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
             aria-invalid={error !== null}
             aria-describedby={error !== null ? errorId : undefined}
             placeholder="traycer/"
-            className="h-8 w-[min(45vw,11rem)] font-mono text-ui-sm max-md:min-w-0 max-md:flex-1"
+            className="h-8 w-[min(45vw,11rem)] max-md:min-w-0 max-md:flex-1"
             onChange={(event) => {
               const next = event.target.value;
               draftRef.current = next;
@@ -291,6 +291,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();
             }}
+            font="mono"
+            size="sm"
           />
           <WorktreeBranchPrefixIndicator
             error={error}
@@ -348,9 +350,10 @@ function WorktreeBranchPrefixIndicator(props: {
   if (props.saving) {
     return (
       <AgentSpinningDots
-        className="text-muted-foreground"
+        className={undefined}
         testId="worktree-branch-prefix-saving-spinner"
         variant={undefined}
+        tone="muted"
       />
     );
   }

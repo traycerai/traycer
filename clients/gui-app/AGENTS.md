@@ -20,6 +20,23 @@ bun run react-doctor   # manual after .ts/.tsx changes; not in pre-commit
 
 Changed-files-only: `npx -y react-doctor@latest . --verbose --diff <base> --offline --no-score`.
 
+After making changes, run `bun run lint` and fix all errors. `@shadcn/lint`
+runs there and reads `components.json` and `src/index.css`, so its errors name
+this app's real variants, sizes and tokens — the fix is in the message.
+
+**A `shadcn/no-restyle` error is answered in `src/components/ui/`, not in
+`eslint.config.mjs`.** Every design-system component has a CONTRACT in that
+config saying what a call site may still write on it — usually `layout` and
+nothing else, because a call site PLACES a component and the component owns how
+it looks. The fix for "`px-3` is not allowed on `<Button>`" is a size; for a
+colour, a variant; for a header band, a `layout` prop. Add the variant, migrate
+the sites that were hand-rolling it, and delete their classes. Widening a
+contract is the last resort and has one test: the reason has to be a fact about
+the SITE, not about the component — if it generalises, it should have been a
+variant. A treatment that is genuinely one file's own goes in
+`restyleExemptions`, one entry per file, `allow` keyed by the contract it opens
+and the reason written above it.
+
 **Commits:** don't manually run `compile` / `build` / `lint` / `format` before
 committing — repo-root `pre-commit` already runs the affected checks (see root
 `AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing
@@ -72,7 +89,7 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
     the guarantee. Where a
     primitive already owns `inset-y-0`/`h-full` under a `data-*` variant, use
     `mt-safe-top` + `h-safe-dvh` under that **same** variant —
-    `tailwind-merge` only displaces a class whose modifiers match, and its
+    `cn()` only displaces a class whose modifiers match, and its
     conflict map lets `inset-y-*` displace `top-*` but not the reverse, so a
     bare `top-safe-top` ties on specificity instead of winning. `sheet.tsx` and
     `drawer.tsx` already do this per side, so their callers need nothing.
@@ -90,9 +107,12 @@ inset-0` and marked `data-full-bleed-surface`, so it takes the viewport
     HEIGHT clears the home indicator does not clear it for a line box centred
     inside that band. Do not add a second full-bleed surface — the contract
     test asserts the marker appears exactly once.
-  - New tokens must also be registered in `cn()`'s `extendTailwindMerge`
-    (`lib/utils.ts`) or they never conflict with the utility they override —
-    which is invisible on desktop, where every inset is zero.
+  - New tokens must also be registered in `cn.config.mjs` (package root),
+    followed by `bun run cn:build`, or they never conflict with the utility
+    they override — which is invisible on desktop, where every inset is zero.
+    The build writes the committed `src/lib/cn-tables.ts` that `lib/utils.ts`
+    merges against; `src/__tests__/cn-tables-up-to-date.test.ts` fails when the
+    config moves without it.
   - When a library takes geometry as a value rather than a style (Radix
     `collisionPadding`), read `readSafeAreaInsets()` from
     `lib/safe-area-insets.ts`. It is the only sanctioned runtime read; do not
@@ -325,6 +345,29 @@ Testing Library role queries.
 | `vite` / `vitest` / `zod` / `bun` | As named                       |
 
 Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
+
+## Status colors
+
+Four status roles, each a `--<role>` / `--<role>-foreground` pair registered in
+`lib/themes/theme-definition.ts` and valued in `builtin-palettes.ts`. Never
+reach for a palette hue (`amber-500`, `emerald-600`, `blue-500`) — `bun run
+lint` rejects it and names these instead. Color tokens need no `cn()`
+registration; that rule is for spacing and size tokens only.
+
+- `warning` — needs attention but nothing is broken: a rate-limit notice, a
+  pending approval, a worktree that will be swept.
+- `success` — it worked: a completed task, a healthy host, a passing check.
+- `info` — worth knowing, no action implied: an update is available, a version
+  is newer, a note on a panel.
+- `destructive` — it failed or it will destroy something.
+
+The recipe is the same for all four, and it is theme-aware in one class rather
+than a light/dark pair: `border-<role>/30 bg-<role>/10
+text-<role>-foreground`. The base is the tint (use it at `/5` to `/30`, or
+solid for a dot); the foreground is text ON that tint and is verified ≥3:1
+against every preset's background, canvas, card and popover.
+`text-destructive` is the red-text spelling, and `destructive-foreground` is
+for text on a SOLID destructive fill (the unread-count badges).
 
 ## Terminal theming (xterm)
 

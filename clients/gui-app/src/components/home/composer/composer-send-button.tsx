@@ -115,10 +115,7 @@ function SendButton(props: SendButtonProps) {
           aria-disabled={hintActive || undefined}
           aria-label={label}
           aria-keyshortcuts="Meta+Enter Control+Enter"
-          className={cn(
-            BUTTON_CLASS_NAME,
-            "bg-primary text-primary-foreground hover:bg-primary/90",
-          )}
+          className={BUTTON_CLASS_NAME}
         >
           {sendButtonIcon(attachmentPending)}
         </Button>
@@ -180,7 +177,7 @@ function sendButtonIcon(attachmentPending: boolean): ReactNode {
   if (attachmentPending) {
     return (
       <AgentSpinningDots
-        className="text-current"
+        className={undefined}
         testId="composer-attachment-pending"
         variant={undefined}
       />

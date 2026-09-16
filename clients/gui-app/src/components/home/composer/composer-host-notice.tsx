@@ -32,9 +32,9 @@ export function ComposerHostNotice(props: ComposerHostNoticeProps): ReactNode {
       role="alert"
       data-testid="composer-host-notice"
       data-notice-kind={notice.kind}
-      className="relative flex w-full max-w-full min-w-0 items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm"
+      className="relative flex w-full max-w-full min-w-0 items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm"
     >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
       <p className="min-w-0 flex-1 text-foreground">{notice.message}</p>
       <button
         type="button"

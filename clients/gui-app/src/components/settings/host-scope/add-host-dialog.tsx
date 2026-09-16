@@ -180,10 +180,10 @@ function AddHostDialogBody(): ReactNode {
           </DialogDescription>
         </DialogHeader>
         <div
-          className="flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3"
+          className="flex items-center gap-3 rounded-lg border border-success/30 bg-success/5 px-4 py-3"
           data-testid="add-host-arrived"
         >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-success/10 text-success-foreground">
             <HostGlyph host={arrived} className="size-4.5" />
           </span>
           <span className="min-w-0 flex-1">
@@ -213,7 +213,10 @@ function AddHostDialogBody(): ReactNode {
               </span>
             </span>
           </span>
-          <Check className="size-4 shrink-0 text-emerald-500" aria-hidden />
+          <Check
+            className="size-4 shrink-0 text-success-foreground"
+            aria-hidden
+          />
         </div>
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Button
@@ -256,19 +259,14 @@ function AddHostDialogBody(): ReactNode {
           <Tabs defaultValue="npm" className="gap-1.5">
             <TabsList
               variant="line"
+              size="sm"
               aria-label="Install method"
-              className="justify-start border-b border-border group-data-[orientation=horizontal]/tabs:h-7"
+              className="justify-start"
             >
-              <TabsTrigger
-                value="npm"
-                className="flex-none px-2.5 py-0 text-ui-xs"
-              >
+              <TabsTrigger value="npm" className="flex-none">
                 npm
               </TabsTrigger>
-              <TabsTrigger
-                value="homebrew"
-                className="flex-none px-2.5 py-0 text-ui-xs"
-              >
+              <TabsTrigger value="homebrew" className="flex-none">
                 Homebrew
               </TabsTrigger>
             </TabsList>
@@ -354,13 +352,13 @@ function CommandBlock(props: { readonly command: string }): ReactNode {
       <Button
         type="button"
         variant="ghost"
-        size="sm"
-        className="size-6 shrink-0 p-0 opacity-60 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        size="inline"
+        className="size-6 shrink-0 opacity-60 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
         aria-label={`Copy: ${props.command}`}
         onClick={() => clipboard.copy(props.command)}
       >
         {clipboard.copied ? (
-          <Check className="size-3.5 text-emerald-500" />
+          <Check className="size-3.5 text-success-foreground" />
         ) : (
           <Copy className="size-3.5" />
         )}

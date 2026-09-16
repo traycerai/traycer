@@ -49,11 +49,11 @@ export function MobileNotificationsButton(): ReactNode {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label={notificationBellAccessibleLabel(bellState)}
       data-testid="mobile-notifications-button"
-      className="relative shrink-0 text-muted-foreground hover:text-foreground"
+      className="relative shrink-0"
       onClick={handleOpen}
     >
       <Bell className="size-4" aria-hidden />

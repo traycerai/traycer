@@ -5,6 +5,7 @@ import type { OpenPathsTarget } from "@traycer/protocol/host/editor/unary-schema
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -132,8 +133,10 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   };
 
   return (
-    <div
-      className="inline-flex shrink-0 items-center"
+    // `ButtonGroup` owns the joined corners (and the shared inner edge) so
+    // neither half has to spell out a `rounded-*-none` of its own.
+    <ButtonGroup
+      className="shrink-0 items-center"
       data-testid="workspace-open-in-editor"
     >
       <Button
@@ -143,7 +146,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
         disabled={openingEditor || noTargetsAvailable || !hostMatches}
         aria-label="Open workspace in editor"
         data-testid="workspace-open-in-editor-primary"
-        className="size-7 rounded-r-none"
+        className="size-7"
         onClick={handleOpenPrimaryEditor}
       >
         <PrimaryButtonGlyph
@@ -160,7 +163,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
             disabled={openingEditor || !hostMatches}
             aria-label="Choose editor"
             data-testid="workspace-open-in-editor-chevron"
-            className="size-5 rounded-l-none px-0"
+            className="size-5"
           >
             <ChevronDown className="size-3" aria-hidden />
           </Button>
@@ -178,7 +181,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
           />
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
+    </ButtonGroup>
   );
 }
 

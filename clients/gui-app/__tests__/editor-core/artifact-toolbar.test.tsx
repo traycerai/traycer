@@ -159,8 +159,11 @@ describe("ArtifactToolbar", () => {
     expect(buttonLabels).toContain("Heading 1");
     expect(buttonLabels).not.toContain("Undo");
     expect(buttonLabels).not.toContain("Redo");
+    // The stacking context belongs to the floating wrapper, not the toolbar
+    // itself. It is a class rather than an inline style, because a literal in
+    // `style` is what `shadcn/no-inline-styles` rejects.
     expect(toolbar.style.zIndex).toBe("");
-    expect(toolbar.parentElement?.style.zIndex).toBe("40");
+    expect(toolbar.parentElement?.classList.contains("z-40")).toBe(true);
     editor.destroy();
   });
 

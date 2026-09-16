@@ -46,7 +46,8 @@ export function DocumentSearchBar({
         onKeyDown={handleKeyDown}
         placeholder="Find in document"
         aria-label="Find in document"
-        className="h-6 min-w-0 flex-1 px-2 text-ui-xs"
+        className="h-6 min-w-0 flex-1"
+        size="xs"
       />
       <span
         className="whitespace-nowrap text-ui-xs text-muted-foreground"
