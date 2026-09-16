@@ -41,13 +41,31 @@ import type {
  * floor - a label emitted onto the floor is drawn either way, rather than
  * appearing only when there is no offscreen surface to bake into.
  *
- * Only sprites qualify. Labels are drawn later in SCREEN space, clocks need
- * hands over them, and an envelope or a logo is not static by nature.
+ * Sprites qualify, and so does a block or quad the painter marked as GROUND.
+ * Labels are drawn later in SCREEN space, clocks need hands over them, and an
+ * envelope or a logo is not static by nature.
+ *
+ * The ground case is the one thing a partition on `kind` alone could not
+ * express. A civic room's tint is floor - it belongs under the reception
+ * counter and the glass screens standing on it - but the static path blits
+ * every baked sprite and only then draws what did not bake, so a tint left out
+ * of the bake is painted over those fixtures no matter how early the painter
+ * emitted it. Array order puts it right on the fallback path and nowhere else,
+ * which is exactly the split this predicate exists to prevent. Admitting it
+ * here puts both paths back on the painter's own order.
+ *
+ * A lod-0 block map is deliberately NOT marked: at overview the floor is
+ * nothing but blocks covering the whole world, and baking those would allocate
+ * the bitmap the block map exists to avoid.
  */
 export function officeBakesIntoStaticFloor(
   drawable: OfficeDrawable,
-): drawable is Extract<OfficeDrawable, { kind: "sprite" }> {
-  return drawable.kind === "sprite";
+): drawable is Extract<OfficeDrawable, { kind: "sprite" | "block" | "quad" }> {
+  if (drawable.kind === "sprite") return true;
+  if (drawable.kind === "block" || drawable.kind === "quad") {
+    return drawable.ground === true;
+  }
+  return false;
 }
 
 /**
