@@ -13,10 +13,12 @@ import { z } from "zod";
 import {
   HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeBusyHoldersSchema,
+  worktreeBusyHoldersSchemaV1,
   worktreeBusyOwnerRefSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export {
   HOLDERS_REVISION_DIGEST_PATTERN,
+  worktreeBusyChatTierSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
@@ -27,6 +29,7 @@ export {
   worktreeHoldersChangedErrorDetailsSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export type {
+  WorktreeBusyChatTier,
   WorktreeBusyErrorDetails,
   WorktreeBusyHoldKind,
   WorktreeBusyHolder,
@@ -966,7 +969,8 @@ export type WorktreeListHoldersRequest = z.infer<
 >;
 
 export const worktreeListHoldersResponseSchema = z.object({
-  holders: worktreeBusyHoldersSchema,
+  /** Released `@1.0` holder shape - see `worktreeBusyHolderSchemaV1`. */
+  holders: worktreeBusyHoldersSchemaV1,
   /**
    * Host-computed digest of `holders`. Optional so a pre-revision
    * response still parses; a current host always emits it. Present
@@ -978,6 +982,24 @@ export const worktreeListHoldersResponseSchema = z.object({
 });
 export type WorktreeListHoldersResponse = z.infer<
   typeof worktreeListHoldersResponseSchema
+>;
+
+/**
+ * `worktree.listHolders@1.1` - request unchanged (aliased so the two cannot
+ * drift); the response's `chat-turn` holders may carry `chatTier`, the WHY
+ * behind a chat's `working` activity. A `@1.0` client reparses through its
+ * own frozen holder object and strips the key.
+ */
+export const worktreeListHoldersRequestSchemaV11 =
+  worktreeListHoldersRequestSchema;
+export type WorktreeListHoldersRequestV11 = WorktreeListHoldersRequest;
+
+export const worktreeListHoldersResponseSchemaV11 = z.object({
+  holders: worktreeBusyHoldersSchema,
+  holdersRevision: z.string().regex(HOLDERS_REVISION_DIGEST_PATTERN).optional(),
+});
+export type WorktreeListHoldersResponseV11 = z.infer<
+  typeof worktreeListHoldersResponseSchemaV11
 >;
 
 /**

@@ -123,8 +123,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // this branch's auto-mode line re-minted above THAT at @1.12.
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(12);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
-      2,
+      3,
     );
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
