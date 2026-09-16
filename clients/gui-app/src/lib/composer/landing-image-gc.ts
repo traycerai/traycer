@@ -26,6 +26,7 @@
  */
 
 import {
+  ensureMeasuredImageSizes,
   flushReclaimCustody,
   imageHashKeys,
   reclaimImageBytes,
@@ -148,6 +149,10 @@ export async function reconcile(): Promise<void> {
   // write was refused, and those are readable only through that custody. Making
   // them durable again is what lets this sweep reason about the partition at
   // all.
+  // Retries a hydration that failed earlier, and is a no-op once it has
+  // succeeded. Admission stays conservative until then, so this is what ends
+  // that state rather than leaving it for the session's lifetime.
+  await ensureMeasuredImageSizes();
   const stillHeld = await flushReclaimCustody();
   if (stillHeld > 0) {
     appLogger.warn("[landing-image-gc] bytes still held after a failed write", {

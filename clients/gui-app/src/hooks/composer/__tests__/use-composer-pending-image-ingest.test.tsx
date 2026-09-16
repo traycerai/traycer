@@ -681,8 +681,8 @@ describe("F5: the 15s deadline and abort responsiveness (use-composer-pending-im
             releaseSpy();
             real.release();
           },
-          settleStored: (hash: string) => {
-            real.settleStored(hash);
+          settleStored: (candidateIndex: number, hash: string) => {
+            real.settleStored(candidateIndex, hash);
           },
         };
       },

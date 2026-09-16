@@ -262,16 +262,22 @@ export async function getImageBytes(
     knownHashes.add(hash);
     return fromSession.bytes;
   }
+  // Custody FIRST, and before the durable read rather than after it. While a
+  // reclaim holds these bytes the partition does not have them, so the read can
+  // only miss - and it can do worse than miss: the case custody exists for
+  // includes a database that is closing or refusing writes, where the read
+  // THROWS and a reader that consults custody afterwards never gets there.
+  const retained = reclaimCustody.get(hash);
+  if (retained !== undefined) {
+    knownHashes.add(hash);
+    return retained;
+  }
   const stored = await get<ImageBytes>(hash, imageStore());
   if (stored !== undefined) {
     knownHashes.add(hash);
     rememberMeasuredSize(hash, stored.byteLength);
-    return stored;
   }
-  // The partition can be missing bytes a reclaim is holding mid-flight - it
-  // deletes before it knows whether it may. A read arriving in that window is
-  // not a miss.
-  return reclaimCustody.get(hash);
+  return stored;
 }
 
 /**
@@ -314,13 +320,45 @@ export type ImageReclaimOutcome =
  *     at any point up to that line is visible to it, and the delete is undone by
  *     writing the retained bytes back.
  *
- * What is left is the acquisition that lands after step 3: a reference to a hash
- * that was unrooted at the instant it was deleted, being brought back to life
- * afterwards. That is a resurrected dead reference, not a lost live one, and it
- * is not reachable from the paths that acquire roots here - each of them holds
- * the content it is rooting from the moment it captures it.
+ * What is left is the acquisition that lands after step 3, and custody does NOT
+ * bound it: a reclaim that decides "reclaimed" drops its retained copy before
+ * it returns, so a root appearing afterwards finds nothing. That window belongs
+ * to the CALLER, and the rule it implies is the one the mirror's prefetch now
+ * follows: whoever will root a hash must hold it from the moment it has the
+ * bytes in hand, not from the moment it installs the document. A local hit held
+ * only in a local map while a sibling blob is still arriving is exactly the
+ * unrooted interval this protocol cannot see.
  */
-export async function reclaimImageBytes(
+export function reclaimImageBytes(
+  hash: string,
+  isRooted: ImageRootProbe,
+): Promise<ImageReclaimOutcome> {
+  // ONE reclaim per hash at a time. Sweeps are debounced, not serialized, so
+  // two of them can reach the same orphan - and the custody map is keyed by
+  // hash, so the first to finish deleted the entry the second was still
+  // relying on: its reader answered `undefined` mid-restore, and a restore
+  // that then failed left no copy anywhere while `knownHashes` still said
+  // present. Refcounting the entry would not fix it either; the two reclaims
+  // disagree about what they are doing to the same bytes.
+  //
+  // A joiner takes the first flight's answer. Both are asking the same
+  // question - "is anything still referencing this?" - and the answer that
+  // matters is the one read at the commit point, which is the flight's own.
+  const existing = reclaimFlights.get(hash);
+  if (existing !== undefined) return existing;
+  const flight = runImageReclaim(hash, isRooted).finally(() => {
+    // Identity-checked: a later flight for the same hash must not be evicted
+    // by this one's cleanup.
+    if (reclaimFlights.get(hash) === flight) reclaimFlights.delete(hash);
+  });
+  reclaimFlights.set(hash, flight);
+  return flight;
+}
+
+/** In-flight reclaims, one per hash. See `reclaimImageBytes`. */
+const reclaimFlights = new Map<string, Promise<ImageReclaimOutcome>>();
+
+async function runImageReclaim(
   hash: string,
   isRooted: ImageRootProbe,
 ): Promise<ImageReclaimOutcome> {
@@ -350,7 +388,14 @@ export async function reclaimImageBytes(
   try {
     await del(hash, store);
     if (!stillRooted(hash, isRooted)) {
+      // Everything this partition knew about the hash goes with the bytes. A
+      // surviving measurement is not inert: the budget charges a root by its
+      // measured size, so a stale one made an ABSENT stash-only root cost the
+      // size it used to have, and a restore of the very bytes that were
+      // reclaimed was refused for the space it thought they still occupied.
       knownHashes.delete(hash);
+      measuredSizes.delete(hash);
+      void del(hash, imageSizeStore()).catch(() => undefined);
       reclaimCustody.delete(hash);
       return "reclaimed";
     }
@@ -386,6 +431,11 @@ const reclaimCustody = new Map<string, ImageBytes>();
  */
 export async function flushReclaimCustody(): Promise<number> {
   for (const [hash, bytes] of [...reclaimCustody]) {
+    // A reclaim holding this hash owns it: it is between its own delete and
+    // its own decision, and writing the bytes back underneath it would race
+    // the very commit it is about to make. Its `finally` leaves custody in
+    // whatever state is true, and the next sweep picks up what is left.
+    if (reclaimFlights.has(hash)) continue;
     try {
       await set(hash, bytes, imageStore());
       knownHashes.add(hash);
@@ -533,11 +583,38 @@ async function hydrateMeasuredImageSizes(): Promise<void> {
  * misreading, since a store that cannot be opened is exactly when nothing can
  * be measured. The flag is set only on the path that actually enumerated.
  */
-const measuredSizesHydration: Promise<void> = hydrateMeasuredImageSizes()
-  .then(() => {
-    measuredSizesHydrated = true;
-  })
-  .catch(() => undefined);
+let measuredSizesHydrationAttempt: Promise<void> | null = null;
+
+/**
+ * Hydrate if it has not succeeded yet, joining an attempt already running.
+ *
+ * Retryable on purpose. A single transient enumeration failure - a database
+ * still opening, a browser refusing the connection once - otherwise left the
+ * readiness flag false for the whole session, and every unmeasured root then
+ * cost the per-image ceiling forever: thirteen absent stash roots made a 64 KiB
+ * paste impossible until the app was restarted. Conservative until it succeeds,
+ * not conservative for good. The sweep calls this, so the retries ride triggers
+ * that already exist rather than a timer of this module's own.
+ */
+export function ensureMeasuredImageSizes(): Promise<void> {
+  if (measuredSizesHydrated) return Promise.resolve();
+  const running = measuredSizesHydrationAttempt;
+  if (running !== null) return running;
+  const attempt = hydrateMeasuredImageSizes()
+    .then(() => {
+      measuredSizesHydrated = true;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (measuredSizesHydrationAttempt === attempt) {
+        measuredSizesHydrationAttempt = null;
+      }
+    });
+  measuredSizesHydrationAttempt = attempt;
+  return attempt;
+}
+
+const measuredSizesHydration: Promise<void> = ensureMeasuredImageSizes();
 
 /**
  * Whether the cold-start measurement above has finished.

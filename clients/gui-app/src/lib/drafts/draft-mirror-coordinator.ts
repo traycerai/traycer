@@ -4,6 +4,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import {
+  holdPendingIngestImageHash,
+  releasePendingIngestImageHashes,
+} from "@/lib/composer/pending-ingest-image-roots";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import {
@@ -624,24 +628,44 @@ async function prefetchDocumentBlobs(
   const client = sessionClients.get(document.ownerHostId);
   const hashes = blobHashesOfDocument(document);
   if (client === undefined || hashes.length === 0) return "continue";
-  const images = await readDraftBlobsIntoLocalStore(
-    document.ownerHostId,
-    client,
-    hashes,
-  );
-  if (
-    document.kind === "landing" &&
-    cloudIngestSeqByDraft.get(document.draftId) !== applySeq
-  ) {
-    return "abandoned";
+  // ROOTED while this apply runs, and that is not belt and braces.
+  //
+  // A hash this partition already holds is a LOCAL hit: the read answers from
+  // the store and nothing about that hit roots it. The document that will root
+  // it is not installed yet - it is waiting for the slowest hash in the same
+  // batch, which may be a host round trip - so between the two a sweep sees an
+  // unreferenced hash, correctly calls it an orphan, and takes bytes this apply
+  // is about to need. The apply then installs a document naming a digest whose
+  // bytes it never re-writes.
+  //
+  // Held per hash as it resolves rather than per batch, so an early local hit
+  // is covered for as long as its siblings run, and released on EVERY exit
+  // below - after the install, so custody passes to the document's own root
+  // with no gap.
+  const holderId = `draft-mirror-prefetch:${document.ownerHostId}:${document.draftId}:${applySeq}`;
+  for (const hash of hashes) holdPendingIngestImageHash(holderId, hash);
+  try {
+    const images = await readDraftBlobsIntoLocalStore(
+      document.ownerHostId,
+      client,
+      hashes,
+    );
+    if (
+      document.kind === "landing" &&
+      cloudIngestSeqByDraft.get(document.draftId) !== applySeq
+    ) {
+      return "abandoned";
+    }
+    if (!applyStillOwned(applyOwner, document)) return "abandoned";
+    rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
+    if (document.kind === "stash-entry") {
+      await ingestStashDocument(document, images, applyOwner);
+      return "ingested";
+    }
+    return "continue";
+  } finally {
+    releasePendingIngestImageHashes(holderId);
   }
-  if (!applyStillOwned(applyOwner, document)) return "abandoned";
-  rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
-  if (document.kind === "stash-entry") {
-    await ingestStashDocument(document, images, applyOwner);
-    return "ingested";
-  }
-  return "continue";
 }
 
 async function applyHostDocument(document: DraftDocument): Promise<void> {
@@ -1253,6 +1277,11 @@ export async function ingestCloudDraftSummary(input: {
   readonly hostId: string;
   readonly summary: CloudChatSummary;
   readonly document: DraftDocument;
+  /**
+   * The account the head read was ISSUED under. See below: a continuation
+   * cannot ask who it belongs to, it can only be told.
+   */
+  readonly readOwner: string | null;
 }): Promise<void> {
   if (input.summary.ownerHostId === input.hostId) return;
   // A host-bound surface is never a replica here. `applyComposerHostDocument`
@@ -1268,8 +1297,13 @@ export async function ingestCloudDraftSummary(input: {
   // snapshot. Ownership never moves, so there is nothing else to admit: a
   // dirty own row keeps its content (`applyLandingHostDocument`), and a
   // replica head is exactly what the directory is for.
-  // The ACCOUNT this ingest belongs to, captured before the apply's own awaits.
-  const ingestOwner = currentDraftBlobOwnerId();
+  // The ACCOUNT this ingest belongs to. Taken from the CALLER, which captured
+  // it when it issued the head read - reading it here would answer with
+  // whoever holds the window now, which is the whole failure: a read that
+  // started under A and finished under B would install A's text under B with
+  // every check agreeing.
+  const ingestOwner = input.readOwner;
+  if (currentDraftBlobOwnerId() !== ingestOwner) return;
   await applyHostDocument(input.document);
   // An apply that abandoned installed no row, so this document roots nothing
   // and there is nothing for recovery to fetch FOR. Running it anyway is not

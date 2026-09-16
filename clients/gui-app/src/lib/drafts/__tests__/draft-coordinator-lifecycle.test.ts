@@ -1178,6 +1178,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     const document = landingCloudDocument(id, "host-b", "cloud body");
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary: landingCloudSummary(document),
       document,
     });
@@ -1325,6 +1326,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     const document = landingCloudDocument("seq-check", "host-b", "cloud body");
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary: landingCloudSummary(document),
       document,
     });
@@ -1356,6 +1358,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     const document = landingCloudDocument(id, "host-b", "cloud body");
     const ingest = ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary: landingCloudSummary(document),
       document,
     });

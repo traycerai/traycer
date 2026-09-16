@@ -118,19 +118,25 @@ export interface LandingImageBudgetReservation {
    */
   release(): void;
   /**
-   * Name the hash an ANONYMOUS slot turned out to be, once its bytes are
-   * stored. Ownership of the charge moves to that hash, so the moment the
-   * bytes become a live root the root sum - not this reservation - is what
-   * charges them.
+   * Name the hash the candidate at `candidateIndex` turned out to be, once its
+   * bytes are stored. Ownership of that slot's charge moves to the hash, so the
+   * root sum - not this reservation - is what charges the part it covers.
    *
    * Without it a batch that stores its items one at a time charges the landed
    * ones twice, as a root AND as an outstanding slot, for as long as its
    * slowest sibling takes. Releasing the whole batch early is not the
    * alternative: the siblings still need their capacity.
    *
-   * A no-op when this reservation has no unnamed slot left, or after release.
+   * The INDEX is required rather than inferred, and that is not ceremony: the
+   * writes of one batch run concurrently, so "the first unnamed slot" is
+   * whichever item happens to be slowest, not the one that just landed.
+   * Settling a 5 MiB slot with a 1 MiB duplicate's hash made 4 MiB of
+   * outstanding work disappear.
+   *
+   * A no-op for an index that was never charged (an already-rooted candidate),
+   * or after release.
    */
-  settleStored(hash: string): void;
+  settleStored(candidateIndex: number, hash: string): void;
 }
 
 function imageHashesOf(content: JsonContent): Set<string> {
@@ -230,10 +236,12 @@ function rootByteCost(hash: string, declared: Map<string, number>): number {
  * free, and admission - which skips a candidate that is already a root - handed
  * out the same allowance twice.
  */
-function currentReferencedBytes(): number {
-  const declared = declaredSizeByHash(currentDrafts());
+function referencedBytesOverRoots(
+  liveRoots: ReadonlySet<string>,
+  declared: Map<string, number>,
+): number {
   let total = 0;
-  for (const hash of landingLiveImageRootHashes()) {
+  for (const hash of liveRoots) {
     total += rootByteCost(hash, declared);
   }
   return total;
@@ -264,25 +272,41 @@ function nextAnonymousKey(): string {
 }
 
 /**
- * Outstanding reservations, minus the ones the root sum is ALREADY charging.
+ * Outstanding reservations, each minus what the root sum is ALREADY charging
+ * for the same hash.
  *
- * A reservation covers bytes that are not in the partition yet. The moment they
+ * A reservation covers bytes that are not fully accounted for yet. Once they
  * land and something references them they become a root, and a root is charged
- * by `currentReferencedBytes` - so a hashed reservation still held at that point
- * is the same bytes counted twice, which refuses work that fits.
+ * by `currentReferencedBytes` - so a hashed reservation still held at that
+ * point would be the same bytes counted twice, which refuses work that fits.
  *
- * An ANONYMOUS slot (a paste that reserves before it has hashed the bytes)
- * cannot be recognised this way, so it stays charged until its batch releases -
- * which is at most as long as that batch's own writes take. That window
- * over-charges rather than over-admits, which is the direction to be wrong in.
+ * SUBTRACTED, not skipped, and the difference is the whole point: a root whose
+ * bytes this partition does not hold is charged ZERO (see `rootByteCost`), so
+ * dropping its reservation on the grounds that "a root exists" made those bytes
+ * free - a stash restoring a missing crop could then be admitted twice over.
+ * What the reservation is for is exactly the part the root sum is not charging.
+ *
+ * An ANONYMOUS slot (a paste that reserves before it has hashed the bytes) is
+ * never a root key, so it stays charged in full until it is settled or
+ * released.
  */
-function inFlightBytes(liveRoots: ReadonlySet<string>): number {
+function outstandingReservedBytes(rootCharge: (key: string) => number): number {
   let total = 0;
   for (const [key, entry] of inFlight) {
-    if (liveRoots.has(key)) continue;
-    total += entry.bytes;
+    total += Math.max(0, entry.bytes - rootCharge(key));
   }
   return total;
+}
+
+/**
+ * The refusal copy, shared so a caller that admits through
+ * `tryReserveLandingImageResidency` tells the user the same thing the ordinary
+ * path does rather than failing silently.
+ */
+export function showLandingImageBudgetExceededToast(
+  draftId: string | null,
+): void {
+  showBudgetExceededToast(draftId);
 }
 
 function showBudgetExceededToast(draftId: string | null): void {
@@ -360,7 +384,12 @@ function reserve(
   skipLiveRoots: boolean,
 ): LandingImageBudgetReservation | null {
   const liveRoots = landingLiveImageRootHashes();
-  const owned: Array<{ readonly key: string; readonly bytes: number }> = [];
+  const declared = declaredSizeByHash(currentDrafts());
+  const rootCharge = (key: string): number =>
+    liveRoots.has(key) ? rootByteCost(key, declared) : 0;
+  // One slot per CANDIDATE, positionally - `null` where nothing was charged.
+  // `settleStored` addresses these by index, so the array cannot be compacted.
+  const slots: Array<{ key: string; readonly bytes: number } | null> = [];
   const seenThisCall = new Set<string>();
   let additionalBytes = 0;
   for (const candidate of candidates) {
@@ -369,64 +398,70 @@ function reserve(
       candidate.hash !== null &&
       liveRoots.has(candidate.hash)
     ) {
+      slots.push(null);
       continue;
     }
     const key = candidate.hash ?? nextAnonymousKey();
-    owned.push({ key, bytes: candidate.bytes });
+    slots.push({ key, bytes: candidate.bytes });
     if (!inFlight.has(key) && !seenThisCall.has(key)) {
-      additionalBytes += candidate.bytes;
+      additionalBytes += Math.max(0, candidate.bytes - rootCharge(key));
     }
     seenThisCall.add(key);
   }
 
   if (additionalBytes > 0) {
     const projected =
-      currentReferencedBytes() + inFlightBytes(liveRoots) + additionalBytes;
+      referencedBytesOverRoots(liveRoots, declared) +
+      outstandingReservedBytes(rootCharge) +
+      additionalBytes;
     if (projected > LANDING_IMAGE_BUDGET_BYTES) {
       return null;
     }
   }
 
-  for (const { key, bytes } of owned) {
-    const existing = inFlight.get(key);
+  for (const slot of slots) {
+    if (slot === null) continue;
+    const existing = inFlight.get(slot.key);
     if (existing === undefined) {
-      inFlight.set(key, { bytes, refCount: 1 });
+      inFlight.set(slot.key, { bytes: slot.bytes, refCount: 1 });
     } else {
       existing.refCount += 1;
     }
   }
 
   let released = false;
-  const held = [...owned];
+  function dropSlot(key: string): void {
+    const existing = inFlight.get(key);
+    if (existing === undefined) return;
+    existing.refCount -= 1;
+    if (existing.refCount <= 0) inFlight.delete(key);
+  }
   return {
     release: () => {
       if (released) return;
       released = true;
-      for (const { key } of held) {
-        const existing = inFlight.get(key);
-        if (existing === undefined) continue;
-        existing.refCount -= 1;
-        if (existing.refCount <= 0) inFlight.delete(key);
+      for (const slot of slots) {
+        if (slot === null) continue;
+        dropSlot(slot.key);
       }
     },
-    settleStored: (hash: string) => {
+    settleStored: (candidateIndex: number, hash: string) => {
       if (released) return;
-      for (const [index, slot] of held.entries()) {
-        if (!slot.key.startsWith(ANON_PREFIX)) continue;
-        const existing = inFlight.get(slot.key);
-        if (existing !== undefined) {
-          existing.refCount -= 1;
-          if (existing.refCount <= 0) inFlight.delete(slot.key);
-        }
-        const named = inFlight.get(hash);
-        if (named === undefined) {
-          inFlight.set(hash, { bytes: slot.bytes, refCount: 1 });
-        } else {
-          named.refCount += 1;
-        }
-        held[index] = { key: hash, bytes: slot.bytes };
-        return;
+      // `.at` rather than an index read: an out-of-range index is `undefined`
+      // by contract here rather than by a compiler setting, and `null` marks a
+      // candidate that was never charged. Neither is a caller error worth
+      // throwing over - the charge simply is not this reservation's to move.
+      const slot = slots.at(candidateIndex) ?? null;
+      if (slot === null) return;
+      if (slot.key === hash) return;
+      dropSlot(slot.key);
+      const named = inFlight.get(hash);
+      if (named === undefined) {
+        inFlight.set(hash, { bytes: slot.bytes, refCount: 1 });
+      } else {
+        named.refCount += 1;
       }
+      slot.key = hash;
     },
   };
 }

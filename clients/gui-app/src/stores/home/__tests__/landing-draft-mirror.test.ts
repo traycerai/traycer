@@ -17,6 +17,16 @@ import {
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import {
+  getImageBytes,
+  putImage,
+  releaseSession,
+} from "@/lib/composer/landing-image-store";
+import {
+  markLandingDraftsReady,
+  markLandingEditorMounted,
+  reconcile,
+} from "@/lib/composer/landing-image-gc";
+import {
   completeLandingDraftDelete,
   landingDraftIsRetired,
   pendingLandingDraftDeleteHostId,
@@ -837,6 +847,105 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(landingDraftIsRetired(id)).toBe(true);
   });
 
+  it("roots a locally-held image while the apply waits for a sibling blob (DRIVE RED)", async () => {
+    // A document names two images. One is already in this partition - a LOCAL
+    // hit, answered from the store, with nothing rooting it - and the other
+    // needs a host round trip. Between the hit and the install there is no
+    // root, so one ordinary sweep correctly calls the local one an orphan and
+    // takes it; the apply then installs a document naming bytes that are gone,
+    // and the local-hit path never re-writes them.
+    const hostId = "host-prefetch-roots";
+    const stream = controlledStream();
+    const localBytes = new Uint8Array([4, 4, 2, 2]).fill(7);
+    const localHash = await putImage(localBytes);
+    // Not session-cached: that entry is a root of its own, and this is about
+    // the bytes that have nothing holding them.
+    releaseSession(localHash);
+    const remoteHash = "ab".repeat(32);
+
+    let releaseRemote: (() => void) | undefined;
+    const remoteRead = new Promise<{
+      readonly ok: false;
+      readonly reason: "missing";
+    }>((resolve) => {
+      releaseRemote = () => resolve({ ok: false, reason: "missing" });
+    });
+    let remoteStarted = false;
+    const client = {
+      request: (method: string, _params: unknown) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.readBlob") {
+          remoteStarted = true;
+          return remoteRead;
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+    };
+    acquireDraftMirrorSession({
+      hostId,
+      client: client as never,
+      streamClient: stream.client,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.started.value).toBe(true);
+    });
+
+    const applying = applyIncomingDraftDocument({
+      draftId: "draft-prefetch-roots",
+      kind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      revision: 1,
+      lastTouchedAt: 1,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: EMPTY_LANDING_DRAFT_CONTENT,
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [localHash, remoteHash],
+        closed: false,
+      },
+    });
+    await vi.waitFor(() => {
+      expect(remoteStarted).toBe(true);
+    });
+
+    // One ordinary sweep, mid-apply. Nothing else references the local hash.
+    markLandingEditorMounted();
+    markLandingDraftsReady();
+    await reconcile();
+
+    // Compared as plain numbers: a value round-tripped through the fake
+    // IndexedDB is a typed array from another realm, which `toEqual` refuses
+    // even when every byte matches.
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      7, 7, 7, 7,
+    ]);
+    releaseRemote?.();
+    await applying;
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      7, 7, 7, 7,
+    ]);
+  });
+
   it("keeps the host revision frontier for direct host-document application", () => {
     const id = "landing-revision-frontier";
     const base = {
@@ -1383,6 +1492,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     // the id is retired.
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary,
       document,
     });
@@ -1397,6 +1507,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(pendingLandingDraftDeletesForHost("host-a")).toEqual([]);
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary,
       document,
     });

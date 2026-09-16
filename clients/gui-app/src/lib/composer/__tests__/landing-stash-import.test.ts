@@ -361,11 +361,14 @@ describe("importPromptStashContentToLanding", () => {
     expect(putSpy).not.toHaveBeenCalled();
   });
 
-  it("returns null when reserveLandingImageBudget rejects", async () => {
+  it("returns null when the residency admission rejects", async () => {
+    // RESIDENCY, not the ordinary path: these bytes are about to become
+    // resident under a hash the stash entry already roots while absent, and
+    // the ordinary path charges such a candidate nothing.
     const bytes = bytesOf([9, 9]);
     const stashHash = await seedStashImage(bytes);
     const budget = await import("@/lib/composer/landing-image-budget");
-    vi.spyOn(budget, "reserveLandingImageBudget").mockReturnValue(null);
+    vi.spyOn(budget, "tryReserveLandingImageResidency").mockReturnValue(null);
     const putSpy = vi.spyOn(landingImageStore, "putImage");
 
     const result = await importPromptStashContentToLanding(

@@ -478,6 +478,54 @@ describe("landing-image-gc", () => {
     expect(await m.store.getImageBytes(hash)).toEqual(bytesOf([5, 6, 7, 8]));
   });
 
+  it("serializes two reclaims of one hash so neither takes the other's copy (DRIVE RED)", async () => {
+    // Sweeps are debounced, not serialized, so two of them can reach the same
+    // orphan. Custody is keyed by hash, so the first to finish deleted the
+    // entry the second was still relying on - its reader answered `undefined`
+    // mid-restore, and a restore that then failed left no copy anywhere while
+    // the presence set still said present.
+    const m = await loadModules({ desktop: true });
+    const hash = "restored-two-sweeps";
+    const bytes = bytesOf([1, 1, 2, 3, 5, 8]);
+    await m.idb.set(hash, bytes, m.store.imageStore());
+
+    // Hold the delete open so the second reclaim starts while the first is
+    // still inside its own.
+    let releaseDelete: () => void = () => undefined;
+    const deleteGate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    let deletes = 0;
+    // Writes the deletion itself rather than delegating back to `m.idb.del` -
+    // that IS this mock, so a persistent implementation calling it recurses
+    // until the worker dies. (`mockImplementationOnce` elsewhere falls through
+    // to the base implementation, which is why those delegate safely.)
+    vi.mocked(m.idb.del).mockImplementation(async (key, store) => {
+      // BYTE deletes only: reclaiming also retires the hash's measured size,
+      // which is a delete against a different database through this same spy.
+      if (idb.dbNameOf.get(store)?.endsWith(":landing-images") === true) {
+        deletes += 1;
+      }
+      await deleteGate;
+      idb.dataFor(store).delete(idbStringKey(key));
+    });
+
+    m.gc.markLandingEditorMounted();
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    const first = m.store.reclaimImageBytes(hash, () => false);
+    const second = m.store.reclaimImageBytes(hash, () => false);
+    // The second JOINS rather than opening its own delete.
+    expect(second).toBe(first);
+    releaseDelete();
+
+    expect(await first).toBe("reclaimed");
+    expect(await second).toBe("reclaimed");
+    expect(deletes).toBe(1);
+    expect(m.store.reclaimCustodyHashesForTests()).toEqual([]);
+  });
+
   it("still reclaims a genuine orphan when no root appears (positive control)", async () => {
     const m = await loadModules({ desktop: true });
     m.gc.markLandingEditorMounted();

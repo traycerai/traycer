@@ -12,6 +12,7 @@ import {
   LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
   registerExtraImageRootSource,
   reserveLandingImageBudget,
+  tryReserveLandingImageResidency,
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
@@ -226,7 +227,7 @@ describe("reserveLandingImageBudget", () => {
     const bytes = new Uint8Array(512).fill(9);
     const hash = await putImage(bytes);
     extraRoots.push(hash);
-    batch?.settleStored(hash);
+    batch?.settleStored(0, hash);
 
     // 512 rooted + 512 still outstanding = 1024, not 1536.
     const exact = reserveLandingImageBudget(null, [
@@ -235,6 +236,71 @@ describe("reserveLandingImageBudget", () => {
     expect(exact).not.toBeNull();
     exact?.release();
     batch?.release();
+    extraRoots.length = 0;
+  });
+
+  it("settles the slot of the item that landed, not the first unnamed one (DRIVE RED)", async () => {
+    // A batch's writes run concurrently, so the fast item can settle while a
+    // slower, LARGER sibling is still outstanding. Settling "the first unnamed
+    // slot" moved the big slot's charge onto the small item's hash - and when
+    // that hash was already rooted, the difference vanished from the ledger
+    // entirely and the next admission saw capacity that does not exist.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const duplicate = new Uint8Array(1024).fill(4);
+    const duplicateHash = await putImage(duplicate);
+    extraRoots.push(duplicateHash);
+
+    const batch = reserveLandingImageBudget(null, [
+      { hash: null, bytes: 4096 },
+      { hash: null, bytes: 1024 },
+    ]);
+    expect(batch).not.toBeNull();
+    // The SECOND candidate is the one that landed, and its bytes are already a
+    // root - so settling it frees 1024 of outstanding charge, not 4096.
+    batch?.settleStored(1, duplicateHash);
+
+    // 1024 rooted + 4096 still outstanding. One byte more than the remainder
+    // must not fit.
+    expect(
+      reserveLandingImageBudget(null, [
+        {
+          hash: "a".repeat(64),
+          bytes: LANDING_IMAGE_BUDGET_BYTES - 1024 - 4096 + 1,
+        },
+      ]),
+    ).toBeNull();
+    batch?.release();
+    extraRoots.length = 0;
+  });
+
+  it("keeps charging a reservation whose root is charging ZERO for it (DRIVE RED)", async () => {
+    // A root whose bytes this partition does not hold costs nothing - that is
+    // what makes a dangling reference free. Dropping its reservation on the
+    // grounds that "a root exists" therefore made those bytes free twice over,
+    // which is how a stash restoring a missing crop could be admitted on top of
+    // a full partition.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const missingHash = "c".repeat(64);
+    extraRoots.push(missingHash);
+    // Rooted, absent: charged zero by the root sum.
+    const restoring = tryReserveLandingImageResidency([
+      { hash: missingHash, bytes: 4096 },
+    ]);
+    expect(restoring).not.toBeNull();
+
+    expect(
+      reserveLandingImageBudget(null, [
+        { hash: "d".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 4096 + 1 },
+      ]),
+    ).toBeNull();
+    const fits = reserveLandingImageBudget(null, [
+      { hash: "d".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 4096 },
+    ]);
+    expect(fits).not.toBeNull();
+    fits?.release();
+    restoring?.release();
     extraRoots.length = 0;
   });
 

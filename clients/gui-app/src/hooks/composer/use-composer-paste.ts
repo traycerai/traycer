@@ -888,7 +888,13 @@ async function hashImageAttrsFromFiles(
     });
     scheduleLandingImageReconcile();
   }
-  const storeAdmitted = reservation !== null;
+  // Which reservation slot each storable file took. The batch maps over
+  // `accepted` while the reservation was built from `storable`, so the two
+  // index spaces differ - and settling the wrong slot is worse than not
+  // settling at all: it moves a large slot's charge onto a small item's hash.
+  const reservationSlotByFile = new Map(
+    storable.map((file, index) => [file, index] as const),
+  );
   // One holder per BATCH: every hash this conversion produces is released
   // together, once the insertion decision has been made for all of them.
   const holderId = `composer-hash-ingest:${uuidv4()}`;
@@ -897,7 +903,10 @@ async function hashImageAttrsFromFiles(
     accepted.map(async (file): Promise<ImageAttachmentAttrs | null> => {
       signal.throwIfAborted();
       if (hostStorableImage(file)) {
-        if (!storeAdmitted) return null;
+        // The null check IS the admission check - `reservation` is null exactly
+        // when the budget refused this batch - and writing it this way narrows
+        // the handle for the settlement below.
+        if (reservation === null) return null;
         // Both awaits are bounded AND abort-responsive. `throwIfAborted` after
         // the fact is not enough: it only runs once the promise settles, so a
         // stall held the send gate open forever and no cancellation could
@@ -946,6 +955,15 @@ async function hashImageAttrsFromFiles(
         // the persisted bytes - after which the batch inserts a hash whose
         // bytes are gone.
         holdPendingIngestImageHash(holderId, hash);
+        // And the charge moves with it. These bytes are in the partition and
+        // rooted by the hold above, so the root sum charges them from here;
+        // leaving the anonymous slot standing counted them twice for as long
+        // as the slowest sibling in this batch took, which refused pastes that
+        // fit.
+        const reservationSlot = reservationSlotByFile.get(file) ?? null;
+        if (reservationSlot !== null) {
+          reservation.settleStored(reservationSlot, hash);
+        }
         return {
           id: uuidv4(),
           fileName: file.name || "image",

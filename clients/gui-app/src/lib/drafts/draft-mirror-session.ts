@@ -167,6 +167,8 @@ export class DraftMirrorSession {
   private readonly pending = new Map<string, PendingFlush>();
   private streamSession: IStreamSession | null = null;
   private closed = false;
+  /** See `start()`: the account this session was established for. */
+  private sessionOwner: string | null = null;
   private capabilityMissing = false;
   private bootGeneration = 0;
   private bootPromise: Promise<void> | null = null;
@@ -185,7 +187,24 @@ export class DraftMirrorSession {
   }
 
   start(): void {
+    // The ACCOUNT this session belongs to, for its whole life.
+    //
+    // A stream established under A keeps delivering after a switch or a
+    // sign-out, because closing it is passive cleanup and cleanup is
+    // asynchronous. Every frame handler that asks "who holds the window now?"
+    // gets the answer B, and installs A's private text under B with each check
+    // agreeing. A session cannot be told whose it is by its own frames; it
+    // knows because it was started by someone.
+    this.sessionOwner = currentDraftBlobOwnerId();
     void this.bootstrap();
+  }
+
+  /**
+   * Has the account this session was started for gone away? Frames delivered
+   * after that are A's, whoever holds the window now.
+   */
+  private sessionOwnerChanged(): boolean {
+    return currentDraftBlobOwnerId() !== this.sessionOwner;
   }
 
   close(): void {
@@ -400,7 +419,7 @@ export class DraftMirrorSession {
     // account B's window with every existing guard answering "yes, carry on".
     // Neither `closed` nor the generation can see that, because the thing that
     // moved is neither.
-    const bootOwner = currentDraftBlobOwnerId();
+    const bootOwner = this.sessionOwner;
     try {
       const listed = await this.rpc.list();
       if (this.isSupersededBoot(generation, bootOwner)) return;
@@ -501,6 +520,10 @@ export class DraftMirrorSession {
     frame: DraftsSubscribeServerFrameV10,
   ): Promise<void> {
     if (frame.kind !== "upsert" && frame.kind !== "delete") return;
+    // Before anything is read OR written: this frame belongs to whoever this
+    // stream was opened for, and if that account is gone the frame is not this
+    // window's to apply. `closed` cannot answer it - the close is on its way.
+    if (this.sessionOwnerChanged()) return;
     const localDirty = this.sink.isDirty(frame.draftId);
     const held = this.held.get(frame.draftId) ?? { kind: "absent" };
     const applies = clientDraftSubscribeFrameApplies({
@@ -516,6 +539,9 @@ export class DraftMirrorSession {
         revision: frame.revision,
       });
       await this.sink.applyUpsert(frame.draft);
+      // Re-checked on the far side of the apply's own awaits, like the
+      // bootstrap's row loop: the switch can land inside the blob read.
+      if (this.sessionOwnerChanged()) return;
       this.rememberIncomingSynced(frame.draft);
       return;
     }

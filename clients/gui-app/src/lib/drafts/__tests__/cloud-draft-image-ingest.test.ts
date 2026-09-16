@@ -198,6 +198,8 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
 
     await ingestCloudDraftSummary({
       hostId: INGESTING_HOST,
+      // Captured where the head read was issued.
+      readOwner: OWNER,
       summary: cloudSummary,
       document,
     });
@@ -240,6 +242,8 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     const cloudSummary = summary();
     await ingestCloudDraftSummary({
       hostId: INGESTING_HOST,
+      // Captured where the head read was issued.
+      readOwner: OWNER,
       summary: cloudSummary,
       document: stashDocument(cloudSummary, [stashHash]),
     });
@@ -256,6 +260,8 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     calls.length = 0;
     await ingestCloudDraftSummary({
       hostId: INGESTING_HOST,
+      // Captured where the head read was issued.
+      readOwner: OWNER,
       summary: cloudSummary,
       document: newChatDocument(cloudSummary, [newChatHash]),
     });
@@ -271,6 +277,8 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     const ingestOnce = (): Promise<void> =>
       ingestCloudDraftSummary({
         hostId: INGESTING_HOST,
+        // Captured where the head read was issued.
+        readOwner: OWNER,
         summary: cloudSummary,
         document: newChatDocument(cloudSummary, [hash]),
       });

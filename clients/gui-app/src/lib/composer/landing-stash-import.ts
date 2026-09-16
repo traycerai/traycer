@@ -15,7 +15,8 @@ import {
   type ComposerImageAtom,
 } from "@/lib/composer/image-atoms";
 import {
-  reserveLandingImageBudget,
+  showLandingImageBudgetExceededToast,
+  tryReserveLandingImageResidency,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
 import { putImage } from "@/lib/composer/landing-image-store";
@@ -57,7 +58,7 @@ export interface LandingStashImportResult {
  * delete-during-read race with another window. Once reads are in hand,
  * capacity is reserved from their measured byte length - never from a
  * carried-over Tiptap `size` attribute - via the canonical
- * `reserveLandingImageBudget`, which stays held across the writes below AND
+ * `tryReserveLandingImageResidency`, which stays held across the writes below AND
  * the caller's subsequent destination decision (see
  * `LandingStashImportResult.reservation`). Writes run sequentially so a
  * first/middle/last `putImage` failure stops immediately: this function
@@ -108,14 +109,23 @@ export async function importPromptStashContentToLanding(
     resolved.push({ stashHash, bytes: blob.bytes });
   }
 
-  const reservation = reserveLandingImageBudget(
-    draftId,
+  // RESIDENCY admission, not the ordinary kind. These bytes are about to be
+  // written into the partition, and the ordinary path charges nothing for a
+  // candidate whose hash is already a live root - which is right for a hash
+  // whose bytes are here, and wrong for a stash hash that is rooted while
+  // absent: `rootByteCost` prices that at zero, so importing it was free.
+  // A 68-byte paste was being refused at the same moment this could write
+  // megabytes.
+  const reservation = tryReserveLandingImageResidency(
     resolved.map(({ stashHash, bytes }) => ({
       hash: stashHash,
       bytes: bytes.byteLength,
     })),
   );
-  if (reservation === null) return null;
+  if (reservation === null) {
+    showLandingImageBudgetExceededToast(draftId);
+    return null;
+  }
 
   const landingHashByStashHash = new Map<string, string>();
   for (const { stashHash, bytes } of resolved) {
