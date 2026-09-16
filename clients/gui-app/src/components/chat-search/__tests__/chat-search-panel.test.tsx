@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHAT_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/chat-search/schemas";
 import type { ChatSearchChatMatch } from "@traycer/protocol/host/chat-search/schemas";
 import { ChatSearchPanel } from "@/components/chat-search/chat-search-panel";
-import type { ChatSearchBaseRequest } from "@/hooks/chats/use-chat-search-query";
+import type {
+  ChatSearchBaseRequest,
+  useChatSearchMessageRows,
+  useChatSearchResults,
+} from "@/hooks/chats/use-chat-search-query";
 import type { ChatSearchMergedResults } from "@/lib/chat-search/chat-search-results";
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -42,15 +46,15 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => readiness.current,
 }));
 
-const useChatSearchResultsMock = vi.hoisted(() => vi.fn());
-const useChatSearchMessageRowsMock = vi.hoisted(() => vi.fn());
+const useChatSearchResultsMock = vi.hoisted(() =>
+  vi.fn<typeof useChatSearchResults>(),
+);
+const useChatSearchMessageRowsMock = vi.hoisted(() =>
+  vi.fn<typeof useChatSearchMessageRows>(),
+);
 vi.mock("@/hooks/chats/use-chat-search-query", () => ({
-  useChatSearchResults: (
-    args: Parameters<typeof useChatSearchResultsMock>[0],
-  ) => useChatSearchResultsMock(args),
-  useChatSearchMessageRows: (
-    args: Parameters<typeof useChatSearchMessageRowsMock>[0],
-  ) => useChatSearchMessageRowsMock(args),
+  useChatSearchResults: useChatSearchResultsMock,
+  useChatSearchMessageRows: useChatSearchMessageRowsMock,
 }));
 
 vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
