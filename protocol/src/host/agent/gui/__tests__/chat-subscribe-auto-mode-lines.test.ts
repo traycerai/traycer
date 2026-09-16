@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   chatSubscribeV10,
   chatSubscribeV11,
@@ -12,6 +13,7 @@ import {
   chatSubscribeV19,
   chatSubscribeV110,
   chatSubscribeV111,
+  chatSubscribeV112,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   sessionImportRunV10,
@@ -172,14 +174,24 @@ const CHAT_SUBSCRIBE_LINES = [
   { label: "1.9", contract: chatSubscribeV19 },
   { label: "1.10", contract: chatSubscribeV110 },
   { label: "1.11", contract: chatSubscribeV111 },
+  { label: "1.12", contract: chatSubscribeV112 },
 ] as const;
 
-// The boundary is read off the live line's own version, never restated as a
-// literal `11` - that minor has already been renumbered once (see
-// `chatSubscribeV111`'s doc comment).
-const CHAT_SUBSCRIBE_AUTO_MINOR = chatSubscribeV111.schemaVersion.minor;
+// The boundary is read off the live line, never restated as a literal - that
+// minor has now been renumbered TWICE (see `chatSubscribeV112`'s doc comment).
+//
+// Read from the REGISTRY rather than from a `chatSubscribeV1NN` symbol, and
+// that distinction is the whole lesson of the second renumber. This line used
+// to say `chatSubscribeV111.schemaVersion.minor`, which looks derived and is
+// not: when main took `1.11` for the shell host and the auto line moved to
+// `1.12`, that symbol kept resolving - to a DIFFERENT contract - so the
+// boundary silently became `11` again and 25 assertions in this file and its
+// sibling went red pointing at the wrong line. `latestMinor` cannot be
+// redirected by a rename, because nothing about it is a name.
+const CHAT_SUBSCRIBE_AUTO_MINOR =
+  hostStreamRpcRegistry["chat.subscribe"][1].latestMinor;
 
-describe("chat.subscribe: the auto permission mode is pinned below 1.11, everywhere it can ride", () => {
+describe("chat.subscribe: the auto permission mode is pinned below 1.12, everywhere it can ride", () => {
   for (const line of CHAT_SUBSCRIBE_LINES) {
     const acceptsAuto =
       line.contract.schemaVersion.minor === CHAT_SUBSCRIBE_AUTO_MINOR;
@@ -290,7 +302,21 @@ describe("sessionImport.run: the auto permission mode is pinned below 1.2", () =
 // by the rebuild, which the by-`kind` assertions above cannot see because they
 // only ever address the frames that are still there.
 describe("chat.subscribe client-frame position guard for the auto widen", () => {
-  it("1.11's client frame admits the exact same ordered kind list as 1.10's", () => {
+  it("1.12's client frame admits the exact same ordered kind list as 1.11's", () => {
+    const v112Kinds = chatSubscribeV112.clientFrameSchema.options.map(
+      (option) => option.shape.kind.value,
+    );
+    const v111Kinds = chatSubscribeV111.clientFrameSchema.options.map(
+      (option) => option.shape.kind.value,
+    );
+
+    expect(v112Kinds).toEqual(v111Kinds);
+  });
+
+  // `1.11` binds the SAME frozen client union as `1.10`, which is the half of
+  // the shell-host tier that is easy to get wrong: its server frames moved and
+  // its client frames deliberately did not.
+  it("1.11's client frame is byte-for-byte 1.10's kind list - the tier widened only the server direction", () => {
     const v111Kinds = chatSubscribeV111.clientFrameSchema.options.map(
       (option) => option.shape.kind.value,
     );

@@ -2377,8 +2377,9 @@ const activeProfileUpdateClientFrameSchema = z.object({
 // it, so there is no honest sender to keep permissive - and unlike an unknown
 // harness id, a mode accepted on one of these lines mints durable state the
 // SAME line cannot then be served (`chatSubscribeSupportsPermissionMode`
-// refuses an `auto` chat below `1.11`). So the mode axis is pinned here and
-// only `1.11` re-widens it, in `chatSubscribeClientFrameSchemaOptions` below.
+// refuses an `auto` chat below `1.12`). So the mode axis is pinned here and
+// only `1.12` re-widens it, in `chatSubscribeClientFrameSchemaOptions` below.
+// `1.11` does NOT: main's shell-host tier widened the server direction only.
 const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
   z.object({
     kind: z.literal("send"),
@@ -2670,7 +2671,7 @@ const [, , , ...chatSubscribeClientFrameSchemaMiddleOptions] =
 
 // The middle segment again, this time by name. Four of these carry the
 // permission mode - three through the settings tuple and one directly - and
-// `1.11` re-widens exactly those four to the live enum
+// `1.12` re-widens exactly those four to the live enum
 // (`chatSubscribeClientFrameSchemaMiddleOptionsLive` below). Destructured from
 // the pre-auto list rather than re-declared, so the two lists can never come to
 // describe different frames.
@@ -2678,7 +2679,7 @@ const [, , , ...chatSubscribeClientFrameSchemaMiddleOptions] =
 // A mis-counted position here is silent in the SHAPE - the live list re-lists
 // the same handles in the same order, so the union's `kind` list does not move;
 // what moves is which frame got the widening. What catches it is
-// `chat-subscribe-auto-mode-lines.test.ts` asserting `1.11` accepts `auto` on
+// `chat-subscribe-auto-mode-lines.test.ts` asserting `1.12` accepts `auto` on
 // each of the six mode-bearing kinds BY KIND, which goes red on whichever frame
 // lost its rebind.
 const [
@@ -4021,7 +4022,7 @@ const chatWindowedSnapshotSchemaV110 = z.object({
   lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
   lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
 });
-// The live windowed snapshot (`chat.subscribe@1.11`): the `auto` permission
+// The live windowed snapshot (`chat.subscribe@1.12`): the `auto` permission
 // mode on the chat record's and the queued turn's settings, and the judge
 // fields on the approval card.
 // Frozen windowed snapshot bound to `chat.subscribe@1.11` - main's shell-host
@@ -4201,7 +4202,7 @@ export type ChatSubscribeWindowedServerFrame = z.infer<
 //
 // `chat`, `queue` and `pendingApprovals` are the pre-`auto` freezes for the
 // same reason the V18 base carries them: `1.9` is pre-auto, and the `auto`
-// line (`1.11`) re-widens all three. See `chatSubscribeV111`. Byte-stability
+// line (`1.12`) re-widens all three. See `chatSubscribeV112`. Byte-stability
 // against what staging shipped is pinned by `chat-schema-checkpoints.test.ts`.
 const chatWindowedSnapshotSchemaV19 = z.object({
   chat: chatRecordSchemaPreAuto,
@@ -4251,8 +4252,9 @@ const chatSubscribeServerFrameSchemaV19 = z.discriminatedUnion("kind", [
 // ─── Frozen `chat.subscribe@1.10` shape (pre-`auto`) ──────────────────────
 //
 // `1.10` is provider fallback as mainline minted it. It bound the live windowed
-// frames by reference until the `auto` permission mode took `1.11` above it,
-// and it holds back exactly what `1.11` adds: the `auto` member on a queued
+// frames by reference until the shell host took `1.11` and the `auto`
+// permission mode took `1.12` above it, and it holds back what `1.12` adds:
+// the `auto` member on a queued
 // turn's settings and the judge fields on the approval card. Every other arm is
 // the live one - the fallback DTOs, the live `range` and `turnStateChanged`,
 // the live `blockDelta`.

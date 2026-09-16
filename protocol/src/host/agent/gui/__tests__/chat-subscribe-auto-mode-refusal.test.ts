@@ -61,7 +61,7 @@ function parseLiveClientFrame(
 }
 
 // The six client-frame kinds `subscribe.ts` re-binds to the live permission
-// mode enum on `1.11` (see `chatSubscribeClientFrameSchemaMiddleOptionsLive`
+// mode enum on `1.12` (see `chatSubscribeClientFrameSchemaMiddleOptionsLive`
 // and the two `.extend({ settings: chatRunSettingsSchema })` spots at the top
 // of `chatSubscribeClientFrameSchemaOptions`): `send` and `editUserMessage`
 // through their `settings` tuple, `queueSteerNow` through the nullable
@@ -140,15 +140,20 @@ const MODE_BEARING_FRAME_KINDS: ReadonlyArray<{
 ];
 
 const V110: SchemaVersion = { major: 1, minor: 10 };
+// `1.11` is main's shell-host tier, which the merge to main slotted BELOW the
+// auto line. It is pre-`auto` like `1.10`, so it belongs on the refusing side
+// of the cliff - a line can gain a server surface and keep an older client
+// enum, and this is the case that proves the two freezes are separate.
 const V111: SchemaVersion = { major: 1, minor: 11 };
+const V112: SchemaVersion = { major: 1, minor: 12 };
 
-describe("projectChatClientFrameForVersion: the auto cliff at chat.subscribe@1.11", () => {
+describe("projectChatClientFrameForVersion: the auto cliff at chat.subscribe@1.12", () => {
   for (const frameKind of MODE_BEARING_FRAME_KINDS) {
     it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" on 1.10`, () => {
       const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
 
       expect(() => projectChatClientFrameForVersion(frame, V110)).toThrow(
-        'permissionMode "auto" requires chat.subscribe@1.11 or newer',
+        'permissionMode "auto" requires chat.subscribe@1.12 or newer',
       );
     });
 
@@ -158,17 +163,25 @@ describe("projectChatClientFrameForVersion: the auto cliff at chat.subscribe@1.1
       expect(projectChatClientFrameForVersion(frame, V110)).toBe(frame);
     });
 
-    it(`passes ${frameKind.kind} carrying "${AUTO_MODE}" through unchanged on 1.11`, () => {
+    it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" on 1.11 - the shell-host tier is still pre-auto`, () => {
       const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
 
-      expect(projectChatClientFrameForVersion(frame, V111)).toBe(frame);
+      expect(() => projectChatClientFrameForVersion(frame, V111)).toThrow(
+        'permissionMode "auto" requires chat.subscribe@1.12 or newer',
+      );
+    });
+
+    it(`passes ${frameKind.kind} carrying "${AUTO_MODE}" through unchanged on 1.12`, () => {
+      const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
+
+      expect(projectChatClientFrameForVersion(frame, V112)).toBe(frame);
     });
 
     it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" when the handshake has not resolved (null)`, () => {
       const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
 
       expect(() => projectChatClientFrameForVersion(frame, null)).toThrow(
-        'permissionMode "auto" requires chat.subscribe@1.11 or newer',
+        'permissionMode "auto" requires chat.subscribe@1.12 or newer',
       );
     });
   }
@@ -186,14 +199,15 @@ describe("projectChatClientFrameForVersion: the auto cliff at chat.subscribe@1.1
 });
 
 describe("supportsAutoPermissionMode", () => {
-  it("is false below 1.11", () => {
+  it("is false below 1.12, the shell-host tier at 1.11 included", () => {
+    expect(supportsAutoPermissionMode({ major: 1, minor: 11 })).toBe(false);
     expect(supportsAutoPermissionMode({ major: 1, minor: 10 })).toBe(false);
     expect(supportsAutoPermissionMode({ major: 1, minor: 0 })).toBe(false);
   });
 
-  it("is true at and above 1.11", () => {
-    expect(supportsAutoPermissionMode({ major: 1, minor: 11 })).toBe(true);
+  it("is true at and above 1.12", () => {
     expect(supportsAutoPermissionMode({ major: 1, minor: 12 })).toBe(true);
+    expect(supportsAutoPermissionMode({ major: 1, minor: 13 })).toBe(true);
   });
 
   it("is false when the handshake has not resolved (null)", () => {

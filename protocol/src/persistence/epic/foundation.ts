@@ -353,7 +353,7 @@ export type ChatRunSettingsPreReasonix = z.infer<
  * What holds the harness axis for `1.7`/`1.8` meanwhile is the host's floor
  * gate - `minimumChatSubscribeMinorForHarness` puts `antigravity` at `9`, so
  * such a chat is REFUSED to a subscriber below `1.9` rather than projected,
- * exactly as an `auto` chat is refused below `1.11`. That gate predates this
+ * exactly as an `auto` chat is refused below `1.12`. That gate predates this
  * schema and is not weakened by it. Distinct from
  * `chatRunSettingsSchemaPreReasonix`, which pins BOTH axes for the lines below
  * `1.7`, where no such sharing forces the compromise.
