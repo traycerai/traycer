@@ -3,7 +3,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerOptionsSheet } from "@/components/home/mobile/composer-options-sheet";
-import type { PermissionMode } from "@/components/home/data/landing-options";
+import {
+  AUTO_MID_TURN_NOTICE,
+  type PermissionMode,
+} from "@/components/home/data/landing-options";
 
 // The sheet portals to <body> and re-asserts the app theme there; the provider
 // itself is not under test.
@@ -17,22 +20,27 @@ function renderSheet(overrides: {
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
   readonly onPermissionChange: (next: PermissionMode) => void;
   readonly settingsLocked: boolean;
+  // Required, not optional: the repo's type rules ask for an explicit value
+  // over a `?`-plus-default pair, and `defaults()` below is what supplies them
+  // - so a case that cares about either one overrides it visibly.
+  readonly permission: PermissionMode;
+  readonly turnActive: boolean;
 }) {
   return render(
     <ComposerOptionsSheet
       open
       onOpenChange={vi.fn()}
-      permission="supervised"
+      permission={overrides.permission}
       onPermissionChange={overrides.onPermissionChange}
       supportedPermissionModes={overrides.supportedPermissionModes}
       harnessLabel="Cursor"
-      // Today's-behaviour values: no catalog to union, no turn in flight and no
-      // host whose judge this fixture could name, so every row renders exactly
-      // what it rendered before these three props existed. The branches they
-      // open are covered against the desktop picker, which shares the two pure
-      // helpers this sheet calls.
+      // Today's-behaviour values: no catalog to union and no host whose judge
+      // this fixture could name, so every row renders exactly what it
+      // rendered before these props existed. The unsupported-copy branch is
+      // covered against the desktop picker, which shares the two pure helpers
+      // this sheet calls.
       catalogSupportedModes={null}
-      turnActive={false}
+      turnActive={overrides.turnActive}
       judgeBilling={null}
       settingsLocked={overrides.settingsLocked}
     />,
@@ -42,11 +50,19 @@ function renderSheet(overrides: {
 /** A harness that honors only full access (Cursor's real shape today). */
 const FULL_ACCESS_ONLY: ReadonlyArray<PermissionMode> = ["full_access"];
 
-function defaults() {
+function defaults(): {
+  readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
+  readonly onPermissionChange: (next: PermissionMode) => void;
+  readonly settingsLocked: boolean;
+  readonly permission: PermissionMode;
+  readonly turnActive: boolean;
+} {
   return {
     supportedPermissionModes: null,
     onPermissionChange: vi.fn(),
     settingsLocked: false,
+    permission: "supervised",
+    turnActive: false,
   };
 }
 
@@ -118,5 +134,38 @@ describe("ComposerOptionsSheet", () => {
     expect(auto.textContent).toContain("Not supported by Cursor.");
     await userEvent.click(auto);
     expect(props.onPermissionChange).not.toHaveBeenCalled();
+  });
+
+  it("shows the same mid-turn notice string as the desktop picker for a mid-turn supervised user", () => {
+    renderSheet({ ...defaults(), turnActive: true, permission: "supervised" });
+    expect(
+      screen.getByTestId("composer-options-permission-mid-turn-notice")
+        .textContent,
+    ).toBe(AUTO_MID_TURN_NOTICE);
+  });
+
+  it("shows the mid-turn notice for a mid-turn full_access user too", () => {
+    renderSheet({ ...defaults(), turnActive: true, permission: "full_access" });
+    expect(
+      screen.getByTestId("composer-options-permission-mid-turn-notice")
+        .textContent,
+    ).toBe(AUTO_MID_TURN_NOTICE);
+  });
+
+  it("does not show the mid-turn notice when the current permission is already auto", () => {
+    renderSheet({
+      ...defaults(),
+      turnActive: true,
+      permission: "auto",
+      supportedPermissionModes: [
+        "supervised",
+        "auto_accept_edits",
+        "auto",
+        "full_access",
+      ],
+    });
+    expect(
+      screen.queryByTestId("composer-options-permission-mid-turn-notice"),
+    ).toBeNull();
   });
 });

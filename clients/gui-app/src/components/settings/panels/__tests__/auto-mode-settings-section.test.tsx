@@ -26,10 +26,22 @@ let supportsPolicy: boolean | null = false;
 // one that would overturn it. `false` here keeps every pre-existing case
 // meaning what it did: a host that HANDSHOOK and lacks the method.
 let judgeSupport: boolean | null = false;
+// The WRITE half. Each row is mounted on its `.get` and now gates its control
+// on the matching `.set`, which is a separate optional method - per-method
+// negotiation means a host can answer one and not the other. Defaults to
+// `true` so every pre-existing case keeps meaning what it did (they are about
+// the READ gate); the cases about the write set it false.
+let supportsWrites = true;
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "autoPolicy.get" ? supportsPolicy : judgeSupport,
+  // The real boolean form is `useHostMethodSupport(...) === true`, so a method
+  // this fixture knows nothing about reads as absent here too.
+  useHostSupportsMethod: (_hostId: string | null, method: string) =>
+    method === "autoJudge.set" || method === "autoPolicy.set"
+      ? supportsWrites
+      : false,
 }));
 
 // The probe exists to produce a handshake while the page is parked on `false`.
@@ -97,9 +109,33 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-set-mutation", () => ({
   useAutoPolicySetMutation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// JOB 5: the judge row's own gate. Faked at the query/mutation boundary, same
+// shape as the policy hooks above, and `AutoJudgePicker` is faked outright -
+// it needs a host client and a harness catalog neither this suite stands up,
+// and the fact under test here is the `disabled` prop `AutoJudgeRow` passes
+// it, not the picker's own rendering.
+vi.mock("@/hooks/auto-mode/use-auto-judge-query", () => ({
+  useAutoJudgeQuery: () => ({
+    data: { selection: null, effective: undefined, blocked: undefined },
+    isError: false,
+  }),
+}));
+vi.mock("@/hooks/auto-mode/use-auto-judge-set-mutation", () => ({
+  useAutoJudgeSetMutation: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+vi.mock("@/components/settings/panels/auto-judge-picker", () => ({
+  AutoJudgePicker: (props: { readonly disabled: boolean }) => (
+    <div
+      data-testid="auto-judge-picker"
+      data-disabled={props.disabled ? "true" : "false"}
+    />
+  ),
+}));
+
 beforeEach(() => {
   supportsPolicy = false;
   judgeSupport = false;
+  supportsWrites = true;
   capabilityProbeMock.mockClear();
   policy = undefined;
   autoPolicyRefetchMock.mockReset();
@@ -462,6 +498,126 @@ describe("<AutoModeSettingsSection />", () => {
       rerender(<AutoModeSettingsSection />);
 
       expect(screen.getByTestId("auto-policy-stale-warning")).toBeTruthy();
+    });
+  });
+
+  // JOB 5: the sibling sweep. Each row is mounted on its `.get` and now gates
+  // its CONTROL on the matching `.set` too - a separate optional method, per
+  // the same `degrade: { kind: "unsupported" }` shape as every other optional
+  // auto-mode RPC.
+  describe("the write gate (autoJudge.set / autoPolicy.set)", () => {
+    it("disables the judge picker and shows the 'can't change the judge' hint when autoJudge.set is absent", () => {
+      judgeSupport = true;
+      supportsWrites = false;
+      render(<AutoModeSettingsSection />);
+
+      expect(
+        screen.getByTestId("auto-judge-picker").getAttribute("data-disabled"),
+      ).toBe("true");
+      expect(
+        screen.getByText(
+          "This machine's host can't change the judge. Update it to pick a different one.",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("disables Edit policy and shows the 'can't save a policy' hint when autoPolicy.set is absent", () => {
+      supportsPolicy = true;
+      supportsWrites = false;
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "2026-09-10T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+      };
+      render(<AutoModeSettingsSection />);
+
+      const editButton = screen.getByTestId(
+        "auto-policy-edit",
+      ) as HTMLButtonElement;
+      // A fresh, readable, saved policy would otherwise leave this enabled
+      // (see the "on a fresh read with a saved body" case above) - what pins
+      // it disabled here is the missing write, not the read state.
+      expect(editButton.disabled).toBe(true);
+      expect(
+        screen.getByText(
+          "This machine's host can't save a policy. Update it to write one.",
+        ),
+      ).toBeTruthy();
+    });
+
+    // The control case: with both writes present, neither gate fires. Without
+    // this, a `!canWrite` slipped in backwards (always true) would pass the
+    // two cases above for the wrong reason.
+    it("control: enables both the judge picker and Edit policy when both writes are supported", () => {
+      judgeSupport = true;
+      supportsPolicy = true;
+      supportsWrites = true;
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "2026-09-10T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+      };
+      render(<AutoModeSettingsSection />);
+
+      expect(
+        screen.getByTestId("auto-judge-picker").getAttribute("data-disabled"),
+      ).toBe("false");
+      const editButton = screen.getByTestId(
+        "auto-policy-edit",
+      ) as HTMLButtonElement;
+      expect(editButton.disabled).toBe(false);
+    });
+
+    // The shipped-rules dialog is a SECOND door into the same editor, gated
+    // by `onEditPolicy` on `AutoPolicyShippedDialog`. Before this edit, that
+    // gate only checked `unreadable` - not `!canWrite` and not `staleRead` -
+    // so either hole let a save-that-cannot-save through the dialog's own
+    // "Edit policy" button even though the row's own button correctly
+    // refused it.
+    it("disables the shipped-rules dialog's Edit policy when autoPolicy.set is absent", () => {
+      supportsPolicy = true;
+      supportsWrites = false;
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: "2026-09-10T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+        shippedDefaults: "## Allow exceptions\n\n- Something allowed.\n",
+      };
+      render(<AutoModeSettingsSection />);
+
+      fireEvent.click(screen.getByTestId("auto-policy-shipped-open"));
+
+      const shippedEditButton = screen.getByTestId(
+        "auto-policy-shipped-edit",
+      ) as HTMLButtonElement;
+      expect(shippedEditButton.disabled).toBe(true);
+    });
+
+    // The pre-existing hole this edit closed: the row's OWN button already
+    // refused a stale read (see "on a stale read: disables Edit policy"
+    // above), but the shipped dialog's second door did not check `staleRead`
+    // at all before this change - so a stale read was editable through it.
+    it("disables the shipped-rules dialog's Edit policy on a stale read too, even with the write supported", () => {
+      supportsPolicy = true;
+      supportsWrites = true;
+      policy = {
+        body: "## Environment\nA laptop running the desktop app.",
+        updatedAt: null,
+        source: "account",
+        readState: "stale",
+        shippedDefaults: "## Allow exceptions\n\n- Something allowed.\n",
+      };
+      render(<AutoModeSettingsSection />);
+
+      fireEvent.click(screen.getByTestId("auto-policy-shipped-open"));
+
+      const shippedEditButton = screen.getByTestId(
+        "auto-policy-shipped-edit",
+      ) as HTMLButtonElement;
+      expect(shippedEditButton.disabled).toBe(true);
     });
   });
 });

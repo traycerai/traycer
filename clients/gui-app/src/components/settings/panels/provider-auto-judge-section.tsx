@@ -12,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useProvidersSetAutoJudge } from "@/hooks/providers/use-providers-set-auto-judge-mutation";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -27,12 +29,24 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
  * other provider gets a read-only line instead, naming Traycer's judge and
  * pointing at where that judge is chosen. The line is there because the tab
  * is: a user who opens a provider's Permissions tab is asking who reviews its
- * commands, and "nothing to choose" is still an answer. The flag is also why
- * the switch needs no separate method gate: it rides the same catalog minor as
- * `providers.setAutoJudge` itself, so a host old enough to lack the write is a
- * host that reports the flag `false` (its default) and never draws the select.
- * Nothing renders until the catalog has answered, so the tab never flashes the
- * read-only line at a provider that is about to get the switch.
+ * commands, and "nothing to choose" is still an answer.
+ *
+ * **TWO gates, not one, and the second is the write's own.** This used to
+ * argue that the catalog flag alone was enough - that `nativeAutoJudge` rides
+ * the same catalog minor as `providers.setAutoJudge`, so a host lacking the
+ * write reports the flag `false` and never draws the select. That is an
+ * inference from ONE method's version to ANOTHER's presence, which is exactly
+ * what per-method negotiation does not support (root `AGENTS.md`): the setter
+ * is registered `degrade: { kind: "unsupported" }`, so the registry itself
+ * contemplates a host that answers the catalog and not the write, and the
+ * catalog response is not evidence either way. The cost of being wrong is a
+ * live-looking selector whose every write fails.
+ *
+ * Both gates hold their render until they can answer. The catalog answers with
+ * `undefined` while loading and the method support with `null` ("no handshake
+ * yet", which `useHostMethodSupport` keeps distinct from "absent" for this
+ * reason) - so the tab never flashes a read-only line at a provider that is
+ * about to get the switch, in either dimension.
  *
  * Reads through the SURFACE's host, like its neighbour
  * `TerminalAgentArgsSection`: this section renders inside the Providers panel's
@@ -46,6 +60,14 @@ export function ProviderAutoJudgeSection({
 }) {
   const providerId = state.providerId;
   const selectId = useId();
+  // The SURFACE's host, which inside a re-provided binding is the panel's
+  // machine rather than the app-wide one - the same host the catalog below is
+  // read from and the write would be sent to.
+  const hostId = useAddressableHostId();
+  const setAutoJudgeSupported = useHostMethodSupport(
+    hostId,
+    "providers.setAutoJudge",
+  );
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: true,
     subscribed: true,
@@ -101,11 +123,42 @@ export function ProviderAutoJudgeSection({
 
   const harnesses = harnessesQuery.data?.harnesses;
   if (harnesses === undefined) return null;
+  // `null` is "no handshake with this host yet", not "absent" - see the header.
+  if (setAutoJudgeSupported === null) return null;
   const hasNativeJudge = harnesses.some(
     (harness) => harness.id === harnessId && harness.nativeAutoJudge,
   );
 
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
+
+  // A host that answers the catalog and not the write. The provider DOES have
+  // a classifier of its own here, so the "nothing to choose" line below would
+  // be false - what is missing is this machine's ability to record the choice,
+  // which is a different sentence and a different remedy. The stored value is
+  // still shown: it is what the judge will use, and a row that hid it would
+  // leave the tab's own question unanswered.
+  if (hasNativeJudge && !setAutoJudgeSupported) {
+    return (
+      <div
+        className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3"
+        data-testid="provider-auto-judge-unsupported"
+      >
+        <p className="text-ui-sm font-medium text-foreground">
+          Who reviews {providerName}&apos;s commands
+        </p>
+        <p className="text-ui-sm text-foreground">
+          {value === "provider"
+            ? `${providerName}'s classifier`
+            : "Traycer's judge"}
+        </p>
+        <p className="text-ui-xs text-muted-foreground">
+          This machine&apos;s host can&apos;t change who reviews {providerName}
+          &apos;s commands. Update it to choose between {providerName}&apos;s
+          own classifier and Traycer&apos;s judge.
+        </p>
+      </div>
+    );
+  }
 
   if (!hasNativeJudge) {
     return (

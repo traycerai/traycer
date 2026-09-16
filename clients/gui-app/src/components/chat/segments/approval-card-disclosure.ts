@@ -32,14 +32,27 @@ const JUDGE_CAP_RUNG_SECONDS = 30;
  * only to subscribers, and every row of the attendance truth table with a
  * human subscribed is a card row.
  *
- * "Up to 2 minutes" restates the host's `AUTO_JUDGE_STAGE2_CAP_MS`, which is
- * an enforced constant (`callAdapter` fires the derived abort signal at
- * exactly that value), not a forecast - so a slower model cannot falsify it,
- * it only changes how often anyone reaches this rung. The client cannot read
- * that constant, so moving it means moving this sentence.
+ * "2 minutes" restates the host's `AUTO_JUDGE_STAGE2_CAP_MS`, which is an
+ * enforced constant (`callAdapter` fires the derived abort signal at exactly
+ * that value), not a forecast - so a slower model cannot falsify it, it only
+ * changes how often anyone reaches this rung. The client cannot read that
+ * constant, so moving it means moving this sentence.
+ *
+ * **PER CHECK, and one at a time - the two halves that make the number true.**
+ * This used to read "Up to 2 minutes", which is a promise about the total wait
+ * that the cap does not make: the constant bounds one stage-2 CALL, while this
+ * row's counter runs from `approval.requestedAt`, and the judge's per-chat
+ * queue admits one call at a time (`AutoJudgeService`'s own note: parallel tool
+ * calls become N stage budgets, serially). A row third in line can therefore
+ * sit here well past two minutes having been told it would not. Naming the
+ * queue is what keeps the number honest AND explains the counter the user is
+ * watching climb - the same fact the 15 s rung was already chosen to expose.
+ *
+ * The alternative - showing the real deadline - needs the stage's own start on
+ * the wire; `reviewing` carries only the stage name today.
  */
 export const JUDGE_CAP_NOTICE =
-  "Up to 2 minutes, then it asks you. Stop the turn to cancel.";
+  "Checks run one at a time, up to 2 minutes each, then it asks you. Stop the turn to cancel.";
 
 export interface JudgeWaitDisclosure {
   /** The elapsed counter, from the first rung up. `null` below it. */

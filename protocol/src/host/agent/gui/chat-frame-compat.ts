@@ -20,6 +20,7 @@
  * same code rather than two drifting copies.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
@@ -46,6 +47,85 @@ function supportsV17(negotiated: SchemaVersion | null): boolean {
     negotiated.major === 1 &&
     negotiated.minor >= CHAT_SUBSCRIBE_V17_MINOR
   );
+}
+
+/**
+ * The minor whose client frames re-bound the permission mode to the live enum.
+ *
+ * `1.11` is the first line whose CLIENT may say `auto`: `1.0`-`1.10` name
+ * `permissionModeSchemaPreAuto` on every frame that carries the mode, so a host
+ * parsing one of those lines rejects the frame outright rather than ignoring an
+ * unknown value. That is the whole difference from the `1.7` cliff above, where
+ * the extra fields were strippable.
+ */
+const CHAT_SUBSCRIBE_AUTO_MODE_MINOR = 11;
+
+/**
+ * Typed against the live enum on purpose: a rename of the mode breaks this
+ * compile rather than leaving a string literal that silently matches nothing.
+ *
+ * ONE predicate, not a table, matching the host's own
+ * `minimumChatSubscribeMinorForPermissionMode` - the mode enum has grown once
+ * in its life, and a per-mode table would invite a row where a single question
+ * says the fact.
+ */
+const AUTO_PERMISSION_MODE: PermissionMode = "auto";
+
+/**
+ * Whether this negotiated line's client frames can carry `auto`.
+ *
+ * A null version - the handshake has not resolved - reads as NOT capable, the
+ * same safe direction `supportsV17` takes.
+ *
+ * The host has a twin of this predicate for the frames it SENDS
+ * (`chatSubscribeSupportsPermissionMode`), and the two must move together. This
+ * copy lives here for the reason the module header gives: the client→host half
+ * belongs to both peers, and a protocol-side predicate is what keeps the OSS
+ * clients and the host from drifting into two answers.
+ */
+export function supportsAutoPermissionMode(
+  negotiated: SchemaVersion | null,
+): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_AUTO_MODE_MINOR
+  );
+}
+
+/**
+ * Whether this frame would ask the host to run `auto`.
+ *
+ * By SHAPE rather than by a list of the six mode-bearing kinds. The list is
+ * already written down twice in `subscribe.ts` (the pre-auto options and their
+ * live re-binds), and a third copy here would be the one nobody updates: a
+ * seventh frame growing a `settings` tuple would leak through a kind list and
+ * cannot leak through this.
+ *
+ * `in` narrowing rather than an index into the union, because the union's
+ * members genuinely differ - `newSettings` is nullable where `settings` is not,
+ * and only two frames have either.
+ */
+function carriesAutoPermissionMode(frame: ChatSubscribeClientFrame): boolean {
+  if (
+    "permissionMode" in frame &&
+    frame.permissionMode === AUTO_PERMISSION_MODE
+  ) {
+    return true;
+  }
+  if (
+    "settings" in frame &&
+    frame.settings.permissionMode === AUTO_PERMISSION_MODE
+  ) {
+    return true;
+  }
+  if (
+    "newSettings" in frame &&
+    frame.newSettings?.permissionMode === AUTO_PERMISSION_MODE
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -81,20 +161,42 @@ export function supportsInterviewSettlementActions(
  *   refuses it instead of relying on an older host to discard an unknown
  *   action literal.
  *
- * ONE CLIFF, DELIBERATELY - and the thing to know before adding a `1.8`. This
- * is a single "does the peer know 1.7" test, not a chain of per-line strips,
- * because `1.7` is the only client-frame growth above the frozen `1.6`. The
- * moment a `1.8` adds another client-frame field, identity
- * for every minor `>= 7` becomes WRONG: a `1.7` peer would receive the `1.8`
- * field. At that point this must become a per-line projection (strip `1.8`
- * fields below 8, then `1.7` fields below 7), and
+ * TWO CLIFFS, and the second one is the case this comment used to only predict.
+ * It said that the moment a line above `1.7` grew another client-frame field,
+ * identity for every minor `>= 7` would become WRONG - and `1.11` is that line:
+ * it re-bound six frames to the live permission-mode enum, so a frame saying
+ * `auto` rode out unchanged onto `1.7`-`1.10` and the host rejected the user's
+ * send or settings update against its frozen pre-auto union.
+ *
+ * The `auto` cliff is a REFUSAL, not a strip, and that asymmetry is the point.
+ * The `1.7` fields are additions, so removing one leaves a frame the older line
+ * fully understands. The mode is a VALUE on a field both lines have, and its
+ * only downgrade target is `auto_accept_edits` - which the host refuses to
+ * project for its own frames, in the same words this borrows: a settings write
+ * replaces the WHOLE run-settings tuple, so a projected mode comes straight
+ * back as the user's own choice and silently ends `auto` on a chat they set to
+ * it. Refusal costs that user a failed action; projection costs them the mode,
+ * with nothing to see.
+ *
  * `supportsInterviewSettlementActions` stays what it is - the `1.7` predicate -
- * rather than being widened to mean "current".
+ * rather than being widened to mean "current", and a third growth above `1.11`
+ * needs its own test here for the same reason.
  */
 export function projectChatClientFrameForVersion(
   frame: ChatSubscribeClientFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
+  // BEFORE the `1.7` identity return, because this cliff is higher than that
+  // one: a `1.10` line takes the identity path and is exactly the line that
+  // cannot decode the value.
+  if (
+    !supportsAutoPermissionMode(negotiated) &&
+    carriesAutoPermissionMode(frame)
+  ) {
+    throw new Error(
+      'permissionMode "auto" requires chat.subscribe@1.11 or newer',
+    );
+  }
   if (supportsV17(negotiated)) return frame;
 
   switch (frame.kind) {

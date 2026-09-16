@@ -256,19 +256,32 @@ export function catalogSupportedPermissionModes(
  * What the `auto` row says when the user is mid-turn and about to switch INTO
  * it.
  *
- * The second sentence is the load-bearing one. `ActiveExecution.autoJudge`
- * stays `null` on a mid-turn flip, so the rest of that turn behaves exactly as
- * `auto_accept_edits` did - without it a user reads the first sentence as "the
- * judge starts soon" and waits for a change that never arrives in this turn.
+ * **This used to say "This turn keeps running as it is", and that was false in
+ * the one direction a permission notice must never be wrong.** A mid-turn mode
+ * change is not deferred: `handleComposerSettingsChange` forwards
+ * `activePermissionModeUpdate` the moment the mode moves while a run is in
+ * progress, the host mutates `activeExecution.permissionMode` on arrival, and
+ * the file-edit coordinator authorizes against that live value - its gate is
+ * `authorizingMode !== "supervised"`, so a turn that was showing every edit for
+ * approval starts auto-approving them on the next one. What does NOT arrive is
+ * the judge: `autoJudge` is bound once, at turn start, so it stays `null` for
+ * the rest of this turn. The user is left in neither mode - edits passing with
+ * nothing reviewing them - and the old sentence told them nothing had changed.
+ *
+ * One sentence for all three starting modes rather than three, because the
+ * consequence is the same from each: under `auto` the coordinator's gate is not
+ * `supervised`, so edits pass. (It overstates by exactly one narrow case - an
+ * edit to a file a later action READS is still put to the user under `auto`,
+ * which is the judged mode's own missing half - and overstating a permission
+ * warning is the safe direction.)
  *
  * It lives in the PICKER rather than as a chat notice deliberately: the user's
  * attention is in the menu at the moment of the choice, and this is a
  * prediction about a choice not yet committed. A chat notice would arrive
- * after the fact, and the host has no reason to learn about a renderer gesture
- * that changes nothing it does.
+ * after the fact.
  */
 export const AUTO_MID_TURN_NOTICE =
-  "The judge starts on your next message. This turn keeps running as it is.";
+  "This turn switches over now, but the judge only starts on your next message - so edits are approved without review until then.";
 
 /**
  * What a disabled option says, and WHO it blames.

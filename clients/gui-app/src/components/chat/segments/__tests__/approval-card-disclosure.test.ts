@@ -52,6 +52,22 @@ describe("judgeWaitDisclosure", () => {
   });
 });
 
+describe("JUDGE_CAP_NOTICE", () => {
+  // Pins the two load-bearing claims the sentence makes, replacing "Up to 2
+  // minutes, then it asks you" - a promise about the TOTAL wait that was
+  // false: the host's cap bounds one stage-2 CALL, this card's counter runs
+  // from `approval.requestedAt` (not from when the call actually started),
+  // and the judge admits one call per chat at a time, so a row queued behind
+  // a sibling can sit here well past the cap despite never having been told
+  // that. "one at a time" states the queue; "up to 2 minutes each" makes the
+  // cap PER CHECK rather than a total.
+  it("is per check, and names the checks as serialized", () => {
+    expect(JUDGE_CAP_NOTICE).toBe(
+      "Checks run one at a time, up to 2 minutes each, then it asks you. Stop the turn to cancel.",
+    );
+  });
+});
+
 describe("isJudgeUnavailableReason", () => {
   it("recognizes the 'auto: ' prefix every unavailability constant is built with", () => {
     expect(

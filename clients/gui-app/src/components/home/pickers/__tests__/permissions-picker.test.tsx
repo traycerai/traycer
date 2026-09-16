@@ -176,7 +176,18 @@ describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
     ).toBe(
-      "The judge starts on your next message. This turn keeps running as it is.",
+      "This turn switches over now, but the judge only starts on your next message - so edits are approved without review until then.",
+    );
+  });
+
+  it("shows the notice when a turn is active and the current value is supervised - the case the old copy was most wrong about", () => {
+    renderPicker({ turnActive: true, value: "supervised" });
+    openMenu();
+
+    expect(
+      screen.getByTestId("permission-option-mid-turn-notice").textContent,
+    ).toBe(
+      "This turn switches over now, but the judge only starts on your next message - so edits are approved without review until then.",
     );
   });
 

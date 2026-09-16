@@ -5,7 +5,11 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
@@ -14,6 +18,17 @@ import { ProviderAutoJudgeSection } from "@/components/settings/panels/provider-
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 const CLAUDE_HARNESS_ID = providerIdToGuiHarnessId("claude-code");
+
+// The section gates on the WRITE method as well as on the catalog, because a
+// host can answer `agent.gui.listHarnesses@9.1` and not advertise
+// `providers.setAutoJudge` (registered `degrade: { kind: "unsupported" }`).
+// The negotiated-manifest registry is the real one here - only the host id is
+// mocked - so these cases exercise `useHostMethodSupport` rather than a stand-in
+// for it.
+const HOST_ID = vi.hoisted(() => "host-provider-auto-judge");
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => HOST_ID,
+}));
 
 const guiHarnessesQueryMock = vi.hoisted(() => ({
   data: undefined as { harnesses: GuiHarnessOption[] } | undefined,
@@ -58,8 +73,18 @@ vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => setAutoJudgeMock,
 }));
 
+// The supported case, which is every case that is not explicitly about the
+// gate. Seeded per test rather than once, so a case that wants the OTHER
+// answer records its own manifest over this one.
+beforeEach(() => {
+  recordNegotiatedHostManifest(HOST_ID, {
+    "providers.setAutoJudge": { major: 1, minor: 0 },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   providersUpdatedAt.current = 1_000;
   vi.clearAllMocks();
   guiHarnessesQueryMock.data = undefined;
@@ -372,6 +397,95 @@ describe("<ProviderAutoJudgeSection />", () => {
   // still shows - that is the ordinary round-trip window it exists for, and
   // this is what proves the expiry above is keyed on the refetch landing,
   // not on time or a rerender alone.
+  // JOB 4: the SECOND gate - a host that answers the catalog (so
+  // `nativeAutoJudge: true`) but does not advertise the write, which the
+  // registry itself contemplates via `providers.setAutoJudge`'s
+  // `degrade: { kind: "unsupported" }`. This records a manifest that carries
+  // some OTHER method and omits the write, which is what a real host that
+  // predates the write looks like - `getNegotiatedHostMethods` then returns a
+  // set not containing it, i.e. `false`, not `null`.
+  it("renders the read-only 'can't change' panel (not the select) when the host answers the catalog but not the write, stored: Traycer's judge", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    const unsupported = screen.getByTestId("provider-auto-judge-unsupported");
+    expect(unsupported.textContent).toContain(
+      "Who reviews Claude Code's commands",
+    );
+    expect(unsupported.textContent).toContain("Traycer's judge");
+    expect(unsupported.textContent).toContain("can't change who reviews");
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("shows the provider's own classifier as the stored value on the same unsupported panel", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: "provider" })}
+      />,
+    );
+
+    const unsupported = screen.getByTestId("provider-auto-judge-unsupported");
+    expect(unsupported.textContent).toContain("Claude Code's classifier");
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  // JOB 4: the "no handshake yet" case must NOT fall back to the read-only
+  // line - that line asserts a POSITIVE fact ("this machine's host can't
+  // change who reviews..."), which is not known yet with no manifest at all
+  // for this host. Falling back would tell the user something the section
+  // has no evidence for; rendering nothing is the honest "not yet known" the
+  // hook itself distinguishes (`useHostMethodSupport` returns `null`, not
+  // `false`, while `false` is what the case above exercises).
+  it("renders nothing when there is no handshake at all for this host yet", () => {
+    resetNegotiatedManifests();
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    const { container } = render(
+      <ProviderAutoJudgeSection state={providerState({})} />,
+    );
+
+    expect(container.firstChild).toBeNull();
+  });
+
+  // JOB 4: the two read-only branches must not be confused with each other.
+  // `nativeAutoJudge: false` takes the ORIGINAL "has no classifier of its
+  // own" line even when the write is also unsupported - the missing write is
+  // irrelevant when there is nothing native to switch to in the first place.
+  it("keeps the ORIGINAL 'has no classifier of its own' line for nativeAutoJudge: false, even when the write is also unsupported", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: false })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+
+    const readonly = screen.getByTestId("provider-auto-judge-readonly");
+    expect(readonly.textContent).toContain("has no classifier of its own");
+    expect(screen.queryByTestId("provider-auto-judge-unsupported")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
   it("control: keeps showing the echo across a rerender when providers.list has not refetched", () => {
     guiHarnessesQueryMock.data = {
       harnesses: [harnessRow({ nativeAutoJudge: true })],

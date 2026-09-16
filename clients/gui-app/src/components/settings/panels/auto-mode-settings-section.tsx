@@ -15,7 +15,10 @@ import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSupport,
+  useHostSupportsMethod,
+} from "@/hooks/host/use-host-supports-method";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useAutoJudgeQuery } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
@@ -145,14 +148,35 @@ function AutoModeRows(props: {
   return (
     <>
       {props.judgeSupported ? <AutoJudgeRow hostId={props.hostId} /> : null}
-      {props.policySupported ? <AutoPolicyRow /> : null}
+      {props.policySupported ? <AutoPolicyRow hostId={props.hostId} /> : null}
     </>
   );
 }
 
+/**
+ * Whether this host advertised the WRITE half of an auto-mode setting.
+ *
+ * Each row is mounted on its `.get`, and the matching `.set` is a separate
+ * optional method - all four are registered `degrade: { kind: "unsupported" }`,
+ * and per-method negotiation means one is not evidence about the other. A host
+ * answering the read and not the write would otherwise draw a live control
+ * whose every write fails as unsupported.
+ *
+ * The BOOLEAN form is safe here where `useHostMethodSupport`'s tri-state is
+ * needed above: a row only exists because its `.get` answered `true`, which
+ * means a manifest for this host is already recorded, so the sibling lookup
+ * cannot be the "no handshake yet" `null`.
+ */
 function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
   const query = useAutoJudgeQuery();
   const setJudge = useAutoJudgeSetMutation();
+  const canWrite = useHostSupportsMethod(props.hostId, "autoJudge.set");
+  // Flat rather than nested, and separate from the read failure because the two
+  // are different sentences with different remedies: one asks the user to try
+  // again, the other to update the machine.
+  const writeBlockedHint = canWrite
+    ? undefined
+    : "This machine's host can't change the judge. Update it to pick a different one.";
   const selection = query.data?.selection ?? null;
   // `mutate` (not the whole result object) is the dependency: a
   // `UseMutationResult` is a fresh object every render, and this callback is
@@ -201,7 +225,7 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
       hint={
         query.isError
           ? "Couldn't read this machine's judge. Reopen Settings to try again."
-          : undefined
+          : writeBlockedHint
       }
       control={
         <AutoJudgePicker
@@ -217,7 +241,7 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
           // control would present the superseded judge as current. The repo's
           // pending rule asks for exactly this pair - disabled, label
           // untouched, inline spinner.
-          disabled={query.data === undefined || setJudge.isPending}
+          disabled={query.data === undefined || setJudge.isPending || !canWrite}
           saving={setJudge.isPending}
           resetNonce={refusedWrites}
           onCommit={commit}
@@ -227,9 +251,18 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
   );
 }
 
-function AutoPolicyRow(): ReactNode {
+function AutoPolicyRow(props: { readonly hostId: string | null }): ReactNode {
   const query = useAutoPolicyQuery();
   const setPolicy = useAutoPolicySetMutation();
+  // See `AutoJudgeRow`: the row is mounted on `autoPolicy.get`, and
+  // `autoPolicy.set` is its own optional method. Editing is the only route to
+  // Save, so refusing to OPEN the editor is where this belongs - the dialog's
+  // own gates are about what the record says, not about what this host can do
+  // with it.
+  const canWrite = useHostSupportsMethod(props.hostId, "autoPolicy.set");
+  const writeBlockedHint = canWrite
+    ? undefined
+    : "This machine's host can't save a policy. Update it to write one.";
   // `updatedAt` as it read when the editor opened. Held here rather than in the
   // dialog so it survives the dialog's own re-renders, and captured at OPEN
   // rather than at first load so a stale-edit warning describes this editing
@@ -247,6 +280,7 @@ function AutoPolicyRow(): ReactNode {
   // therefore narrows on the pair.
   const readState = data === undefined ? null : autoPolicyReadStateFor(data);
   const unreadable = readState === "unreadable";
+  const staleRead = readState === "stale";
   // The shipped rules are BUNDLED with the host, not fetched from the cloud, so
   // they are readable in exactly the state the account policy above is not.
   const shipped = useMemo(
@@ -324,12 +358,13 @@ function AutoPolicyRow(): ReactNode {
         hint={
           query.isError
             ? "Couldn't read your policy. Reopen Settings to try again."
-            : undefined
+            : writeBlockedHint
         }
         control={
           <AutoPolicyControl
             policy={data}
             readState={readState}
+            canWrite={canWrite}
             onEdit={openEditor}
           />
         }
@@ -367,9 +402,18 @@ function AutoPolicyRow(): ReactNode {
       {viewingShipped ? (
         <AutoPolicyShippedDialog
           sections={shipped}
-          // Same gate as the row's own button: there is no editing a policy
-          // this host could not read.
-          onEditPolicy={data === undefined || unreadable ? null : openEditor}
+          // The SAME gate as the row's own button, restated as one expression
+          // because this is a second door into the same editor. It used to be
+          // a SUBSET - it checked `unreadable` and not `stale`, so a stale read
+          // that the row refused to open could still be opened from here, and
+          // the dialog's own stale gate then presented an editor whose Save
+          // could never fire. `canWrite` joins for the same reason: a host that
+          // cannot save must not be reachable through either door.
+          onEditPolicy={
+            data === undefined || unreadable || staleRead || !canWrite
+              ? null
+              : openEditor
+          }
           onClose={() => setViewingShipped(false)}
         />
       ) : null}
@@ -394,6 +438,8 @@ function AutoPolicyRow(): ReactNode {
 function AutoPolicyControl(props: {
   readonly policy: AutoPolicyGetResponse | undefined;
   readonly readState: AutoPolicyReadState | null;
+  /** Whether this host advertised `autoPolicy.set` - see `AutoPolicyRow`. */
+  readonly canWrite: boolean;
   readonly onEdit: () => void;
 }): ReactNode {
   const { policy, readState } = props;
@@ -425,7 +471,13 @@ function AutoPolicyControl(props: {
         // the exact overwrite the warning exists to prevent, with the warning
         // structurally unable to appear. The open-time refetch does not rescue
         // it either: if that read is stale as well, nothing changes.
-        disabled={policy === undefined || unreadable || stale}
+        // A host that cannot SAVE joins the same list. The editor is the only
+        // route to Save, so a live button here would open a dialog whose one
+        // action fails - the same shape as the unreadable case, arriving from
+        // the write side rather than the read side.
+        disabled={
+          policy === undefined || unreadable || stale || !props.canWrite
+        }
         onClick={props.onEdit}
       >
         {hasBody || unreadable ? "Edit policy" : "Write a policy"}
