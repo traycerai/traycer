@@ -94,7 +94,18 @@ export function AutoModeSettingsSection(): ReactNode {
   const viewerUserId = useCloudChatViewerId();
   useHostCapabilityProbe({
     client: scope.client,
-    stale: !judgeSupported && !policySupported,
+    // EITHER absent, not BOTH. `autoJudge.get` and `autoPolicy.get` are
+    // independently negotiated, so "one of them answered" is not evidence
+    // about the other - the same per-method rule this file applies elsewhere,
+    // pointed at its own gate.
+    //
+    // With `&&`, a host advertising the judge getter but not the policy one
+    // (an in-place upgrade that adds `autoPolicy.get` later is exactly that)
+    // parks here with `stale: false`. Nothing then re-asks: the judge row does
+    // not poll, and the missing policy row issues no RPC of its own, so the
+    // recorded manifest stays stale and the newly supported row never appears
+    // until unrelated traffic happens to refresh it.
+    stale: !judgeSupported || !policySupported,
     incarnation: [
       scope.host?.version ?? null,
       scope.host?.connectable ?? false,

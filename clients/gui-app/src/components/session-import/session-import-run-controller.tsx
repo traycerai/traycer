@@ -5,7 +5,6 @@ import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
-import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   SessionImportRunClient,
   type SessionImportRunCallbacks,
@@ -80,15 +79,27 @@ function importPermissionModeFor(input: {
  * prove it, and **both are about `sessionImport.run` itself** - which is the
  * correction that matters here:
  *
- *   - the negotiated line of a LIVE `sessionImport.run` session. Authoritative,
- *     but `getMethodSchemaVersion` reconciles from live sessions of that
- *     method, and the first run of a window is asked before one exists (a
- *     remote transport answers `null` always, by design);
- *   - the line this host ADVERTISED for that method in its negotiated manifest.
- *     `ws-rpc-client.ts` records the host's whole manifest on every unary
- *     openAck, so any RPC to this host - the app-load prefetcher, or the import
- *     wizard's own catalog warm-up for a remote target - publishes it without a
- *     stream existing.
+ *   - the negotiated line of a LIVE `sessionImport.run` session, which
+ *     `getMethodSchemaVersion` reports first when one exists;
+ *   - failing that, the line this host ADVERTISED for the method in its STREAM
+ *     handshake. `WsStreamClient.applyHostManifest` walks every method in the
+ *     peer manifest, not just the subscribed one, and caches what a subscribe
+ *     would declare - so any stream handshake with this host (a chat tile, an
+ *     epic subscription) answers for `sessionImport.run` without one ever
+ *     having been opened. `getMethodSchemaVersion` already falls through to
+ *     that cache, which is why both facts come from the SAME call.
+ *
+ * **The unary manifest is not one of them, and used to be.** This fell back to
+ * `getNegotiatedHostMethodVersion(hostId, "sessionImport.run")` on the stated
+ * reasoning that `ws-rpc-client.ts` records "the host's whole manifest" on
+ * every unary openAck. It records the whole UNARY manifest:
+ * `sessionImport.run` is a stream method
+ * (`HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`), the host derives its unary
+ * openAck manifest from the unary registry alone, and so that read returned
+ * `null` for every host that has ever connected. The fallback could not fire,
+ * and a capable host silently got `auto_accept_edits` instead of the user's
+ * `auto`. `src/__tests__/stream-method-not-in-unary-manifest.test.ts` is the
+ * scan that stops this being written a third time.
  *
  * **What is deliberately NOT a proof any more: the harness catalog.** This used
  * to fall through to `agent.gui.listHarnesses` rows offering `auto`, with a
@@ -97,12 +108,13 @@ function importPermissionModeFor(input: {
  * says the host can spell `auto` in a catalog ROW and says nothing about which
  * `sessionImport.run` line the eventual stream negotiates. A host advertising
  * `run@1.1` would have had `auto` put into an open request that rejects it,
- * losing the import the user had already picked sessions for. The manifest read
- * above covers every case the catalog was introduced for - it is filled by the
- * same warm-up, and it is CONNECTION-scoped, so a host that came back on an
- * older build has already overwritten it - without inferring across methods.
+ * losing the import the user had already picked sessions for. The stream
+ * handshake's cached manifest covers every case the catalog was introduced for
+ * - it is filled by any stream to this host - without inferring across methods,
+ * and it is CONNECTION-scoped, so a host that came back on an older build has
+ * already overwritten it.
  *
- * Both reads are synchronous because the mode rides the stream's OPEN request;
+ * The read is synchronous because the mode rides the stream's OPEN request;
  * nothing on this path can await one.
  *
  * Neither provable is "not proven", not "old host", and it demotes: an `auto` a
@@ -112,7 +124,6 @@ function importPermissionModeFor(input: {
  * moves this with it.
  */
 function hostUnderstandsAutoPermissionMode(input: {
-  readonly hostId: string;
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
 }): boolean {
   const negotiated =
@@ -130,31 +141,13 @@ function hostUnderstandsAutoPermissionMode(input: {
     // connection the open request is about to ride.
     if (versionIsBelow(negotiated, required)) return false;
   }
-  // THE SAME METHOD, asked a second way. The live-session read above is `null`
-  // whenever this window has no open `sessionImport.run` (the first run of a
-  // window; a remote transport always), and the answer used to fall through to
-  // the harness CATALOG - which is a different method's fact, and exactly the
-  // cross-method inference the rest of this file refuses. A warm
-  // `listHarnesses@9.1` cache proves the host can spell `auto` in a catalog
-  // row; it proves nothing about which `sessionImport.run` line the eventual
-  // stream will negotiate, and `run@1.1` rejects the open payload outright -
-  // losing the import the user just picked sessions for.
-  //
-  // The negotiated MANIFEST answers the method itself without needing a live
-  // session: `ws-rpc-client.ts` records the host's whole advertised manifest on
-  // every unary openAck, so any RPC to this host - including the wizard's own
-  // catalog warm-up - publishes `sessionImport.run`'s advertised line. It is
-  // connection-scoped, so a host that came back on an older build has already
-  // overwritten the entry, which is the same property
-  // `handshakeProvesPreAutoCatalog` was relying on one method over.
-  const advertised = getNegotiatedHostMethodVersion(
-    input.hostId,
-    "sessionImport.run",
-  );
-  if (advertised === null) return false;
-  return (
-    advertised.major === required.major && advertised.minor >= required.minor
-  );
+  // Nothing further to ask. The advertised line is already folded into the read
+  // above - `getMethodSchemaVersion` answers from the live session first and
+  // the stream handshake's cached manifest second - so a separate lookup here
+  // would either restate that answer or, as the unary-manifest read it used to
+  // be, answer `null` forever. Unproven demotes, which is the direction this
+  // whole predicate is built around.
+  return false;
 }
 
 /**

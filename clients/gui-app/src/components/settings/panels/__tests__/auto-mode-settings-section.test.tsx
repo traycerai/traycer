@@ -226,6 +226,38 @@ describe("<AutoModeSettingsSection />", () => {
     });
   });
 
+  // The `||` fix: EITHER getter still missing is reason enough to keep
+  // re-asking. Before this line the gate was `&&`, so a host that answered
+  // one of the two (here: the judge getter) but not the other parked here
+  // with `stale: false` - nothing then re-asks, and the negotiated manifest
+  // stays stale for the getter that never got a chance to answer.
+  it("keeps the probe staled when only ONE of the two getters is supported", () => {
+    judgeSupport = true;
+    supportsPolicy = false;
+    render(<AutoModeSettingsSection />);
+
+    expect(capabilityProbeMock).toHaveBeenCalledWith({
+      client: null,
+      stale: true,
+      incarnation: ["1.4.2", true],
+    });
+  });
+
+  // The other half of the same fix, in the direction that keeps it from
+  // polling forever: once BOTH getters have answered, the probe has nothing
+  // left to prove and must stop being asked.
+  it("stops staling the probe once both getters are supported", () => {
+    judgeSupport = true;
+    supportsPolicy = true;
+    render(<AutoModeSettingsSection />);
+
+    expect(capabilityProbeMock).toHaveBeenCalledWith({
+      client: null,
+      stale: false,
+      incarnation: ["1.4.2", true],
+    });
+  });
+
   describe("when the host advertises autoPolicy.get", () => {
     beforeEach(() => {
       supportsPolicy = true;

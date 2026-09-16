@@ -2,13 +2,19 @@ import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   CHAT_SYNC_1_1_READER_FLOOR,
   CHAT_SYNC_READER_VERSION,
+  CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
   chatHeadReaderSchema,
+  chatSyncReaderFloorForTranscriptEvents,
   decodeChatHeadDocument,
   encodeChatHead,
   gateChatHeadVersion,
   listChatHeadParts,
   serializeChatHeadDocument,
 } from "@traycer/protocol/persistence/chat-sync/head";
+import type {
+  ChatEvent,
+  ChatEventType,
+} from "@traycer/protocol/persistence/epic/chat-events";
 import {
   canonicalJsonStringify,
   canonicalizeJsonValue,
@@ -325,6 +331,134 @@ describe("chat-head version gate", () => {
           minReaderVersion: { major: 1, minor: 3 },
         },
         { major: 1, minor: 3 },
+      ),
+    ).toEqual({ ok: true });
+  });
+});
+
+function makeChatEvent(fields: {
+  eventId: string;
+  type: ChatEventType;
+  timestamp: number;
+  metadata: Record<string, unknown> | null;
+}): ChatEvent {
+  return {
+    eventId: fields.eventId,
+    type: fields.type,
+    timestamp: fields.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: fields.metadata,
+  };
+}
+
+/** An unattended auto-mode refusal - the one row shape that forces a floor. */
+function unattendedDenialEvent(): ChatEvent {
+  return makeChatEvent({
+    eventId: "e-denial",
+    type: "approval.denied",
+    timestamp: 9,
+    metadata: {
+      autoJudge: {
+        attendanceReason: "agent-created",
+        rule: "no-secrets",
+        reason: "matched a secret pattern",
+      },
+    },
+  });
+}
+
+/** An ordinary event no row predicate recognizes. */
+function ordinaryEvent(): ChatEvent {
+  return makeChatEvent({
+    eventId: "e-ordinary",
+    type: "turn.started",
+    timestamp: 1,
+    metadata: null,
+  });
+}
+
+describe("chatSyncReaderFloorForTranscriptEvents", () => {
+  it("returns the unattended-denial floor when an event carries that row source", () => {
+    // `unattendedDenialEvent` only earns its floor if the predicate this
+    // function derives from actually recognizes it - proving the fixture
+    // against `autoJudgeUnattendedDenialRowSource` directly would restate the
+    // predicate's own test; going through the publisher-facing function is
+    // the point of this suite.
+    expect(
+      chatSyncReaderFloorForTranscriptEvents([
+        ordinaryEvent(),
+        unattendedDenialEvent(),
+      ]),
+    ).toEqual(CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR);
+  });
+
+  it("returns null for ordinary events - never the 1.1 floor as a default", () => {
+    expect(
+      chatSyncReaderFloorForTranscriptEvents([
+        ordinaryEvent(),
+        ordinaryEvent(),
+      ]),
+    ).toBeNull();
+    expect(chatSyncReaderFloorForTranscriptEvents([])).toBeNull();
+  });
+
+  it("the floor it names is honoured by gateChatHeadVersion at the reader it pins, and refuses below it", () => {
+    const floor = chatSyncReaderFloorForTranscriptEvents([
+      unattendedDenialEvent(),
+    ]);
+    if (floor === null) throw new Error("expected a floor");
+
+    const belowFloor = gateChatHeadVersion(
+      { schemaVersion: CHAT_SYNC_SCHEMA_VERSION, minReaderVersion: floor },
+      { major: floor.major, minor: floor.minor - 1 },
+    );
+    expect(belowFloor.ok).toBe(false);
+    if (!belowFloor.ok) expect(belowFloor.reason).toBe("reader-below-minimum");
+
+    expect(
+      gateChatHeadVersion(
+        { schemaVersion: CHAT_SYNC_SCHEMA_VERSION, minReaderVersion: floor },
+        floor,
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it("is pinned, not derived from CHAT_SYNC_SCHEMA_VERSION", () => {
+    // The whole point of a pinned literal (see the constant's own doc): a
+    // future minor bump must NOT drag this floor up with it, or every later
+    // minor would lock out readers over a row they can already draw. Today
+    // the two happen to coincide at 1.5 - this only asserts the floor is at
+    // or behind the current schema version, plus its own literal value, so a
+    // later schema bump cannot silently make this pass by both moving
+    // together.
+    expect(CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR).toEqual({
+      major: 1,
+      minor: 5,
+    });
+    expect(CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR.major).toBe(
+      CHAT_SYNC_SCHEMA_VERSION.major,
+    );
+    expect(CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR.minor).toBeLessThanOrEqual(
+      CHAT_SYNC_SCHEMA_VERSION.minor,
+    );
+    // A 1.5 reader (the floor itself) is still admitted at today's schema
+    // version - the assertion this constant exists to keep true forever,
+    // independent of how far `CHAT_SYNC_SCHEMA_VERSION` has since moved.
+    expect(
+      gateChatHeadVersion(
+        {
+          schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
+          minReaderVersion: CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
+        },
+        CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
       ),
     ).toEqual({ ok: true });
   });

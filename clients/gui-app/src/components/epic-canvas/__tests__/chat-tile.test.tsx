@@ -44,6 +44,18 @@ const forkCreateTestState = vi.hoisted(() => ({
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
 }));
+// The tile's own next-step/compact/implement-plan sends read this catalog to
+// clamp a sticky `auto` permission to what the selected harness row actually
+// honors (chat-tile.tsx's `nextStepSettings`). `MOCK_HOST_CLIENT.request`
+// below never resolves, so the real `agent.gui.listHarnesses` query is
+// permanently pending - this test state is the only way to hand the tile a
+// settled row. Left empty, it reproduces the suite's pre-existing "catalog
+// never answers" default for every other test in this file.
+const harnessCatalogTestState = vi.hoisted<{
+  harnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
+}>(() => ({
+  harnesses: [],
+}));
 // The one host this suite runs on. The mocked binding/directory, the tile
 // fixtures, and the per-host run-settings buckets all key off it, so they
 // cannot drift apart into a fixture that tests a host the tile never sees.
@@ -330,6 +342,25 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
   }),
 }));
 
+// Only `useGuiHarnessCatalogForClient` is overridden - every other export
+// (including `useGuiHarnessCatalog`, whose own body calls the real,
+// unmocked `useGuiHarnessCatalogForClient` from module scope rather than
+// through this export) keeps its real implementation.
+vi.mock(
+  "@/hooks/harnesses/use-gui-harness-catalog",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/harnesses/use-gui-harness-catalog")
+    >()),
+    useGuiHarnessCatalogForClient: () => ({
+      harnesses: harnessCatalogTestState.harnesses,
+      harnessesLoading: false,
+      harnessesError: null,
+      modelsLoading: false,
+    }),
+  }),
+);
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
@@ -387,6 +418,12 @@ import {
   resetFocusedComposerControlsForTests,
 } from "@/lib/commands/composer-controls-registry";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
+import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 
 const EPIC_ID = "epic-chat-tile";
 const CHAT_ARTIFACT = {
@@ -467,6 +504,15 @@ const SESSION_SETTINGS: ChatRunSettings = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+};
+// `SESSION_SETTINGS` twin with `permissionMode: "auto"`, for the next-step
+// clamp cases. Installed as the CHAT'S OWN persisted settings (rather than
+// set through the composer toolbar) so a later snapshot carrying the same
+// tuple never trips `authoritativeSettingsChanged` in the session store and
+// silently overwrites it with an unrelated value.
+const AUTO_SESSION_SETTINGS: ChatRunSettings = {
+  ...SESSION_SETTINGS,
+  permissionMode: "auto",
 };
 
 interface ChatHarness {
@@ -778,6 +824,32 @@ function deliveredA2aUserMessage(): Message {
     ...hostUserMessage(),
     messageId: DELIVERED_A2A_MESSAGE_ID,
     timestamp: 5,
+  };
+}
+
+/**
+ * A `agent.gui.listHarnesses` row shaped for `harnessCatalogTestState`,
+ * filling in every field the schema requires with a value that never
+ * constrains anything this suite tests except `supportedPermissionModes`.
+ */
+function harnessCatalogRow(overrides: {
+  readonly id: GuiHarnessCatalogEntry["id"];
+  readonly supportedPermissionModes: GuiHarnessCatalogEntry["supportedPermissionModes"];
+}): GuiHarnessCatalogEntry {
+  return {
+    id: overrides.id,
+    label: overrides.id,
+    enabled: true,
+    available: true,
+    error: null,
+    modes: ["gui"],
+    requiresApiKey: false,
+    supportedPermissionModes: overrides.supportedPermissionModes,
+    nativeAutoJudge: false,
+    availabilityPending: false,
+    models: [],
+    modelsLoading: false,
+    modelsError: null,
   };
 }
 
@@ -1304,6 +1376,8 @@ describe("<ChatTile />", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
+    harnessCatalogTestState.harnesses = [];
+    resetNegotiatedManifests();
   });
 
   afterEach(() => {
@@ -1315,6 +1389,7 @@ describe("<ChatTile />", () => {
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();
     chatHarness.teardown();
+    resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
@@ -2626,6 +2701,131 @@ describe("<ChatTile />", () => {
         },
       ],
     });
+  });
+
+  it("clamps a next-step send off the harness row when it does not list auto", async () => {
+    // Host proof: the catalog line is new enough to spell `auto` at all, so
+    // the clamp below is decided by the ROW, not this half of the gate.
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    // Installed as the CHAT's own persisted settings, and re-asserted with the
+    // exact same tuple on the snapshot below: `chat-session-store` replaces a
+    // live composer edit outright whenever a snapshot's settings differ from
+    // what it last recorded (`authoritativeSettingsChanged`), so a toolbar
+    // edit here would be clobbered the moment the next-steps message arrives.
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], AUTO_SESSION_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: AUTO_SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    // `auto`'s own declared fallback (`PERMISSION_FALLBACK_MODE.auto`), not
+    // the row's most-restrictive supported mode - the row honors
+    // `auto_accept_edits` too, so the walk stops there.
+    expect(frame.settings.permissionMode).toBe("auto_accept_edits");
+  });
+
+  it("preserves auto on a next-step send when the harness row lists it", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "auto",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], AUTO_SESSION_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: AUTO_SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.settings.permissionMode).toBe("auto");
+  });
+
+  it("passes auto through a next-step send unclamped when the harness catalog has not answered", async () => {
+    // Host proof present (so the HOST half of the gate cannot be what lets
+    // `auto` through), but no row for "claude" at all - `harnessCatalogTestState`
+    // is left at its default empty array, the same "catalog never answers"
+    // state every other test in this file already runs under.
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], AUTO_SESSION_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: AUTO_SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.settings.permissionMode).toBe("auto");
   });
 
   // A next-step click never touches the composer, so the chip has to come out of

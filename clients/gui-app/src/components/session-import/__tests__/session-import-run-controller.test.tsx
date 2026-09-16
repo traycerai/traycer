@@ -885,17 +885,22 @@ describe("<SessionImportRunController />", () => {
       expect(requireInstance(1).permissionMode).toBe("auto");
     });
 
-    it("sends auto unchanged when the advertised sessionImport.run manifest proves the host knows it", () => {
-      streamBinding.current = createStreamBinding("host-auto-cached");
+    it("sends auto unchanged when the host's ADVERTISED sessionImport.run line proves it, with no live session", () => {
+      // The advertised line, which reaches this gate through the SAME
+      // accessor the live session does: `WsStreamClient.applyHostManifest`
+      // caches what a subscribe would declare for every method in the peer
+      // manifest, and `getMethodSchemaVersion` falls through to that cache.
+      //
+      // This used to pin `recordNegotiatedHostManifest` instead, and that was
+      // the defect wearing a test: the unary manifest is derived from the
+      // unary registry alone, `sessionImport.run` is a stream method, so the
+      // key this wrote by hand is one no host can ever publish. The assertion
+      // passed while production read `null` and demoted every import.
+      streamBinding.current = createStreamBindingWithSchemaVersion(
+        "host-auto-cached",
+        sessionImportRunV12.schemaVersion,
+      );
       useSettingsStore.setState({ defaultPermission: "auto" });
-      // The harness catalog (`agent.gui.listHarnesses`) is deliberately no
-      // longer evidence for this gate - a catalog row is a different
-      // method's fact. The proof is `sessionImport.run`'s OWN advertised
-      // line in this host's negotiated manifest, published by
-      // `recordNegotiatedHostManifest` on every unary openAck.
-      recordNegotiatedHostManifest("host-auto-cached", {
-        "sessionImport.run": sessionImportRunV12.schemaVersion,
-      });
       render(<SessionImportRunController />);
       const handle = getSessionImportStartHandle();
       if (handle === null) {
@@ -921,17 +926,18 @@ describe("<SessionImportRunController />", () => {
     // below. That manifest does not need a live stream to exist - ANY RPC to
     // this host (the app-load prefetcher, or the wizard's own catalog
     // warm-up for a remote import target) records it via
-    // `recordNegotiatedHostManifest`. These two cases pin that: same gate,
+    // the stream handshake's cached line. These two cases pin that: same gate,
     // same mechanism as "host-auto-cached" / "host-auto-unproven" above, but
     // for a host shaped like the wizard's remote import target rather than
     // the ambient one this controller otherwise runs against. The harness
     // catalog plays no part in either case any more.
-    it("opens with permissionMode 'auto' for a remote-shaped host whose advertised sessionImport.run manifest proves it", () => {
-      streamBinding.current = createStreamBinding("host-remote-import-target");
+    it("opens with permissionMode 'auto' for a remote-shaped host whose advertised sessionImport.run line proves it", () => {
+      streamBinding.current = createStreamBindingWithSchemaVersion(
+        "host-remote-import-target",
+        sessionImportRunV12.schemaVersion,
+      );
       useSettingsStore.setState({ defaultPermission: "auto" });
-      recordNegotiatedHostManifest("host-remote-import-target", {
-        "sessionImport.run": sessionImportRunV12.schemaVersion,
-      });
+
       render(<SessionImportRunController />);
       const handle = getSessionImportStartHandle();
       if (handle === null) {
@@ -951,7 +957,7 @@ describe("<SessionImportRunController />", () => {
       expect(requireInstance(1).permissionMode).toBe("auto");
     });
 
-    it("demotes to 'auto_accept_edits' for a remote-shaped host with no sessionImport.run manifest recorded", () => {
+    it("demotes to 'auto_accept_edits' for a remote-shaped host with no sessionImport.run line known", () => {
       streamBinding.current = createStreamBinding(
         "host-remote-import-target-empty",
       );
@@ -1017,19 +1023,17 @@ describe("<SessionImportRunController />", () => {
     // per-method negotiation is exactly the rule the catalog broke.
     describe("the advertised sessionImport.run manifest is the second proof", () => {
       it("sends auto for an advertised sessionImport.run manifest at or above the required minor", () => {
-        streamBinding.current = createStreamBinding(
-          "host-auto-manifest-at-line",
-        );
-        useSettingsStore.setState({ defaultPermission: "auto" });
         // A higher minor within the same major, not the exact required
         // version - proves the `>=` half of the comparison independently of
         // the exact-match case covered by "host-auto-cached" above.
-        recordNegotiatedHostManifest("host-auto-manifest-at-line", {
-          "sessionImport.run": {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-manifest-at-line",
+          {
             major: sessionImportRunV12.schemaVersion.major,
             minor: sessionImportRunV12.schemaVersion.minor + 3,
           },
-        });
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
         render(<SessionImportRunController />);
         const handle = getSessionImportStartHandle();
         if (handle === null) {
@@ -1061,14 +1065,14 @@ describe("<SessionImportRunController />", () => {
       });
 
       it("demotes when the advertised sessionImport.run manifest is below the required minor", () => {
-        streamBinding.current = createStreamBinding("host-auto-manifest-below");
-        useSettingsStore.setState({ defaultPermission: "auto" });
-        recordNegotiatedHostManifest("host-auto-manifest-below", {
-          "sessionImport.run": {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-manifest-below",
+          {
             major: sessionImportRunV12.schemaVersion.major,
             minor: sessionImportRunV12.schemaVersion.minor - 1,
           },
-        });
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
         render(<SessionImportRunController />);
         const handle = getSessionImportStartHandle();
         if (handle === null) {
@@ -1255,15 +1259,23 @@ describe("<SessionImportRunController />", () => {
       // alone - execution falls through to the advertised-manifest check
       // instead. The harness catalog is not consulted at any point on this
       // path any more, so the manifest below is what has to carry the case.
-      it("still sends auto when the negotiated sessionImport.run version is on a higher major but the advertised manifest proves it", () => {
+      // Reframed. This used to assert that a live session on a HIGHER major
+      // fell through to an advertised manifest pinned at the required major,
+      // and still sent `auto`. That state cannot exist: both facts describe
+      // one host's one `sessionImport.run` line, so a host on major 2 does
+      // not simultaneously advertise major 1 - the fixture could only build
+      // it because the second fact came from a registry no host writes.
+      //
+      // With both facts arriving through the same accessor, a higher major is
+      // simply a line this build cannot reason about, and the gate demotes.
+      // That is the safe direction and the one the comparison already
+      // encodes: `advertised.major === required.major` was never true for it.
+      it("demotes when the sessionImport.run line is on a higher major this build cannot reason about", () => {
         streamBinding.current = createStreamBindingWithSchemaVersion(
           "host-auto-negotiated-higher-major",
           { major: sessionImportRunV12.schemaVersion.major + 1, minor: 0 },
         );
         useSettingsStore.setState({ defaultPermission: "auto" });
-        recordNegotiatedHostManifest("host-auto-negotiated-higher-major", {
-          "sessionImport.run": sessionImportRunV12.schemaVersion,
-        });
         render(<SessionImportRunController />);
         const handle = getSessionImportStartHandle();
         if (handle === null) {
@@ -1280,11 +1292,10 @@ describe("<SessionImportRunController />", () => {
           );
         });
 
-        // FALSIFICATION: delete the fallthrough (return `false` immediately
-        // whenever `negotiated !== null`) and this goes red with
-        // 'auto_accept_edits' - a live session on a higher major would then
-        // veto the advertised manifest instead of deferring to it.
-        expect(requireInstance(1).permissionMode).toBe("auto");
+        // FALSIFICATION: make the same-major check a `>=` on major alone and
+        // this goes red with 'auto' - a host on the next major would then be
+        // credited with understanding a mode nothing has proven it parses.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
       });
 
       // The LIVE-session half of the exact-major rule, which the case above

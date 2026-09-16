@@ -216,7 +216,12 @@ import {
   buildChatRunSettings,
   importedChatSettingsSeed,
 } from "@/lib/composer/chat-run-settings";
-import type { ProviderId } from "@/components/home/data/landing-options";
+import {
+  autoModeOfferableHere,
+  normalizePermissionMode,
+  type ProviderId,
+} from "@/components/home/data/landing-options";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
   effectiveMissingWorktreePaths,
@@ -2254,7 +2259,54 @@ function useChatTileSessionViewModel(
       defaultRunSettings,
     ],
   );
-  const nextStepSettings = currentComposerSettings;
+  // The TILE-OWNED send paths (next step, compact, implement-plan, inline edit)
+  // take the same permission clamp the composer's toolbar store applies, and
+  // this is where they get it. They do not go through that store - it belongs
+  // to the lower composer - so before this they sent `currentComposerSettings`
+  // raw: a chat retaining `auto` whose selected harness no longer advertises it
+  // submitted `permissionMode: "auto"` from these buttons while an ordinary
+  // composer send beside them was clamped to a supported mode. One chat, two
+  // answers, and the host refuses the button.
+  //
+  // Same three inputs the composer uses, read off what this tile already holds:
+  // the row from the tab-host catalog, and the pair of proofs
+  // `autoModeOfferableHere` needs (the catalog line, plus THIS chat's
+  // `chat.subscribe` line from the session probe). A catalog that has not
+  // answered leaves the row `null`, which `normalizePermissionMode` reads as
+  // "cannot say" and passes through - the same direction the composer takes on
+  // a cold load, and never a clamp invented from missing evidence.
+  const tileListHarnessesLine = useHostMethodSchemaVersion(
+    activeHostId,
+    "agent.gui.listHarnesses",
+  );
+  const nextStepSettings = useMemo(() => {
+    const row = displayCatalog.find(
+      (harness) => harness.id === currentComposerSettings.harnessId,
+    );
+    const clamped = normalizePermissionMode(
+      currentComposerSettings.permissionMode,
+      row?.supportedPermissionModes ?? null,
+      autoModeOfferableHere(
+        tileListHarnessesLine,
+        state.autoPermissionModeProtocolSupported,
+      ),
+    );
+    // Hand back the SAME object when nothing was clamped, which is a narrower
+    // claim than it looks: `useMemo` already stops a fresh object per render,
+    // so this is not what keeps the memoized composer region stable across
+    // ordinary renders. What it covers is a recompute triggered by a dep that
+    // does not change the ANSWER - a catalog refetch moving `displayCatalog`'s
+    // identity, say - where a spread would mint a new settings object that is
+    // field-for-field equal and still churn every consumer downstream of it.
+    return clamped === currentComposerSettings.permissionMode
+      ? currentComposerSettings
+      : { ...currentComposerSettings, permissionMode: clamped };
+  }, [
+    currentComposerSettings,
+    displayCatalog,
+    tileListHarnessesLine,
+    state.autoPermissionModeProtocolSupported,
+  ]);
   const editSettings = nextStepSettings;
   // The tile's own send paths - next steps, compact, inline edit - never touch
   // the composer, so they cannot read the catalog off its picker store. Subscribe
