@@ -48,6 +48,26 @@ import type {
 } from "@/lib/comm-graph/office/office-types";
 import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view";
 
+/**
+ * WHAT A SIGN IS FIXED TO, which decides both whether it has a board and where
+ * its lettering sits.
+ *
+ * `wall` is a board hung on a wall face, with the lettering ON the board -
+ * every cabin sign, pod plate, area name and roster board, and a civic room
+ * that is walled. The board lands on structure because there is structure
+ * there to land on.
+ *
+ * `floating` is lettering alone, hung in the air just above the room it names.
+ * It exists because THREE QUARTERS of the civic rooms are `enclosure: "open"`
+ * - a plaza ward, a row of waiting chairs, a reception counter - and an open
+ * room has no wall for a board to hang on. Hanging one anyway put it on the
+ * room's own first row, which is the row the room is FURNISHED along: the
+ * Dispensary's board stood in a bed and hid the agent lying in it, the waiting
+ * room's took a chair, and the front desk's collected the name tag of whoever
+ * was standing at the counter. A room label belongs over the room, not in it.
+ */
+export type OfficeSignMount = "wall" | "floating";
+
 /** One sign, resolved: where it is, and what it says right now. */
 export interface OfficeSignToDraw {
   readonly sign: OfficeSign;
@@ -69,6 +89,8 @@ export interface OfficeSignToDraw {
    * and the clock meet, and it has no business naming pixel maps.
    */
   readonly sirenFrame: 0 | 1 | null;
+  /** Board on a wall, or lettering hung over the room. */
+  readonly mount: OfficeSignMount;
 }
 
 /** A storey's name over its stairwell, already projected. */
@@ -899,6 +921,10 @@ function civicSignToDraw(args: {
     subtext: null,
     anchor,
     sirenFrame,
+    // THE ROOM'S OWN ENCLOSURE DECIDES, because the board needs a wall and
+    // only a walled room has one. See {@link OfficeSignMount} for what an
+    // open room's board was landing on instead.
+    mount: placed.room.enclosure === "walled" ? "wall" : "floating",
   };
 }
 
@@ -1022,6 +1048,7 @@ export function officeSignsToDraw(args: {
         subtext: null,
         anchor,
         sirenFrame: null,
+        mount: "wall",
       });
       continue;
     }
@@ -1080,7 +1107,14 @@ function nameSignToDraw(args: {
   // every view but the two oblique ones: their plates are the only lettering
   // whose room is narrow enough for the reading to have to give way.
   if (rungs === null) {
-    return { sign, text, subtext: claim, anchor, sirenFrame: null };
+    return {
+      sign,
+      text,
+      subtext: claim,
+      anchor,
+      sirenFrame: null,
+      mount: "wall",
+    };
   }
   const fitted = officePlateTextThatFits({
     rungs,
@@ -1106,6 +1140,7 @@ function nameSignToDraw(args: {
           }),
     anchor,
     sirenFrame: null,
+    mount: "wall",
   };
 }
 

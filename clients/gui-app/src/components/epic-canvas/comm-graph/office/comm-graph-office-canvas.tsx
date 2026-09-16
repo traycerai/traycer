@@ -174,6 +174,7 @@ import {
   type OfficeNameTagCandidate,
 } from "@/components/epic-canvas/comm-graph/office/office-name-tags";
 import {
+  OFFICE_CHARACTER_HEIGHT,
   OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
@@ -263,6 +264,25 @@ const DARK_LABEL_BACKING = "rgba(0, 0, 0, 0.85)";
 const LIGHT_LABEL_BACKING = "rgba(255, 255, 255, 0.85)";
 /** Baseline of a sign's name, measured down from the sign sprite's own top. */
 const SIGN_LABEL_BASELINE = 11;
+/**
+ * The air between a floating sign's plate and what stands on the room's first
+ * row.
+ *
+ * Two pixels, the same gap the beacon keeps from its plate
+ * ({@link SIREN_PLATE_GAP_PX}), so the label reads as belonging to the room
+ * under it rather than to whatever is in the row above.
+ */
+const FLOATING_SIGN_GAP_PX = 2;
+/**
+ * How far above its own tile a standing figure reaches, in WORLD pixels.
+ *
+ * A character stands with its feet on the tile's bottom edge and is taller
+ * than the tile, so the difference is head-room that hangs over the row above
+ * - and a floating sign clearing only the TILE grazed the hair of whoever was
+ * in the room's first bed. It scales with the camera, unlike the plate's own
+ * backing, which is why it is applied in world space and the gap above is not.
+ */
+const FIGURE_OVERHANG = OFFICE_CHARACTER_HEIGHT - OFFICE_TILE;
 const SIGN_WIDTH_TILES = 2;
 /** An overview pip, and the two marks that ride over it. */
 const PIP_RADIUS = 3;
@@ -1827,6 +1847,9 @@ function drawSignArt(args: {
 }): void {
   const { ctx, signs, theme } = args;
   for (const entry of signs) {
+    // A FLOATING SIGN HAS NO BOARD: there is no wall under it to hang one on,
+    // and the tile it would hang in is furniture. See `OfficeSignMount`.
+    if (entry.mount === "floating") continue;
     const name = signSpriteFor(entry.sign);
     if (name === null) continue;
     const boardX = signBoardX(entry, name);
@@ -1857,7 +1880,22 @@ function drawSignLabels(args: {
       SIGN_LABEL_BASELINE;
     const screenX = officeSignCenterX(entry) * camera.zoom + camera.x;
     const plateText = signPlateText(entry).toUpperCase();
-    const screenY = baseline * camera.zoom + camera.y;
+    // A FLOATING SIGN HANGS ABOVE ITS ROOM rather than inside its first row.
+    //
+    // TWO SPACES, deliberately. The room's own head-room is world art and
+    // scales with the camera ({@link FIGURE_OVERHANG}); the air above it is
+    // the plate's, and a plate's backing is a fixed fourteen pixels tall
+    // whatever the camera is doing - the same argument the archive's two-row
+    // lift is made in. A clearance measured wholly in rows clears the
+    // furniture at close-up and sits back down on it as the reader zooms out;
+    // one measured wholly in screen pixels drifts off the room instead.
+    const screenY =
+      entry.mount === "floating"
+        ? (entry.anchor.y - FIGURE_OVERHANG) * camera.zoom +
+          camera.y -
+          FLOATING_SIGN_GAP_PX -
+          SIGN_PADDING_Y
+        : baseline * camera.zoom + camera.y;
     drawSignPlate(ctx, { text: plateText, screenX, screenY, palette });
     // THE WARD'S BEACON, where a ward has one: Mission control's medbay, which
     // has no street for an ambulance to come down (C6). Which frame is up is
@@ -1887,9 +1925,14 @@ function drawSignLabels(args: {
         signMaxChars(entry.sign.widthTiles),
       ).toUpperCase(),
       screenX,
+      // A LINE UNDER THE PLATE ABOVE, measured from where that plate actually
+      // landed rather than from `baseline` - the two agree for a wall sign and
+      // only the first is true for a floating one. No civic sign carries a
+      // claim today, so this is the trap rather than the bug: deriving it from
+      // `baseline` would sit the second plate back down in the room the first
+      // one was lifted out of, the day a floating sign ever has a subtext.
       screenY:
-        (baseline + OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2) * camera.zoom +
-        camera.y,
+        screenY + (OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2) * camera.zoom,
       palette,
     });
   }
