@@ -83,10 +83,8 @@ import {
   requiredChatTarget,
   stashDraftWrite,
 } from "./draft-write-codec";
-import type {
-  PromptStashEntry,
-  PromptStashImageBlob,
-} from "@/lib/composer/prompt-stash-codec";
+import type { ImageBlob } from "@/lib/attachments/image-bytes";
+import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
   setDraftLocalDeleteListener,
@@ -121,6 +119,28 @@ const sessionClients = new Map<string, HostRequester<HostRpcRegistry>>();
 const knownLandingDraftIds = new Set<string>();
 const cloudScopeIdByHost = new Map<string, string | null>();
 const cloudScopeListeners = new Set<() => void>();
+const sessionListeners = new Set<() => void>();
+
+/**
+ * Whether this window holds a draft mirror session with `hostId` - the "All"
+ * filter's live-host set (D09). `composer-draft-store` is persisted and never
+ * sweeps an unmounted chat, so without this every chat draft any host ever
+ * listed would keep listing after its session is gone, with a dead Open.
+ */
+export function hasDraftMirrorSession(hostId: string): boolean {
+  return sessions.has(hostId);
+}
+
+export function subscribeDraftMirrorSessions(listener: () => void): () => void {
+  sessionListeners.add(listener);
+  return () => {
+    sessionListeners.delete(listener);
+  };
+}
+
+function notifySessionListeners(): void {
+  for (const listener of sessionListeners) listener();
+}
 
 function notifyCloudScopeListeners(): void {
   for (const listener of cloudScopeListeners) listener();
@@ -275,7 +295,7 @@ export async function consumeStashOnHost(
 
 async function ingestStashDocument(
   document: DraftDocument,
-  images: ReadonlyMap<string, PromptStashImageBlob>,
+  images: ReadonlyMap<string, ImageBlob>,
 ): Promise<void> {
   if (document.kind !== "stash-entry") return;
   stashHostById.set(document.draftId, document.ownerHostId);
@@ -963,6 +983,9 @@ export function acquireDraftMirrorSession(
   });
   sessions.set(args.hostId, { session, refCount: 1 });
   sessionClients.set(args.hostId, args.client);
+  // Only a NEW host entry moves the live-host set; a second ref for a host
+  // already mounted changes nothing an observer can see.
+  notifySessionListeners();
   session.start();
   return session;
 }
@@ -977,6 +1000,7 @@ export function releaseDraftMirrorSession(hostId: string): void {
   sessionClients.delete(hostId);
   cloudScopeIdByHost.delete(hostId);
   notifyCloudScopeListeners();
+  notifySessionListeners();
 }
 
 export async function flushDraftMirrorSessions(
@@ -1058,6 +1082,7 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   warnedUnboundInterview.clear();
   resetDraftBlobTransportForTests();
   notifyCloudScopeListeners();
+  notifySessionListeners();
   // Re-bind production listeners. Tests that install their own must not
   // leave `routeLocalDelete` unbound for later files in the same worker.
   setDraftLocalEditListener(routeLocalEdit);

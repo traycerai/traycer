@@ -30,21 +30,16 @@ export class PromptStashCapacityExceededError extends Error {
   }
 }
 
-/** Every blob a restore needs was resolvable, but at least one is missing. */
-export class PromptStashMissingBlobError extends Error {
-  constructor() {
-    super("A stashed image is missing from durable storage.");
-    this.name = "PromptStashMissingBlobError";
-  }
-}
-
-/** Every referenced blob exists but failed byte-level validation. */
-export class PromptStashCorruptBlobError extends Error {
-  constructor() {
-    super("A stashed image is damaged and could not be verified.");
-    this.name = "PromptStashCorruptBlobError";
-  }
-}
+/**
+ * The restore-blob failures now live beside `ImageBlob` in
+ * `lib/attachments/image-bytes.ts`, because the landing image import throws
+ * them and no longer belongs to the stash. Re-exported here under their
+ * original names so every existing `instanceof` site keeps matching.
+ */
+export {
+  ImageBlobCorruptError as PromptStashCorruptBlobError,
+  ImageBlobMissingError as PromptStashMissingBlobError,
+} from "@/lib/attachments/image-bytes";
 
 export const PROMPT_STASH_DB_NAME = `${PERSIST_PREFIX}:prompt-stash`;
 /**

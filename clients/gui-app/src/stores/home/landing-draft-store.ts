@@ -148,6 +148,18 @@ export interface LandingDraftWorkspaceSnapshot {
   readonly primaryPath: string | null;
 }
 
+/** The row {@link LandingDraftStoreState.installLandingDraft} writes. */
+export interface InstallLandingDraftInput {
+  readonly id: string;
+  readonly content: JsonContent;
+  readonly selection: DraftSelection | null;
+  readonly lastTouchedAt: number;
+  readonly settings: ChatRunSettings | null;
+  readonly composerMode: ComposerMode;
+  readonly workspace: LandingDraftWorkspaceSnapshot;
+  readonly closed: boolean;
+}
+
 interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
@@ -174,6 +186,18 @@ interface LandingDraftStoreState {
    * `nextId` already exists.
    */
   forkDraft: (sourceId: string, nextId: string) => boolean;
+  /**
+   * Insert a start-task row for `id` carrying the given snapshot verbatim,
+   * dirty (so the mirror adopts and publishes it) and unadopted, WITHOUT
+   * touching `activeDraftId` - the stash migration installs many rows at
+   * once and Undo restores one the user is not looking at, so neither may
+   * hijack the composer. False when `id` is retired or already present.
+   *
+   * Deliberately not `createDraftWithId` + `closeDraft`: that pair sets and
+   * then clears the active draft, and fires an image reconcile between the
+   * empty content and the real content.
+   */
+  installLandingDraft: (input: InstallLandingDraftInput) => boolean;
   /**
    * Put a start-task draft away. A non-empty draft is retained (`closed:
    * true`) and leaves the tab strip; an empty one is deleted so stray Cmd-N
@@ -674,6 +698,32 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         return true;
       },
 
+      installLandingDraft: (input) => {
+        if (landingDraftIsRetired(input.id)) return false;
+        if (get().drafts.some((draft) => draft.id === input.id)) return false;
+        const next: LandingDraftTab = {
+          id: input.id,
+          content: input.content,
+          selection: input.selection,
+          lastTouchedAt: input.lastTouchedAt,
+          settings: copyChatRunSettings(input.settings),
+          composerMode: input.composerMode,
+          workspace: input.workspace,
+          ...freshLandingMirrorState(),
+          // A fresh row with content is dirty by definition: the mirror
+          // adopts and publishes it on the next sweep.
+          generation: 1,
+          closed: input.closed,
+        };
+        // Partial set: `activeDraftId` is deliberately left where it is.
+        set((state) => ({
+          drafts: [...uniqueLandingDrafts(state.drafts), next],
+        }));
+        notifyDraftLocalEdit(input.id);
+        scheduleLandingImageReconcile();
+        return true;
+      },
+
       closeDraft: (id) => {
         if (!get().drafts.some((d) => d.id === id)) return;
         // Flush pending runtime writes first so emptiness is judged on the
@@ -1171,7 +1221,7 @@ function parseComposerMode(value: unknown): ComposerMode {
   return useSettingsStore.getState().composerMode;
 }
 
-function parseChatRunSettings(value: unknown): ChatRunSettings | null {
+export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
   if (value === null || value === undefined) return null;
   const parsed = chatRunSettingsSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
@@ -1338,7 +1388,7 @@ export function setLandingDraftWorkspacePrimary(
   return { ...workspace, primaryPath: folderPath };
 }
 
-function parseLandingDraftWorkspaceSnapshot(
+export function parseLandingDraftWorkspaceSnapshot(
   value: unknown,
 ): LandingDraftWorkspaceSnapshot {
   if (!isRecord(value)) return emptyLandingDraftWorkspaceSnapshot();
@@ -1564,7 +1614,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // b64 node). Hash-only image nodes (whose bytes are durably stored) are kept; a
 // still-pending b64 node is dropped from the serialized form until its background
 // job flips it to a hash and the next serialization captures the converted node.
-function stripBase64ImageNodes(content: JsonContent): JsonContent {
+export function stripBase64ImageNodes(content: JsonContent): JsonContent {
   return stripBase64ImageNode(content) ?? EMPTY_LANDING_DRAFT_CONTENT;
 }
 

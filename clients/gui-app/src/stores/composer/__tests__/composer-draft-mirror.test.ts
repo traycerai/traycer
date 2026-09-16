@@ -75,6 +75,8 @@ describe("composer draft host-mirror bookkeeping", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -153,6 +155,8 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -179,6 +183,8 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -212,6 +218,8 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
           origin: "own",
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });

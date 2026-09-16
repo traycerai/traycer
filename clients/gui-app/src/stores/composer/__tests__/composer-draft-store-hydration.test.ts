@@ -50,6 +50,8 @@ const MENTION_DRAFT: DraftState = {
   origin: null,
   supersedes: null,
   publication: null,
+  chatTitle: null,
+  epicTitle: null,
 };
 
 beforeEach(() => {
@@ -205,6 +207,8 @@ describe("composer draft store hydration", () => {
       origin: null,
       supersedes: null,
       publication: null,
+      chatTitle: null,
+      epicTitle: null,
     });
   });
 

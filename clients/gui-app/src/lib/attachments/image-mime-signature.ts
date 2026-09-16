@@ -1,11 +1,10 @@
 /**
- * Canonical image format sniffing/MIME normalization for the prompt stash.
- * Shared by image preparation (`prompt-stash-image-preparation.ts`, which
- * validates and encodes a captured image before it is stashed) and persisted
- * record/blob restore validation (`prompt-stash-codec.ts`) so the two never
- * drift into disagreeing about what counts as a valid PNG/JPEG/GIF/WebP -
- * this is the sole signature implementation; nothing else in the prompt
- * stash re-derives it.
+ * Canonical image format sniffing/MIME normalization for composer
+ * attachments. Shared by image preparation, persisted record/blob restore
+ * validation, draft blob transport and appearance image processing so they
+ * never drift into disagreeing about what counts as a valid
+ * PNG/JPEG/GIF/WebP - this is the sole signature implementation; nothing
+ * else re-derives it.
  */
 
 export type CanonicalImageMimeType =
@@ -46,7 +45,7 @@ export function canonicalImageMimeType(
   }
 }
 
-/** Magic-byte sniff for the 4 canonical stash image formats. */
+/** Magic-byte sniff for the 4 canonical image formats. */
 export function sniffImageMimeType(
   bytes: Uint8Array,
 ): CanonicalImageMimeType | null {

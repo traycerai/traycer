@@ -2,8 +2,14 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { DraftDocument } from "@traycer/protocol/host";
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
-import type { ComposerMode } from "@/components/home/data/landing-options";
+import {
+  isComposerMode,
+  type ComposerMode,
+} from "@/components/home/data/landing-options";
+import { isJsonContent } from "@/lib/editor/prosemirror-json";
+import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import {
   notifyDraftLocalDelete,
@@ -12,10 +18,13 @@ import {
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import {
   mergeLandingDraftWorkspaceFolders,
+  parseChatRunSettings,
+  parseLandingDraftWorkspaceSnapshot,
   removeLandingDraftWorkspaceFolder,
   sameLandingDraftWorkspace,
   sameNullableChatRunSettings,
   setLandingDraftWorkspacePrimary,
+  stripBase64ImageNodes,
 } from "@/stores/home/landing-draft-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
@@ -52,6 +61,14 @@ export interface NewConversationModalDraftPatch {
   readonly lastTouchedAt: number;
   readonly generation: number;
   readonly syncedGeneration: number;
+  /**
+   * Display snapshot for the drafts list, recorded by the mounted modal
+   * (`setNewChatEpicTitle`). Not on the wire - the epic title comes from the
+   * open-epic projector, which exists only for open epics, while the list
+   * must name a draft whose epic is closed. `null` until a modal for this
+   * epic has mounted.
+   */
+  readonly epicTitle: string | null;
 }
 
 interface NewConversationModalStore {
@@ -79,6 +96,18 @@ interface NewConversationModalStore {
     settings: ChatRunSettings | null,
   ) => void;
   readonly setComposerMode: (epicId: string, mode: ComposerMode) => void;
+  /**
+   * Record the drafts-list display snapshot for an EXISTING patch. Non-
+   * dirtying by construction, like `setComposerDraftTitles`: it compares
+   * first, writes only that field, and deliberately does NOT go through
+   * `mergePatch` (which mints a draft identity and bumps `generation`, so a
+   * title write would publish a modal the user never typed in). No-op when
+   * this epic has no patch yet; there is nothing to label.
+   */
+  readonly setNewChatEpicTitle: (
+    epicId: string,
+    epicTitle: string | null,
+  ) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
   readonly addResolvedFolders: (
@@ -112,6 +141,7 @@ const EMPTY_DRAFT_PATCH: NewConversationModalDraftPatch = {
   lastTouchedAt: 0,
   generation: 0,
   syncedGeneration: 0,
+  epicTitle: null,
 };
 
 // Merge a partial patch onto the epic's current draft (seeded from
@@ -146,106 +176,239 @@ const mergePatch = (
 };
 
 export const useNewConversationModalStore = create<NewConversationModalStore>()(
-  (set, get) => ({
-    draftPatchesByEpicId: {},
-    setContent: (epicId, content) => {
-      notifyDraftLocalEdit(applyNewChatLocalPatch(epicId, { content }, true));
+  persist(
+    (set, get) => ({
+      draftPatchesByEpicId: {},
+      setContent: (epicId, content) => {
+        notifyDraftLocalEdit(applyNewChatLocalPatch(epicId, { content }, true));
+      },
+      // Every reducer below compares before it writes. `mergePatch` mints a
+      // draft identity and bumps `generation`, so an unchanged value applied
+      // anyway makes a modal the user never touched dirty and publishes it.
+      setSelection: (epicId, selection) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        if (sameNewChatSelection(current.selection, selection)) return;
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { selection }, false),
+        );
+      },
+      clearSelection: (epicId) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        if (current.selection === null) return;
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { selection: null }, false),
+        );
+      },
+      setSettings: (epicId, settings) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        if (sameNullableChatRunSettings(current.settings, settings)) return;
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { settings }, false),
+        );
+      },
+      setComposerMode: (epicId, mode) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        if (current.composerMode === mode) return;
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { composerMode: mode }, false),
+        );
+      },
+      setNewChatEpicTitle: (epicId, epicTitle) => {
+        set((state) => {
+          const current = state.draftPatchesByEpicId[epicId];
+          if (current === undefined || current.epicTitle === epicTitle) {
+            return state;
+          }
+          return {
+            draftPatchesByEpicId: {
+              ...state.draftPatchesByEpicId,
+              [epicId]: { ...current, epicTitle },
+            },
+          };
+        });
+      },
+      addResolvedFolders: (epicId, seedWorkspace, folders) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        const beforeWorkspace = current.workspace ?? seedWorkspace;
+        const workspace = mergeLandingDraftWorkspaceFolders(
+          beforeWorkspace,
+          folders,
+        );
+        // A merge that adds nothing (every folder already staged) evicts
+        // nothing either, so there is no work and no patch - unless the draft
+        // has no workspace of its own yet: the first workspace gesture writes
+        // the seed through, so the mirror carries the folders the user is
+        // looking at rather than `null`.
+        if (
+          current.workspace !== null &&
+          sameLandingDraftWorkspace(beforeWorkspace, workspace)
+        ) {
+          return [];
+        }
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { workspace }, false),
+        );
+        const afterSet = new Set(workspace.folders);
+        return beforeWorkspace.folders.filter((path) => !afterSet.has(path));
+      },
+      removeFolder: (epicId, seedWorkspace, folderKey) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        const before = current.workspace ?? seedWorkspace;
+        const workspace = removeLandingDraftWorkspaceFolder(before, folderKey);
+        if (
+          current.workspace !== null &&
+          sameLandingDraftWorkspace(before, workspace)
+        ) {
+          return;
+        }
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { workspace }, false),
+        );
+      },
+      setPrimaryFolder: (epicId, seedWorkspace, folderPath) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        const before = current.workspace ?? seedWorkspace;
+        const workspace = setLandingDraftWorkspacePrimary(before, folderPath);
+        if (
+          current.workspace !== null &&
+          sameLandingDraftWorkspace(before, workspace)
+        ) {
+          return;
+        }
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { workspace }, false),
+        );
+      },
+      clearDraft: (epicId) => {
+        const removed = get().draftPatchesByEpicId[epicId];
+        // Notify BEFORE removing: the coordinator resolves this draft's host
+        // through `findNewChatByDraftId`, which reads this store. Removing
+        // first left a modal the user is not looking at with no route for its
+        // `drafts.delete` at all, and the host went on listing the row.
+        if (removed?.draftId !== undefined && removed.draftId !== null) {
+          notifyDraftLocalDelete(removed.draftId);
+        }
+        set((state) => {
+          const { [epicId]: _removed, ...draftPatchesByEpicId } =
+            state.draftPatchesByEpicId;
+          return { draftPatchesByEpicId };
+        });
+      },
+      resetForTests: () => set({ draftPatchesByEpicId: {} }),
+    }),
+    {
+      ...basePersistOptions(persistKey(STORE_KEYS.newConversationDraft)),
+      // Same serialization boundary as the landing store's: a paste's
+      // still-pending base64 node never reaches localStorage, while a
+      // hash-only node (whose bytes are durably stored) always survives.
+      partialize: (state) => ({
+        draftPatchesByEpicId: Object.fromEntries(
+          Object.entries(state.draftPatchesByEpicId).flatMap(
+            ([epicId, patch]) =>
+              patch === undefined
+                ? []
+                : [
+                    [
+                      epicId,
+                      {
+                        ...patch,
+                        content:
+                          patch.content === null
+                            ? null
+                            : stripBase64ImageNodes(patch.content),
+                      },
+                    ],
+                  ],
+          ),
+        ),
+      }),
+      // Rebuilt field by field, like the composer store's: the JSON crossing
+      // this boundary is untrusted, and one malformed `content` would throw
+      // wherever the drafts list flattens it to a preview.
+      //
+      // `hostRevision` / `generation` / `syncedGeneration` / `draftId` are
+      // persisted AS WRITTEN rather than re-dirtied: a reload that marked
+      // every clean row dirty would re-publish rows the host already holds.
+      merge: (persistedState, currentState) => {
+        if (!isRecord(persistedState)) return currentState;
+        const rawPatches = persistedState.draftPatchesByEpicId;
+        if (!isRecord(rawPatches)) return currentState;
+        const draftPatchesByEpicId: Record<
+          string,
+          NewConversationModalDraftPatch | undefined
+        > = {};
+        for (const [epicId, raw] of Object.entries(rawPatches)) {
+          if (!isRecord(raw)) continue;
+          // A patch with no restorable document is not a draft: it lists
+          // nothing and seeds nothing.
+          if (!isJsonContent(raw.content, 0)) continue;
+          draftPatchesByEpicId[epicId] = {
+            content: raw.content,
+            selection: parseNewChatSelection(raw.selection),
+            settings: parseChatRunSettings(raw.settings),
+            composerMode: parsePersistedComposerMode(raw.composerMode),
+            workspace: parsePersistedWorkspace(raw.workspace),
+            revision: nonNegativeNumber(raw.revision),
+            draftId: parseNullableId(raw.draftId),
+            hostRevision: nonNegativeNumber(raw.hostRevision),
+            lastTouchedAt: nonNegativeNumber(raw.lastTouchedAt),
+            generation: nonNegativeNumber(raw.generation),
+            syncedGeneration: nonNegativeNumber(raw.syncedGeneration),
+            epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
+          };
+        }
+        return { ...currentState, draftPatchesByEpicId };
+      },
     },
-    // Every reducer below compares before it writes. `mergePatch` mints a
-    // draft identity and bumps `generation`, so an unchanged value applied
-    // anyway makes a modal the user never touched dirty and publishes it.
-    setSelection: (epicId, selection) => {
-      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      if (sameNewChatSelection(current.selection, selection)) return;
-      notifyDraftLocalEdit(
-        applyNewChatLocalPatch(epicId, { selection }, false),
-      );
-    },
-    clearSelection: (epicId) => {
-      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      if (current.selection === null) return;
-      notifyDraftLocalEdit(
-        applyNewChatLocalPatch(epicId, { selection: null }, false),
-      );
-    },
-    setSettings: (epicId, settings) => {
-      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      if (sameNullableChatRunSettings(current.settings, settings)) return;
-      notifyDraftLocalEdit(applyNewChatLocalPatch(epicId, { settings }, false));
-    },
-    setComposerMode: (epicId, mode) => {
-      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      if (current.composerMode === mode) return;
-      notifyDraftLocalEdit(
-        applyNewChatLocalPatch(epicId, { composerMode: mode }, false),
-      );
-    },
-    addResolvedFolders: (epicId, seedWorkspace, folders) => {
-      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      const beforeWorkspace = current.workspace ?? seedWorkspace;
-      const workspace = mergeLandingDraftWorkspaceFolders(
-        beforeWorkspace,
-        folders,
-      );
-      // A merge that adds nothing (every folder already staged) evicts
-      // nothing either, so there is no work and no patch - unless the draft
-      // has no workspace of its own yet: the first workspace gesture writes
-      // the seed through, so the mirror carries the folders the user is
-      // looking at rather than `null`.
-      if (
-        current.workspace !== null &&
-        sameLandingDraftWorkspace(beforeWorkspace, workspace)
-      ) {
-        return [];
-      }
-      notifyDraftLocalEdit(
-        applyNewChatLocalPatch(epicId, { workspace }, false),
-      );
-      const afterSet = new Set(workspace.folders);
-      return beforeWorkspace.folders.filter((path) => !afterSet.has(path));
-    },
-    removeFolder: (epicId, seedWorkspace, folderKey) => {
-      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      const before = current.workspace ?? seedWorkspace;
-      const workspace = removeLandingDraftWorkspaceFolder(before, folderKey);
-      if (
-        current.workspace !== null &&
-        sameLandingDraftWorkspace(before, workspace)
-      ) {
-        return;
-      }
-      notifyDraftLocalEdit(
-        applyNewChatLocalPatch(epicId, { workspace }, false),
-      );
-    },
-    setPrimaryFolder: (epicId, seedWorkspace, folderPath) => {
-      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      const before = current.workspace ?? seedWorkspace;
-      const workspace = setLandingDraftWorkspacePrimary(before, folderPath);
-      if (
-        current.workspace !== null &&
-        sameLandingDraftWorkspace(before, workspace)
-      ) {
-        return;
-      }
-      notifyDraftLocalEdit(
-        applyNewChatLocalPatch(epicId, { workspace }, false),
-      );
-    },
-    clearDraft: (epicId) => {
-      const removed = get().draftPatchesByEpicId[epicId];
-      set((state) => {
-        const { [epicId]: _removed, ...draftPatchesByEpicId } =
-          state.draftPatchesByEpicId;
-        return { draftPatchesByEpicId };
-      });
-      if (removed?.draftId !== undefined && removed.draftId !== null) {
-        notifyDraftLocalDelete(removed.draftId);
-      }
-    },
-    resetForTests: () => set({ draftPatchesByEpicId: {} }),
-  }),
+  ),
 );
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseNewChatSelection(
+  value: unknown,
+): NewConversationModalDraftPatch["selection"] {
+  if (!isRecord(value)) return null;
+  const { from, to } = value;
+  if (
+    typeof from !== "number" ||
+    typeof to !== "number" ||
+    !Number.isFinite(from) ||
+    !Number.isFinite(to)
+  ) {
+    return null;
+  }
+  return { from, to };
+}
+
+// `null` is this patch's "the modal has not chosen a mode", so an absent or
+// unrecognized value restores as null rather than as a default the user never
+// picked (the body seeds its own).
+function parsePersistedComposerMode(value: unknown): ComposerMode | null {
+  return typeof value === "string" && isComposerMode(value) ? value : null;
+}
+
+// `null` is meaningful here - "this modal has no workspace of its own yet, use
+// the seed" - so it must survive the round trip rather than collapsing to the
+// empty snapshot the way an unparsable record does.
+function parsePersistedWorkspace(
+  value: unknown,
+): LandingDraftWorkspaceSnapshot | null {
+  if (value === null || value === undefined) return null;
+  return parseLandingDraftWorkspaceSnapshot(value);
+}
+
+function parseNullableId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function nonNegativeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
 
 function sameNewChatSelection(
   left: NewConversationModalDraftPatch["selection"],

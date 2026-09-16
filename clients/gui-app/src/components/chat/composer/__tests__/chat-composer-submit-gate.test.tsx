@@ -239,6 +239,8 @@ describe("chat-composer submit gate (editor readiness)", () => {
           hostId: "host-1",
           editorRef,
           editorReadyTick: tick,
+          chatTitle: null,
+          epicTitle: null,
         }),
       { initialProps: 0 },
     );
@@ -314,6 +316,8 @@ describe("chat-composer submit multi-surface clear", () => {
         hostId: "host-1",
         editorRef: editorRefA,
         editorReadyTick: 1,
+        chatTitle: null,
+        epicTitle: null,
       }),
     );
     renderHook(() =>
@@ -323,6 +327,8 @@ describe("chat-composer submit multi-surface clear", () => {
         hostId: "host-1",
         editorRef: editorRefB,
         editorReadyTick: 1,
+        chatTitle: null,
+        epicTitle: null,
       }),
     );
 

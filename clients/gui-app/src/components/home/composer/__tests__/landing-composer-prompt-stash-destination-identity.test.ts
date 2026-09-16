@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { landingStashIdentity } from "@/components/home/composer/use-landing-prompt-stash-adapters";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
-import { importPromptStashContentToLanding } from "@/lib/composer/landing-stash-import";
+import { importImagesIntoLanding } from "@/lib/composer/landing-image-import";
 import {
   reserveLandingImageBudget,
   resetLandingImageBudgetReservationsForTesting,
@@ -451,21 +451,19 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     });
     expect(landingImagePartition()).toBe("window-a");
     vi.mocked(idbCreateStore).mockClear();
-    const importedA = await importPromptStashContentToLanding(
-      makeEntry({
-        content: imageDoc({
-          id: "a",
-          fileName: "a.png",
-          hash: stashHashA,
-          b64content: null,
-          mimeType: "image/png",
-          size: 3,
-        }),
-        id: "entry-a",
-        blobHashes: [stashHashA],
+    const importedA = await importImagesIntoLanding({
+      content: imageDoc({
+        id: "a",
+        fileName: "a.png",
+        hash: stashHashA,
+        b64content: null,
+        mimeType: "image/png",
+        size: 3,
       }),
-      "draft-a",
-    );
+      blobHashes: [stashHashA],
+      readBlob: (hash) => Promise.resolve(stashBlobs.get(hash) ?? null),
+      draftId: "draft-a",
+    });
     const resultA = requireDefined(importedA, "import A");
     expect(idbCreateStore).toHaveBeenCalledWith(
       expect.stringContaining(":window-a:landing-images"),
@@ -478,21 +476,19 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     });
     expect(landingImagePartition()).toBe("window-b");
     vi.mocked(idbCreateStore).mockClear();
-    const importedB = await importPromptStashContentToLanding(
-      makeEntry({
-        content: imageDoc({
-          id: "b",
-          fileName: "b.png",
-          hash: stashHashB,
-          b64content: null,
-          mimeType: "image/png",
-          size: 3,
-        }),
-        id: "entry-b",
-        blobHashes: [stashHashB],
+    const importedB = await importImagesIntoLanding({
+      content: imageDoc({
+        id: "b",
+        fileName: "b.png",
+        hash: stashHashB,
+        b64content: null,
+        mimeType: "image/png",
+        size: 3,
       }),
-      "draft-b",
-    );
+      blobHashes: [stashHashB],
+      readBlob: (hash) => Promise.resolve(stashBlobs.get(hash) ?? null),
+      draftId: "draft-b",
+    });
     const resultB = requireDefined(importedB, "import B");
     expect(idbCreateStore).toHaveBeenCalledWith(
       expect.stringContaining(":window-b:landing-images"),

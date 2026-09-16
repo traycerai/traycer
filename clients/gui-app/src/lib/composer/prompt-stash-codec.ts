@@ -13,12 +13,12 @@ import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import {
   CANONICAL_IMAGE_MIME_TYPES,
   sniffImageMimeType,
-} from "@/lib/composer/prompt-stash-image-signature";
+} from "@/lib/attachments/image-mime-signature";
 import {
   KNOWN_STASH_MARK_TYPES,
   KNOWN_STASH_NODE_TYPES,
 } from "@/lib/composer/prompt-stash-schema-descriptor";
-import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import type { ImageBlob, ImageBytes } from "@/lib/attachments/image-bytes";
 
 export interface PromptStashEntry {
   readonly id: string;
@@ -35,10 +35,7 @@ export interface PromptStashEntry {
 }
 
 /** Bytes plus the canonical MIME the image-preparation pipeline resolved for them. */
-export interface PromptStashImageBlob {
-  readonly bytes: ImageBytes;
-  readonly mimeType: string;
-}
+export type PromptStashImageBlob = ImageBlob;
 
 export interface PromptStashSnapshot {
   readonly entry: PromptStashEntry;

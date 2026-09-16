@@ -25,6 +25,9 @@ import {
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useMaybeEpicStore } from "@/hooks/use-epic-store";
+import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -367,6 +370,21 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pickerStore.getState().close();
   }, [focused, pickerStore]);
 
+  // Display snapshots for the drafts list, recorded on this chat's draft row
+  // (they are not on the wire). Read TOLERANTLY: this composer also mounts
+  // outside an `<EpicSessionProvider>` (the mobile standalone chat view),
+  // where the strict `useEpicStore` read would throw.
+  const selectChatTitle = useCallback(
+    (state: OpenEpicState) => {
+      if (!Object.hasOwn(state.chats.byId, taskId)) return null;
+      const title = state.chats.byId[taskId].title;
+      return title.length > 0 ? title : null;
+    },
+    [taskId],
+  );
+  const chatTitle = useMaybeEpicStore(selectChatTitle, null);
+  const epicTitle = useRegisteredEpicTitle(currentEpicId);
+
   const {
     initialContent,
     initialSelection,
@@ -381,6 +399,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     hostId: tabHostId,
     editorRef,
     editorReadyTick,
+    chatTitle,
+    epicTitle,
   });
 
   const { dictationControl, dictationPreparing } = useComposerDictation({

@@ -1085,6 +1085,8 @@ describe("DraftMirrorSession", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -1232,6 +1234,8 @@ describe("DraftMirrorSession", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });

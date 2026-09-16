@@ -183,6 +183,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicConnectionStatus: () => "open",
   useEpicNodeOwnerKind: () => "chat",
   useEpicNodeWorkspaceFolders: () => [],
+  useEpicTitle: () => "Epic",
 }));
 
 const stubHostClient = {

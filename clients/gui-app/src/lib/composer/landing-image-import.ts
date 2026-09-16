@@ -1,15 +1,19 @@
 /**
- * Dedicated landing-restore image import path. Unlike chat/new-conversation
- * restore (which materializes stash-hash images back to inline base64 via
- * `materializePromptStashEntry`), landing owns a hash-addressed image store
- * of its own: a restored prompt must resolve straight from the app-global
- * stash blob to this window's landing partition, never through an inline
- * base64 detour or the fire-and-forget `reingestPendingImages` sweep. No
- * image is exposed to the landing draft until its bytes are durably written
- * here.
+ * Dedicated landing image import path. Unlike chat/new-conversation restore
+ * (which materializes hash-addressed images back to inline base64), landing
+ * owns a hash-addressed image store of its own: imported content must resolve
+ * straight from the source blob to this window's landing partition, never
+ * through an inline base64 detour or the fire-and-forget
+ * `reingestPendingImages` sweep. No image is exposed to the landing draft
+ * until its bytes are durably written here.
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import {
+  ImageBlobCorruptError,
+  ImageBlobMissingError,
+  type ImageBlob,
+} from "@/lib/attachments/image-bytes";
 import {
   collectImageAtoms,
   type ComposerImageAtom,
@@ -19,18 +23,9 @@ import {
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
 import { putImage } from "@/lib/composer/landing-image-store";
-import {
-  stashImageMetadataAgreesWithBlob,
-  type PromptStashEntry,
-} from "@/lib/composer/prompt-stash-codec";
-import {
-  PromptStashCorruptBlobError,
-  PromptStashMissingBlobError,
-  readPromptStashRestoreBlobs,
-} from "@/lib/composer/prompt-stash-repository";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 
-export interface LandingStashImportResult {
+export interface LandingImageImportResult {
   readonly content: JsonContent;
   /**
    * The import's budget reservation, still held. The caller MUST call
@@ -42,24 +37,34 @@ export interface LandingStashImportResult {
   readonly reservation: LandingImageBudgetReservation;
 }
 
+export interface LandingImageImportInput {
+  readonly content: JsonContent;
+  /**
+   * Authoritative reference list for this content's image blobs, captured by
+   * whatever produced it rather than re-derived from the content itself. An
+   * image node whose hash is not in here has no resolvable blob.
+   */
+  readonly blobHashes: readonly string[];
+  /** Resolves one referenced blob; `null` when it is not there. */
+  readonly readBlob: (hash: string) => Promise<ImageBlob | null>;
+  readonly draftId: string | null;
+}
+
 /**
- * Resolves every stash-hash image referenced by `entry.content` and writes
- * it into this window's landing partition, returning content rewritten to
- * landing hashes with fresh node ids. Only `id` and `hash` change; `fileName`,
+ * Resolves every source-hash image referenced by `content` and writes it into
+ * this window's landing partition, returning content rewritten to landing
+ * hashes with fresh node ids. Only `id` and `hash` change; `fileName`,
  * `mimeType`, and `size` carry over unchanged, matching the in-place rewrite
  * `rewriteImageAttachmentHashById` already performs for a normal paste.
  *
- * Reads resolve before any budget is reserved, so a missing stash blob
- * throws before landing storage is touched (surfaces the same "image could
- * not be read" messaging restore already uses for chat/modal). Reads go
- * through one consistent-snapshot repository transaction keyed by the
- * entry's authoritative `blobHashes` - all-or-nothing, immune to a
- * delete-during-read race with another window. Once reads are in hand,
- * capacity is reserved from their measured byte length - never from a
+ * Reads resolve before any budget is reserved, so an unresolvable blob throws
+ * before landing storage is touched (surfaces the same "image could not be
+ * read" messaging restore already uses for chat/modal). Once reads are in
+ * hand, capacity is reserved from their measured byte length - never from a
  * carried-over Tiptap `size` attribute - via the canonical
  * `reserveLandingImageBudget`, which stays held across the writes below AND
  * the caller's subsequent destination decision (see
- * `LandingStashImportResult.reservation`). Writes run sequentially so a
+ * `LandingImageImportResult.reservation`). Writes run sequentially so a
  * first/middle/last `putImage` failure stops immediately: this function
  * releases the reservation itself and reports `null`, while bytes already
  * written before the failure are not rolled back. They become landing
@@ -68,57 +73,57 @@ export interface LandingStashImportResult {
  * Returns `null` on measured-budget rejection or a `putImage` failure (both
  * release their own reservation before returning).
  */
-export async function importPromptStashContentToLanding(
-  entry: PromptStashEntry,
-  draftId: string | null,
-): Promise<LandingStashImportResult | null> {
-  const stashAtoms = uniqueImageAtomsInOrder(entry.content);
-  if (stashAtoms.length === 0) {
+export async function importImagesIntoLanding(
+  input: LandingImageImportInput,
+): Promise<LandingImageImportResult | null> {
+  const atoms = uniqueImageAtomsInOrder(input.content);
+  if (atoms.length === 0) {
     // Nothing to charge - hand back a reservation whose release is trivially
     // a no-op rather than reserving zero candidates for it.
     return {
-      content: entry.content,
+      content: input.content,
       reservation: { release: () => undefined },
     };
   }
 
-  const read = await readPromptStashRestoreBlobs(entry.blobHashes);
-  if (read.status === "missing") throw new PromptStashMissingBlobError();
-  if (read.status === "corrupt") throw new PromptStashCorruptBlobError();
-  const blobs = read.blobs;
-
+  const referenced = new Set(input.blobHashes);
   const resolved: Array<{
-    readonly stashHash: string;
+    readonly sourceHash: string;
     readonly bytes: Uint8Array<ArrayBuffer>;
   }> = [];
-  for (const atom of stashAtoms) {
-    const stashHash = atom.hash;
+  for (const atom of atoms) {
+    const sourceHash = atom.hash;
     // `uniqueImageAtomsInOrder` already filtered out null hashes.
-    if (stashHash === null) continue;
-    const blob = blobs.get(stashHash);
-    if (blob === undefined) {
-      throw new PromptStashMissingBlobError();
+    if (sourceHash === null) continue;
+    const blob = referenced.has(sourceHash)
+      ? await input.readBlob(sourceHash)
+      : null;
+    if (blob === null) {
+      throw new ImageBlobMissingError();
     }
     // The node's own declared MIME/size can diverge from what the verified
     // blob actually is. Metadata disagreement is corruption: preserve the
-    // stash rather than import mismatched content into the landing draft.
-    if (!stashImageMetadataAgreesWithBlob(atom.mimeType, atom.size, blob)) {
-      throw new PromptStashCorruptBlobError();
+    // source rather than import mismatched content into the landing draft.
+    if (
+      atom.mimeType !== blob.mimeType ||
+      atom.size !== blob.bytes.byteLength
+    ) {
+      throw new ImageBlobCorruptError();
     }
-    resolved.push({ stashHash, bytes: blob.bytes });
+    resolved.push({ sourceHash, bytes: blob.bytes });
   }
 
   const reservation = reserveLandingImageBudget(
-    draftId,
-    resolved.map(({ stashHash, bytes }) => ({
-      hash: stashHash,
+    input.draftId,
+    resolved.map(({ sourceHash, bytes }) => ({
+      hash: sourceHash,
       bytes: bytes.byteLength,
     })),
   );
   if (reservation === null) return null;
 
-  const landingHashByStashHash = new Map<string, string>();
-  for (const { stashHash, bytes } of resolved) {
+  const landingHashBySourceHash = new Map<string, string>();
+  for (const { sourceHash, bytes } of resolved) {
     let landingHash: string;
     try {
       landingHash = await putImage(bytes);
@@ -126,11 +131,11 @@ export async function importPromptStashContentToLanding(
       reservation.release();
       return null;
     }
-    landingHashByStashHash.set(stashHash, landingHash);
+    landingHashBySourceHash.set(sourceHash, landingHash);
   }
 
   return {
-    content: rewriteToLandingHashes(entry.content, landingHashByStashHash),
+    content: rewriteToLandingHashes(input.content, landingHashBySourceHash),
     reservation,
   };
 }
@@ -138,7 +143,7 @@ export async function importPromptStashContentToLanding(
 /**
  * Image atoms referenced by `content`, deduped by hash, first-occurrence
  * order. Carries each atom's declared `mimeType`/`size` through (not just
- * the hash) so the caller can verify them against the resolved stash blob.
+ * the hash) so the caller can verify them against the resolved blob.
  */
 function uniqueImageAtomsInOrder(content: JsonContent): ComposerImageAtom[] {
   const seen = new Set<string>();
@@ -153,12 +158,12 @@ function uniqueImageAtomsInOrder(content: JsonContent): ComposerImageAtom[] {
 
 function rewriteToLandingHashes(
   node: JsonContent,
-  landingHashByStashHash: ReadonlyMap<string, string>,
+  landingHashBySourceHash: ReadonlyMap<string, string>,
 ): JsonContent {
   if (node.type === "imageAttachment") {
-    const stashHash = stringValue(node.attrs?.hash);
+    const sourceHash = stringValue(node.attrs?.hash);
     const landingHash =
-      stashHash === null ? undefined : landingHashByStashHash.get(stashHash);
+      sourceHash === null ? undefined : landingHashBySourceHash.get(sourceHash);
     if (landingHash !== undefined) {
       return {
         ...node,
@@ -170,7 +175,7 @@ function rewriteToLandingHashes(
   return {
     ...node,
     content: node.content.map((child) =>
-      rewriteToLandingHashes(child, landingHashByStashHash),
+      rewriteToLandingHashes(child, landingHashBySourceHash),
     ),
   };
 }

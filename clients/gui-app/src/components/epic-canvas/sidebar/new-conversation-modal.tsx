@@ -84,6 +84,7 @@ import {
   useEpicNodeOwnerKind,
   useEpicNodeWorkspaceFolders,
   useEpicPermissionRole,
+  useEpicTitle,
 } from "@/lib/epic-selectors";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import {
@@ -603,6 +604,23 @@ export function NewConversationModalBody(props: {
     (state) => state.setComposerMode,
   );
   const clearDraft = useNewConversationModalStore((state) => state.clearDraft);
+  // Record this epic's name on the draft patch so the drafts list can name
+  // the row once no modal for this epic is mounted (the title comes from the
+  // open-epic projector, which only exists while the epic is open). Keyed on
+  // `draftId` as well as the title: the setter is a no-op until the patch
+  // exists, which is the first keystroke, not this mount.
+  const liveEpicTitle = useEpicTitle();
+  const epicTitle = liveEpicTitle.length > 0 ? liveEpicTitle : null;
+  const setNewChatEpicTitle = useNewConversationModalStore(
+    (state) => state.setNewChatEpicTitle,
+  );
+  const draftId = useNewConversationModalStore(
+    (state) => state.draftPatchesByEpicId[epicId]?.draftId ?? null,
+  );
+  useEffect(() => {
+    if (draftId === null) return;
+    setNewChatEpicTitle(epicId, epicTitle);
+  }, [draftId, epicId, epicTitle, setNewChatEpicTitle]);
   // The modal's host can change under an open session, so a SUBMIT consumes
   // every host's copy of the slot - not just the one selected at submit.
   const clearStagedIntent = useWorktreeIntentStagingStore(

@@ -9,7 +9,12 @@ import type {
 } from "@/lib/composer/prompt-stash-destination";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
 import type { PromptStashSourceAdapter } from "@/lib/composer/prompt-stash-source";
-import { importPromptStashContentToLanding } from "@/lib/composer/landing-stash-import";
+import { importImagesIntoLanding } from "@/lib/composer/landing-image-import";
+import {
+  PromptStashCorruptBlobError,
+  PromptStashMissingBlobError,
+  readPromptStashRestoreBlobs,
+} from "@/lib/composer/prompt-stash-repository";
 import {
   draftRuntimeRegistry,
   EMPTY_DRAFT_RUNTIME_CONTENT,
@@ -153,10 +158,20 @@ export function useLandingPromptStashDestination(args: {
       materialize: async (
         entry: PromptStashEntry,
       ): Promise<PromptStashMaterializedContent | null> => {
-        const imported = await importPromptStashContentToLanding(
-          entry,
+        // One consistent-snapshot repository transaction keyed by the entry's
+        // authoritative `blobHashes` - all-or-nothing, immune to a
+        // delete-during-read race with another window - then the import only
+        // looks blobs up in what that snapshot returned.
+        const read = await readPromptStashRestoreBlobs(entry.blobHashes);
+        if (read.status === "missing") throw new PromptStashMissingBlobError();
+        if (read.status === "corrupt") throw new PromptStashCorruptBlobError();
+        const blobs = read.blobs;
+        const imported = await importImagesIntoLanding({
+          content: entry.content,
+          blobHashes: entry.blobHashes,
+          readBlob: (hash) => Promise.resolve(blobs.get(hash) ?? null),
           draftId,
-        );
+        });
         if (imported === null) return null;
         return {
           content: imported.content,

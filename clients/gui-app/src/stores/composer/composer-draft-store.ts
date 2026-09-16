@@ -81,6 +81,16 @@ export interface DraftState {
    */
   readonly supersedes: string | null;
   readonly publication: DraftPublication | null;
+  /**
+   * Display snapshots for the drafts list, recorded by the mounted composer
+   * (`setComposerDraftTitles`) and persisted with the row. They are NOT on
+   * the wire: the chat/epic titles come from the open-epic projector, which
+   * exists only for open epics, and the list must name a draft whose chat is
+   * closed. `null` until some composer for this chat has mounted - a row a
+   * host published before that reads as `Chat` / `Epic`.
+   */
+  readonly chatTitle: string | null;
+  readonly epicTitle: string | null;
 }
 
 export interface PendingSubmittedDraftDelete {
@@ -202,6 +212,19 @@ interface ComposerDraftStore {
   ) => void;
   readonly completeSubmittedDraftDelete: (draftId: string) => void;
   readonly bindTarget: (chatId: string, epicId: string) => void;
+  /**
+   * Record the drafts-list display snapshots for an EXISTING row. Non-
+   * dirtying by construction: it compares first, writes only those two
+   * fields, and touches neither `generation`, `revision`, `lastTouchedAt`
+   * nor `draftId` - a title write through `touchLocalComposerDraft` would
+   * re-order the list and publish an untouched row on every tile mount.
+   * No-op when this chat has no row yet; there is nothing to label.
+   */
+  readonly setComposerDraftTitles: (
+    chatId: string,
+    chatTitle: string | null,
+    epicTitle: string | null,
+  ) => void;
 }
 const EMPTY_COMPOSER_CONTENT: JsonContent = {
   type: "doc",
@@ -225,6 +248,8 @@ export const EMPTY_COMPOSER_DRAFT: DraftState = {
   origin: null,
   supersedes: null,
   publication: null,
+  chatTitle: null,
+  epicTitle: null,
 };
 
 function ensureDraft(
@@ -503,6 +528,24 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           notifyDraftLocalEdit(notifyId);
         }
       },
+      setComposerDraftTitles: (chatId, chatTitle, epicTitle) => {
+        set((state) => {
+          const current = state.drafts[chatId];
+          if (current === undefined) return state;
+          if (
+            current.chatTitle === chatTitle &&
+            current.epicTitle === epicTitle
+          ) {
+            return state;
+          }
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: { ...current, chatTitle, epicTitle },
+            },
+          };
+        });
+      },
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.composerDraft)),
@@ -552,6 +595,8 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               normalizedNullableId(value.supersedes),
             ),
             publication: null,
+            chatTitle: normalizedTitle(value.chatTitle),
+            epicTitle: normalizedTitle(value.epicTitle),
           };
         }
         const pendingSubmittedDraftDeletes: Partial<
@@ -937,6 +982,15 @@ function normalizedNullableId(value: unknown): string | null {
 
 function migratedNullableId(value: string | null): string | null {
   return value === null ? null : migratedLegacyComposerDraftId(value);
+}
+
+/**
+ * A display snapshot written before the field existed (or by a build that
+ * stored something else there) is simply unknown - the list falls back to
+ * `Chat` / `Epic` rather than rendering whatever the JSON held.
+ */
+function normalizedTitle(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 function normalizedOrigin(value: unknown): "own" | "replica" | null {

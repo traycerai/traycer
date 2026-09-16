@@ -69,6 +69,19 @@ describe("draft blob transport", () => {
     expect(confirmed).toEqual([]);
   });
 
+  it("skips a hash the landing store does not hold", async () => {
+    let calls = 0;
+    const client = {
+      request: ((_method, _params) => {
+        calls += 1;
+        return Promise.resolve({ ok: true as const });
+      }) as HostRequester<HostRpcRegistry>["request"],
+    };
+    const confirmed = await putDraftBlobs(HOST, client, ["cd".repeat(32)]);
+    expect(confirmed).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
   it("readBlob missing collapses to no local bytes", async () => {
     const client = {
       request: ((_method, _params) =>

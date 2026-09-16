@@ -8,7 +8,7 @@ import {
   canonicalImageMimeType,
   sniffImageMimeType,
   type CanonicalImageMimeType,
-} from "@/lib/composer/prompt-stash-image-signature";
+} from "@/lib/attachments/image-mime-signature";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 export const PROMPT_STASH_STATIC_IMAGE_MAX_BYTES = 975 * 1024;
