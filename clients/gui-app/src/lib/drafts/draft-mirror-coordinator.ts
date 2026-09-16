@@ -18,7 +18,8 @@ import {
   blobHashesOfDocument,
 } from "./draft-write-codec";
 import { draftKindIsHostBound } from "./draft-portability";
-import { resetCloudDraftKindsForTests } from "./cloud-draft-kinds";
+import { isDraftsCapabilityMissing } from "./draft-capability";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 import { interviewDraftBindingKey } from "./draft-ids";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
@@ -28,10 +29,14 @@ import {
   applyLandingHostDocument,
   collectLandingDirtyWrites,
   collectUnadoptedLandingDrafts,
+  deleteLandingDraftOnHost,
+  dropForeignLandingMirrorsAbsent,
   dropLandingAbsentFromList,
   landingDraftIsDirty,
   landingDraftRememberSynced,
+  landingRowIsForeign,
   rememberLandingBlobsOnHost,
+  reopenLandingDraftView,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import {
@@ -40,14 +45,17 @@ import {
   collectComposerDirtyWrites,
   composerDraftIsDirty,
   composerDraftRememberSynced,
+  composerDraftRowIsForeign,
   composerSubmittedDraftDeleteIsPending,
   dropComposerAbsentFromList,
   findComposerChatIdByDraftId,
+  pendingSubmittedDraftDelete,
   pendingSubmittedDraftDeleteHostId,
-  pendingSubmittedDraftDeleteIdsForHost,
+  pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import type { TabRef } from "@/stores/tabs/types";
 import {
   applyInterviewHostDelete,
   applyInterviewHostDocument,
@@ -84,9 +92,11 @@ import {
   setDraftLocalDeleteListener,
   setDraftLocalEditListener,
   setDraftLocalFlushListener,
+  setLandingPlacementHostReader,
 } from "./draft-local-edits";
 import {
   DraftMirrorSession,
+  type DraftDeleteOutcome,
   type DraftDirtyWrite,
   type DraftMirrorSink,
 } from "./draft-mirror-session";
@@ -95,8 +105,9 @@ import {
   completeLandingDraftDelete,
   landingDraftIsRetired,
   pendingLandingDraftDeleteHostId,
-  pendingLandingDraftDeleteIdsForHost,
+  pendingLandingDraftDeletesForHost,
   retireLandingDraft,
+  retireLandingDraftForRetract,
   resolveLandingDraftRetirementOwner,
 } from "./landing-draft-retirement";
 
@@ -146,6 +157,28 @@ function interviewBindingRefKey(bindingKey: string, hostId: string): string {
 
 /** Placement host that may lazily adopt landing drafts (decision #9). */
 let landingAdoptionHostId: string | null = null;
+/**
+ * Ordering fence for the cloud-directory absence sweep: every landing
+ * document apply - a cloud-head ingest or a host session's live echo -
+ * takes the next sequence number when it STARTS, and a directory snapshot
+ * records the sequence current when its request was DISPATCHED. A row
+ * applied after that (by another mount, through another host) is not
+ * absent from that snapshot in any sense the snapshot can attest to.
+ */
+let cloudIngestSeq = 0;
+const cloudIngestSeqByDraft = new Map<string, number>();
+/**
+ * View state of landing rows a successor may inherit, keyed by the
+ * superseded id: a row a host `delete` frame removed while open in this
+ * window before the `upsert` naming it arrived (a host that emits the old
+ * frame order, or a delete that raced ahead). The successor takes over the
+ * tab - open, and active if the ancestor was - so the user keeps looking at
+ * what reads as the same draft. The primary path is the in-place re-key
+ * (`rekeyLandingTabInPlace`), which needs the ancestor still open here.
+ * Consumed on use; bounded.
+ */
+const inheritableLandingTabs = new Map<string, { readonly active: boolean }>();
+const INHERITABLE_LANDING_TABS_CAP = 64;
 
 /** Host that last published or ingested each stash id. */
 const stashHostById = new Map<string, string>();
@@ -221,18 +254,20 @@ export async function consumeStashOnHost(
     await deleteStashEntryOnHost(bound, entryId);
     return;
   }
+  // Consumed through a host other than the one that published it: the
+  // entry's cloud row is retracted on the user's authority from here, and
+  // the publishing host tombstones its (immutable, hence unchanged) local
+  // row when it finds the cloud row gone. Ownership never moves.
   const client = sessionClients.get(bound);
   if (client !== undefined) {
     try {
-      const claimed = await client.request("drafts.claim", {
-        draftId: entryId,
-      });
-      if (claimed.status === "ok" || claimed.status === "already-owned") {
-        stashHostById.set(entryId, bound);
-      }
+      await client.request("drafts.retract", { draftId: entryId });
+      stashHostById.delete(entryId);
+      return;
     } catch {
-      // Delete still runs: same-host consume and a lost claim race
-      // are both idempotent (`deleted: false`).
+      // An older host without `drafts.retract`: fall through to the
+      // idempotent delete, which answers `deleted: false` there and leaves
+      // the publisher's row (lossy, not broken).
     }
   }
   await deleteStashEntryOnHost(bound, entryId);
@@ -352,20 +387,24 @@ const sink: DraftMirrorSink = {
       composerSubmittedDraftDeleteIsPending(draftId)
     );
   },
-  pendingDeleteIdsForHost(hostId) {
+  pendingDeletesForHost(hostId) {
     return [
-      ...pendingLandingDraftDeleteIdsForHost(hostId),
-      ...pendingSubmittedDraftDeleteIdsForHost(hostId),
+      ...pendingLandingDraftDeletesForHost(hostId),
+      ...pendingSubmittedDraftDeletesForHost(hostId),
     ];
   },
-  completeDelete(draftId) {
-    completeLandingDraftDelete(draftId);
+  settleDelete(hostId, draftId, outcome) {
+    // Landing: only while the receipt still names this host. Composer: a
+    // retired submitted id is done once the host has answered anything but
+    // a failure.
+    settleLandingDeleteOutcome(draftId, hostId, outcome);
     useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
   },
   applyUpsert(document) {
     return applyHostDocument(document);
   },
   applyDelete(draftId) {
+    rememberInheritableLandingTab(draftId);
     // A tombstone can arrive while the first landing upsert awaits its images,
     // before there is any local row for applyLandingHostDelete to remove.
     if (knownLandingDraftIds.has(draftId)) retireLandingDraft(draftId, null);
@@ -421,8 +460,127 @@ function rejectRetiredLandingDocument(document: DraftDocument): boolean {
   return true;
 }
 
+/**
+ * Record the view state of an open landing row about to be removed by a
+ * host tombstone, for a successor that names it (see
+ * `inheritableLandingTabs`).
+ */
+function rememberInheritableLandingTab(draftId: string): void {
+  const { drafts, activeDraftId } = useLandingDraftStore.getState();
+  const row = drafts.find((draft) => draft.id === draftId);
+  if (row === undefined || row.closed) {
+    inheritableLandingTabs.delete(draftId);
+    return;
+  }
+  inheritableLandingTabs.delete(draftId);
+  inheritableLandingTabs.set(draftId, { active: activeDraftId === draftId });
+  for (const key of inheritableLandingTabs.keys()) {
+    if (inheritableLandingTabs.size <= INHERITABLE_LANDING_TABS_CAP) break;
+    inheritableLandingTabs.delete(key);
+  }
+}
+
+/**
+ * A landing document that names an ancestor still open in a tab here (the
+ * owner's re-mint, whose `upsert` precedes the ancestor's `delete` frame;
+ * or a fork echoed by another host's session, whose owner has yet to
+ * tombstone it): re-key that tab onto the successor in place, keeping its
+ * strip position and group, and retire the ancestor locally so the delete
+ * that follows is a no-op. Zero UI: the tab simply reads the successor now.
+ * False when there is nothing to re-key (no ancestor open in the strip);
+ * the caller then applies the document as an insert.
+ */
+function rekeyLandingTabInPlace(
+  document: Extract<DraftDocument, { kind: "landing" }>,
+): boolean {
+  if (document.supersedes === null) return false;
+  const ancestor = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === document.supersedes);
+  if (ancestor === undefined || ancestor.closed) return false;
+  let replaced: TabRef | null;
+  try {
+    replaced = tabCommandCoordinator.replaceDraftWithDocument({
+      previousDraftId: ancestor.id,
+      nextDraftId: document.draftId,
+      installNext: () => {
+        // A document the store rejects (retired, or older than the row's
+        // current revision) installs nothing, and the command must not
+        // re-key the tab onto a row that never materialised.
+        if (!applyLandingHostDocument(document, document.portable.content)) {
+          return false;
+        }
+        // The strip item now names the successor, which must be open: a
+        // foreign row's `closed` is this device's view (the ancestor's was
+        // open), an own row on the placement follows the host's value.
+        reopenLandingDraftView(document.draftId);
+        return true;
+      },
+    });
+  } catch (error: unknown) {
+    // The transaction refused mid-flight (the successor could not be
+    // installed, or a listener moved the ancestor underneath it): the
+    // layout and the ancestor are untouched, and the document falls to
+    // the plain apply + inherit path below.
+    appLogger.warn("[draft-mirror] landing re-key refused", {
+      draftId: document.draftId,
+      supersedes: document.supersedes,
+      error: describeLogError(error),
+    });
+    return false;
+  }
+  if (replaced === null) return false;
+  inheritableLandingTabs.delete(document.supersedes);
+  return true;
+}
+
+/**
+ * The fallback for a successor whose ancestor is no longer in the store
+ * (removed by a `delete` frame that came first): the successor inherits
+ * the view state recorded at that delete - open, and active if the ancestor
+ * was. Without a record the row lands as a plain insert.
+ */
+function inheritLandingTab(
+  document: Extract<DraftDocument, { kind: "landing" }>,
+): void {
+  if (document.supersedes === null) return;
+  const { drafts, activeDraftId } = useLandingDraftStore.getState();
+  const ancestor = drafts.find((draft) => draft.id === document.supersedes);
+  let view: { readonly active: boolean } | undefined;
+  if (ancestor === undefined) {
+    view = inheritableLandingTabs.get(document.supersedes);
+  } else if (!ancestor.closed) {
+    // Open here but with no strip item to re-key (a surface outside the
+    // strip): the successor is activated the same way.
+    view = { active: activeDraftId === ancestor.id };
+  }
+  inheritableLandingTabs.delete(document.supersedes);
+  if (view === undefined) return;
+  reopenLandingDraftView(document.draftId);
+  if (!view.active) return;
+  tabCommandCoordinator.activateTab({
+    kind: "draft",
+    draftId: document.draftId,
+    settings: null,
+    create: false,
+  });
+}
+
 async function applyHostDocument(document: DraftDocument): Promise<void> {
-  if (document.kind === "landing") knownLandingDraftIds.add(document.draftId);
+  if (document.kind === "landing") {
+    knownLandingDraftIds.add(document.draftId);
+    // The absence-sweep fence is reserved here, synchronously at the start
+    // of EVERY landing apply - a host session's live echo as much as a
+    // cloud-head ingest - and before the blob reads below: a directory
+    // request dispatched earlier must not sweep a row this apply installs.
+    cloudIngestSeq += 1;
+    cloudIngestSeqByDraft.set(document.draftId, cloudIngestSeq);
+  }
+  // This apply's own reservation. The blob read below can outlast a newer
+  // apply of the same row (or a newer directory run's reservation before
+  // its head read), and cloud heads carry revision 0 so nothing later
+  // fences an older head by revision: whoever reserved last wins the row.
+  const applySeq = cloudIngestSeq;
   if (rejectRetiredLandingDocument(document)) return;
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) {
     await retrySubmittedDraftDelete(document.draftId);
@@ -436,6 +594,12 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
       client,
       hashes,
     );
+    if (
+      document.kind === "landing" &&
+      cloudIngestSeqByDraft.get(document.draftId) !== applySeq
+    ) {
+      return;
+    }
     rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
     if (document.kind === "stash-entry") {
       await ingestStashDocument(document, images);
@@ -451,8 +615,12 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
     return;
   }
   if (document.kind === "landing") {
+    // Re-checked after the blob reads: a delete routed meanwhile retired it.
     if (rejectRetiredLandingDocument(document)) return;
-    applyLandingHostDocument(document, document.portable.content);
+    if (rekeyLandingTabInPlace(document)) return;
+    if (applyLandingHostDocument(document, document.portable.content)) {
+      inheritLandingTab(document);
+    }
     return;
   }
   if (document.kind === "chat-composer") {
@@ -479,6 +647,7 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
         composerMode: draft.composerMode,
         workspace: draft.workspace,
         closed: draft.closed,
+        supersedes: draft.supersedes,
       }),
     });
   }
@@ -507,6 +676,7 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
         composerMode: "chat",
         workspace: null,
         closed: false,
+        supersedes: draft.supersedes,
       }),
     });
   }
@@ -553,6 +723,8 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
         composerMode: patch.composerMode,
         workspace: patch.workspace,
         closed: false,
+        // New-chat drafts live on the epic's host and are never forked.
+        supersedes: null,
       }),
     });
   }
@@ -629,6 +801,11 @@ function routeLocalEdit(draftId: string): void {
   const landing = useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === draftId);
+  // A foreign row is never written through its adoption host's session:
+  // that host is not the placement (a replica's owner, or a host the
+  // placement auto-followed away from). Its edit forked it onto a fresh row
+  // of the placement host's own before applying, and that row routes.
+  if (landing !== undefined && landingRowIsForeign(landing)) return;
   if (landing !== undefined && landing.adoption.state === "unadopted") {
     if (landingAdoptionHostId === null) return;
     sessions.get(landingAdoptionHostId)?.session.noteDirty(draftId);
@@ -638,11 +815,95 @@ function routeLocalEdit(draftId: string): void {
 }
 
 function routeLocalDelete(draftId: string): void {
-  const session = sessionForDraft(draftId);
-  if (session === null) return;
-  void session.deleteOnHost(draftId).then((deleted) => {
-    if (deleted) completeLandingDraftDelete(draftId);
+  // A receipt that names a host is an explicit route (History deleting an
+  // own row through the host that holds it, whichever host the landing
+  // placement points at) and takes precedence over the placement rule.
+  const explicitHostId = pendingLandingDraftDeleteHostId(draftId);
+  const landing = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === draftId);
+  // A foreign row (still in the store: the notice precedes its removal) is
+  // not this placement's to `drafts.delete`. Its cloud row is retracted on
+  // the user's authority through the placement host instead; the owner
+  // host tombstones its own row from there. The receipt records the
+  // retract so the placement host's session retries it until the host
+  // answers; a host without `drafts.retract` leaves the owner's row
+  // (lossy, not broken).
+  if (
+    explicitHostId === null &&
+    landing !== undefined &&
+    landingRowIsForeign(landing)
+  ) {
+    if (landingAdoptionHostId !== null) {
+      retireLandingDraftForRetract(draftId, landingAdoptionHostId);
+      void retractDraftThroughHost(landingAdoptionHostId, draftId);
+    }
+    return;
+  }
+  const hostId = explicitHostId ?? hostIdForDraft(draftId);
+  if (hostId === null) return;
+  const session = sessions.get(hostId)?.session;
+  if (session === undefined) return;
+  void session.deleteOnHostOutcome(draftId).then((outcome) => {
+    settleLandingDeleteOutcome(draftId, hostId, outcome);
   });
+}
+
+/**
+ * Retract a draft's cloud row on the user's authority through `hostId`,
+ * for a row that host does not own (it would answer a `drafts.delete` with
+ * `absent` and the owner's cloud row would survive). The caller has
+ * recorded the pending retract on the id's receipt; the answer settles it
+ * through the sink like a delete's (`deleted` / `absent` / `unsupported`
+ * are terminal, a failure leaves it pending for the host's session to
+ * retry). A mounted session is preferred, as for a delete; otherwise the
+ * request goes out on the bare client. Resolves once the host has answered
+ * or the request has failed and been left pending.
+ */
+async function retractDraftThroughHost(
+  hostId: string,
+  draftId: string,
+): Promise<void> {
+  const session = sessions.get(hostId)?.session;
+  if (session !== undefined) {
+    const outcome = await session.retractOnHostOutcome(draftId);
+    if (outcome !== "failed") sink.settleDelete(hostId, draftId, outcome);
+    return;
+  }
+  const client = sessionClients.get(hostId);
+  if (client === undefined) return;
+  try {
+    const response = await client.request("drafts.retract", { draftId });
+    sink.settleDelete(
+      hostId,
+      draftId,
+      response.retracted ? "deleted" : "absent",
+    );
+  } catch (error: unknown) {
+    if (isDraftsCapabilityMissing(error)) {
+      sink.settleDelete(hostId, draftId, "unsupported");
+      return;
+    }
+    appLogger.warn("[draft-mirror] drafts.retract failed", {
+      error: describeLogError(error),
+    });
+  }
+}
+
+/**
+ * Apply a host's `drafts.delete` answer to a landing retirement receipt -
+ * only while the receipt still names `hostId`. Ownership never moves, so
+ * `absent` is as final as `deleted`: the row is not on the host that owns
+ * it. `failed` leaves the receipt pending for retry.
+ */
+function settleLandingDeleteOutcome(
+  draftId: string,
+  hostId: string,
+  outcome: DraftDeleteOutcome,
+): void {
+  if (pendingLandingDraftDeleteHostId(draftId) !== hostId) return;
+  if (outcome === "failed") return;
+  completeLandingDraftDelete(draftId);
 }
 
 function routeLocalFlush(draftId: string): void {
@@ -662,6 +923,7 @@ function routeLocalFlush(draftId: string): void {
 setDraftLocalEditListener(routeLocalEdit);
 setDraftLocalDeleteListener(routeLocalDelete);
 setDraftLocalFlushListener(routeLocalFlush);
+setLandingPlacementHostReader(() => landingAdoptionHostId);
 
 export interface AcquireDraftMirrorArgs {
   readonly hostId: string;
@@ -692,6 +954,7 @@ export function acquireDraftMirrorSession(
       },
       upsert: (draft) => args.client.request("drafts.upsert", { draft }),
       delete: (draftId) => args.client.request("drafts.delete", { draftId }),
+      retract: (draftId) => args.client.request("drafts.retract", { draftId }),
     },
     streamClient: args.streamClient,
     sink,
@@ -786,18 +1049,21 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   interviewBindingRefs.clear();
   newChatHostByEpicId.clear();
   landingAdoptionHostId = null;
+  cloudIngestSeq = 0;
+  cloudIngestSeqByDraft.clear();
+  inheritableLandingTabs.clear();
   stashHostById.clear();
   stashSeenOnHost.clear();
   warnedUnboundComposer.clear();
   warnedUnboundInterview.clear();
   resetDraftBlobTransportForTests();
-  resetCloudDraftKindsForTests();
   notifyCloudScopeListeners();
   // Re-bind production listeners. Tests that install their own must not
   // leave `routeLocalDelete` unbound for later files in the same worker.
   setDraftLocalEditListener(routeLocalEdit);
   setDraftLocalDeleteListener(routeLocalDelete);
   setDraftLocalFlushListener(routeLocalFlush);
+  setLandingPlacementHostReader(() => landingAdoptionHostId);
 }
 
 export function draftMirrorSessionCountForTests(): number {
@@ -811,20 +1077,51 @@ export async function submitComposerDraft(chatId: string): Promise<void> {
   const store = useComposerDraftStore.getState();
   store.clearDraft(chatId);
   if (before.draftId === null || hostId === null) return;
-  // Then retire the id. `clearDraft` keeps it, so an edit made during the
-  // flush/delete round-trip below would be published under the id this
-  // function is about to tombstone, and the tombstone would mark that
-  // content synced. The next edit mints a fresh id and a fresh host row.
-  store.fenceAndDetachSubmittedDraft(chatId, before.draftId, hostId);
+  // A row the tab host does not own (a replica, or another host's row),
+  // submitted without an edit that would have forked it: `drafts.delete`
+  // there would answer `absent` and the owner's cloud row would survive.
+  // The id is dropped with no pending delete, and the cloud row is
+  // retracted on the user's authority through the tab host instead - the
+  // same rule the landing path applies to a foreign row.
+  const foreign = composerDraftRowIsForeign(before, hostId);
+  // Retire the id BEFORE any host round trip below is awaited. `clearDraft`
+  // keeps it, so an edit typed during an awaited retract or delete would
+  // re-dirty the id, the mirror could upsert it, and the tombstone that
+  // follows would remove that content and mark it synced. Fenced first,
+  // the next edit mints a fresh id and a fresh host row.
+  store.fenceAndDetachSubmittedDraft(
+    chatId,
+    before.draftId,
+    foreign ? null : hostId,
+  );
+  // A fork whose first write has not been acknowledged still carries
+  // `supersedes`: the upsert that would make the host retract the
+  // ancestor's cloud row has not landed (and after the fence above it never
+  // will), while the delete of the fresh id answers `absent`. The ancestor
+  // is retracted here on the user's authority instead, whatever the fresh
+  // row's ownership reads; a host that already retracted it (the ack raced
+  // this submit) has nothing left to pay.
+  if (before.supersedes !== null) {
+    store.recordPendingSubmittedDraftRetract(before.supersedes, hostId);
+    await retractDraftThroughHost(hostId, before.supersedes);
+  }
+  if (foreign) {
+    store.recordPendingSubmittedDraftRetract(before.draftId, hostId);
+    await retractDraftThroughHost(hostId, before.draftId);
+    return;
+  }
   await retrySubmittedDraftDelete(before.draftId);
 }
 
 async function retrySubmittedDraftDelete(draftId: string): Promise<void> {
-  const hostId = pendingSubmittedDraftDeleteHostId(draftId);
-  if (hostId === null) return;
-  const session = sessions.get(hostId)?.session;
+  const pending = pendingSubmittedDraftDelete(draftId);
+  if (pending === null) return;
+  const session = sessions.get(pending.hostId)?.session;
   if (session === undefined) return;
-  if (await session.deleteOnHost(draftId)) {
+  const outcome = pending.retract
+    ? await session.retractOnHostOutcome(draftId)
+    : await session.deleteOnHostOutcome(draftId);
+  if (outcome !== "failed") {
     useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
   }
 }
@@ -850,12 +1147,144 @@ export async function ingestCloudDraftSummary(input: {
   // A host-bound surface is never a replica here. `applyComposerHostDocument`
   // keys on `target.chatId`, so ingesting another host's chat-composer draft
   // overwrites the row for a chat that lives on THAT host - flipping the
-  // owning host's own live draft to `origin: "replica"`, which is what
-  // `draftRequiresClaim` reads to put the composer behind a read-only banner
-  // naming the tab's own host. Every tile mount re-ran this, which is why the
-  // banner came back on every tab switch.
+  // owning host's own live draft to `origin: "replica"`, which would make
+  // the chat composer fork it on the next keystroke. Every tile mount
+  // re-ran this.
   if (draftKindIsHostBound(input.document.kind)) return;
+  // The absence-sweep fence is reserved by `applyHostDocument` at its
+  // (synchronous) start, before the blob reads: an older directory request
+  // settling in that window already sees this row as newer than its
+  // snapshot. Ownership never moves, so there is nothing else to admit: a
+  // dirty own row keeps its content (`applyLandingHostDocument`), and a
+  // replica head is exactly what the directory is for.
   await applyHostDocument(input.document);
+}
+
+/**
+ * Delete a landing draft through `hostId` from a surface that holds that
+ * host's client but need not have a mirror session mounted: History runs on
+ * the app-wide host, and only the landing placement and mounted tabs
+ * acquire sessions, so with the composer pinned elsewhere the routed
+ * delete (`notifyDraftLocalDelete` -> `routeLocalDelete`) has no session to
+ * reach. A mounted session is preferred (it serializes the tombstone
+ * behind in-flight upserts); otherwise the tombstone goes out on the
+ * client directly. The receipt stays pending until the host answers, so a
+ * failure is retried by whichever session for that host mounts later.
+ */
+export function deleteLandingDraftThroughHost(
+  draftId: string,
+  hostId: string,
+  client: HostRequester<HostRpcRegistry> | null,
+): void {
+  deleteLandingDraftOnHost(draftId, hostId);
+  if (sessions.has(hostId) || client === null) return;
+  if (pendingLandingDraftDeleteHostId(draftId) !== hostId) return;
+  void client
+    .request("drafts.delete", { draftId })
+    .then((response) => {
+      settleLandingDeleteOutcome(
+        draftId,
+        hostId,
+        response.deleted ? "deleted" : "absent",
+      );
+    })
+    .catch((error: unknown) => {
+      if (isDraftsCapabilityMissing(error)) {
+        settleLandingDeleteOutcome(draftId, hostId, "unsupported");
+        return;
+      }
+      appLogger.warn("[draft-mirror] direct drafts.delete failed", {
+        error: describeLogError(error),
+      });
+    });
+}
+
+/** The current ingest sequence; a directory captures it at dispatch. */
+export function cloudDraftIngestSeq(): number {
+  return cloudIngestSeq;
+}
+
+/**
+ * Reserve the absence-sweep fence for a draft whose cloud head is about
+ * to be READ: the read (head plus parts) can take a while, and an older
+ * directory snapshot settling meanwhile must not sweep the existing mirror
+ * the apply is about to refresh. `applyHostDocument` reserves again at the
+ * apply; a read with a terminal outcome simply leaves this reservation,
+ * which protects the row until a later snapshot.
+ */
+export function reserveCloudDraftIngestFence(draftId: string): void {
+  cloudIngestSeq += 1;
+  cloudIngestSeqByDraft.set(draftId, cloudIngestSeq);
+}
+
+/**
+ * Drop local mirrors of cloud rows a settled directory no longer lists.
+ * `fenceSeq` is the ingest sequence at that directory's fetch start: a row
+ * ingested since is kept. A replica qualifies once clean. An OWN row
+ * adopted on another host qualifies only when it was published (an
+ * unpublished own row is never listed) and that host has no mirror
+ * session here (a mounted session delivers its own tombstones, and its
+ * unsynced writes may not have reached the directory yet).
+ */
+export function sweepAbsentCloudDraftMirrors(
+  hostId: string,
+  listed: ReadonlyMap<string, ReadonlySet<string>>,
+  fenceSeq: number,
+): readonly string[] {
+  return dropForeignLandingMirrorsAbsent(hostId, listed, (draft) => {
+    if ((cloudIngestSeqByDraft.get(draft.id) ?? 0) > fenceSeq) return false;
+    if (draft.origin === "replica") return true;
+    // A row with no recorded publication state is treated as unpublished.
+    return (
+      draft.publication !== null &&
+      draft.publication.status !== "unpublished" &&
+      draft.adoption.state === "adopted" &&
+      !sessions.has(draft.adoption.hostId)
+    );
+  });
+}
+
+/**
+ * Own rows whose cloud entry a settled directory no longer lists, while the
+ * session of the host that holds them is mounted here: the owner host never
+ * re-publishes an unchanged row, so on its own it cannot see that a fork
+ * elsewhere tombstoned its cloud row. A `drafts.subscribe` `flush` for the
+ * row makes that host probe the cloud and apply its tombstone rule - delete
+ * the row if unchanged, re-mint it if edited since. Nothing is deleted
+ * client-side. `fenceSeq` as for the sweep: a row applied after the
+ * directory was dispatched is not absent in any sense it can attest to.
+ * `alreadyFlushed` holds the ids nudged for this snapshot; returns the ids
+ * flushed now, so the caller sends each at most once per snapshot.
+ */
+export function flushAbsentOwnCloudDrafts(
+  listed: ReadonlyMap<string, ReadonlySet<string>>,
+  fenceSeq: number,
+  alreadyFlushed: ReadonlySet<string>,
+): readonly string[] {
+  const flushed: string[] = [];
+  for (const draft of useLandingDraftStore.getState().drafts) {
+    if (draft.adoption.state !== "adopted" || draft.origin !== "own") continue;
+    if (alreadyFlushed.has(draft.id)) continue;
+    if (
+      draft.publication === null ||
+      draft.publication.publishedRevision === null
+    ) {
+      continue;
+    }
+    if ((cloudIngestSeqByDraft.get(draft.id) ?? 0) > fenceSeq) continue;
+    const owners = listed.get(draft.id);
+    if (
+      owners !== undefined &&
+      (draft.ownerHostId === null || owners.has(draft.ownerHostId))
+    ) {
+      continue;
+    }
+    const session = sessions.get(draft.adoption.hostId)?.session;
+    if (session === undefined) continue;
+    void session.flush([draft.id]);
+    flushed.push(draft.id);
+  }
+  return flushed;
 }
 
 registerExtraImageRootSource({

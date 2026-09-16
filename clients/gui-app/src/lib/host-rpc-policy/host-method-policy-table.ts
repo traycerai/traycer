@@ -1365,7 +1365,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // would win.
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "drafts.claim": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Unary byte channel, same posture as `epic.readChatAttachment`.
   "drafts.putBlob": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },
