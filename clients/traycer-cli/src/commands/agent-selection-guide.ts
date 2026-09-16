@@ -4,6 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   A2A_PERMISSION_MODE_INSTRUCTION,
+  AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION,
   formatAgentSelectionGuideResponse,
 } from "@traycer/protocol/agent/agent-selection-guide-format";
 import {
@@ -38,6 +39,7 @@ export function buildAgentSelectionGuideCommand(opts: {
     return {
       data: {
         ...response,
+        scopeInstruction: AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION,
         permissionModeInstruction: A2A_PERMISSION_MODE_INSTRUCTION,
       },
       human,
