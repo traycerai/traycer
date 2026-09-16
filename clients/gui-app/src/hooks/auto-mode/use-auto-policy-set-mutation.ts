@@ -83,6 +83,13 @@ export function useAutoPolicySetMutation(): UseMutationResult<
       // every partition under the host.
       onSuccess: async (data, variables, ctx) => {
         if (ctx.hostId === null) return;
+        // The same unattributed-bucket rule as the read: `""` is the absence of
+        // a viewer, not a viewer, so a write-through keyed on it lands in a
+        // bucket every account passes through. The read is disabled in that
+        // window, so there is nothing to keep fresh and nothing lost by
+        // skipping - once the viewer resolves, the read runs against its own
+        // partition and fetches for itself.
+        if (ctx.viewerUserId.length === 0) return;
         const queryKey = hostQueryKeys.autoPolicyForViewer(
           ctx.hostId,
           ctx.viewerUserId,

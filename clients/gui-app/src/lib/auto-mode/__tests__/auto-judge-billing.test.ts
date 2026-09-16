@@ -342,6 +342,7 @@ describe("autoJudgeBillingForRun", () => {
         runHarnessId: "claude",
         isProviderNative: true,
         blocked: null,
+        judgeProfileUnavailable: false,
       }),
     ).toEqual({
       kind: "provider-native",
@@ -357,6 +358,7 @@ describe("autoJudgeBillingForRun", () => {
         runHarnessId: "claude",
         isProviderNative: true,
         blocked: null,
+        judgeProfileUnavailable: false,
       }),
     ).toEqual({
       kind: "provider-native",
@@ -372,6 +374,7 @@ describe("autoJudgeBillingForRun", () => {
         runHarnessId: "codex",
         isProviderNative: false,
         blocked: null,
+        judgeProfileUnavailable: false,
       }),
     ).toEqual(autoJudgeBillingFor("claude"));
   });
@@ -410,6 +413,7 @@ describe("autoJudgeBillingForRun (blocked)", () => {
           runHarnessId: "codex",
           isProviderNative: false,
           blocked: { reason },
+          judgeProfileUnavailable: false,
         }),
       ).toEqual({ kind: "blocked" });
     },
@@ -424,11 +428,13 @@ describe("autoJudgeBillingForRun (blocked)", () => {
       judgeHarnessId: "claude",
       runHarnessId: "codex",
       isProviderNative: false,
+      judgeProfileUnavailable: false,
     };
     const withNull = autoJudgeBillingForRun({ ...input, blocked: null });
     const withUndefined = autoJudgeBillingForRun({
       ...input,
       blocked: undefined,
+      judgeProfileUnavailable: false,
     });
 
     expect(withUndefined).toEqual(withNull);
@@ -447,12 +453,64 @@ describe("autoJudgeBillingForRun (blocked)", () => {
         runHarnessId: "claude",
         isProviderNative: true,
         blocked: { reason: "no-default" },
+        judgeProfileUnavailable: false,
       }),
     ).toEqual({
       kind: "provider-native",
       harnessId: "claude",
       harnessLabel: "Claude Code",
     });
+  });
+});
+
+// FIX 3 (P2): the client-side sibling of the host's `blocked` reason - a
+// stored judge whose explicit `profileId` its provider no longer offers,
+// which the host cannot report at all (`AutoJudgeBlocked.reason` has no
+// missing-profile member).
+describe("autoJudgeBillingForRun (judgeProfileUnavailable)", () => {
+  it("resolves to blocked when the stored judge's profile is unavailable, even with no host-reported blocker", () => {
+    expect(
+      autoJudgeBillingForRun({
+        judgeHarnessId: "claude",
+        runHarnessId: "codex",
+        isProviderNative: false,
+        blocked: null,
+        judgeProfileUnavailable: true,
+      }),
+    ).toEqual({ kind: "blocked" });
+  });
+
+  // Precedence: provider-native wins over judgeProfileUnavailable for the
+  // SAME reason it wins over the host's own `blocked` field just above - a
+  // provider running its own classifier never consults Traycer's stored
+  // judge record, so a vanished profile on that record describes a call that
+  // was never going to happen either way.
+  it("resolves to provider-native, not blocked, when the run is provider-native and the stored judge's profile is also unavailable", () => {
+    expect(
+      autoJudgeBillingForRun({
+        judgeHarnessId: "claude",
+        runHarnessId: "claude",
+        isProviderNative: true,
+        blocked: null,
+        judgeProfileUnavailable: true,
+      }),
+    ).toEqual({
+      kind: "provider-native",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+    });
+  });
+
+  it("falls through to autoJudgeBillingFor(judgeHarnessId) when judgeProfileUnavailable is false", () => {
+    expect(
+      autoJudgeBillingForRun({
+        judgeHarnessId: "claude",
+        runHarnessId: "codex",
+        isProviderNative: false,
+        blocked: null,
+        judgeProfileUnavailable: false,
+      }),
+    ).toEqual(autoJudgeBillingFor("claude"));
   });
 });
 

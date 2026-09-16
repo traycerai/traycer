@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -16,6 +17,10 @@ import {
 import { providersListReportsAutoJudge } from "@/lib/providers/provider-auto-judge";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
+import {
+  judgeProfileUnavailable,
+  offeredJudgeProfileIds,
+} from "@/components/settings/panels/auto-judge-selection";
 
 // Stable params identity so the host-scoped query key stays referentially
 // constant across renders.
@@ -57,6 +62,57 @@ const AUTO_JUDGE_GET_PARAMS = {};
  * the caller this read actually fetches for - which is the point, since that
  * row makes the same claim.
  */
+/**
+ * The composer's half of round 12's profile-availability read.
+ *
+ * Extracted rather than inlined because `useAutoJudgeBilling` is at gui-app's
+ * complexity ceiling (16) and this is the branch that pushed it over - the same
+ * reason `offeredJudgeProfileIds` lives beside the picker rather than in it.
+ *
+ * A null judge harness short-circuits: with no stored judge there is no profile
+ * to have lost, and `offeredJudgeProfileIds` would have no row to look up.
+ */
+/**
+ * Whether every read the billing answer depends on has settled.
+ *
+ * Extracted for the complexity ceiling, like its neighbour below, but the
+ * grouping is real: these are exactly the reads whose PENDING state must
+ * publish `null` rather than a guess, and keeping them in one predicate is what
+ * stops a later edit from adding a fourth read to the hook and forgetting one
+ * of the two places readiness is decided.
+ *
+ * `isProviderNative` is an OR rather than a requirement: a provider running its
+ * own classifier needs no judge record, which is what lets a host without
+ * `autoJudge.get` still publish "no extra cost".
+ */
+function billingInputsSettled(input: {
+  readonly providersSettled: boolean;
+  readonly harnessesSettled: boolean;
+  readonly providerJudgeUnknown: boolean;
+  readonly isProviderNative: boolean;
+  readonly judgeRecordAnswered: boolean;
+}): boolean {
+  const catalogsSettled =
+    input.providersSettled &&
+    input.harnessesSettled &&
+    !input.providerJudgeUnknown;
+  return (
+    catalogsSettled && (input.isProviderNative || input.judgeRecordAnswered)
+  );
+}
+
+function storedJudgeProfileUnavailable(
+  judgeHarnessId: string | null,
+  storedProfileId: string | null,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+): boolean {
+  if (judgeHarnessId === null) return false;
+  return judgeProfileUnavailable(
+    storedProfileId,
+    offeredJudgeProfileIds(providers, judgeHarnessId),
+  );
+}
+
 export function useAutoJudgeBilling(
   hostId: string | null,
   harnessId: GuiHarnessId | null,
@@ -172,6 +228,21 @@ export function useAutoJudgeBilling(
     !providersListReportsAutoJudge(providersListVersion);
   const selection = query.data?.selection ?? null;
   const judgeHarnessId = selection === null ? null : selection.harnessId;
+  // The stored judge's PROFILE, which the host's `blocked` cannot report:
+  // `AutoJudgeBlocked.reason` has no missing-profile member, so a judge whose
+  // explicit profile was removed reads as runnable here while Settings already
+  // shows it as a record that cannot run. The composer's Auto row was still
+  // promising the provider account would be charged for a judge that will not
+  // run - every command escalates to the human instead.
+  //
+  // Same rule as Settings, through the same function rather than a second
+  // spelling (`judgeProfileUnavailable`): ambient (`null`) is not a missing
+  // profile, and an unanswered providers read is not either.
+  const storedProfileUnavailable = storedJudgeProfileUnavailable(
+    judgeHarnessId,
+    selection?.profileId ?? null,
+    providers,
+  );
   // The host's own verdict that it CANNOT run the judge it has stored
   // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
   // wire, so an older host answers `undefined` and reads as "not blocked".
@@ -182,10 +253,14 @@ export function useAutoJudgeBilling(
   // and `isProviderNative` can only be true for a non-null `harnessId`
   // (`providerRunsItsOwnJudge` returns `false` for a null one), so that arm is
   // guaranteed to be the one `autoJudgeBillingForRun` takes.
-  const catalogsSettled =
-    providersSettled && harnessesSettled && !providerJudgeUnknown;
-  const loaded =
-    catalogsSettled && (isProviderNative || query.data !== undefined);
+  const loaded = billingInputsSettled({
+    providersSettled,
+    harnessesSettled,
+    providerJudgeUnknown,
+    isProviderNative,
+    judgeRecordAnswered: query.data !== undefined,
+  });
+
   return useMemo(
     () =>
       loaded
@@ -194,8 +269,16 @@ export function useAutoJudgeBilling(
             runHarnessId: harnessId,
             isProviderNative,
             blocked,
+            judgeProfileUnavailable: storedProfileUnavailable,
           })
         : null,
-    [loaded, judgeHarnessId, harnessId, isProviderNative, blocked],
+    [
+      loaded,
+      judgeHarnessId,
+      harnessId,
+      isProviderNative,
+      blocked,
+      storedProfileUnavailable,
+    ],
   );
 }

@@ -3,6 +3,7 @@ import { renderHook } from "@testing-library/react";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   type ProviderCliState,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { AutoJudgeGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
@@ -199,6 +200,30 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   };
 }
 
+/** A minimal `ProviderProfile` fixture for the FIX 3 profile-availability case below. */
+function providerProfile(profileId: string): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind: "managed",
+    authType: "oauth",
+    label: profileId,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
 afterEach(() => {
   vi.clearAllMocks();
   providersListVersion.current = { major: 9, minor: 1 };
@@ -367,6 +392,63 @@ describe("useAutoJudgeBilling", () => {
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
+  });
+
+  // FIX 3 (P2): the stored judge names an explicit profile its provider no
+  // longer offers. The host's `blocked` field has no member for this - it is
+  // a purely client-side comparison against the LIVE `providers.list` read -
+  // so before this fix the row kept claiming the provider account would be
+  // charged for a judge call that was never going to happen (every command
+  // escalates to the human instead, exactly like the host-blocked case
+  // above).
+  it("resolves to blocked when the stored judge names a profile the provider no longer offers", () => {
+    autoJudgeGetData = {
+      selection: {
+        harnessId: "claude",
+        model: "claude-sonnet",
+        profileId: "removed-profile",
+      },
+    };
+    providersListData = {
+      providers: [
+        providerState({ profiles: [providerProfile("kept-profile")] }),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+    );
+
+    expect(result.current).toEqual({ kind: "blocked" });
+  });
+
+  // Control: the same stored judge, with the SAME profile still present in
+  // the provider's offered list - proves the case above fires on the
+  // profile comparison and not merely on having an external (non-traycer)
+  // judge harness stored.
+  it("still bills the provider account when the stored judge's profile is still offered", () => {
+    autoJudgeGetData = {
+      selection: {
+        harnessId: "claude",
+        model: "claude-sonnet",
+        profileId: "kept-profile",
+      },
+    };
+    providersListData = {
+      providers: [
+        providerState({ profiles: [providerProfile("kept-profile")] }),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+    );
+
+    expect(result.current).toEqual({
+      kind: "provider",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+    });
   });
 
   // JOB 2: the ordering defect itself. `autoJudge.get` has already resolved,

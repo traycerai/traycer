@@ -17,6 +17,7 @@ import {
   autoJudgeRecordHealth,
   autoJudgeSeed,
   autoJudgeSeedKeyForAttempt,
+  judgeProfileUnavailable,
   offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
 import { AutoJudgePicker } from "@/components/settings/panels/auto-judge-picker";
@@ -570,6 +571,39 @@ describe("autoJudgeRecordHealth", () => {
       storedProfileUnavailable: false,
       noJudgeWillRun: false,
     });
+  });
+});
+
+// FIX 3 (P2): direct coverage of the extracted, now-shared predicate. It used
+// to live inline inside `autoJudgeRecordHealth`'s own boolean expression -
+// the cases in that `describe` block above still exercise the SAME logic
+// through that wrapper - but the extraction makes it a second call site's
+// dependency (`use-auto-judge-billing.ts`'s composer row), so a drift between
+// what the two callers assume it does would no longer show up in either
+// site's own tests alone.
+describe("judgeProfileUnavailable", () => {
+  it("is false for a null (ambient) stored profile, even when the offered list omits null itself", () => {
+    // Ambient has no row to delete - excluded outright regardless of what the
+    // provider currently offers.
+    expect(judgeProfileUnavailable(null, ["profile-1"])).toBe(false);
+  });
+
+  it("is false when offeredProfileIds is undefined - providers.list has not answered yet", () => {
+    // Must not flash the warning (or suppress billing) on a cold load before
+    // the providers read has settled.
+    expect(judgeProfileUnavailable("profile-1", undefined)).toBe(false);
+  });
+
+  it("is false when the stored profile is present in the offered list", () => {
+    expect(judgeProfileUnavailable("profile-1", ["profile-1", null])).toBe(
+      false,
+    );
+  });
+
+  it("is true when the stored profile is absent from a settled, non-empty offered list", () => {
+    expect(
+      judgeProfileUnavailable("profile-1", ["some-other-profile", null]),
+    ).toBe(true);
   });
 });
 

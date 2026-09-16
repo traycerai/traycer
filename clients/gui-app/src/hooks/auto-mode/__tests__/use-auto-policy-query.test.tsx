@@ -38,6 +38,26 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const USER_A = "user-a";
 const USER_B = "user-b";
 
+const MICROTASK_FLUSH_TICKS = 20;
+
+/**
+ * Drains the microtask queue `MICROTASK_FLUSH_TICKS` times over - the mock
+ * messenger runs handlers inline with no transport timers
+ * (`MockHostMessenger.request`'s own comment), so every hop from a fired
+ * query to its cache write is a microtask, never a real timer. A fixed,
+ * generous flush is what lets the SAME assertion work under both regimes
+ * this file falsifies against: under the fix nothing is ever dispatched, so
+ * the loop is a no-op; under a reverted guard it is enough ticks for the
+ * response to actually land in the cache before the next step reads it.
+ */
+async function flushMicrotasks(): Promise<void> {
+  let chain: Promise<void> = Promise.resolve();
+  for (let i = 0; i < MICROTASK_FLUSH_TICKS; i += 1) {
+    chain = chain.then(() => undefined);
+  }
+  await chain;
+}
+
 function authProfile(userId: string): {
   readonly userId: string;
   readonly userName: string;
@@ -67,12 +87,21 @@ function createAutoPolicyFixture(
   readonly queryClient: QueryClient;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly setBearerUser: (userId: string) => void;
+  /**
+   * How many times the mock host actually dispatched `autoPolicy.get`. The
+   * unattributed-viewer cases below assert on this directly rather than on
+   * `data`/`fetchStatus`, because a disabled query's `data` stays `undefined`
+   * for the same reason a query that was never RENDERED does - only the
+   * dispatch count tells "never asked" apart from "asked and still pending".
+   */
+  readonly getCallCount: () => number;
 } {
   const policies: Record<string, AutoPolicyGetResponse> = {
     ...initialPolicies,
   };
   let currentBearerUser = USER_A;
   let setCount = 0;
+  let getCount = 0;
   // `gcTime: Infinity`, deliberately NOT 0. A cache entry for a viewer who
   // just unmounted must survive - that lingering entry is the whole hazard
   // JOB 1 closes (it is what a naive `["host", hostId, "autoPolicy.get", {}]`
@@ -93,13 +122,17 @@ function createAutoPolicyFixture(
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {
-        "autoPolicy.get": () =>
-          policies[currentBearerUser] ?? {
-            body: null,
-            updatedAt: null,
-            source: "account",
-            readState: "fresh",
-          },
+        "autoPolicy.get": () => {
+          getCount += 1;
+          return (
+            policies[currentBearerUser] ?? {
+              body: null,
+              updatedAt: null,
+              source: "account",
+              readState: "fresh",
+            }
+          );
+        },
         "autoPolicy.set": (params) => {
           setCount += 1;
           const updatedAt = `2026-09-16T00:00:0${setCount}.000Z`;
@@ -130,6 +163,7 @@ function createAutoPolicyFixture(
     setBearerUser: (userId: string) => {
       currentBearerUser = userId;
     },
+    getCallCount: () => getCount,
   };
 }
 
@@ -332,5 +366,150 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
       aEntryKey ?? [],
     );
     expect(aEntry?.body).toBe("A's policy");
+  });
+});
+
+// FIX 1 (P1): "" is the ABSENCE of an identity - `useCloudChatViewerId()`
+// answers it whenever `contextMetadata` is absent (startup, and the gap
+// during an account transition), not a person. Before this fix the read ran
+// unconditionally, so the account that happened to be authenticated at the
+// HOST while the GUI's own viewer was still unresolved got cached under the
+// `""` partition - a bucket every account passes through on its way in, so
+// the NEXT account's own unresolved window could be served whatever the
+// FIRST one left there. None of these tests ever call `signInAs`, so
+// `useCloudChatViewerId()` reads the default signed-out `contextMetadata:
+// null` and answers `""` throughout, exactly like the unresolved window.
+describe('useAutoPolicyQuery / useAutoPolicySetMutation - the unattributed ("") viewer bucket', () => {
+  it("does not fire the read while the viewer is unattributed - the query stays disabled and its data stays undefined", async () => {
+    const fixture = createAutoPolicyFixture({
+      [USER_A]: {
+        body: "A's policy",
+        updatedAt: "2026-09-15T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+      },
+    });
+    fixtureClientRef.current = fixture.client;
+
+    const { result } = renderHook(() => useAutoPolicyQuery(), {
+      wrapper: fixture.Wrapper,
+    });
+
+    // Long enough for a synchronous mock messenger to have dispatched,
+    // resolved, and been written into the cache, had the query fired.
+    await flushMicrotasks();
+
+    expect(fixture.getCallCount()).toBe(0);
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.fetchStatus).toBe("idle");
+  });
+
+  it('fires exactly once, against the resolved partition, once the viewer resolves from "" to a real id', async () => {
+    const fixture = createAutoPolicyFixture({
+      [USER_A]: {
+        body: "A's policy",
+        updatedAt: "2026-09-15T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+      },
+    });
+    fixtureClientRef.current = fixture.client;
+
+    const { result, rerender } = renderHook(() => useAutoPolicyQuery(), {
+      wrapper: fixture.Wrapper,
+    });
+    await flushMicrotasks();
+    expect(fixture.getCallCount()).toBe(0);
+
+    signInAs(USER_A);
+    rerender();
+
+    await waitFor(() => expect(result.current.data?.body).toBe("A's policy"));
+    expect(fixture.getCallCount()).toBe(1);
+  });
+
+  // THE LEAK ITSELF (must have been red before the fix - see the falsification
+  // note in the report back to the assigning agent). Two mounts, BOTH while
+  // the viewer is unattributed (`""`), with the host's own bearer moved to a
+  // DIFFERENT account in between - modelling "every account passes through
+  // the same [\"\"] bucket on the way in". Pre-fix, mount #1's enabled read
+  // would have cached the first account's body under the `[\"\"]` key; mount
+  // #2, still keyed `[\"\"]`, would have been served that cached body
+  // SYNCHRONOUSLY (TanStack returns a cache hit before any await), with Edit
+  // enabled. The assertion is checked immediately after mount #2, before any
+  // `waitFor`, for exactly that reason - mirroring the sibling A/B case above.
+  it("does not serve one account's policy, landed while unattributed, to a later unattributed render after the host's bearer moves on", async () => {
+    const fixture = createAutoPolicyFixture({
+      [USER_A]: {
+        body: "A's policy, landed while the viewer was unattributed",
+        updatedAt: "2026-09-15T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+      },
+      [USER_B]: {
+        body: "B's own policy",
+        updatedAt: "2026-09-15T00:00:00.000Z",
+        source: "account",
+        readState: "fresh",
+      },
+    });
+    fixtureClientRef.current = fixture.client;
+
+    // Mount #1: unattributed, host bearer is A (the default). Flushed fully
+    // before unmounting so a reverted guard's response has actually landed
+    // in the cache by the time mount #2 reads the same `[""]` key.
+    const first = renderHook(() => useAutoPolicyQuery(), {
+      wrapper: fixture.Wrapper,
+    });
+    await flushMicrotasks();
+    first.unmount();
+
+    // The host's bearer moves to B - "the gap during an account switch" - but
+    // the GUI's own viewer id is STILL unresolved (no signInAs), so
+    // `useCloudChatViewerId()` still answers "".
+    fixture.setBearerUser(USER_B);
+
+    const second = renderHook(() => useAutoPolicyQuery(), {
+      wrapper: fixture.Wrapper,
+    });
+
+    // Checked SYNCHRONOUSLY, before any await: nothing was ever cached at
+    // `[""]` under the fix, so there is nothing to serve.
+    expect(second.result.current.data?.body).not.toBe(
+      "A's policy, landed while the viewer was unattributed",
+    );
+    expect(second.result.current.data).toBeUndefined();
+  });
+
+  it("a save made while the viewer is unattributed writes nothing to the cache", async () => {
+    const fixture = createAutoPolicyFixture({});
+    fixtureClientRef.current = fixture.client;
+
+    // The read is mounted ALONGSIDE the mutation, disabled (viewer is still
+    // unattributed) - `enabled: false` still creates the query's cache ENTRY
+    // for the `[""]` key, it just never fetches into it. Without a pre-
+    // existing entry at that key, `setQueriesData` (a FILTER-matching update,
+    // never a create) would have nothing to touch regardless of the guard,
+    // which would make this test pass for the wrong reason.
+    const { result } = renderHook(
+      () => ({
+        query: useAutoPolicyQuery(),
+        mutation: useAutoPolicySetMutation(),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    result.current.mutation.mutate({ body: "written while unattributed" });
+    await waitFor(() => expect(result.current.mutation.isSuccess).toBe(true));
+
+    // The write-through addresses `hostQueryKeys.autoPolicyForViewer(hostId,
+    // viewerUserId)` - with `viewerUserId === ""` that is the same
+    // unattributed bucket the read refuses to populate. Nothing should be
+    // there after the save either.
+    expect(result.current.query.data).toBeUndefined();
+    const cached = fixture.queryClient.getQueryData<AutoPolicyGetResponse>(
+      hostQueryKeys.autoPolicyForViewer(mockLocalHostEntry.hostId, ""),
+    );
+    expect(cached).toBeUndefined();
   });
 });

@@ -96,9 +96,18 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   // "this machine predates `auto`" from "every provider here declines it".
   // The negotiated catalog line answers the first question directly, and the
   // picker's unsupported copy uses it to decide who to blame.
-  const hostKnowsAutoMode = catalogLineKnowsAutoMode(
-    useHostMethodSchemaVersion(runTargetHostId, "agent.gui.listHarnesses"),
+  // `null` when no host is named: that is "no host in scope", not "the host
+  // cannot spell `auto`", and the two are different claims. A named host whose
+  // line is unreadable still answers `false` - the composer is about to send on
+  // it - which is what `catalogLineKnowsAutoMode(null)` gives.
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    runTargetHostId,
+    "agent.gui.listHarnesses",
   );
+  const hostKnowsAutoMode =
+    runTargetHostId === null
+      ? null
+      : catalogLineKnowsAutoMode(listHarnessesLine);
   // Same two inputs as the desktop toolbar - see `ComposerToolbar`.
   const runHarnessId = useStore(store, (s) => s.selection.harnessId);
   const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);
@@ -112,7 +121,11 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   // Mirror the desktop picker: show the mode the harness will actually run,
   // never a stale sticky it does not honor.
   const permissionOption = findPermissionOption(
-    normalizePermissionMode(permission, supportedPermissionModes),
+    normalizePermissionMode(
+      permission,
+      supportedPermissionModes,
+      hostKnowsAutoMode,
+    ),
   );
   const PermissionIcon = permissionOption.icon;
 

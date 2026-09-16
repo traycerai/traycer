@@ -53,9 +53,24 @@ export function useAutoPolicyQuery(): UseQueryResult<
   // would have written A's prose into B's account.
   //
   // The viewer id closes it by construction: B's first render looks up a key
-  // that has never held data, so there is nothing to serve. `""` (no context
-  // metadata yet) is its own bucket for the same reason, which is the safe
-  // direction. Same read every other viewer-scoped surface uses rather than a
+  // that has never held data, so there is nothing to serve.
+  //
+  // `""` IS NOT AN IDENTITY, and treating it as "its own bucket" was this
+  // hook's own earlier mistake. `useCloudChatViewerId` answers `""` whenever
+  // `contextMetadata` is absent - startup, and the gap during an account
+  // transition - and that is the ABSENCE of an attribution, not a person. The
+  // query still ran there, and the host answers from its own credentials, so
+  // the REAL account's policy landed under `""`. Every account passes through
+  // that same bucket on the way in, so the next one is served the previous
+  // one's body synchronously, with Edit enabled: the exact leak the partition
+  // exists to close, arriving through the unattributed door.
+  //
+  // So the read is DISABLED until the viewer resolves, which is what
+  // `useCloudDraftsDirectory` already does with the same helper
+  // (`viewerUserId.length > 0`). A disabled query holds `undefined`, and the
+  // editor's mount condition keys on `data !== undefined`, so the dialog stays
+  // closed through the unresolved window rather than opening on a stranger's
+  // prose. Same read every other viewer-scoped surface uses rather than a
   // second spelling of the same field.
   //
   // `autoJudge.get` deliberately does NOT take this: it answers from a file
@@ -78,6 +93,10 @@ export function useAutoPolicyQuery(): UseQueryResult<
     client,
     method: "autoPolicy.get",
     params: AUTO_POLICY_GET_PARAMS,
-    options: { refetchOnWindowFocus: false, refetchOnMount: "always" },
+    options: {
+      enabled: viewerUserId.length > 0,
+      refetchOnWindowFocus: false,
+      refetchOnMount: "always",
+    },
   });
 }

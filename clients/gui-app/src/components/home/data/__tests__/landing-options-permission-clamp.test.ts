@@ -7,6 +7,7 @@ import {
   PERMISSION_OPTIONS,
   catalogLineKnowsAutoMode,
   catalogSupportedPermissionModes,
+  composerOffersPermissionMode,
   fallbackPermissionMode,
   findPermissionOption,
   harnessHonorsPermissionMode,
@@ -64,26 +65,116 @@ describe("harnessHonorsPermissionMode", () => {
   });
 });
 
+// FIX 2 (P1): the ROW's constraint and the HOST's own line are two different
+// questions - a pre-`auto` host serves unconstrained rows like any other, so
+// the row predicate alone lit up an option the wire cannot carry.
+describe("composerOffersPermissionMode", () => {
+  // `null` = no host in scope passes through; `false` = a host said no vetoes.
+  it("offers auto when no host is in scope (null) and vetoes only on false", () => {
+    expect(composerOffersPermissionMode([], "auto", null)).toBe(true);
+    expect(composerOffersPermissionMode(null, "auto", null)).toBe(true);
+    expect(composerOffersPermissionMode([], "auto", false)).toBe(false);
+  });
+  it("withholds auto from an unconstrained row when the host cannot spell it", () => {
+    expect(composerOffersPermissionMode([], "auto", false)).toBe(false);
+  });
+
+  it("offers auto from the same unconstrained row once the host proves it can spell it", () => {
+    expect(composerOffersPermissionMode([], "auto", true)).toBe(true);
+  });
+
+  it("leaves every non-auto mode unaffected by hostKnowsAutoMode", () => {
+    const nonAutoModes: ReadonlyArray<PermissionMode> = [
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ];
+    for (const mode of nonAutoModes) {
+      expect(composerOffersPermissionMode([], mode, false)).toBe(
+        composerOffersPermissionMode([], mode, true),
+      );
+      expect(composerOffersPermissionMode([], mode, false)).toBe(true);
+    }
+  });
+
+  it("still withholds a mode the ROW itself refuses, regardless of hostKnowsAutoMode", () => {
+    const supported: ReadonlyArray<PermissionMode> = ["supervised"];
+    expect(composerOffersPermissionMode(supported, "auto", true)).toBe(false);
+    expect(composerOffersPermissionMode(supported, "full_access", true)).toBe(
+      false,
+    );
+  });
+});
+
 describe("normalizePermissionMode", () => {
+  // The THIRD state of the host proof, and the one a boolean cannot hold.
+  // `null` is "no host is in scope" - Settings' install-wide default row, which
+  // names no harness and no machine - and it must pass `auto` through, exactly
+  // as a `null` `supportedPermissionModes` passes a mode through one dimension
+  // over. `false` is the different claim "a machine was asked and cannot spell
+  // it", and only that one demotes.
+  //
+  // Guarded here because the surface half of it lives in
+  // `general-settings-panel.test.tsx`, and that suite cannot see the clamp: it
+  // renders a picker, not this function. Collapsing `null` into `false` here -
+  // `!hostKnowsAutoMode` instead of `hostKnowsAutoMode === false` - leaves that
+  // panel suite GREEN and silently demotes every install-wide `auto` default.
+  it("keeps auto when NO host is in scope (null), on an unconstrained row", () => {
+    expect(normalizePermissionMode("auto", [], null)).toBe("auto");
+  });
+
+  it("keeps auto when no host is in scope and no harness is either", () => {
+    expect(normalizePermissionMode("auto", null, null)).toBe("auto");
+  });
+
+  it("demotes auto when a host IS in scope and cannot spell it", () => {
+    expect(normalizePermissionMode("auto", [], false)).toBe(
+      "auto_accept_edits",
+    );
+  });
+
   it("demotes sticky auto to auto_accept_edits on an old host that serves the pre-auto trio - THE regression this ticket exists for", () => {
     expect(
-      normalizePermissionMode("auto", [
-        "supervised",
-        "auto_accept_edits",
-        "full_access",
-      ]),
+      normalizePermissionMode(
+        "auto",
+        ["supervised", "auto_accept_edits", "full_access"],
+        true,
+      ),
     ).toBe("auto_accept_edits");
   });
 
   it("falls back to the safest supported mode when the host doesn't even honor auto_accept_edits", () => {
-    expect(normalizePermissionMode("auto", ["supervised", "full_access"])).toBe(
-      "supervised",
-    );
+    expect(
+      normalizePermissionMode("auto", ["supervised", "full_access"], true),
+    ).toBe("supervised");
   });
 
   it("leaves auto unchanged when the host's row includes it", () => {
-    expect(normalizePermissionMode("auto", ["auto", "full_access"])).toBe(
+    expect(normalizePermissionMode("auto", ["auto", "full_access"], true)).toBe(
       "auto",
+    );
+  });
+
+  // FIX 2 (P1): the HOST proof runs FIRST and is not foldable into the row
+  // walk - a pre-`auto` host's rows are routinely unconstrained, so `auto`
+  // would satisfy `harnessHonorsPermissionMode` and return on the first
+  // branch without ever reaching a fallback. `null` here models exactly that:
+  // "no harness scope yet", the row saying nothing either way.
+  it("demotes sticky auto to auto_accept_edits when hostKnowsAutoMode is false, even with a null (unconstrained) row", () => {
+    expect(normalizePermissionMode("auto", null, false)).toBe(
+      "auto_accept_edits",
+    );
+  });
+
+  // The literal shape of the P1 regression: an EMPTY (unconstrained) row -
+  // exactly what a pre-`auto` host's `chat.subscribe` line routinely serves,
+  // since such a host has no way to single `auto` out even if it wanted to -
+  // still gets demoted once the host proof says no. Before this fix, the
+  // unconstrained row alone satisfied `harnessHonorsPermissionMode` and
+  // `auto` passed straight through.
+  it("demotes sticky auto to auto_accept_edits when hostKnowsAutoMode is false, even with an empty (unconstrained) row", () => {
+    expect(normalizePermissionMode("auto", [], false)).toBe(
+      "auto_accept_edits",
     );
   });
 
@@ -95,7 +186,7 @@ describe("normalizePermissionMode", () => {
       "full_access",
     ];
     for (const mode of modes) {
-      expect(normalizePermissionMode(mode, null)).toBe(mode);
+      expect(normalizePermissionMode(mode, null, true)).toBe(mode);
     }
   });
 
@@ -107,12 +198,12 @@ describe("normalizePermissionMode", () => {
       "full_access",
     ];
     for (const mode of modes) {
-      expect(normalizePermissionMode(mode, [])).toBe(mode);
+      expect(normalizePermissionMode(mode, [], true)).toBe(mode);
     }
   });
 
   it("elevates sticky supervised to full_access when that's all Cursor's row supports", () => {
-    expect(normalizePermissionMode("supervised", ["full_access"])).toBe(
+    expect(normalizePermissionMode("supervised", ["full_access"], true)).toBe(
       "full_access",
     );
   });
@@ -121,10 +212,11 @@ describe("normalizePermissionMode", () => {
     // full_access has no declared PERMISSION_FALLBACK_MODE entry, so the
     // safest-supported walk still owns this case - unchanged behaviour.
     expect(
-      normalizePermissionMode("full_access", [
-        "supervised",
-        "auto_accept_edits",
-      ]),
+      normalizePermissionMode(
+        "full_access",
+        ["supervised", "auto_accept_edits"],
+        true,
+      ),
     ).toBe("supervised");
   });
 });

@@ -225,26 +225,91 @@ export function harnessHonorsPermissionMode(
 //   `supportedPermissionModes[0]` - adapters may declare modes in any order,
 //   and picking the head silently elevates Cursor (`["full_access"]`) past
 //   any sticky preference the user previously held.
+/**
+ * Whether this composer may OFFER `mode` - the ROW's constraint AND the HOST's
+ * line, which are two different questions and both have to answer yes.
+ *
+ * {@link harnessHonorsPermissionMode} is about the row alone and is right to
+ * be: an empty `supportedPermissionModes` is a harness that answered and
+ * constrained nothing, so it honors every mode. But "this provider would run
+ * it" is not "this machine can express it". A pre-`auto` host returns
+ * unconstrained rows like any other, so the row predicate says yes and the
+ * option lights up on a host whose `chat.subscribe` line cannot carry the
+ * enum - the UI then sits on Auto while `sendAction` drops every mode-bearing
+ * frame at the projection cliff, which is silent on both ends.
+ *
+ * Only `auto` takes the second proof, for the reason
+ * {@link catalogLineKnowsAutoMode} gives: it is the one mode young enough for a
+ * supported host to predate.
+ *
+ * `hostKnowsAutoMode` has THREE states, and the third is the one that gets
+ * missed:
+ *
+ * - `true` - a host is in scope and its negotiated line can spell `auto`;
+ * - `false` - a host is in scope and it cannot, or its line is unreadable.
+ *   Unreadable counts as cannot: the surface is about to send on that host;
+ * - `null` - NO host is in scope. Settings' install-wide default row is the
+ *   case: it names no harness and no machine, and a preference recorded there
+ *   is clamped later by whichever host actually runs it.
+ *
+ * Collapsing `null` into `false` refuses a mode because no machine has been
+ * named, which is not the claim "a machine said no". The row dimension beside
+ * it has carried the same three states all along (`null` / `[]` / a list).
+ *
+ * ONE COPY of that pairing, same discipline as the row predicate's own note -
+ * the pickers, the sticky clamp and anything else that offers a mode read this
+ * rather than restating "and also check the host".
+ */
+export function composerOffersPermissionMode(
+  supportedPermissionModes: ReadonlyArray<PermissionMode> | null,
+  mode: PermissionMode,
+  hostKnowsAutoMode: boolean | null,
+): boolean {
+  if (!harnessHonorsPermissionMode(supportedPermissionModes, mode))
+    return false;
+  // `=== false`, not falsy. `null` is NO HOST IN SCOPE and passes through,
+  // exactly as a `null` `supportedPermissionModes` does one line up - the two
+  // dimensions carry the same three states and have to read them the same way.
+  return mode !== "auto" || hostKnowsAutoMode !== false;
+}
+
 export function normalizePermissionMode(
   value: PermissionMode,
   supportedPermissionModes: ReadonlyArray<PermissionMode> | null,
+  hostKnowsAutoMode: boolean | null,
 ): PermissionMode {
+  // The HOST proof runs FIRST, and it is not foldable into the row walk below.
+  // That walk only ever narrows within what the row declares, and a pre-`auto`
+  // host's rows are routinely unconstrained - so an `auto` sticky would satisfy
+  // `harnessHonorsPermissionMode`, return on the first branch, and never reach
+  // a fallback at all. `findSafestSupportedPermissionMode([])` answers `null`
+  // for the same reason, so even the tail would have handed `auto` back.
+  //
+  // `hostKnowsAutoMode` is a required parameter rather than a defaulted one
+  // precisely so every call site has to answer it; the repo bans defaults for
+  // this reason and it earns its keep here.
+  const candidate =
+    value === "auto" && hostKnowsAutoMode === false
+      ? (PERMISSION_FALLBACK_MODE.auto ?? value)
+      : value;
   // The null arm is repeated here rather than left to the predicate alone:
   // the predicate already answers true for it, but the compiler cannot see
   // that, and the fallback path below needs the array narrowed.
   if (
     supportedPermissionModes === null ||
-    harnessHonorsPermissionMode(supportedPermissionModes, value)
+    harnessHonorsPermissionMode(supportedPermissionModes, candidate)
   )
-    return value;
-  const declaredFallback = PERMISSION_FALLBACK_MODE[value];
+    return candidate;
+  const declaredFallback = PERMISSION_FALLBACK_MODE[candidate];
   if (
     declaredFallback !== null &&
     supportedPermissionModes.includes(declaredFallback)
   ) {
     return declaredFallback;
   }
-  return findSafestSupportedPermissionMode(supportedPermissionModes) ?? value;
+  return (
+    findSafestSupportedPermissionMode(supportedPermissionModes) ?? candidate
+  );
 }
 
 function findSafestSupportedPermissionMode(
@@ -403,7 +468,7 @@ export function unsupportedPermissionModeCopy(input: {
    * Whether the host's negotiated catalog line can spell `auto` at all
    * ({@link catalogLineKnowsAutoMode}). `true` VETOES the upgrade sentence.
    */
-  readonly hostKnowsAutoMode: boolean;
+  readonly hostKnowsAutoMode: boolean | null;
 }): string {
   const { mode, harnessLabel, catalogSupportedModes, hostKnowsAutoMode } =
     input;
@@ -417,7 +482,9 @@ export function unsupportedPermissionModeCopy(input: {
   // sentence is the true one.
   if (
     mode === "auto" &&
-    !hostKnowsAutoMode &&
+    // `=== false` for the same reason the offer predicate uses it: with no
+    // host in scope there is no machine to tell the user to update.
+    hostKnowsAutoMode === false &&
     catalogSupportedModes !== null &&
     !catalogSupportedModes.includes(mode)
   ) {

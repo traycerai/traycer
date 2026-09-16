@@ -6,9 +6,11 @@ import {
   resolveModelBySlug,
 } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   findDefaultModel,
   findSelectedModel,
+  catalogLineKnowsAutoMode,
   normalizePermissionMode,
   normalizeReasoningForModel,
   normalizeServiceTierForModel,
@@ -397,12 +399,35 @@ function deriveToolbarState(
     null;
   const supportedPermissionModes =
     selectedHarness?.supportedPermissionModes ?? null;
+  // The HOST's own line, which no row in the catalog can answer. A pre-`auto`
+  // host serves unconstrained rows like any other, so without this a sticky
+  // `auto` survives the clamp on a machine whose `chat.subscribe` line cannot
+  // carry the enum.
+  //
+  // Read straight off the negotiated-manifest registry rather than through a
+  // hook, because this is a store: `getNegotiatedHostMethodVersion` is a plain
+  // module function and `stores/epics/open-epic/doc-record-arms.ts` reads it
+  // the same way. An unrecorded handshake answers `null`, which
+  // `catalogLineKnowsAutoMode` reads as "cannot spell it" - the safe direction,
+  // and the same hold every other gate on this line takes.
+  const hostKnowsAutoMode =
+    catalog.hostId === null
+      ? // No host in scope yet - not a host that cannot spell `auto`. The
+        // clamp passes the mode through and re-runs when a catalog arrives.
+        null
+      : catalogLineKnowsAutoMode(
+          getNegotiatedHostMethodVersion(
+            catalog.hostId,
+            "agent.gui.listHarnesses",
+          ),
+        );
   const derived: ComposerToolbarDerived = {
     selection,
     selectedModel,
     permission: normalizePermissionMode(
       values.permission,
       supportedPermissionModes,
+      hostKnowsAutoMode,
     ),
     reasoning: normalizeReasoningForModel(values.reasoning, selectedModel),
     // Clamp the sticky tier to the selected model (single site for display AND

@@ -5,10 +5,12 @@ import type {
   ProviderId,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import {
   fallbackPermissionMode,
-  harnessHonorsPermissionMode,
+  catalogLineKnowsAutoMode,
+  composerOffersPermissionMode,
 } from "@/components/home/data/landing-options";
 
 export interface ResolvedClonedChatSettings {
@@ -178,15 +180,29 @@ async function permissionModeForTarget(
   // reason. Clamping here would quietly rewrite the mode on the way to an
   // error about something else.
   if (targetRow === undefined) return settings;
-  // Through the shared predicate, not a bare `.includes`. An EMPTY
-  // `supportedPermissionModes` is a harness that answered and constrained
-  // nothing - the host's own assert short-circuits on it - so a raw `includes`
-  // read it as "no auto here" and silently rewrote the user's mode on a target
-  // that would have accepted it.
+  // Through the shared predicate, not a bare `.includes`, and paired with the
+  // TARGET host's own line. An EMPTY `supportedPermissionModes` is a harness
+  // that answered and constrained nothing - the host's own assert
+  // short-circuits on it - so a raw `includes` read it as "no auto here" and
+  // silently rewrote the user's mode on a target that would have accepted it.
+  //
+  // But an unconstrained row on a PRE-`auto` target says nothing about the
+  // wire: that host serves unconstrained rows like any other and still cannot
+  // carry the enum. The catalog request above has already completed on this
+  // client, so the target's negotiated manifest is recorded by the time we get
+  // here - a `null` reads as "cannot spell it", the safe direction, and demotes
+  // exactly as an unsupported row does.
+  const targetHostId = targetClient.getActiveHostId() ?? null;
+  const targetKnowsAutoMode = catalogLineKnowsAutoMode(
+    targetHostId === null
+      ? null
+      : getNegotiatedHostMethodVersion(targetHostId, "agent.gui.listHarnesses"),
+  );
   if (
-    harnessHonorsPermissionMode(
+    composerOffersPermissionMode(
       targetRow.supportedPermissionModes,
       settings.permissionMode,
+      targetKnowsAutoMode,
     )
   ) {
     return settings;

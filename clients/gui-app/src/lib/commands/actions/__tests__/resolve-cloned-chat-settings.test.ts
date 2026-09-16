@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   hostRpcRegistry,
@@ -98,6 +103,22 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
   };
 }
 
+/**
+ * Record the target host's negotiated catalog line so it can PROVE it knows
+ * `auto`.
+ *
+ * The clamp now takes two proofs - the target ROW's constraint and the target
+ * HOST's line - because an unconstrained row on a pre-`auto` host says nothing
+ * about the wire. Without this the registry answers `null`, which reads as
+ * "cannot spell it" and demotes, which is the safe direction and exactly what
+ * the sibling cases below assert.
+ */
+function targetHostKnowsAutoMode(): void {
+  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+    "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+  });
+}
+
 function harnessOption(overrides: Partial<GuiHarnessOption>): GuiHarnessOption {
   return guiHarnessOptionSchema.parse({
     id: "claude",
@@ -154,6 +175,10 @@ function buildClient(
 }
 
 describe("resolveClonedChatSettings", () => {
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+
   it("passes ambient settings through untouched when Terminal is enabled", async () => {
     const sourceClient = buildClient([], []);
     const targetClient = buildClient(
@@ -365,6 +390,15 @@ describe("resolveClonedChatSettings", () => {
 // remap, clamping `auto` against the TARGET's own harness catalog rather than
 // letting it ride through to a create the target host would refuse outright.
 describe("resolveClonedChatSettings clamps auto against the target catalog", () => {
+  // The negotiated-manifest registry is module-level state, so a
+  // `targetHostKnowsAutoMode()` call earlier in this describe block would
+  // otherwise leak into every later test that never calls it itself - a
+  // false pass hiding behind an untested reliance on execution order. Mirrors
+  // the sibling `describe`'s own `beforeEach` above.
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+
   const autoSourceSettings: ChatRunSettings = {
     ...BASE_SETTINGS,
     permissionMode: "auto",
@@ -410,6 +444,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
   // catalog under the correct assertion; this one keeps the POSITIVE path
   // honest by letting the target row itself offer `auto`.
   it("keeps auto when the target row named by settings.harnessId supports it", async () => {
+    targetHostKnowsAutoMode();
     const sourceClient = buildClient([], []);
     const targetClient = buildClient(
       [profile("ambient", "ambient", "Terminal account", "acct-9")],
@@ -473,6 +508,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
   // demoted a mode the target would have accepted. The fix routes through
   // `harnessHonorsPermissionMode`, which treats `[]` like `null`.
   it("keeps auto when the target row named by settings.harnessId declares an empty supportedPermissionModes", async () => {
+    targetHostKnowsAutoMode();
     const sourceClient = buildClient([], []);
     const targetClient = buildClient(
       [profile("ambient", "ambient", "Terminal account", "acct-9")],
@@ -488,6 +524,36 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     expect(result).toEqual({
       status: "ready",
       settings: autoSourceSettings,
+      fallenBackToAmbient: false,
+    });
+  });
+
+  // FIX 2 (P1): the sibling of the case above, WITHOUT
+  // `targetHostKnowsAutoMode()`. The row is exactly as unconstrained - an
+  // empty `supportedPermissionModes` `harnessHonorsPermissionMode` treats
+  // identically either way - so the only thing that differs is the target
+  // HOST's own negotiated line, which this test leaves unrecorded (the
+  // `beforeEach` above resets it). A pre-`auto` host serves unconstrained
+  // rows like any other, so before this fix the clone would have kept `auto`
+  // on a machine whose wire cannot carry it; the safe direction is to demote,
+  // exactly as the "no target catalog anywhere" case at the top of this
+  // describe block does.
+  it("demotes auto when the target row declares an empty supportedPermissionModes but no manifest proves the target host knows auto", async () => {
+    const sourceClient = buildClient([], []);
+    const targetClient = buildClient(
+      [profile("ambient", "ambient", "Terminal account", "acct-9")],
+      [harnessOption({ id: "claude", supportedPermissionModes: [] })],
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings: autoSourceSettings,
+      sourceClient,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      settings: { ...autoSourceSettings, permissionMode: "auto_accept_edits" },
       fallenBackToAmbient: false,
     });
   });

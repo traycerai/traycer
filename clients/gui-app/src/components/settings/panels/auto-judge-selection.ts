@@ -268,9 +268,7 @@ export function autoJudgeRecordHealth(input: {
   const storedProfileUnavailable =
     readable &&
     !storedHarnessUnavailable &&
-    input.storedProfileId !== null &&
-    input.offeredProfileIds !== undefined &&
-    !input.offeredProfileIds.includes(input.storedProfileId);
+    judgeProfileUnavailable(input.storedProfileId, input.offeredProfileIds);
   return {
     storedHarnessUnavailable,
     storedModelUnavailable,
@@ -287,6 +285,30 @@ export function autoJudgeRecordHealth(input: {
       storedModelUnavailable ||
       storedProfileUnavailable,
   };
+}
+
+/**
+ * Whether the judge's STORED profile is gone from what its provider offers.
+ *
+ * The bare rule, with no surface's framing around it, because two surfaces ask
+ * it and they must not answer differently: Settings renders it as a warning on
+ * the record, and the composer's Auto row has to stop claiming the provider
+ * account will be charged - a judge whose profile vanished does not run, so
+ * every command escalates to the human and no pocket is touched.
+ *
+ * Two "cannot say" values, both `false`. `null` is AMBIENT - the account the
+ * CLI is already signed into, which has no row to delete and which every
+ * provider has. `undefined` offers is the providers read not having answered;
+ * reading that as "the stored profile is gone" would flash the warning, and
+ * suppress the billing line, on every cold load.
+ */
+export function judgeProfileUnavailable(
+  storedProfileId: string | null,
+  offeredProfileIds: ReadonlyArray<string | null> | undefined,
+): boolean {
+  if (storedProfileId === null) return false;
+  if (offeredProfileIds === undefined) return false;
+  return !offeredProfileIds.includes(storedProfileId);
 }
 
 /**

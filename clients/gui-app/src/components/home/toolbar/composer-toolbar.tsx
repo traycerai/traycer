@@ -94,9 +94,18 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   // "this machine predates `auto`" from "every provider here declines it".
   // The negotiated catalog line answers the first question directly, and the
   // picker's unsupported copy uses it to decide who to blame.
-  const hostKnowsAutoMode = catalogLineKnowsAutoMode(
-    useHostMethodSchemaVersion(runTargetHostId, "agent.gui.listHarnesses"),
+  // `null` when no host is named: that is "no host in scope", not "the host
+  // cannot spell `auto`", and the two are different claims. A named host whose
+  // line is unreadable still answers `false` - the composer is about to send on
+  // it - which is what `catalogLineKnowsAutoMode(null)` gives.
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    runTargetHostId,
+    "agent.gui.listHarnesses",
   );
+  const hostKnowsAutoMode =
+    runTargetHostId === null
+      ? null
+      : catalogLineKnowsAutoMode(listHarnessesLine);
   // The harness this composer will RUN, which decides the disclosure alongside
   // the host's stored judge: a provider set to its own classifier bypasses
   // Traycer's judge entirely. Read off the same store slice the picker shows,

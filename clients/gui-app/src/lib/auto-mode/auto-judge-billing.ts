@@ -130,8 +130,26 @@ export function autoJudgeBillingForRun(input: {
    * older host that has no such field, and reads the same as `null`.
    */
   readonly blocked: AutoJudgeBlocked | null | undefined;
+  /**
+   * The stored judge names an explicit profile its provider no longer offers.
+   *
+   * A SEPARATE input rather than a synthesized `blocked` value, because
+   * `AutoJudgeBlocked.reason` has no missing-profile member and inventing one
+   * would put a reason on the wire's type that no host ever sends. The host
+   * cannot report this at all - it is a client-side comparison of the stored
+   * `profileId` against what `providers.list` currently offers
+   * (`judgeProfileUnavailable`) - so it arrives on its own channel and is
+   * folded in here, once, where the precedence already lives.
+   */
+  readonly judgeProfileUnavailable: boolean;
 }): AutoJudgeBilling {
-  const { judgeHarnessId, runHarnessId, isProviderNative, blocked } = input;
+  const {
+    judgeHarnessId,
+    runHarnessId,
+    isProviderNative,
+    blocked,
+    judgeProfileUnavailable,
+  } = input;
   // Precedence, and the order is the whole content of this function.
   //
   // Provider-native FIRST: that provider's classifier decides inside the agent
@@ -150,6 +168,11 @@ export function autoJudgeBillingForRun(input: {
   // said it cannot run that judge, so every command escalates to the human and
   // no pocket is touched.
   if (blocked !== null && blocked !== undefined) return BLOCKED_BILLING;
+  // Then the client-side equivalent, AFTER the provider-native arm for exactly
+  // the same reason the host's blocker is: a provider running its own
+  // classifier does not consult Traycer's stored judge, so a vanished profile
+  // on that record describes a call that was never going to happen.
+  if (judgeProfileUnavailable) return BLOCKED_BILLING;
   return autoJudgeBillingFor(judgeHarnessId);
 }
 

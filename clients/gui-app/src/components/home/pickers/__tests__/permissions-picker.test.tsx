@@ -32,7 +32,12 @@ const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
   supportedPermissionModes: null,
   harnessLabel: "Claude Code",
   catalogSupportedModes: null,
-  hostKnowsAutoMode: false,
+  // A host whose catalog line CAN spell `auto`. That is the ordinary case and
+  // the one every test about the auto row wants: with `false` the option is
+  // correctly disabled, so a description/meta/notice assertion would be
+  // asserting about a row the user cannot reach. The `false` direction has its
+  // own case below.
+  hostKnowsAutoMode: true,
   turnActive: false,
   judgeBilling: null,
 };
@@ -72,6 +77,9 @@ describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
       ],
       harnessLabel: "Claude Code",
       catalogSupportedModes: ["supervised", "auto_accept_edits", "full_access"],
+      // Explicit, because this is the one case the veto is ABOUT: the upgrade
+      // sentence only appears for a host that cannot spell the mode.
+      hostKnowsAutoMode: false,
     });
     openMenu();
 
@@ -128,6 +136,47 @@ describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
     openMenu();
 
     expect(screen.getByText("Not supported by this provider.")).toBeTruthy();
+  });
+});
+
+// FIX 2 (P1): the Auto row must be gated on the HOST's own line, not the
+// row's constraint alone - a pre-`auto` host serves unconstrained rows like
+// any other, so the row predicate lit the option up on a machine whose
+// `chat.subscribe` line cannot carry the enum.
+describe("<PermissionsPicker /> - FIX 2 (P1): Auto option gated on hostKnowsAutoMode", () => {
+  // Matched on the label span's EXACT text, not a `startsWith("Auto")`
+  // prefix: "auto_accept_edits"'s own label ("Auto-accept edits") also starts
+  // with "Auto" and sits earlier in `PERMISSION_OPTIONS` order, so a prefix
+  // match would silently grab the wrong row.
+  function autoMenuItem(): HTMLElement {
+    const item = screen
+      .getAllByRole("menuitemradio")
+      .find(
+        (option) =>
+          option.querySelector(".font-medium")?.textContent === "Auto",
+      );
+    if (item === undefined) throw new Error("Auto menu item not found");
+    return item;
+  }
+
+  it("disables Auto on an unconstrained row when the host cannot spell auto", () => {
+    renderPicker({
+      supportedPermissionModes: null,
+      hostKnowsAutoMode: false,
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(true);
+  });
+
+  it("enables Auto on the same unconstrained row once the host proves it can spell auto", () => {
+    renderPicker({
+      supportedPermissionModes: null,
+      hostKnowsAutoMode: true,
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
   });
 });
 

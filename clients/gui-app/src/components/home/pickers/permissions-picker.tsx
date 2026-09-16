@@ -18,7 +18,7 @@ import {
   findPermissionLabel,
   findPermissionOption,
   isPermissionMode,
-  harnessHonorsPermissionMode,
+  composerOffersPermissionMode,
   normalizePermissionMode,
   unsupportedPermissionModeCopy,
   type PermissionMode,
@@ -61,7 +61,7 @@ interface PermissionsPickerProps {
   catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
   /** Whether the host's catalog LINE can spell `auto` - vetoes the upgrade
    *  sentence in `unsupportedPermissionModeCopy`. */
-  hostKnowsAutoMode: boolean;
+  hostKnowsAutoMode: boolean | null;
   /**
    * Whether a turn is running on this composer's chat right now. Drives the
    * `auto` row's mid-turn notice only; `false` is every surface with no turn
@@ -108,7 +108,11 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // sticky. The parent still owns the persisted state and may clamp on
   // user-intent harness swaps; the picker is responsible for never lying
   // about the effective permission, regardless of when the parent commits.
-  const displayValue = normalizePermissionMode(value, supportedPermissionModes);
+  const displayValue = normalizePermissionMode(
+    value,
+    supportedPermissionModes,
+    hostKnowsAutoMode,
+  );
   const Icon = findPermissionOption(displayValue).icon;
   const label = findPermissionLabel(displayValue);
   // Layout ▸ Composer's floor for this picker, never `hidden`: the pill reports
@@ -202,9 +206,14 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
         >
           {PERMISSION_OPTIONS.map((option) => {
             const OptionIcon = option.icon;
-            const isSupported = harnessHonorsPermissionMode(
+            // The ROW's constraint and the HOST's line, through the one
+            // predicate that pairs them. The row alone lights `auto` up on a
+            // machine that cannot spell it, because a pre-`auto` host's rows
+            // are unconstrained like any other.
+            const isSupported = composerOffersPermissionMode(
               supportedPermissionModes,
               option.id,
+              hostKnowsAutoMode,
             );
             return (
               <DropdownMenuRadioItem

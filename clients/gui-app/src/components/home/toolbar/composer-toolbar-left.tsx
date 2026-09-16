@@ -24,7 +24,7 @@ interface ComposerToolbarLeftProps {
   /** Union across the host's whole harness catalog - see `PermissionsPicker`. */
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
   /** See `PermissionsPicker`'s prop of the same name. */
-  readonly hostKnowsAutoMode: boolean;
+  readonly hostKnowsAutoMode: boolean | null;
   /** Whether a turn is running - see `PermissionsPicker`. */
   readonly turnActive: boolean;
   /** Which pocket the host's judge spends - see `PermissionsPicker`. */

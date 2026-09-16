@@ -4,7 +4,7 @@ import { Check } from "lucide-react";
 import {
   AUTO_MID_TURN_NOTICE,
   PERMISSION_OPTIONS,
-  harnessHonorsPermissionMode,
+  composerOffersPermissionMode,
   normalizePermissionMode,
   unsupportedPermissionModeCopy,
   type PermissionMode,
@@ -34,7 +34,7 @@ interface ComposerOptionsSheetProps {
   /** See `PermissionsPicker`: the union across the host's whole catalog. */
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
   /** See `PermissionsPicker`'s prop of the same name. */
-  readonly hostKnowsAutoMode: boolean;
+  readonly hostKnowsAutoMode: boolean | null;
   /** See `PermissionsPicker`: drives the `auto` row's mid-turn notice. */
   readonly turnActive: boolean;
   /** See `PermissionsPicker`: which pocket this host's judge spends. */
@@ -63,6 +63,7 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
   const effectivePermission = normalizePermissionMode(
     props.permission,
     props.supportedPermissionModes,
+    props.hostKnowsAutoMode,
   );
   const supported = props.supportedPermissionModes;
 
@@ -87,11 +88,13 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
             {PERMISSION_OPTIONS.map((option) => {
               const Icon = option.icon;
               // Through the shared predicate, which is where the "empty means
-              // unconstrained" rule lives now - see
-              // `harnessHonorsPermissionMode`.
-              const isSupported = harnessHonorsPermissionMode(
+              // unconstrained" rule AND the host's own line live now - see
+              // `composerOffersPermissionMode`. The row alone would offer
+              // `auto` on a host that cannot carry it.
+              const isSupported = composerOffersPermissionMode(
                 supported,
                 option.id,
+                props.hostKnowsAutoMode,
               );
               return (
                 <OptionRow

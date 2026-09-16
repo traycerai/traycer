@@ -90,15 +90,26 @@ export function GeneralSettingsPanel() {
                 harnessLabel={null}
                 // Install-wide and harness-agnostic, so there is no catalog to
                 // union, no turn to be mid-way through, no one host whose judge
-                // this row could name, and no negotiated catalog line to read:
-                // all four stay at the values that render exactly what this row
-                // rendered before them. `hostKnowsAutoMode` is inert here
-                // either way - it only vetoes the upgrade sentence, which a
-                // `null` union already makes unreachable - so it withholds the
-                // claim rather than asserting one about a host this row has
-                // deliberately not scoped to.
+                // this row could name, and no negotiated catalog line to read.
+                //
+                // `hostKnowsAutoMode={null}` is the THIRD state, and it is load
+                // bearing rather than a formality: `null` means no host is in
+                // scope, exactly as `supportedPermissionModes={null}` above
+                // means no harness is. `false` would be a different claim -
+                // "a machine was asked and cannot spell `auto`" - and this row
+                // has asked no machine anything. It once passed `false` with a
+                // comment calling the value inert, which was true while the
+                // flag only vetoed the upgrade sentence and stopped being true
+                // the moment it also gated the option: the row silently refused
+                // to let anyone choose Auto as their default.
+                //
+                // Nothing is lost by offering it here. A default is a
+                // preference, and the composer clamps it per host at the point
+                // a host actually exists - the same division of labour the
+                // `supportedPermissionModes` comment above describes for
+                // harnesses.
                 catalogSupportedModes={null}
-                hostKnowsAutoMode={false}
+                hostKnowsAutoMode={null}
                 turnActive={false}
                 judgeBilling={null}
                 closeFocus="trigger"

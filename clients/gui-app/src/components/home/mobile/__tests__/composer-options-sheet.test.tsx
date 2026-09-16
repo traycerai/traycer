@@ -25,6 +25,12 @@ function renderSheet(overrides: {
   // - so a case that cares about either one overrides it visibly.
   readonly permission: PermissionMode;
   readonly turnActive: boolean;
+  // A host whose catalog line can spell `auto` - the ordinary case, and the
+  // one the auto-row assertions need. With `false` the option is correctly
+  // disabled and those assertions would be about an unreachable row. Mirrors
+  // the desktop picker's fixture. Stated (not defaulted) so a case that cares
+  // overrides it visibly - see the FIX 2 describe block below.
+  readonly hostKnowsAutoMode: boolean;
 }) {
   return render(
     <ComposerOptionsSheet
@@ -40,7 +46,7 @@ function renderSheet(overrides: {
       // covered against the desktop picker, which shares the two pure helpers
       // this sheet calls.
       catalogSupportedModes={null}
-      hostKnowsAutoMode={false}
+      hostKnowsAutoMode={overrides.hostKnowsAutoMode}
       turnActive={overrides.turnActive}
       judgeBilling={null}
       settingsLocked={overrides.settingsLocked}
@@ -57,6 +63,7 @@ function defaults(): {
   readonly settingsLocked: boolean;
   readonly permission: PermissionMode;
   readonly turnActive: boolean;
+  readonly hostKnowsAutoMode: boolean;
 } {
   return {
     supportedPermissionModes: null,
@@ -64,6 +71,7 @@ function defaults(): {
     settingsLocked: false,
     permission: "supervised",
     turnActive: false,
+    hostKnowsAutoMode: true,
   };
 }
 
@@ -180,5 +188,36 @@ describe("ComposerOptionsSheet", () => {
     expect(
       screen.queryByTestId("composer-options-permission-mid-turn-notice"),
     ).toBeNull();
+  });
+});
+
+// FIX 2 (P1): the Auto row must be gated on the HOST's own line, not the
+// row's constraint alone - the mobile sheet is the second of the two copies
+// of this rule (the desktop picker is the first), and both were wrong the
+// same way before this fix.
+describe("ComposerOptionsSheet - FIX 2 (P1): Auto option gated on hostKnowsAutoMode", () => {
+  it("disables Auto on an unconstrained row when the host cannot spell auto", () => {
+    renderSheet({
+      ...defaults(),
+      supportedPermissionModes: null,
+      hostKnowsAutoMode: false,
+    });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(auto.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("enables Auto on the same unconstrained row once the host proves it can spell auto", async () => {
+    const props = {
+      ...defaults(),
+      supportedPermissionModes: null,
+      hostKnowsAutoMode: true,
+    };
+    renderSheet(props);
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(auto.hasAttribute("disabled")).toBe(false);
+    await userEvent.click(auto);
+    expect(props.onPermissionChange).toHaveBeenCalledWith("auto");
   });
 });
