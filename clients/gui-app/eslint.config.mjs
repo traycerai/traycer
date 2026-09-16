@@ -239,6 +239,11 @@ const appChromeAppWideReadExemptions = [
   // null means follow the app-wide default (which may be remote) so auto-open
   // can match the picker's create-profile gate.
   "src/components/providers/provider-profile-add-flow-host.tsx",
+  // The "Search chats" dialog: mounted once at the root route beside the
+  // system-tab modal host, outside any tab, Epic session or picker. It
+  // searches the host the app is pointed at and routes every result to a tab
+  // bound to that same host, so the effective host is the only right read.
+  "src/components/chat-search/chat-search-panel.tsx",
 ];
 
 // Hook directories whose every RPC now takes the caller's client, because
