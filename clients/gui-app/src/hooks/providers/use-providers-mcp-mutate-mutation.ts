@@ -32,7 +32,13 @@ export type McpMutateVariables = {
 
 interface McpMutateContext {
   readonly hostId: string | null;
-  readonly previousServers: McpListData | undefined;
+  readonly listState:
+    | {
+        readonly data: McpListData | undefined;
+        readonly dataUpdateCount: number;
+        readonly errorUpdateCount: number;
+      }
+    | undefined;
   readonly listParams: {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
@@ -46,6 +52,9 @@ interface McpMutateContext {
  * state: the host always returns the post-mutation list for the scope tuple.
  * Typed native errors (`ok: false`) surface as ProviderNativeRpcError so
  * callers can render row-local error codes.
+ * Keep the last confirmed list while the row shows its pending state:
+ * optimistic list writes would clear refresh errors, and rolling them back
+ * could overwrite a newer full-list response or another server's discovery.
  */
 export function useProvidersMcpMutate(): UseMutationResult<
   McpMutateData,
@@ -81,55 +90,41 @@ export function useProvidersMcpMutate(): UseMutationResult<
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
       };
-      const listKey = providersNativeQueryKeys.mcpList(hostId, listParams);
-      const previousServers = queryClient.getQueryData<McpListData>(listKey);
-
-      if (
-        previousServers !== undefined &&
-        variables.mutation.action === "toggleTool"
-      ) {
-        const { serverName, toolName, enabled } = variables.mutation;
-        queryClient.setQueryData<McpListData>(listKey, {
-          servers: previousServers.servers.map((server) => {
-            if (server.name !== serverName) return server;
-            return {
-              ...server,
-              tools: server.tools.map((tool) =>
-                tool.name === toolName ? { ...tool, enabled } : tool,
-              ),
-            };
-          }),
-        });
-      }
-
-      if (
-        previousServers !== undefined &&
-        variables.mutation.action === "toggleServer"
-      ) {
-        const { name, enabled } = variables.mutation;
-        queryClient.setQueryData<McpListData>(listKey, {
-          servers: previousServers.servers.map((server) =>
-            server.name === name ? { ...server, enabled } : server,
-          ),
-        });
-      }
-
-      return { hostId, previousServers, listParams };
+      return {
+        hostId,
+        listParams,
+        listState: queryClient.getQueryState<McpListData>(
+          providersNativeQueryKeys.mcpList(hostId, listParams),
+        ),
+      };
     },
-    onSuccess: (data, _variables, ctx) => {
+    onSuccess: async (data, _variables, ctx) => {
       if (ctx.hostId === null) return;
-      queryClient.setQueryData<McpListData>(
-        providersNativeQueryKeys.mcpList(ctx.hostId, ctx.listParams),
-        data,
+      const listKey = providersNativeQueryKeys.mcpList(
+        ctx.hostId,
+        ctx.listParams,
       );
-    },
-    onError: (error, variables, ctx) => {
-      if (ctx !== undefined && ctx.hostId !== null) {
-        queryClient.setQueryData(
-          providersNativeQueryKeys.mcpList(ctx.hostId, ctx.listParams),
-          ctx.previousServers,
-        );
+      const current = queryClient.getQueryState<McpListData>(listKey);
+      if (
+        current?.fetchStatus === "fetching" ||
+        current?.data !== ctx.listState?.data ||
+        current?.dataUpdateCount !== ctx.listState?.dataUpdateCount ||
+        current?.errorUpdateCount !== ctx.listState?.errorUpdateCount
+      ) {
+        // A newer response/error or in-flight list supersedes this mutation's
+        // snapshot. Reconcile through the existing list query, preserving its
+        // error until that complete read succeeds.
+        if (current?.fetchStatus === "fetching") {
+          // invalidateQueries alone reuses an initial fetch with no data;
+          // this read must begin after the mutation has completed.
+          await queryClient.cancelQueries({ queryKey: listKey, exact: true });
+        }
+        await queryClient.invalidateQueries({ queryKey: listKey, exact: true });
+        return;
       }
+      queryClient.setQueryData<McpListData>(listKey, data);
+    },
+    onError: (error, variables) => {
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
         return;
       }

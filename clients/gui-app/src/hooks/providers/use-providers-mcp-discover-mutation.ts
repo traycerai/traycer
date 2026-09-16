@@ -6,6 +6,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
   mapProvidersListToMcpDiscover,
+  nextMcpCacheRevision,
   type McpDiscoverData,
   type McpListData,
 } from "@/hooks/providers/native-response-map";
@@ -26,6 +27,8 @@ export type McpDiscoverVariables = {
 
 interface McpDiscoverContext {
   readonly hostId: string | null;
+  readonly completeListRevision: number | null;
+  readonly requestRevision: number;
   readonly listParams: {
     readonly providerId: ProviderId;
     readonly scope: ProviderNativeScope;
@@ -60,14 +63,23 @@ export function useProvidersMcpDiscover(): UseMutationResult<
       );
       return mapProvidersListToMcpDiscover({ response });
     },
-    onMutate: (variables) => ({
-      hostId: client.getActiveHostId(),
-      listParams: {
+    onMutate: (variables) => {
+      const hostId = client.getActiveHostId();
+      const listParams = {
         providerId: variables.providerId,
         scope: variables.scope,
         workspaceRoot: variables.workspaceRoot,
-      },
-    }),
+      };
+      const list = queryClient.getQueryData<McpListData>(
+        providersNativeQueryKeys.mcpList(hostId, listParams),
+      );
+      return {
+        hostId,
+        listParams,
+        completeListRevision: list?.completeListRevision ?? null,
+        requestRevision: nextMcpCacheRevision(),
+      };
+    },
     onSuccess: (data, _variables, ctx) => {
       if (ctx.hostId === null) return;
       const listKey = providersNativeQueryKeys.mcpList(
@@ -75,19 +87,45 @@ export function useProvidersMcpDiscover(): UseMutationResult<
         ctx.listParams,
       );
       queryClient.setQueryData<McpListData>(listKey, (prev) => {
-        if (prev === undefined) {
-          return { servers: [data.server] };
+        const previous: McpListData = prev ?? {
+          servers: [],
+          refreshError: null,
+          completeListRevision: null,
+          discoveryRevisions: {},
+        };
+        const servers = previous.servers;
+        const appliedRevision = previous.discoveryRevisions[data.server.name];
+        if (
+          previous.completeListRevision !== ctx.completeListRevision ||
+          (typeof appliedRevision === "number" &&
+            appliedRevision > ctx.requestRevision)
+        ) {
+          // A newer complete list or this server's own update takes priority;
+          // request order survives structural sharing of identical row data.
+          // Discoveries of other servers still merge independently.
+          return undefined;
         }
-        const found = prev.servers.some(
+        // setQueryData clears TanStack's error even though this response
+        // refreshes only one server. Keep the full-list error in this same
+        // entry until a successful complete list replaces it.
+        const error = queryClient.getQueryState<McpListData, HostRpcError>(
+          listKey,
+        )?.error;
+        const found = servers.some(
           (server) => server.name === data.server.name,
         );
-        if (!found) {
-          return { servers: [...prev.servers, data.server] };
-        }
         return {
-          servers: prev.servers.map((server) =>
-            server.name === data.server.name ? data.server : server,
-          ),
+          servers: found
+            ? servers.map((server) =>
+                server.name === data.server.name ? data.server : server,
+              )
+            : [...servers, data.server],
+          refreshError: error ?? previous.refreshError,
+          completeListRevision: previous.completeListRevision,
+          discoveryRevisions: {
+            ...previous.discoveryRevisions,
+            [data.server.name]: ctx.requestRevision,
+          },
         };
       });
     },

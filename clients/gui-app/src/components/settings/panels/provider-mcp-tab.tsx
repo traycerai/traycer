@@ -302,6 +302,7 @@ export function ProviderMcpTab(props: {
   });
 
   const listData = listQuery.data;
+  const listError = listQuery.error ?? listData?.refreshError ?? null;
   const servers = listData?.servers ?? EMPTY_MCP_SERVERS;
   const filteredServers = useMemo(
     () => filterProviderMcpServers(servers, searchQuery),
@@ -753,8 +754,10 @@ export function ProviderMcpTab(props: {
         multiWorkspace={multiWorkspace}
         workspacesLoading={workspacesLoading}
         listPending={listQuery.isPending}
-        listError={listQuery.isError}
-        errorMessage={listQuery.isError ? listQuery.error.message : null}
+        listHasData={listData !== undefined}
+        listFetching={listQuery.isFetching}
+        listError={listError !== null}
+        errorMessage={listError?.message ?? null}
         onRetryList={() => {
           void listQuery.refetch();
         }}
@@ -933,6 +936,8 @@ function McpServerList(props: {
   readonly multiWorkspace: boolean;
   readonly workspacesLoading: boolean;
   readonly listPending: boolean;
+  readonly listHasData: boolean;
+  readonly listFetching: boolean;
   readonly listError: boolean;
   readonly errorMessage: string | null;
   readonly onRetryList: () => void;
@@ -1006,7 +1011,7 @@ function McpServerList(props: {
       </div>
     );
   }
-  if (props.listError) {
+  if (props.listError && !props.listHasData) {
     return (
       <EmptyState
         title="Couldn't load MCP servers"
@@ -1016,7 +1021,7 @@ function McpServerList(props: {
       />
     );
   }
-  if (props.unfilteredServerCount === 0) {
+  if (props.unfilteredServerCount === 0 && !props.listError) {
     return (
       <EmptyState
         title="No MCP servers"
@@ -1026,60 +1031,109 @@ function McpServerList(props: {
       />
     );
   }
-  if (props.searchActive && props.servers.length === 0) {
-    return (
-      <ProviderListSearchEmptyState
-        query={props.searchQuery}
-        resourceLabel="servers"
-      />
-    );
-  }
   return (
-    <ul className="flex flex-col gap-2">
-      {props.servers.map((server) => (
-        <McpServerRow
-          key={server.name}
-          server={server}
-          capabilities={props.capabilities}
-          shadowed={props.shadowedNames.has(server.name)}
-          pending={
-            props.pendingServerNames.has(server.name) ||
-            server.discoveryPending ||
-            server.status === "connecting"
-          }
-          rowError={props.rowErrors.get(server.name) ?? null}
-          canRemove={props.canRemove}
-          canToggleServer={props.canToggleServer}
-          canDiscover={props.canDiscover}
-          canAuth={props.canAuth}
-          toolsReadOnly={props.toolsReadOnly}
-          onRefresh={() => {
-            props.onRefresh(server.name);
-          }}
-          onToggleServer={(enabled) => {
-            props.onToggleServer(server, enabled);
-          }}
-          onToggleTool={(toolName, enabled) => {
-            props.onToggleTool(server.name, toolName, enabled);
-          }}
-          onToggleAllTools={(enabled) => {
-            void props.onToggleAllTools(server, enabled);
-          }}
-          onLogin={() => {
-            props.onAuth(server.name, "login");
-          }}
-          onLogout={() => {
-            props.onAuth(server.name, "logout");
-          }}
-          onForceReauth={() => {
-            props.onAuth(server.name, "forceReauth");
-          }}
-          onDelete={() => {
-            props.onDelete(server.name);
-          }}
+    <>
+      {props.listError ? (
+        <McpListRefreshError
+          empty={props.unfilteredServerCount === 0}
+          errorMessage={props.errorMessage}
+          isFetching={props.listFetching}
+          onRetry={props.onRetryList}
         />
-      ))}
-    </ul>
+      ) : null}
+      {props.unfilteredServerCount > 0 &&
+        (props.searchActive && props.servers.length === 0 ? (
+          <ProviderListSearchEmptyState
+            query={props.searchQuery}
+            resourceLabel="servers"
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {props.servers.map((server) => (
+              <McpServerRow
+                key={server.name}
+                server={server}
+                capabilities={props.capabilities}
+                shadowed={props.shadowedNames.has(server.name)}
+                pending={
+                  props.pendingServerNames.has(server.name) ||
+                  server.discoveryPending ||
+                  server.status === "connecting"
+                }
+                rowError={props.rowErrors.get(server.name) ?? null}
+                canRemove={props.canRemove}
+                canToggleServer={props.canToggleServer}
+                canDiscover={props.canDiscover}
+                canAuth={props.canAuth}
+                toolsReadOnly={props.toolsReadOnly}
+                onRefresh={() => {
+                  props.onRefresh(server.name);
+                }}
+                onToggleServer={(enabled) => {
+                  props.onToggleServer(server, enabled);
+                }}
+                onToggleTool={(toolName, enabled) => {
+                  props.onToggleTool(server.name, toolName, enabled);
+                }}
+                onToggleAllTools={(enabled) => {
+                  void props.onToggleAllTools(server, enabled);
+                }}
+                onLogin={() => {
+                  props.onAuth(server.name, "login");
+                }}
+                onLogout={() => {
+                  props.onAuth(server.name, "logout");
+                }}
+                onForceReauth={() => {
+                  props.onAuth(server.name, "forceReauth");
+                }}
+                onDelete={() => {
+                  props.onDelete(server.name);
+                }}
+              />
+            ))}
+          </ul>
+        ))}
+    </>
+  );
+}
+
+function McpListRefreshError(props: {
+  readonly empty: boolean;
+  readonly errorMessage: string | null;
+  readonly isFetching: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  return (
+    <div
+      role="status"
+      className="flex flex-col gap-1 rounded-lg border border-border/60 p-4"
+    >
+      <p className="text-ui-sm font-medium text-foreground">
+        Couldn't refresh MCP servers
+      </p>
+      <p className="text-ui-xs text-muted-foreground">
+        {props.empty
+          ? "The last successful list had no MCP servers. Retry to check for changes."
+          : "Showing the last known servers. Their status and tools may be out of date."}
+      </p>
+      {props.errorMessage !== null ? (
+        <p className="break-words text-ui-xs text-muted-foreground">
+          {props.errorMessage}
+        </p>
+      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="mt-2 self-start"
+        disabled={props.isFetching}
+        onClick={props.onRetry}
+      >
+        {props.isFetching ? <MutedAgentSpinner /> : null}
+        Retry
+      </Button>
+    </div>
   );
 }
 
