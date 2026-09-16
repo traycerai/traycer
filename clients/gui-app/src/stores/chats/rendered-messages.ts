@@ -1,3 +1,7 @@
+import {
+  codexRetryVisibility,
+  codexRetryTitle,
+} from "@traycer/protocol/host/agent/gui/retry-feedback";
 import { useMemo } from "react";
 import type {
   AgentSender,
@@ -283,6 +287,11 @@ function blockContentVersion(block: ContentBlock): number {
       return textBlockContentVersion(block);
     case "reasoning":
       return block.content.length;
+    case "error":
+      return hashStringField(
+        hashStringField(TURN_SIGNATURE_HASH_OFFSET, block.code ?? ""),
+        block.message,
+      );
     case "steer":
       return extractPlainTextFromComposerJSONContent(block.content).length;
     case "plan":
@@ -475,6 +484,13 @@ function hasCompletedProviderTurn(timing: TurnLifecycleTiming | null): boolean {
   return (
     timing !== null && timing.startedAt !== null && timing.endedAt !== null
   );
+}
+
+function retryTurnHasEnded(
+  stopped: TurnStoppedEventInfo | null,
+  timing: TurnLifecycleTiming | null,
+): boolean {
+  return stopped !== null || (timing !== null && timing.endedAt !== null);
 }
 
 function nestedSteeredUsersSignature(
@@ -2394,6 +2410,7 @@ function renderPersistedAssistantMessageTurn(
     input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null,
     acc.blocks,
   );
+  const retryTurnEnded = retryTurnHasEnded(stopped, lifecycleTiming);
   const notificationOnlyAutonomousResume = isNotificationOnlyAutonomousResume(
     turnComplete,
     hasCompletedProviderTurn(lifecycleTiming),
@@ -2427,6 +2444,7 @@ function renderPersistedAssistantMessageTurn(
     checkpointSignature(checkpointView),
     nestedSteeredUsersSignature(acc.blocks, args.userMessagesById),
     completionToken,
+    String(retryTurnEnded),
     timing.cacheToken,
     runState ?? "none",
     String(timing.rowAnchorAt),
@@ -2450,6 +2468,7 @@ function renderPersistedAssistantMessageTurn(
     turnKey,
     checkpointView,
     turnComplete,
+    retryTurnEnded,
     // A plain completion/interruption without a matching start remains a
     // notification-only row. A user Stop is itself a transcript boundary and
     // must retain its stopped marker even when it lands before `turn.started`.
@@ -2780,6 +2799,8 @@ interface AssistantTurnRenderInput {
   readonly turnKey: string;
   readonly checkpointView: CheckpointManifestView | null;
   readonly turnComplete: boolean;
+  /** Durable terminal evidence, independent of whether a live turn is loaded. */
+  readonly retryTurnEnded: boolean;
   /** False for a background notification row that no provider turn adopted. */
   readonly showCompletionFooter: boolean;
   /** Wall-clock terminal instant stamped onto the completed assistant row. */
@@ -2839,6 +2860,7 @@ function renderAssistantTurnRows(
   const plan = planAssistantTurnRows(blocks);
   const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
 
+  const hiddenSliceIds = new Set<string>();
   const rows = plan.entries.map((entry): ChatMessageModel => {
     if (entry.kind === "steer") {
       const block = blocks[entry.blockIndex];
@@ -2866,11 +2888,29 @@ function renderAssistantTurnRows(
         createdAt: input.rowAnchorAt,
       };
     }
+    const sliceBlocks = entry.blockIndices.map((index) => blocks[index]);
+    if (
+      sliceBlocks.length > 0 &&
+      sliceBlocks.every(
+        (block) =>
+          block.type === "error" &&
+          codexRetryVisibility(
+            input.acc.sender.harnessId,
+            block.code,
+            input.retryTurnEnded,
+          ) === "hidden",
+      )
+    ) {
+      hiddenSliceIds.add(
+        assistantSliceRowId(input.turnKey, entry.chunkIndex, plan.split),
+      );
+    }
     return renderAssistantTurnSlice({
       acc: input.acc,
       turnKey: input.turnKey,
       checkpointView: input.checkpointView,
       turnComplete: input.turnComplete,
+      retryTurnEnded: input.retryTurnEnded,
       // A split turn's run indicator belongs on the trailing slice, which
       // `attachRunStateToTrailingAssistantSlice` resolves once for the turn.
       runState: plan.split ? null : input.runState,
@@ -2878,7 +2918,7 @@ function renderAssistantTurnRows(
       ctx: input.ctx,
       epicId: input.epicId,
       chatId: input.chatId,
-      blocks: entry.blockIndices.map((index) => blocks[index]),
+      blocks: sliceBlocks,
       chunkIndex: entry.chunkIndex,
       split: plan.split,
       rowAnchorAt: input.rowAnchorAt,
@@ -2887,14 +2927,29 @@ function renderAssistantTurnRows(
     });
   });
 
-  // AFTER the completion/run-state passes, not before: both of them rebuild
-  // row objects, and a stamp applied first would have to be preserved by every
-  // future pass added between here and there. Stamping last makes this the one
-  // place the field is written.
-  if (!plan.split) return withManualRungAnchor(withTurnCompletion(rows, input));
+  // Visibility never renumbers the shared plan. A hidden trailing slice must
+  // still carry the turn boundary below the last steer, even when an earlier
+  // assistant slice remains visible.
+  const needsBoundary =
+    input.runState !== null ||
+    input.stopped !== null ||
+    (input.turnComplete && input.showCompletionFooter);
+  const boundaryRow = needsBoundary ? rows.at(-1) : undefined;
+  const visibleRows = rows.filter(
+    (row) => !hiddenSliceIds.has(row.id) || row === boundaryRow,
+  );
+  // Stamp the recovery-action anchor last: completion/run-state passes rebuild
+  // row objects, so they must finish before its single owner is selected.
+  if (!plan.split)
+    return withManualRungAnchor(withTurnCompletion(visibleRows, input));
   return withManualRungAnchor(
     withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(rows, input, plan, rowIdByBlockId),
+      attachRunStateToTrailingAssistantSlice(
+        visibleRows,
+        input,
+        plan,
+        rowIdByBlockId,
+      ),
       input,
     ),
   );
@@ -3048,6 +3103,8 @@ interface AssistantTurnSliceRenderInput {
   readonly turnKey: string;
   readonly checkpointView: CheckpointManifestView | null;
   readonly turnComplete: boolean;
+  /** Durable terminal evidence, independent of whether a live turn is loaded. */
+  readonly retryTurnEnded: boolean;
   readonly runState: ChatMessageRunState | null;
   readonly pause: TurnPauseAccounting;
   readonly ctx: RenderedMessagesDisplayContext;
@@ -3079,6 +3136,15 @@ function renderAssistantTurnSlice(
     envCredentialVar: input.acc.envCredentialVar,
     costUsd: input.acc.costUsd,
   };
+  const visibleBlocks = input.blocks.filter(
+    (block) =>
+      block.type !== "error" ||
+      codexRetryVisibility(
+        input.acc.sender.harnessId,
+        block.code,
+        input.retryTurnEnded,
+      ) !== "hidden",
+  );
   const firstBlock = input.blocks.at(0) ?? null;
   const createdAt =
     input.rowAnchorAt !== null
@@ -3087,12 +3153,14 @@ function renderAssistantTurnSlice(
   return {
     id: assistantSliceRowId(input.turnKey, input.chunkIndex, input.split),
     role: "assistant",
-    content: input.ctx.contentBlocksPreview(input.blocks),
+    content: input.ctx.contentBlocksPreview(visibleBlocks),
     segments: buildAssistantSegments(
-      input.blocks,
+      visibleBlocks,
       input.checkpointView,
       input.turnComplete,
       {
+        harnessId: input.acc.sender.harnessId,
+        retryTurnEnded: input.retryTurnEnded,
         epicId: input.epicId,
         chatId: input.chatId,
         resolutionsByBlockId: input.acc.imageResolutionsByBlockId,
@@ -3204,6 +3272,7 @@ function attachRunStateToTrailingAssistantSlice(
       turnKey: input.turnKey,
       checkpointView: input.checkpointView,
       turnComplete: input.turnComplete,
+      retryTurnEnded: input.retryTurnEnded,
       runState: input.runState,
       pause: input.pause,
       ctx: input.ctx,
@@ -3460,6 +3529,7 @@ function renderLiveAssistant(
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
     // Live turn is by definition still streaming — hold back the group.
     turnComplete: false,
+    retryTurnEnded: false,
     showCompletionFooter: true,
     // Unused while `turnComplete` is false; keep the input total and explicit.
     completedAt: liveAssistant.timestamp,
@@ -3638,6 +3708,8 @@ function buildAssistantSegments(
   checkpointView: CheckpointManifestView | null,
   turnComplete: boolean,
   imageProjection: {
+    readonly harnessId: string;
+    readonly retryTurnEnded: boolean;
     readonly epicId: string;
     readonly chatId: string;
     readonly resolutionsByBlockId: ReadonlyMap<
@@ -3667,6 +3739,33 @@ function buildAssistantSegments(
     return computed;
   };
   for (const block of blocks) {
+    if (
+      block.type === "error" &&
+      codexRetryVisibility(
+        imageProjection.harnessId,
+        block.code,
+        imageProjection.retryTurnEnded,
+      ) === "active"
+    ) {
+      const attempt = /^Reconnecting(?:\.{3}|…)?\s*(\d+\s*\/\s*\d+)/i.exec(
+        block.message,
+      )?.[1];
+      flat.push({
+        id: block.blockId,
+        kind: "provider_notice",
+        status: "streaming",
+        noticeKind: "harness_message",
+        tone: "info",
+        title: codexRetryTitle(block.message),
+        message:
+          attempt === undefined
+            ? "Retrying automatically."
+            : `Retrying automatically · attempt ${attempt}`,
+        details: [{ label: "Reported by Codex", value: block.message }],
+        parentId: block.parentBlockId ?? null,
+      });
+      continue;
+    }
     const segment = blockToSegment(block);
     if (segment !== null) {
       const resolutions =

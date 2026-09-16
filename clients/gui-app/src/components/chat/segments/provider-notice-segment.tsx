@@ -74,6 +74,7 @@ export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   return (
     <div
       data-chat-find-unit={findUnitId ?? undefined}
+      role={isStreaming ? "status" : undefined}
       className="flex w-full flex-col gap-1"
     >
       <div className="flex items-center gap-3">
