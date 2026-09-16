@@ -303,12 +303,43 @@ export async function consumeStashOnHost(
   await deleteStashEntryOnHost(bound, entryId);
 }
 
+/**
+ * Drop any image whose bytes do not sniff to the MIME it is labelled with.
+ *
+ * The stash's restore contract is stricter than the transport's. A stored blob
+ * is read back through `isValidStashBlobRecord`, which requires
+ * `sniffImageMimeType(bytes) === mimeType` and answers `corrupt` otherwise -
+ * while `readDraftBlobs`, which feeds the mirror path here, falls back to
+ * `"image/png"` for bytes that sniff to nothing. That fallback is right for the
+ * landing image partition, which holds bytes rather than records, and is
+ * exactly the pairing the stash predicate rejects.
+ *
+ * So a blob that fails this check could only ever be stored as a record that
+ * reads as corrupt. Leaving it out is strictly better: the entry restores its
+ * text with one image missing - the same outcome as a blob the host never had -
+ * instead of one the reader reports as damaged.
+ */
+function stashBlobsThatCanRestore(
+  images: ReadonlyMap<string, PromptStashImageBlob>,
+): ReadonlyMap<string, PromptStashImageBlob> {
+  const restorable = new Map<string, PromptStashImageBlob>();
+  for (const [hash, blob] of images) {
+    if (sniffImageMimeType(blob.bytes) !== blob.mimeType) continue;
+    restorable.set(hash, blob);
+  }
+  return restorable;
+}
+
 async function ingestStashDocument(
   document: DraftDocument,
-  images: ReadonlyMap<string, PromptStashImageBlob>,
+  rawImages: ReadonlyMap<string, PromptStashImageBlob>,
   applyOwner: string | null,
 ): Promise<void> {
   if (document.kind !== "stash-entry") return;
+  // Filtered HERE rather than in either reader, because this is the one gate
+  // every stash ingest passes: the mirror path's prefetch arrives with the
+  // transport's fallback already applied, and so would any future caller.
+  const images = stashBlobsThatCanRestore(rawImages);
   stashHostById.set(document.draftId, document.ownerHostId);
   stashSeenOnHost.add(stashSeenKey(document.ownerHostId, document.draftId));
   try {
@@ -1497,12 +1528,17 @@ async function recoverCloudStashImages(input: {
   for (const hash of hashes) {
     const bytes = await getImageBytes(hash);
     if (bytes === undefined) continue;
-    // Sniffed from the BYTES, never from the document's `mimeType` attr, so
-    // this map says the same thing `readDraftBlobs` says about the same bytes.
-    images.set(hash, {
-      bytes,
-      mimeType: sniffImageMimeType(bytes) ?? "image/png",
-    });
+    // Sniffed from the BYTES, never from the document's `mimeType` attr, and
+    // with NO fallback. The transport's readers answer `"image/png"` for bytes
+    // that sniff to nothing, which suits the landing partition - it holds bytes,
+    // not records - but the stash reads a blob back through
+    // `isValidStashBlobRecord`, which requires the sniff to equal the stored
+    // MIME and answers `corrupt` when it does not. A label this side cannot
+    // justify is therefore a record that reads as damaged later, so it is not
+    // minted at all.
+    const mimeType = sniffImageMimeType(bytes);
+    if (mimeType === null) continue;
+    images.set(hash, { bytes, mimeType });
   }
   return images;
 }

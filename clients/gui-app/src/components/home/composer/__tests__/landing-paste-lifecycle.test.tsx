@@ -687,8 +687,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     // The landing composer long carried its own copy of the pending-image
     // ingest, and that copy had no notion of a storable format: it started a
     // store job for any decodable image, so a pasted BMP was hashed here and
-    // then refused by the host's writer, while its budget reservation was
-    // taken and never released.
+    // then refused by the host's writer, while its budget reservation was taken
+    // and never released.
     //
     // The shared hook's rule - a format the host refuses stays INLINE, reserves
     // nothing and starts no job - is what this asserts on the landing surface.
@@ -705,25 +705,30 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     });
     const draftId = useLandingDraftStore.getState().activeDraftId;
 
-    // The node survives with its bytes: inline is the ACCEPTED outcome here,
-    // not a rejection - the draft still sends this image, just not hash-only.
+    // The DISCRIMINATOR, and the reason this is not merely a same-tick read:
+    // an ingest job in flight holds the pending indicator true, and this test
+    // releases no gate, so a BMP job that wrongly started would hold it true
+    // until this `waitFor` gave up. Settling to "false" is therefore positive
+    // evidence that no job is outstanding - not just that none had registered
+    // yet when the assertion ran.
     await waitFor(() => {
-      const atoms = collectImageAtoms(
-        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
-          emptyDoc(),
-      );
-      expect(atoms).toHaveLength(1);
-      expect(atoms[0]?.b64content).not.toBeNull();
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("false");
     });
 
-    // No store write was ever issued for it. `setGates` records every
-    // `putImage` that reached the store, so an entry for this hash means a job
-    // ran - which is exactly the behaviour being removed.
+    // And nothing reached the store under its hash. `setGates` records every
+    // `putImage` that got that far, so an entry here would mean a job ran.
     expect(setGates.has(hash)).toBe(false);
+
+    // Inline is the ACCEPTED outcome, not a rejection: the draft still sends
+    // this image, just not hash-only.
     const atoms = collectImageAtoms(
       draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
         emptyDoc(),
     );
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.b64content).not.toBeNull();
     expect(atoms[0]?.hash).toBeNull();
   });
 

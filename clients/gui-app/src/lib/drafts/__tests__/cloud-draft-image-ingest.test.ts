@@ -301,7 +301,15 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     // partition before the ingest ran and NO fetch was issued whatever the rule
     // was - it asserted "no payload read" and would have passed just the same
     // with the exclusion removed.
-    const stashBytes = new Uint8Array([61, 62, 63, 64]);
+    // A real GIF87a header. Two things ride on it. The blob must SNIFF to a
+    // canonical type at all - the ingest gate drops one whose bytes disagree
+    // with their label, because the stash's restore predicate would later call
+    // that record corrupt. And the type must not be the `image/png` the
+    // transport falls back to, or the assertion below would hold just as well
+    // with the sniff removed.
+    const stashBytes = new Uint8Array([
+      0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01, 0x00,
+    ]);
     const stashHash = await sha256HexOf(stashBytes);
     const handed: Array<ReadonlyMap<string, { readonly mimeType: string }>> =
       [];
@@ -340,9 +348,10 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     ).toBe(true);
     expect(handed).toHaveLength(1);
     expect([...(handed[0]?.keys() ?? [])]).toEqual([stashHash]);
-    // Sniffed from the bytes, never from the document's own attr, so this map
-    // says what `readDraftBlobs` says about the same bytes.
-    expect(handed[0]?.get(stashHash)?.mimeType).toBe("image/png");
+    // GIF, from the BYTES - not the `image/png` the document's attr declares
+    // and not the `image/png` the transport falls back to, so this discriminates
+    // the sniff from both.
+    expect(handed[0]?.get(stashHash)?.mimeType).toBe("image/gif");
   });
 
   it("still applies a stash document when the image fetch fails", async () => {
