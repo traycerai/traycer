@@ -4,9 +4,12 @@ import type { DraftWrite } from "@traycer/protocol/host";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
+  deleteImage,
   getImageBytes,
   putImageBytesAtHash,
+  releaseSession,
 } from "@/lib/composer/landing-image-store";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { bytesToBase64, base64ToBytes } from "@/lib/composer/image-base64";
 import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import { readPromptStashRestoreBlobs } from "@/lib/composer/prompt-stash-repository";
@@ -290,6 +293,29 @@ export async function putDraftBlobs(
   return confirmed;
 }
 
+/**
+ * Undo a host-blob writeback that landed under a different account.
+ *
+ * The session entry goes first: it is itself a GC root, so leaving it would
+ * keep the bytes reachable past the durable delete. Only when nothing live
+ * names the digest - content addressing means the new account may legitimately
+ * hold the same image, and taking it away then would be the mirror of the leak
+ * this exists to prevent. Twin of `retireCrossedWrite` on the cloud leg.
+ */
+async function retireCrossedBlobWrite(sha256: string): Promise<void> {
+  appLogger.warn("[draft-blobs] readBlob landed after an identity change", {
+    sha256,
+  });
+  if (landingLiveImageRootHashes().has(sha256)) return;
+  releaseSession(sha256);
+  await deleteImage(sha256).catch((error: unknown) => {
+    appLogger.warn("[draft-blobs] could not retire a crossed writeback", {
+      sha256,
+      error: describeLogError(error),
+    });
+  });
+}
+
 /** The in-flight key: one upload per (host, digest, owner) at a time. */
 function blobUploadKey(sha256: string, ownerUserId: string | null): string {
   // A null owner is its own bucket rather than sharing the first account's: an
@@ -477,6 +503,14 @@ async function readDraftBlobs(
   // just cleared, and short-circuit every blob call on an upgraded host until
   // the next reconnect.
   const epoch = blobEpochOf(hostId);
+  // And the ACCOUNT, for the writeback below. `drafts.readBlob` has no
+  // cancellation signal and the landing-image store it writes into is
+  // window-global and NOT account-partitioned, so bytes fetched for account A
+  // and answered after a sign-out or a switch would be seeded into the session
+  // cache and IndexedDB that account B is now using - and the session entry is
+  // itself a GC root, so they would stay. The cloud-payload sibling fences the
+  // same boundary; this is the host leg of it.
+  const owner = currentDraftBlobOwnerId();
   for (const sha256 of hashes) {
     // Contained, and the containment is the point: an unavailable or failing
     // IndexedDB makes this reject, and OUTSIDE a catch that rejection escaped
@@ -500,8 +534,18 @@ async function readDraftBlobs(
       if (!response.ok) continue;
       const bytes = base64ToBytes(response.bytesBase64);
       if (bytes === null) continue;
+      // Checked immediately before the write, and again after it: `store`
+      // hashes and awaits IndexedDB, so a check on only one side leaves the
+      // other half of that window open. Losing this race costs one wasted
+      // fetch; winning it wrongly costs an image in the wrong account's
+      // partition.
+      if (currentDraftBlobOwnerId() !== owner) return images;
       const stored = await store(sha256, bytes);
       if (!stored) continue;
+      if (currentDraftBlobOwnerId() !== owner) {
+        await retireCrossedBlobWrite(sha256);
+        return images;
+      }
       const mimeType = sniffImageMimeType(bytes) ?? "image/png";
       images.set(sha256, { bytes, mimeType });
     } catch (error: unknown) {

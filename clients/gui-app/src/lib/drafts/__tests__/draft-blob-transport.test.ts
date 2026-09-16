@@ -3,6 +3,8 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { putImage } from "@/lib/composer/landing-image-store";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import {
   forgetBlobUnsupportedHost,
@@ -166,6 +168,52 @@ describe("draft blob transport", () => {
       "ab".repeat(32),
     ]);
     expect(images.size).toBe(0);
+  });
+
+  it("a readBlob writeback after an identity change is retired, not kept (DRIVE RED)", async () => {
+    // `drafts.readBlob` has no cancellation signal and the landing-image store
+    // it writes into is window-global and NOT account-partitioned - so bytes
+    // fetched for account A and answered after a sign-out would be seeded into
+    // the partition account B is now using, and rooted there by the session
+    // entry. Twin of the cloud-payload leg's fence.
+    // Bytes unique to this test. `pngBytes()` is shared, and the image
+    // store's session cache is module-level - it survives
+    // `installFreshIndexedDb`, so a digest an earlier test stored would be
+    // found LOCALLY here and the request would never be made.
+    const bytes = new Uint8Array([...pngBytes(), 0x9a, 0x9b, 0x9c]);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    const hash = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    // A REAL identity, because the fence compares owner ids and a signed-out
+    // store has none - `null === null` would compare equal and prove nothing.
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "a" },
+    });
+
+    const client: DraftBlobClient = {
+      request: ((_method, _params) => {
+        // The switch lands while the response is being handled - after the
+        // request, before the writeback is complete.
+        useAuthStore.setState({
+          status: "signed-in",
+          contextMetadata: { userId: "user-b", username: "b" },
+        });
+        return Promise.resolve({
+          ok: true as const,
+          bytesBase64: bytesToBase64(bytes),
+        });
+      }) as HostRequester<HostRpcRegistry>["request"],
+    };
+
+    const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
+
+    // Nothing handed back, and nothing left behind.
+    expect(images.size).toBe(0);
+    const realRead = localReadMocks.real;
+    if (realRead === null) throw new Error("no passthrough captured");
+    expect(await realRead(hash)).toBeUndefined();
   });
 
   // ─── T5's once-per-host upload memo ─────────────────────────────────────

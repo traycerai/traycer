@@ -802,4 +802,39 @@ describe("cloud-draft-image-recovery", () => {
     expect(result).toBeNull();
     expect(await getImageBytes(hash)).toBeUndefined();
   });
+  it("an account SWITCH during the write retires them too - the other half of the fence", async () => {
+    // The sign-out case above exercises the authorization half. This one
+    // exercises the owner-id half: still signed in, different person. Both
+    // halves are needed and neither implies the other.
+    const bytes = bytesB();
+    const hash = await sha256HexOf(bytes);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "a" },
+    });
+
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    const passthrough = landingImageStoreMocks.actualPutImageBytesAtHash;
+    if (passthrough === null) throw new Error("no passthrough captured");
+    landingImageStoreMocks.putImageBytesAtHash.mockImplementationOnce(
+      async (writtenHash, writtenBytes) => {
+        const stored = await passthrough(writtenHash, writtenBytes);
+        useAuthStore.setState({
+          status: "signed-in",
+          contextMetadata: { userId: "user-b", username: "b" },
+        });
+        return stored;
+      },
+    );
+
+    expect(await readCloudDraftImageBytes(hash)).toBeNull();
+    expect(await getImageBytes(hash)).toBeUndefined();
+  });
 });
