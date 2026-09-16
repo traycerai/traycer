@@ -9,7 +9,6 @@ import {
   ChevronRight,
   ChevronUp,
   ClipboardCheck,
-  Command,
   Download,
   FileCode2,
   FileText,
@@ -22,6 +21,7 @@ import {
   Monitor,
   Palette,
   Plus,
+  Search,
   SplitSquareHorizontal,
   Terminal,
   Ticket,
@@ -53,6 +53,7 @@ import { ProviderList } from "@/components/providers/provider-list";
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import { ORDERED_PROVIDERS } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 interface OnboardingDioramaProps {
   readonly actId: DesktopOnboardingActId;
@@ -194,11 +195,11 @@ function taskSceneFor(index: number): TaskScene {
 }
 
 const PALETTE_ROWS = [
-  { label: "New task", hint: "Cmd N" },
-  { label: "New terminal agent", hint: "Cmd T" },
+  { label: "New task", hint: formatChordForDisplay("mod+n") },
+  { label: "New tab", hint: formatChordForDisplay("mod+t") },
   { label: "Agents", hint: "" },
   { label: "Artifacts", hint: "" },
-  { label: "Files", hint: "Cmd P" },
+  { label: "Files", hint: "" },
   { label: "View diff", hint: "" },
   { label: "Pick model", hint: "" },
   { label: "Change theme", hint: "" },
@@ -447,7 +448,7 @@ function NavigationDragDemo(props: {
           scale: [0.96, 1.03, 1, 0.98],
         }}
         transition={{ duration: 1.45, ease: EASE, times: [0, 0.18, 0.76, 1] }}
-        className="pointer-events-none absolute z-30 flex w-[min(30%,12.5rem)] items-center gap-1.5 rounded-md border border-primary/45 bg-popover/95 px-2 py-1.5 text-code-xs text-popover-foreground shadow-xl backdrop-blur-sm"
+        className="pointer-events-none absolute z-30 flex w-[min(30%,12.5rem)] items-center gap-1.5 rounded-md border border-primary/45 bg-popover/95 px-2 py-1.5 text-code-xs text-popover-foreground shadow-xl"
       >
         <HarnessIcon
           harnessId={agent.harnessId}
@@ -1069,7 +1070,7 @@ function ProvidersFocusScene() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.25, ease: EASE }}
-        className="absolute inset-0 z-20 bg-black/55 supports-backdrop-filter:backdrop-blur-xs"
+        className="absolute inset-0 z-20 bg-black/55"
       />
       {/* Anchored at the chat composer (bottom-left of the left pane), not a
           centered modal — the dropdown reads as the input box's own picker. */}
@@ -1391,7 +1392,7 @@ function AgentGuideModal(props: {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.2, ease: EASE }}
-        className="absolute inset-0 z-20 bg-black/50 supports-backdrop-filter:backdrop-blur-xs"
+        className="absolute inset-0 z-20 bg-black/50"
       />
       <div className="absolute inset-0 z-30 flex items-center justify-center p-4">
         <m.div
@@ -1418,7 +1419,7 @@ function CommandThemeScene(props: { readonly reducedMotion: boolean }) {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.2, ease: EASE }}
-        className="absolute inset-0 z-20 bg-black/10 supports-backdrop-filter:backdrop-blur-xs"
+        className="absolute inset-0 z-20 bg-black/10"
       />
       <div className="absolute inset-0 z-30 flex items-center justify-center p-4">
         <CommandPalette reducedMotion={props.reducedMotion} />
@@ -1452,12 +1453,12 @@ function CommandPalette(props: { readonly reducedMotion: boolean }) {
       className="z-30 flex w-[min(82%,26rem)] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-2xl"
     >
       <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
-        <Command className="size-3.5 text-muted-foreground" />
+        <Search className="size-3.5 text-muted-foreground" />
         <span className="text-ui-sm text-muted-foreground">
           Type a command...
         </span>
         <kbd className="ml-auto rounded border border-border bg-foreground/8 px-1.5 py-0.5 font-mono text-overline text-muted-foreground">
-          Cmd K
+          {formatChordForDisplay("mod+k")}
         </kbd>
       </div>
       <ul className="flex flex-col p-1">

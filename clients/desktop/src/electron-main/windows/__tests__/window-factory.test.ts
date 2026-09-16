@@ -9,6 +9,7 @@ const electronState = vi.hoisted(() => ({
     readonly pageTitleUpdated: () => void;
     readonly preventDefault: () => void;
     readonly setTitleCalls: string[];
+    readonly setMenuBarVisibilityCalls: boolean[];
   }>,
   webContentsOnChannels: [] as string[],
   // Captures the LATEST listener registered per channel, so a test can drive
@@ -56,6 +57,7 @@ vi.mock("electron", () => ({
   BrowserWindow: class {
     maximizeCalls = 0;
     setTitleCalls: string[] = [];
+    setMenuBarVisibilityCalls: boolean[] = [];
     private readyToShow: (() => void) | null = null;
     private pageTitleUpdated:
       | ((event: { preventDefault(): void }) => void)
@@ -86,6 +88,9 @@ vi.mock("electron", () => ({
         preventDefault,
         get setTitleCalls() {
           return self.setTitleCalls;
+        },
+        get setMenuBarVisibilityCalls() {
+          return self.setMenuBarVisibilityCalls;
         },
       });
     }
@@ -119,6 +124,10 @@ vi.mock("electron", () => ({
 
     setTitle(title: string): void {
       this.setTitleCalls.push(title);
+    }
+
+    setMenuBarVisibility(visible: boolean): void {
+      this.setMenuBarVisibilityCalls.push(visible);
     }
   },
   shell: { openExternal: vi.fn() },
@@ -372,6 +381,32 @@ describe("loadMainWindow", () => {
           height: 54,
         },
       }),
+    ]);
+  });
+
+  it("uses the integrated title bar overlay and hides the native menu bar on Linux", () => {
+    setProcessPlatform("linux");
+
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1.5,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        titleBarStyle: "hidden",
+        titleBarOverlay: {
+          color: "#0b0b0d",
+          symbolColor: "#e5e5e5",
+          height: 54,
+        },
+      }),
+    ]);
+    expect(electronState.browserWindows[0]?.setMenuBarVisibilityCalls).toEqual([
+      false,
     ]);
   });
 

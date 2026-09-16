@@ -169,15 +169,43 @@ describe("useSurfaceHostStreamBinding", () => {
       expect(result.current).toBe(AMBIENT);
     });
 
-    it("returns null - not the ambient binding - for the commit after the EFFECTIVE host moves onto the pin, while the ambient binding still names the old host", () => {
-      // The surface is pinned to host-b and was serving its own host-b
-      // binding; the effective host now moves a -> b, so `isFollowing` flips
-      // on this commit - but `HostStreamProvider` replaces its state-held
-      // binding in a passive effect, so the ambient value still names host-a.
-      // Handing it on would move the surface OFF its correct host-b stream and
-      // onto host-a's socket for one commit (git-diff / file-tree subscribe
-      // host-b paths over it). Pending is the honest state; the ambient
-      // binding is handed on only once it names host-b.
+    it("reuses the canvas binding when canvas host A differs from effective host B", () => {
+      refs.effective = "host-b";
+
+      const { result } = renderHook(
+        () => useSurfaceHostStreamBinding("host-a"),
+        { wrapper },
+      );
+
+      expect(result.current).toBe(AMBIENT);
+      expect(result.current?.hostId).toBe("host-a");
+    });
+
+    it("explicitly resolves effective host B when an unpinned surface sees ambient canvas host A", () => {
+      refs.effective = "host-b";
+      refs.entry = HOST_B;
+      refs.binding = {
+        client: PINNED_CLIENT,
+        transportKey: "k1",
+        pin: () => undefined,
+        unpin: () => undefined,
+      };
+      refs.expectedKey = "k1";
+
+      const { result } = renderHook(() => useSurfaceHostStreamBinding(null), {
+        wrapper,
+      });
+
+      expect(result.current?.hostId).toBe("host-b");
+      expect(result.current?.wsStreamClient).toBe(PINNED_CLIENT);
+    });
+
+    it("keeps the matching pinned binding when effective moves onto the pin but ambient still names the old host", () => {
+      // The surface is pinned to host-b and has its own host-b binding. The
+      // effective host now moves a -> b, while HostStreamProvider's ambient
+      // value still names host-a for one commit. The selected target is still
+      // host-b, so this must keep the valid pinned binding rather than riding
+      // host-a's socket under host-b's name.
       refs.effective = "host-b";
       refs.entry = HOST_B;
       refs.binding = {
@@ -206,11 +234,12 @@ describe("useSurfaceHostStreamBinding", () => {
         },
       );
 
-      expect(result.current).toBeNull();
+      expect(result.current).not.toBeNull();
       expect(result.current).not.toBe(AMBIENT);
+      expect(result.current?.hostId).toBe("host-b");
 
-      // The provider's effect lands: the ambient binding now names host-b and
-      // is the value to share (same object, same subscription registry key).
+      // Once the provider's effect lands, the ambient binding now names host-b
+      // and is the value to share (same object, same subscription registry key).
       ambient = AMBIENT_B;
       rerender();
       expect(result.current).toBe(AMBIENT_B);

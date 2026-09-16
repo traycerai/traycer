@@ -148,13 +148,25 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
+  // Its own group, not a fifth per-type row: the answer is whether the tile
+  // appears at all, not where it lands, and a standalone row under "Open new
+  // tiles" read as an override with the wrong tint.
+  agentTabs: {
+    kind: "group",
+    search: { anchor: "opening-agent-tabs" },
+    label: "Agent-opened tabs",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["agent", "popup", "browser", "surface"],
+  },
   agentOpenedTabs: {
     kind: "row",
-    group: "tilePlacement",
+    group: "agentTabs",
     search: { anchor: "opening-tiles-agent-opened" },
     label: "Agent-opened tabs",
     description:
-      "When an agent or a page opens a browser tab without you clicking anything.",
+      "Tabs an agent opens while driving a browser session. Tabs a page opens, including links you click in it, always land as browser tiles.",
     availableWhen: alwaysAvailable,
     keywords: ["agent", "popup", "automatic", "background", "browser"],
   },

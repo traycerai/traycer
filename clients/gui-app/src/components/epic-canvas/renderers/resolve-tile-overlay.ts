@@ -20,11 +20,21 @@ export interface TileOverlayView {
  * not yet being interactive - never on the same flag that hides the overlay -
  * so a live, presented guest is never click-blocked by a stale loader. A
  * terminal surface (dead / stalled) blocks so its Retry stays clickable.
+ *
+ * The loading surface only paints when there is nothing meaningful beneath
+ * it: the guest is not presented (`guestInteractive` false - attaching, or
+ * re-attaching after a renderer reset), or the tile has not yet seen a
+ * committed document (`documentCommitted` false - a fresh tab still at its
+ * `about:blank` birth). Once a page has committed, a navigation away from it
+ * keeps that page painted until the next one commits, so status text over
+ * it is noise; the toolbar spinner carries in-flight navigation, as in any
+ * browser.
  */
 export function resolveTileOverlay(
   status: BrowserViewStatus,
   guestInteractive: boolean,
   navigationStalled: boolean,
+  documentCommitted: boolean,
 ): TileOverlayView {
   if (status === "ready") {
     return { visible: false, blocking: false, surface: "loading" };
@@ -35,5 +45,9 @@ export function resolveTileOverlay(
   if (navigationStalled) {
     return { visible: true, blocking: true, surface: "stalled" };
   }
-  return { visible: true, blocking: !guestInteractive, surface: "loading" };
+  return {
+    visible: !guestInteractive || !documentCommitted,
+    blocking: !guestInteractive,
+    surface: "loading",
+  };
 }

@@ -7,29 +7,31 @@ editing and inspection, and VS Code/Open VSX color-theme imports.
 
 All implementation paths below are relative to `clients/gui-app/src/`.
 
-`styles/theme-surfaces.css` applies the same glass opacity to shared menus,
+`styles/theme-surfaces.css` applies solid theme fills to shared menus,
 submenus, popovers, hover cards, dialogs and drawers, plus custom composer and
-editor floating surfaces. Each surface paints one glass layer; embedded command
+editor floating surfaces. Embedded command
 lists inherit a transparent background, while standalone command lists retain
 their normal fill. Fixed menu headers and footers remain transparent. Sticky
 rows retain their fill to cover scrolling content, and compact inverted tooltips
 and theme-editor recovery controls retain their dedicated styling.
+Backdrop blur and the background-opacity preference are retired; existing
+saved theme libraries keep their themes and other preferences.
 
-| Responsibility                                                     | Owner                                                                             |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| Typed semantic roles, literal-color validation, guided derivation  | `lib/themes/theme-definition.ts`                                                  |
-| All 17 built-in families, both appearances                         | `lib/themes/builtin-palettes.ts`                                                  |
-| Durable local library, independent selections, transient draft     | `stores/settings/theme-library-store.ts`                                          |
-| Synchronous startup/runtime application and revision notifications | `lib/theme-applier.ts`                                                            |
-| Sidebar, glass, prompt typography, motion and artwork bridge       | `styles/theme-surfaces.css`                                                       |
-| Visual appearance selector and collection management               | `components/settings/themes/theme-gallery.tsx`                                    |
-| Lazy global floating editor and dependency inspector               | `components/settings/themes/theme-editor-{host,panel}.tsx`, `theme-inspector.tsx` |
-| Prompt typography, ligatures, contrast and panel motion            | `components/settings/themes/appearance-details.tsx`                               |
-| Native/VS Code JSONC, local VSIX, includes and palette conversion  | `lib/themes/theme-import.ts`                                                      |
-| Open VSX search, extension IDs, verified downloads                 | `lib/themes/open-vsx.ts`                                                          |
-| Search/import preview, explicit update/copy, stale-update guard    | `components/settings/themes/theme-import-dialog.tsx`                              |
-| Shared consumer refresh signal                                     | `providers/use-theme-revision.ts`                                                 |
-| Imported TextMate registration                                     | `lib/themes/syntax-theme.ts`                                                      |
+| Responsibility                                                       | Owner                                                                             |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Typed semantic roles, literal-color validation, guided derivation    | `lib/themes/theme-definition.ts`                                                  |
+| All 17 built-in families, both appearances                           | `lib/themes/builtin-palettes.ts`                                                  |
+| Durable local library, independent selections, transient draft       | `stores/settings/theme-library-store.ts`                                          |
+| Synchronous startup/runtime application and revision notifications   | `lib/theme-applier.ts`                                                            |
+| Sidebar, surface fills, prompt typography, motion and artwork bridge | `styles/theme-surfaces.css`                                                       |
+| Visual appearance selector and collection management                 | `components/settings/themes/theme-gallery.tsx`                                    |
+| Lazy global floating editor and dependency inspector                 | `components/settings/themes/theme-editor-{host,panel}.tsx`, `theme-inspector.tsx` |
+| Prompt typography, ligatures, contrast and panel motion              | `components/settings/themes/appearance-details.tsx`                               |
+| Native/VS Code JSONC, local VSIX, includes and palette conversion    | `lib/themes/theme-import.ts`                                                      |
+| Open VSX search, extension IDs, verified downloads                   | `lib/themes/open-vsx.ts`                                                          |
+| Search/import preview, explicit update/copy, stale-update guard      | `components/settings/themes/theme-import-dialog.tsx`                              |
+| Shared consumer refresh signal                                       | `providers/use-theme-revision.ts`                                                 |
+| Imported TextMate registration                                       | `lib/themes/syntax-theme.ts`                                                      |
 
 The existing appearance panel keeps Traycer's interface, code, terminal,
 artifact, and desktop zoom settings. The new gallery replaces the old preset
@@ -153,7 +155,6 @@ This is the acceptance contract, not a claim of completed visual review.
 - [x] Local VSIX import and extension IDs are supported if advertised in the UI.
 - [ ] Imported workbench colors reach app chrome, sidebar, controls, messages, and terminals.
 - [ ] Imported ANSI and syntax payloads reach the corresponding consumers where advertised.
-- [ ] Glass opacity visibly changes intended menus/dialogs/composer surfaces and has reset.
 - [ ] Typography offers interface, prompt, code, and terminal font families and sizes.
 - [ ] Typography advanced options, resets, font discovery/fallbacks, and ligatures are handled.
 - [ ] Contrast controls and panel-animation duration have real runtime effects and reset.

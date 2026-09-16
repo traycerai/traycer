@@ -59,10 +59,11 @@ const LIST_FADE_CLASS =
  * that the desktop header carries (Settings, identity / account) into a single
  * menu, plus a "New task" entry and an inline recent task list (the same
  * `useHistoryQuery` source the landing page renders), since the tab strip and
- * header right-cluster are hidden on phones. Manage subscription and Sign out
- * ride the identity row as icons; notifications stay in the header next to the
- * other status controls (`MobileNotificationsButton`). Every action reuses the
- * same helper the desktop surfaces call. Mounted only on mobile (see
+ * header right-cluster are hidden on phones. Sign out rides the identity row as
+ * an icon, joined by Manage subscription on every shell EXCEPT the installed
+ * mobile app (see the identity row below); notifications stay in the header
+ * next to the other status controls (`MobileNotificationsButton`). Every action
+ * reuses the same helper the desktop surfaces call. Mounted only on mobile (see
  * AppShell), so desktop is untouched.
  */
 export function MobileNavDrawer(): ReactNode {
@@ -117,12 +118,17 @@ export function MobileNavDrawer(): ReactNode {
   // differs, so it is built once rather than duplicated per branch.
   const panel = (
     <>
-      {/* Identity plus the two account actions as icons beside the name -
-            the same pair the desktop `UserMenu` offers behind the avatar, both
-            one tap here. Manage subscription takes the slot the notification
-            bell vacated when it moved to the header.
-
-            `px-5` is the nav rows' effective inset below (`p-2` + `px-3`), so
+      {/* Identity plus the account actions as icons beside the name - the same
+            pair the desktop `UserMenu` offers behind the avatar, both one tap
+            here. Manage subscription took the slot the notification bell
+            vacated when it moved to the header, and it is WITHHELD from the
+            installed app: App Store review guideline 3.1.1 forbids linking out
+            to a subscription that cannot be bought through Apple, and this
+            link opens exactly that page. It stays for the other shell that
+            renders this drawer - a narrow DESKTOP window, which is why this is
+            a branch rather than a deletion, and why it reads the product flag
+            rather than the viewport. Sign out is unaffected. */}
+      {/* `px-5` is the nav rows' effective inset below (`p-2` + `px-3`), so
             the avatar shares a left edge with their glyphs; no bottom padding
             beyond `pb-2` because the `nav` supplies the rest of the gap. */}
       {profile === null ? null : (
@@ -143,16 +149,18 @@ export function MobileNavDrawer(): ReactNode {
               {profile.email}
             </span>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Manage subscription"
-            data-testid="mobile-nav-manage-subscription"
-            onClick={handleManageSubscription}
-          >
-            <SquareArrowOutUpRight className="size-4" />
-          </Button>
+          {installedApp ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Manage subscription"
+              data-testid="mobile-nav-manage-subscription"
+              onClick={handleManageSubscription}
+            >
+              <SquareArrowOutUpRight className="size-4" />
+            </Button>
+          )}
           {/* Opens the confirm rather than signing out: unlike its
                 neighbours this control doesn't `close()` first, so cancelling
                 puts the user back in the drawer where they were. */}

@@ -14,6 +14,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -44,6 +45,7 @@ import type {
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
+import { setMobileApp } from "@/lib/mobile-app";
 import { queryKeys } from "@/lib/query-keys";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
@@ -892,6 +894,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setMobileApp(false);
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -1254,6 +1257,39 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.queryByText("Pro 5x")).toBeNull();
   });
 
+  it("re-words every window row when Layout's Used / Remaining setting flips", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+    };
+    renderPopover();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("22% used")).toBeTruthy();
+
+    act(() => {
+      useLayoutStore.getState().setStatusBarPercentMode("remaining");
+    });
+    // The words are the strip's own (`windowPercentText`), so the popover
+    // under the footer and the footer never state one limit two ways.
+    expect(screen.getByText("96% remaining")).toBeTruthy();
+    expect(screen.getByText("78% remaining")).toBeTruthy();
+    expect(screen.queryByText("4% used")).toBeNull();
+
+    act(() => {
+      useLayoutStore.getState().setStatusBarPercentMode("used");
+    });
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.queryByText("96% remaining")).toBeNull();
+  });
+
   /**
    * Two providers with two accounts each, both `ephemeralProcess`, with a
    * reading for every card. Shared by the `Show in status bar` cases below,
@@ -1313,7 +1349,12 @@ describe("<RateLimitPopover /> rail", () => {
     };
   }
 
-  it("highlights the accounts the strip draws by default and offers a Status bar switch on every card", () => {
+  /** Every card's eye toggle, in document order. */
+  function statusBarEyes(): HTMLElement[] {
+    return screen.getAllByTestId("rate-limit-profile-status-bar-eye");
+  }
+
+  it("highlights the accounts the strip draws by default and offers an eye toggle on every card", () => {
     configureTwoAccountProviders();
     mocks.profileSelection = {
       shownProfiles: {},
@@ -1332,47 +1373,80 @@ describe("<RateLimitPopover /> rail", () => {
     // The `Active` badge went with the focused-chat rule it described.
     expect(screen.queryByText("Active")).toBeNull();
     // Nothing checked: each provider's last-used account is the one the strip
-    // draws, and its card carries the accent - with the switch OFF, since
+    // draws, and its card carries the accent - with the eye OFF, since
     // nothing was asked for.
     const activeRows = document.querySelectorAll('[aria-current="true"]');
     expect(activeRows).toHaveLength(2);
     expect(activeRows[0].textContent).toContain("Work");
     expect(activeRows[1].textContent).toContain("Personal");
-    const switches = screen.getAllByRole("switch", {
-      name: /in status bar$/,
-    });
-    expect(
-      switches.map((element) => element.getAttribute("aria-label")),
-    ).toEqual([
+    const eyes = statusBarEyes();
+    expect(eyes.map((element) => element.getAttribute("aria-label"))).toEqual([
       "Show Default Codex in status bar",
       "Show Work in status bar",
       "Show Default Claude in status bar",
       "Show Personal in status bar",
     ]);
+    expect(eyes.map((element) => element.getAttribute("aria-pressed"))).toEqual(
+      ["false", "false", "false", "false"],
+    );
+    // The labelled `Status bar` switch the eye replaced is gone, and the
+    // enable switch is the only switch left on a card.
     expect(
-      switches.map((element) => element.getAttribute("aria-checked")),
-    ).toEqual(["false", "false", "false", "false"]);
+      screen.queryByTestId("rate-limit-profile-status-bar-switch"),
+    ).toBeNull();
+    expect(screen.queryByText("Status bar")).toBeNull();
+    expect(screen.queryAllByRole("switch", { name: /status bar/ })).toEqual([]);
     expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
-  it("writes the viewed host's Show in status bar entry from a card's switch", () => {
+  it("draws the eye immediately left of the profile's accent dot, with the enable switch alone on the right", () => {
+    configureTwoAccountProviders();
+    renderPopover();
+
+    const card = screen.getByTestId(
+      "rate-limit-profile-card-codex-work-profile",
+    );
+    const eye = within(card).getByRole("button", {
+      name: "Show Work in status bar",
+    });
+    // The dot is the `aria-hidden` swatch `AccentDot` draws; the eye (in its
+    // tooltip-trigger span) is its immediate previous sibling, so the two
+    // read as one unit.
+    const dot = eye.parentElement?.nextElementSibling;
+    expect(dot).not.toBeNull();
+    expect(dot?.getAttribute("aria-hidden")).toBe("true");
+    expect(dot?.className).toContain("rounded-full");
+    expect(dot?.className).toContain("size-2");
+    // The card's one switch is the host-side enable toggle, after the eye.
+    const switches = within(card).getAllByRole("switch");
+    expect(switches).toHaveLength(1);
+    expect(switches[0].getAttribute("aria-label")).toBe(
+      "Allow agents to use Work",
+    );
+    expect(
+      eye.compareDocumentPosition(switches[0]) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("writes the viewed host's Show in status bar entry from a card's eye", () => {
     configureTwoAccountProviders();
     renderPopover();
 
     fireEvent.click(
-      screen.getByRole("switch", { name: "Show Work in status bar" }),
+      screen.getByRole("button", { name: "Show Work in status bar" }),
     );
     expect(
       useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
     ).toEqual({ "host-a": { codex: ["work-profile"] } });
     fireEvent.click(
-      screen.getByRole("switch", { name: "Show Default Codex in status bar" }),
+      screen.getByRole("button", { name: "Show Default Codex in status bar" }),
     );
     expect(
       useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
     ).toEqual({ "host-a": { codex: ["work-profile", null] } });
 
-    // The switch reads its checked state through the selection the caller
+    // The eye reads its pressed state through the selection the caller
     // resolved (a static double here), so re-render with both checked before
     // flipping them off: unchecking the last one removes the entry rather
     // than leaving `[]`.
@@ -1383,10 +1457,12 @@ describe("<RateLimitPopover /> rail", () => {
     };
     renderPopover();
     fireEvent.click(
-      screen.getByRole("switch", { name: "Show Work in status bar" }),
+      screen.getByRole("button", { name: "Hide Work from status bar" }),
     );
     fireEvent.click(
-      screen.getByRole("switch", { name: "Show Default Codex in status bar" }),
+      screen.getByRole("button", {
+        name: "Hide Default Codex from status bar",
+      }),
     );
     expect(
       useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
@@ -1401,12 +1477,14 @@ describe("<RateLimitPopover /> rail", () => {
     };
     renderPopover();
 
-    const codexSwitches = [
-      screen.getByRole("switch", { name: "Show Default Codex in status bar" }),
-      screen.getByRole("switch", { name: "Show Work in status bar" }),
+    const codexEyes = [
+      screen.getByRole("button", {
+        name: "Hide Default Codex from status bar",
+      }),
+      screen.getByRole("button", { name: "Hide Work from status bar" }),
     ];
     expect(
-      codexSwitches.map((element) => element.getAttribute("aria-checked")),
+      codexEyes.map((element) => element.getAttribute("aria-pressed")),
     ).toEqual(["true", "true"]);
     // Both Codex cards are on the strip; Claude falls back to its last-used.
     const activeRows = document.querySelectorAll('[aria-current="true"]');
@@ -1416,17 +1494,92 @@ describe("<RateLimitPopover /> rail", () => {
     expect(activeRows[2].textContent).toContain("Personal");
   });
 
-  it("hides the Status bar switch for a provider hidden from the strip", () => {
+  it("says in the eye's tooltip whether the account is on the strip by choice, by default, or not at all", async () => {
+    configureTwoAccountProviders();
+    mocks.profileSelection = {
+      shownProfiles: { codex: ["work-profile"] },
+      lastProfileByHarness: { claude: "personal-profile" },
+    };
+    renderPopover();
+
+    // Checked: the strip draws it because it was asked for. The tooltip
+    // repeats the button's name, so it must NOT also describe the button -
+    // Radix would otherwise point `aria-describedby` at the open tooltip and
+    // a reader would hear the action twice.
+    const checkedEye = screen.getByRole("button", {
+      name: "Hide Work from status bar",
+    });
+    fireEvent.focus(checkedEye);
+    let tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toBe("Hide Work from status bar");
+    expect(checkedEye.getAttribute("aria-describedby")).toBeNull();
+    expect(checkedEye.getAttribute("aria-label")).toBe(
+      "Hide Work from status bar",
+    );
+
+    // Not checked, and not drawn: nothing else to say.
+    const offEye = screen.getByRole("button", {
+      name: "Show Default Codex in status bar",
+    });
+    fireEvent.focus(offEye);
+    tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toBe("Show Default Codex in status bar");
+    expect(offEye.getAttribute("aria-describedby")).toBeNull();
+
+    // Not checked, but drawn anyway: Claude has nothing checked, so its
+    // last-used account is the strip's fallback and the eye has to say so.
+    const fallbackEye = screen.getByRole("button", {
+      name: "Show Personal in status bar",
+    });
+    expect(fallbackEye.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      screen
+        .getByTestId("rate-limit-profile-card-claude-code-personal-profile")
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    fireEvent.focus(fallbackEye);
+    tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toBe(
+      "Show Personal in status bar. Shown by default until an account is checked.",
+    );
+    // A reader gets the note as the description - only the words the name
+    // does not already carry, never the open tooltip's full sentence.
+    const describedBy = fallbackEye.getAttribute("aria-describedby");
+    expect(describedBy).not.toBeNull();
+    expect(describedBy).not.toBe(tooltip.id);
+    expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
+      "Shown by default until an account is checked.",
+    );
+    expect(fallbackEye.getAttribute("aria-label")).toBe(
+      "Show Personal in status bar",
+    );
+  });
+
+  it("hides the eye for a provider hidden from the strip", () => {
     configureTwoAccountProviders();
     useLayoutStore.getState().toggleStatusBarProvider("codex");
     renderPopover();
 
     expect(
-      screen.queryByRole("switch", { name: "Show Work in status bar" }),
+      screen.queryByRole("button", { name: "Show Work in status bar" }),
     ).toBeNull();
     expect(
-      screen.getByRole("switch", { name: "Show Personal in status bar" }),
+      screen.getByRole("button", { name: "Show Personal in status bar" }),
     ).toBeTruthy();
+  });
+
+  it("renders no eye for a provider that reports no profiles", () => {
+    mocks.configured = [
+      { providerId: "kilocode", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { kilocode: kilocodeReady() };
+    renderPopover();
+
+    expect(screen.getByText("Kilo Code")).toBeTruthy();
+    expect(
+      screen.queryByTestId("rate-limit-profile-status-bar-eye"),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /status bar$/ })).toBeNull();
   });
 
   it("scrolls the card a strip segment deep-linked to into view and consumes the request", () => {
@@ -2743,6 +2896,36 @@ describe("<RateLimitPopover /> Refresh all", () => {
       { force: true },
     );
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  // This popover IS reachable on the phone - `MobileAppHeader` renders
+  // `RateLimitIconButton` - and the tier chip is the one thing on the account
+  // card that names something for sale. App Store review guideline 3.1.1 says
+  // the installed app may not present a subscription it cannot sell, so the
+  // chip goes and the usage stays.
+  it("names the Traycer plan tier on desktop and drops the chip in the installed mobile app", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    renderPopover();
+
+    expect(screen.getByText("Pro")).not.toBeNull();
+    // The card itself is still there, named and selectable.
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).not.toBeNull();
+
+    cleanup();
+    setMobileApp(true);
+    renderPopover();
+
+    expect(screen.queryByText("Pro")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).not.toBeNull();
+    // The usage body survives, denominated in credits rather than dollars.
+    expect(screen.queryByText(/\$/)).toBeNull();
   });
 
   it("refetches Traycer when the synthetic Traycer entry is eligible", () => {

@@ -1,6 +1,6 @@
 import { useCallback, useRef, type ReactNode } from "react";
-import { Bot, FileDiff, Layers, Terminal, type LucideIcon } from "lucide-react";
-import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
+import { Bot, FileDiff, type LucideIcon } from "lucide-react";
+import { MessageSquareClock } from "@/components/notifications/message-square-clock";
 import { ChatDockCompactChip } from "@/components/chat/chat-dock-compact-chip";
 import {
   STATUS_ANIMATION_PULSE_CADENCE_MS,
@@ -34,14 +34,12 @@ export function ChatDockCompactStripProvider(props: {
 const GLYPH_ICONS: Readonly<Record<ChatDockCompactChipGlyph, LucideIcon>> = {
   filesChanged: FileDiff,
   activeAgents: Bot,
-  mixed: Layers,
-  // A host-supervised shell is a terminal, whatever it is doing. It is
-  // deliberately NOT the panel's pause glyph: that glyph earns its meaning from
-  // the word "Held" printed beside it on the row, and a chip has no such word,
-  // so `PauseCircle` over a shell following a PR simply said the shell was
-  // paused. Held is stated in this chip's sentence instead.
-  managedShell: Terminal,
-  ...BACKGROUND_KIND_ICONS,
+  // The section's own mark, resting and working alike - the same
+  // chat-with-a-clock `BackgroundActivityGlyph` draws for background-only
+  // activity elsewhere. Never a per-kind icon and never a pause: what the rows
+  // are is the panel's to draw, and whether a shell is held is stated in this
+  // chip's sentence.
+  background: MessageSquareClock,
 };
 
 /**

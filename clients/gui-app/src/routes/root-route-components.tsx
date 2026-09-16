@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
@@ -6,8 +6,8 @@ import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { AppShell } from "@/components/layout/app-shell";
-import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
-import { useWindowsMenuBarActive } from "@/components/layout/header/use-windows-menu-bar-active";
+import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
+import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
@@ -187,7 +187,7 @@ function RootSurface(props: {
     );
   }
   // Sign-in and the onboarding tour render without AppShell, so they lose the
-  // frameless Windows title bar the app header provides. Give them the same
+  // Windows/Linux title bar the app header provides. Give them the same
   // full-width band - menu strip, drag region, native window controls in one
   // strip - instead of floating a chip over the artwork.
   return (
@@ -217,12 +217,8 @@ function StandaloneBody(props: {
   return <Outlet />;
 }
 
-// `-webkit-app-region` isn't in the standard CSSProperties typings (mirrors
-// `app-header.tsx`). The band itself drags; the menu strip inside opts out.
-const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
-
 // Owns the viewport for standalone surfaces, which size themselves with
-// h-full/min-h-full: on the Windows desktop shell a title-bar band takes the
+// h-full/min-h-full: on Windows/Linux a title-bar band takes the
 // top and the content gets the rest; elsewhere the band collapses and the
 // content keeps the full height.
 //
@@ -238,17 +234,10 @@ const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
 // below the bar, applied by each surface to its own content layer - artwork and
 // content are siblings there, so the shell cannot inset one without the other.
 function StandaloneShell(props: { readonly children: ReactNode }) {
-  const menuBarActive = useWindowsMenuBarActive();
+  const menuBarActive = useDesktopMenuBarActive();
   return (
     <div data-full-bleed-surface="" className="fixed inset-0 flex flex-col">
-      {menuBarActive ? (
-        <div
-          className="relative z-20 flex h-10 shrink-0 items-center bg-canvas after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']"
-          style={DRAG_STYLE}
-        >
-          <WindowsMenuBar />
-        </div>
-      ) : null}
+      {menuBarActive ? <DesktopMenuHeader /> : null}
       <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
     </div>
   );

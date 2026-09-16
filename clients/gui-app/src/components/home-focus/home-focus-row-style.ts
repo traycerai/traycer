@@ -21,7 +21,7 @@
  * above them. `flex-wrap` cannot help once a single item is wider than the
  * line, so each badge kept its intrinsic width and spilled out of its parent's
  * collapsed box to the right, painting over the status cell that follows it -
- * `1 active` drawn under `● turn`, badges stacked vertically with the status on
+ * `1 active` drawn under `● running`, badges stacked vertically with the status on
  * top of them. That is the screenshot's overlap, and it is a sizing bug rather
  * than a clipping one: the fix is to stop asking one line to hold all five
  * cells, and to release the fixed tracks while it is folded.

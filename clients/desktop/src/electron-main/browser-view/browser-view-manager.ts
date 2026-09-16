@@ -759,6 +759,8 @@ export class BrowserViewManager {
     }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;
+    entry.navigationAttempt += 1;
+    const attempt = entry.navigationAttempt;
     entry.status = "loading";
     entry.statusReason = null;
     entry.certificateError = null;
@@ -770,7 +772,14 @@ export class BrowserViewManager {
         error: describeLogError(err),
         url,
       });
-      if (this.entries.isCurrent(entry)) {
+      // Settle only the attempt that failed. `loadURL` rejects for the OLDER
+      // of two overlapping navigations (ERR_ABORTED) after the newer one has
+      // already set `loading`; an entry-identity check alone would report
+      // `ready` for a page still in flight.
+      if (
+        this.entries.isCurrent(entry) &&
+        entry.navigationAttempt === attempt
+      ) {
         this.setStatus(entry, "ready", "Navigation failed");
       }
       throw err;
@@ -778,8 +787,24 @@ export class BrowserViewManager {
   }
 
   private reloadEntry(entry: BrowserViewEntry): void {
-    this.setStatus(entry, "loading", null);
+    this.startNavigationAttempt(entry);
     entry.webContents.reload();
+  }
+
+  /**
+   * Opens a new loading episode for a host-driven reload or history move.
+   * `setStatus` dedupes on (status, reason), so a move issued while the entry
+   * is ALREADY loading would bump the attempt and tell nobody - and the
+   * renderer's stall clock, keyed on the attempt, would keep running down
+   * for the old episode. Emit unconditionally instead.
+   */
+  private startNavigationAttempt(entry: BrowserViewEntry): void {
+    entry.navigationAttempt += 1;
+    if (entry.status !== "loading" || entry.statusReason !== null) {
+      this.setStatus(entry, "loading", null);
+      return;
+    }
+    this.emitStatus(entry);
   }
 
   private moveEntryInHistory(
@@ -804,7 +829,7 @@ export class BrowserViewManager {
       this.emitStatus(entry);
       return;
     }
-    this.setStatus(entry, "loading", null);
+    this.startNavigationAttempt(entry);
     try {
       if (direction === "back") {
         navigationHistory.goBack();
@@ -816,7 +841,9 @@ export class BrowserViewManager {
         error: describeLogError(err),
         webContentsId: entry.webContents.id,
       });
-      this.emitStatus(entry);
+      // Nothing will commit for a move that threw synchronously; re-emitting
+      // `loading` here left the tile spinning for good.
+      this.setStatus(entry, "ready", "Navigation failed");
     }
   }
 
@@ -964,6 +991,7 @@ export class BrowserViewManager {
       canGoBack: readings.canGoBack,
       canGoForward: readings.canGoForward,
       zoomPercent: readings.zoomPercent,
+      navigationAttempt: entry.navigationAttempt,
       viewed: entry.surface !== null && entry.desiredVisible,
     };
     this.send(

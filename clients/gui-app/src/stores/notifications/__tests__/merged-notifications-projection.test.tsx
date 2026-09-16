@@ -654,20 +654,27 @@ describe("cloud feed projection authority", () => {
     useCloudNotificationsStore.getState().reset();
   });
 
-  it("concatenates the local lane - host local-home rows, renderer-local failures, collaboration rows - with the cloud partition", () => {
+  it("interleaves the local lane - host local-home rows, renderer-local failures, collaboration rows - with the cloud partition by recency", () => {
     // Mixed mode keeps the host feed as the exact local durable-home
     // partition and the cloud relay as the complementary partition. App-local
     // failures and Notifications-room collaboration rows are this machine's
     // client-side state no feed can reproduce, so they ride in the LOCAL lane
-    // beside the partition rows; the two lanes concatenate in protocol order
-    // rather than comparing timestamps across planes.
+    // beside the partition rows; but the merged list is ONE newest-first order
+    // across both planes - `createdAt` is the origin clock in each lane, so a
+    // fresher cloud row lands ahead of a staler local-lane row and vice versa.
+    // The protocol home order (`local` before `cloud`) only breaks a tie at
+    // the exact same `createdAt`, and ascending `feedId` breaks whatever tie
+    // is left. The cloud row's `createdAt` (95) sits strictly between the
+    // host row's (100) and the app-local row's (90) below, so this only
+    // passes if the merge genuinely interleaves by date rather than grouping
+    // all local-lane rows ahead of the cloud partition.
     applyHostSnapshot([hostDone("local-host", 100, null)], {
       unreadCount: 1,
       attentionCount: 0,
     });
     seedAppLocal([appLocalEntry("local-app", 90, null)]);
     seedGlobal([globalEntry("local-global", 80, null)]);
-    const cloud = cloudDone("entry-cloud", 7, null);
+    const cloud = cloudDone("entry-cloud", 95, null);
     useCloudNotificationsStore.getState().applySnapshot({
       rows: [cloud],
       summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
@@ -687,9 +694,9 @@ describe("cloud feed projection authority", () => {
 
     expect(result.current.ids).toEqual([
       hostFeedId("local-host"),
+      cloudNotificationFeedId(cloud.entryId),
       appLocalFeedId("local-app"),
       globalFeedId("local-global"),
-      cloudNotificationFeedId(cloud.entryId),
     ]);
     expect(result.current.hostRow?.source).toBe("host");
     expect(result.current.cloudRow?.sourceId).toBe("entry-cloud");
@@ -735,7 +742,10 @@ describe("cloud feed projection authority", () => {
       attention: useAttentionNotificationIds(),
     }));
 
-    // Protocol order: local plane first, then cloud plane.
+    // Newest-first by createdAt across both planes - this fixture's local
+    // rows (200, 150) simply happen to be newer than the cloud rows (10, 9),
+    // so this order falls out of recency, not out of the local plane being
+    // listed first.
     expect(result.current.ids).toEqual([
       hostFeedId("local-prompt"),
       hostFeedId("local-done"),
@@ -836,6 +846,75 @@ describe("cloud feed projection authority", () => {
     expect(result.current.ids).toEqual([cloudNotificationFeedId("entry-b")]);
     expect(result.current.reopened?.readAt).toBeNull();
     expect(result.current.superseded).toBeNull();
+  });
+
+  it("orders Recent by recency across planes, not by plane - a fresh cloud row beats a stale local row and vice versa", () => {
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1_000;
+    applyHostSnapshot(
+      [
+        hostDone("host-week-old", now - 7 * oneDayMs, null),
+        hostDone("host-today", now - 1_000, null),
+      ],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("cloud-today", now, null),
+        cloudDone("cloud-yesterday", now - oneDayMs, null),
+      ],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 9,
+    });
+
+    const { result } = renderHook(() => useRecentNotificationIds());
+
+    // Newest first purely by createdAt across planes: today's cloud row beats
+    // last week's local row (cloud-over-local), and today's local row beats
+    // yesterday's cloud row (local-over-cloud) - both driven by recency alone,
+    // never by which plane a row belongs to.
+    expect(result.current).toEqual([
+      cloudNotificationFeedId("cloud-today"),
+      hostFeedId("host-today"),
+      cloudNotificationFeedId("cloud-yesterday"),
+      hostFeedId("host-week-old"),
+    ]);
+  });
+
+  it("orders Attention within the same severity tier by recency across planes - a newer cloud row precedes an older local row", () => {
+    applyHostSnapshot([hostPrompt("local-prompt-old", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const cloudPromptRowBase = cloudDone("cloud-prompt-new", 200, null);
+    const cloudPromptRow: HostNotificationsCloudFeedRow = {
+      ...cloudPromptRowBase,
+      entry: {
+        ...cloudPromptRowBase.entry,
+        kind: "approval.requested",
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        readAt: null,
+      },
+      coalesceKey: "approval.requested:cloud-prompt-new",
+    };
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudPromptRow],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 11,
+    });
+
+    const { result } = renderHook(() => useAttentionNotificationIds());
+
+    // Both rows land in the same "blocking" tier (needs_action). Severity
+    // tier is still the outer sort key, but within a tier the newer cloud row
+    // precedes the older local row purely by `createdAt` - plane only breaks
+    // an exact tie, it is never the primary order.
+    expect(result.current).toEqual([
+      cloudNotificationFeedId("cloud-prompt-new"),
+      hostFeedId("local-prompt-old"),
+    ]);
   });
 });
 

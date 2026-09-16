@@ -8,10 +8,11 @@ import {
   DEFAULT_MONO_FONT_STACK,
 } from "@/lib/default-font-stacks";
 import {
+  DEFAULT_AGENT_OFFICE_VIEW,
   DEFAULT_CODE_FONT_SIZE,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
-import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
+import { OFFICE_VIEW_LABELS } from "@/lib/comm-graph/office/office-view-vocabulary";
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => null,
@@ -22,18 +23,6 @@ vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
 // rows - and so which search anchors - the panel renders.
 vi.mock("@/lib/appearance/curated-wallpapers", () => ({
   fetchCuratedWallpaperManifest: () => Promise.resolve([]),
-}));
-
-const analyticsMocks = vi.hoisted(() => ({
-  trackSettingChanged: vi.fn(),
-}));
-
-// Only `trackSettingChanged` is stubbed: the panel also imports
-// `trackedSettingSetter` from this module, and replacing the whole module
-// leaves every other row's setter undefined.
-vi.mock("@/lib/analytics", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/analytics")>()),
-  trackSettingChanged: analyticsMocks.trackSettingChanged,
 }));
 
 const GROUP_TITLES = [
@@ -56,6 +45,7 @@ function resetAppearanceSettings(): void {
     codeFontSize: DEFAULT_CODE_FONT_SIZE,
     terminalFontFamily: null,
     terminalFontSize: null,
+    agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
   });
 }
 
@@ -65,48 +55,12 @@ describe("<AppearanceSettingsPanel /> groups", () => {
   beforeEach(() => {
     queryClient = createQueryClient();
     resetAppearanceSettings();
-    analyticsMocks.trackSettingChanged.mockReset();
-    useThemeLibraryStore.setState({ glassOpacity: 100 });
   });
 
   afterEach(() => {
     queryClient.clear();
     cleanup();
     resetAppearanceSettings();
-  });
-
-  it("emits exactly one glassOpacity analytics event for a keyboard change", () => {
-    renderPanel(queryClient);
-
-    const slider = screen.getByRole("slider", { name: "Background opacity" });
-    // A real browser moves the value on ArrowLeft before any key event
-    // reaches userspace; jsdom does not, so the change is simulated here
-    // the same way the pointer-drag path is simulated (fireEvent.change),
-    // leaving keyUp to answer only for the analytics side of the fix.
-    fireEvent.keyDown(slider, { key: "ArrowLeft" });
-    fireEvent.change(slider, { target: { value: "90" } });
-    fireEvent.keyUp(slider, { key: "ArrowLeft" });
-
-    expect(useThemeLibraryStore.getState().glassOpacity).toBe(90);
-    expect(analyticsMocks.trackSettingChanged).toHaveBeenCalledTimes(1);
-    expect(analyticsMocks.trackSettingChanged).toHaveBeenCalledWith(
-      "appearance",
-      "glassOpacity",
-    );
-  });
-
-  it("reports nothing for a keyboard press the clamp leaves unmoved", () => {
-    // 30 is the slider's floor, so ArrowLeft there changes nothing and there
-    // is no setting change to report.
-    useThemeLibraryStore.setState({ glassOpacity: 30 });
-    renderPanel(queryClient);
-
-    const slider = screen.getByRole("slider", { name: "Background opacity" });
-    fireEvent.keyDown(slider, { key: "ArrowLeft" });
-    fireEvent.keyUp(slider, { key: "ArrowLeft" });
-
-    expect(useThemeLibraryStore.getState().glassOpacity).toBe(30);
-    expect(analyticsMocks.trackSettingChanged).not.toHaveBeenCalled();
   });
 
   it("renders the named group headings in order", () => {
@@ -145,6 +99,73 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     expect(documentPosition(fontsAndText, motion)).toBe("before");
     expect(documentPosition(motion, terminal)).toBe("before");
     expect(documentPosition(terminal, iconColors)).toBe("before");
+  });
+
+  it("renders the Agent office group between Terminal and Icon colors, with its Default view row wired to the store", () => {
+    // The case above is PAIRWISE: it asserts Terminal before Icon colors,
+    // which stays true whether or not Agent office renders between them at
+    // all - a port that added the definitions module entries but never
+    // wired the panel's own `<SettingsGroup>` would leave that case green.
+    // This pins the group by NAME, ties its row to it rather than to its
+    // neighbors, and exercises the row's control end to end.
+    renderPanel(queryClient);
+
+    const terminal = screen.getByRole("heading", {
+      level: 2,
+      name: "Terminal",
+    });
+    const agentOffice = screen.getByRole("heading", {
+      level: 2,
+      name: "Agent office",
+    });
+    const iconColors = screen.getByRole("heading", {
+      level: 2,
+      name: "Icon colors",
+    });
+    expect(documentPosition(terminal, agentOffice)).toBe("before");
+    expect(documentPosition(agentOffice, iconColors)).toBe("before");
+
+    // Tied to its OWN section, the way "places representative rows under
+    // the correct section headers" ties every other row to its heading -
+    // not merely somewhere after Terminal and before Icon colors, but
+    // inside Agent office's own `<section>`.
+    const defaultViewRow = screen.getByText("Default view");
+    expect(agentOffice.closest("section")).toBe(
+      defaultViewRow.closest("section"),
+    );
+    expect(iconColors.closest("section")).not.toBe(
+      defaultViewRow.closest("section"),
+    );
+
+    const select = screen.getByRole("combobox", { name: "Default view" });
+    expect(select.textContent).toBe(
+      DEFAULT_AGENT_OFFICE_VIEW === "auto" ? "Auto" : DEFAULT_AGENT_OFFICE_VIEW,
+    );
+
+    fireEvent.click(select);
+    fireEvent.click(
+      // Sourced from the leaf vocabulary module, not the registry: the panel
+      // itself now reads `OFFICE_VIEW_LABELS`, so this proves the option text
+      // it actually renders, without importing every planner, measurer and
+      // painter the registry pulls in.
+      screen.getByRole("option", { name: OFFICE_VIEW_LABELS.floor }),
+    );
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("floor");
+  });
+
+  it("sizes the Default view selector as a fluid width with a tokenized cap (Finding 16)", () => {
+    // A fixed `w-[min(40vw,8rem)]` caps a new layout surface at an arbitrary
+    // rem, which the GUI fluid-sizing rule forbids - `w-[40vw]` (fluid)
+    // plus a tokenized `max-w-32` ceiling replaces it. Scoped to the
+    // "Default view" trigger only: "Display zoom" carries the same
+    // `w-[min(40vw,8rem)]` shape and is deliberately out of scope here.
+    renderPanel(queryClient);
+
+    const select = screen.getByRole("combobox", { name: "Default view" });
+    expect(select.className).toContain("w-[40vw]");
+    expect(select.className).toContain("max-w-32");
+    expect(select.className).not.toContain("w-[min(40vw,8rem)]");
   });
 
   // The minimap side control moved to Settings > Layout's Chat group, where it
@@ -203,7 +224,6 @@ describe("<AppearanceSettingsPanel /> groups", () => {
 
     const schemeButton = screen.getByRole("button", { name: "Follow device" });
     const preset = screen.getByRole("button", { name: "Light theme" });
-    const backgroundOpacity = screen.getByText("Background opacity");
     const pointerCursors = screen.getByText(
       "Show a hand cursor over clickable controls",
     );
@@ -224,9 +244,6 @@ describe("<AppearanceSettingsPanel /> groups", () => {
       themesHeading.closest("section"),
     );
     expect(schemeButton.closest("div.rounded-lg")).toBe(
-      preset.closest("div.rounded-lg"),
-    );
-    expect(backgroundOpacity.closest("div.rounded-lg")).toBe(
       preset.closest("div.rounded-lg"),
     );
     expect(preset.closest("section")).toBe(themesHeading.closest("section"));
@@ -332,7 +349,6 @@ describe("<AppearanceSettingsPanel /> groups", () => {
 
     const schemeButton = screen.getByRole("button", { name: "Follow device" });
     const preset = screen.getByRole("button", { name: "Light theme" });
-    const backgroundOpacity = screen.getByText("Background opacity");
     const pointerCursors = screen.getByText(
       "Show a hand cursor over clickable controls",
     );
@@ -352,7 +368,6 @@ describe("<AppearanceSettingsPanel /> groups", () => {
     // row first.
     expect(documentPosition(themes, schemeButton)).toBe("before");
     expect(documentPosition(schemeButton, preset)).toBe("before");
-    expect(documentPosition(preset, backgroundOpacity)).toBe("before");
     expect(documentPosition(themes, startPage)).toBe("before");
     expect(documentPosition(preset, iface)).toBe("before");
 
