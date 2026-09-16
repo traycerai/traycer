@@ -203,6 +203,18 @@ export function usePromptStash(
         // composer that is gone.
         return;
       }
+      if (entrySnapshot.droppedAnnotations > 0) {
+        // The entry does not carry everything this composer holds, so clearing
+        // would destroy the part it could not take - a record's comment, the
+        // page it was taken on, which elements were marked. None of that is in
+        // the document text, and none of it can be recovered from the stash.
+        setPulseEpoch((epoch) => epoch + 1);
+        toast.warning("Prompt stashed without its annotations", {
+          description:
+            "Their images could not be read, so the composer was left as it is.",
+        });
+        return;
+      }
       const cleared = sourceRef.current.clearIfUnchanged(snapshot.token);
       setPulseEpoch((epoch) => epoch + 1);
       if (!cleared) {
@@ -275,6 +287,14 @@ export function usePromptStash(
         if (result.status === "stale") {
           // Destination disappeared, remounted, or switched while blobs were
           // reading. Never consume; never report success.
+          return false;
+        }
+        if (result.status === "unsupported") {
+          // The destination refused rather than take half of it. Keeping the
+          // entry is the point: the part it cannot hold exists nowhere else.
+          toast.warning("This composer can't take that prompt", {
+            description: result.reason,
+          });
           return false;
         }
         focusEditor();

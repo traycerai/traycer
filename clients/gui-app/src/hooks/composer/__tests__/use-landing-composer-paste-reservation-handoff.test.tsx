@@ -178,7 +178,12 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         reservation.release();
       });
       releaseSpies.push(release);
-      return { release };
+      return {
+        release,
+        settleStored: (hash: string) => {
+          reservation.settleStored(hash);
+        },
+      };
     });
     return { releaseSpies };
   }

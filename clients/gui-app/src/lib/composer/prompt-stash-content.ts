@@ -19,12 +19,20 @@ import type {
 } from "@/lib/composer/prompt-stash-codec";
 import { stashImageMetadataAgreesWithBlob } from "@/lib/composer/prompt-stash-codec";
 import {
+  PromptStashCapacityExceededError,
   PromptStashCorruptBlobError,
   PromptStashMissingBlobError,
   readPromptStashRestoreBlobs,
 } from "@/lib/composer/prompt-stash-repository";
+import {
+  tryReserveLandingImageResidency,
+  type LandingImageBudgetCandidate,
+} from "@/lib/composer/landing-image-budget";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
-import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
+import {
+  hasLandingImageBytes,
+  putImageBytesAtHash,
+} from "@/lib/composer/landing-image-store";
 
 interface PreparedOwnedImage {
   readonly bytes: ImageBytes;
@@ -148,7 +156,7 @@ export async function buildPromptStashSnapshot(args: {
       size: canonical.byteLength,
     };
   });
-  const annotations = await captureStashAnnotations({
+  const captured = await captureStashAnnotations({
     records: args.annotations,
     canonicalBySourceHash,
     imagesByHash,
@@ -162,9 +170,10 @@ export async function buildPromptStashSnapshot(args: {
       content,
       // After the annotations, because a sidecar-only crop adds a blob.
       blobHashes: Array.from(imagesByHash.keys()),
-      annotations,
+      annotations: captured,
     },
     imagesByHash,
+    droppedAnnotations: args.annotations.length - captured.length,
   };
 }
 
@@ -179,9 +188,12 @@ export async function buildPromptStashSnapshot(args: {
  * inlined it - has no node to ride along with, so its bytes are resolved and
  * stored here or the record is not carried at all.
  *
- * A record whose bytes cannot be resolved is DROPPED rather than throwing. The
- * prompt is the thing being saved; refusing to stash a page of text because a
- * crop that is no longer in it has been reclaimed would be the worse failure.
+ * A record whose bytes cannot be resolved is left out rather than throwing -
+ * refusing to stash a page of text because one crop has been reclaimed would be
+ * the worse failure. The COUNT of what was left out travels back with the
+ * snapshot, and the caller keeps the source rather than clearing it, so the
+ * comment and page context of an uncaptured annotation are never destroyed by a
+ * save that could not take them.
  */
 async function captureStashAnnotations(args: {
   readonly records: ReadonlyArray<BrowserAnnotationRecord>;
@@ -294,8 +306,13 @@ async function resolveImageSource(args: {
  * so before the consume - is what makes a restored annotation a working chip
  * rather than a broken one.
  *
- * Best effort per crop. A blob that has gone missing or fails its digest costs
- * that one annotation its image, not the restore.
+ * NOT best effort. This is a SECOND read of the same store `materialize`
+ * already read, and between the two the entry can be deleted by another window
+ * or a blob can fail its check - so a miss here is a real failure, and
+ * swallowing it would hand the composer records pointing at nothing and then
+ * let the caller consume the entry that still had the bytes. The errors are the
+ * ones `materialize` raises for the same conditions, so the restore hook
+ * already treats them as "keep the stash, mark the row unavailable".
  */
 export async function restorePromptStashAnnotationCrops(
   annotations: ReadonlyArray<BrowserAnnotationRecord>,
@@ -303,11 +320,35 @@ export async function restorePromptStashAnnotationCrops(
   const hashes = [...new Set(annotations.map((record) => record.imageHash))];
   if (hashes.length === 0) return;
   const read = await readPromptStashRestoreBlobs(hashes);
-  if (read.status !== "ok") return;
+  if (read.status === "missing") throw new PromptStashMissingBlobError();
+  if (read.status === "corrupt") throw new PromptStashCorruptBlobError();
+  // Admitted like any other gain in resident bytes. These writes go straight to
+  // the partition, so without this a restore could push it past a cap that had
+  // just refused an ordinary paste - and the residency variant is the one to
+  // use, because a crop's hash may already be a root while its bytes are not
+  // here, which the ordinary path charges at zero.
+  const arriving: LandingImageBudgetCandidate[] = [];
   for (const hash of hashes) {
     const blob = read.blobs.get(hash);
-    if (blob === undefined) continue;
-    await putImageBytesAtHash(hash, blob.bytes);
+    if (blob === undefined) throw new PromptStashMissingBlobError();
+    if (hasLandingImageBytes(hash)) continue;
+    arriving.push({ hash, bytes: blob.byteLength });
+  }
+  const reservation = tryReserveLandingImageResidency(arriving);
+  if (reservation === null) throw new PromptStashCapacityExceededError();
+  try {
+    for (const hash of hashes) {
+      const blob = read.blobs.get(hash);
+      if (blob === undefined) throw new PromptStashMissingBlobError();
+      // A digest that does not match is corruption, not a skip: the record
+      // would name bytes this partition never wrote.
+      if (!(await putImageBytesAtHash(hash, blob.bytes))) {
+        throw new PromptStashCorruptBlobError();
+      }
+    }
+  } finally {
+    // The bytes are resident now, so the root sum charges them from here.
+    reservation.release();
   }
 }
 

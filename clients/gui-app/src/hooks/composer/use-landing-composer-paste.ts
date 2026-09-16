@@ -89,6 +89,11 @@ async function landingImageAttrsFromFiles(
       const bytes = new Uint8Array(await file.arrayBuffer());
       signal.throwIfAborted();
       const hash = await putImage(bytes);
+      // These bytes are in the partition now, and whatever roots them charges
+      // them from here on. Hand this slot's charge over to the hash rather than
+      // holding both until the slowest sibling finishes - that double count
+      // refuses pastes that fit.
+      reservation.settleStored(hash);
       signal.throwIfAborted();
       return {
         id: uuidv4(),

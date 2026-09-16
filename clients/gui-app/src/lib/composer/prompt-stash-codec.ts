@@ -60,6 +60,16 @@ export interface PromptStashImageBlob {
 export interface PromptStashSnapshot {
   readonly entry: PromptStashEntry;
   readonly imagesByHash: ReadonlyMap<string, PromptStashImageBlob>;
+  /**
+   * Annotation records this capture could NOT take, because their crop could
+   * not be read or prepared.
+   *
+   * A record is not decoration: it holds the comment the user typed, the page
+   * it was taken on and which elements were marked, and none of that is in the
+   * document text. So a capture that drops one has not captured the prompt, and
+   * the source must keep what this entry does not carry.
+   */
+  readonly droppedAnnotations: number;
 }
 
 export interface PromptStashRestoreBlob {

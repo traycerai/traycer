@@ -683,6 +683,56 @@ describe("cloud-draft-image-recovery", () => {
     expect(await reading).toEqual(bytes);
     expect(good.calls).toHaveLength(1);
   });
+  it("refuses a late source from an account this window no longer serves (DRIVE RED)", async () => {
+    // The candidate list is shared per digest and capped at three. Ingests that
+    // were in flight when the account changed apply no rows - correctly - but
+    // their recovery publication still ran, and three of them filled the list
+    // and evicted the address of the account actually being served. That
+    // account then read `null` without issuing a single request, for a digest
+    // whose bytes were one RPC away.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-other", username: "other" },
+    });
+    const theirs = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+    recordCloudDraftImageSources({
+      identity: {
+        taskId: "scp_other",
+        chatId: "draft-other",
+        ownerUserId: "user-other",
+      },
+      hostId: "host-b",
+      client: theirs.client,
+      hashes: [hash],
+    });
+
+    // Three late ingests belonging to the PREVIOUS account, enough to fill the
+    // list on their own.
+    const stale = recordingClient((_method, _params) => ({
+      outcome: { status: "unavailable" as const },
+    }));
+    for (const chatId of ["stale-1", "stale-2", "stale-3"]) {
+      recordCloudDraftImageSources({
+        identity: { ...IDENTITY, chatId },
+        hostId: "host-a",
+        client: stale.client,
+        hashes: [hash],
+      });
+    }
+
+    expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+    expect(theirs.calls).toHaveLength(1);
+    expect(stale.calls).toHaveLength(0);
+  });
+
   it("stops a walk whose ACCOUNT moved, even when the next candidate belongs to the NEW one (DRIVE RED)", async () => {
     // The sibling above is why the candidate list is re-read per iteration, and
     // re-reading it is what made this reachable. Content addressing means two

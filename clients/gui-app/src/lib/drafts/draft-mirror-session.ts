@@ -15,6 +15,7 @@ import {
 import { appLogger, describeLogError } from "@/lib/logger";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 import {
+  currentDraftBlobOwnerId,
   forgetBlobUnsupportedHost,
   forgetConfirmedDraftBlobs,
 } from "./draft-blob-transport";
@@ -390,16 +391,40 @@ export class DraftMirrorSession {
 
   private async runBootstrap(generation: number): Promise<void> {
     if (this.closed || generation !== this.bootGeneration) return;
+    // The ACCOUNT this bootstrap belongs to, captured before the first await.
+    //
+    // Closing is how a sign-out or a user switch is SUPPOSED to reach this
+    // session, and it does - eventually. The teardown is asynchronous, so
+    // between the switch and the close this session is still open, still on its
+    // original generation, and still applying rows: account A's drafts land in
+    // account B's window with every existing guard answering "yes, carry on".
+    // Neither `closed` nor the generation can see that, because the thing that
+    // moved is neither.
+    const bootOwner = currentDraftBlobOwnerId();
     try {
       const listed = await this.rpc.list();
-      if (this.isClosed() || generation !== this.bootGeneration) return;
+      if (this.isSupersededBoot(generation, bootOwner)) return;
       this.snapshotSeq = listed.snapshotSeq;
       this.listedScopeId = listed.scopeId ?? null;
       this.held.clear();
       const listedIds = new Set<string>();
-      if (!(await this.applyListedRows(listed.drafts, generation, listedIds))) {
+      if (
+        !(await this.applyListedRows(
+          listed.drafts,
+          generation,
+          bootOwner,
+          listedIds,
+        ))
+      ) {
         return;
       }
+      // AWAITING the loop is itself a suspension point, whatever the loop did.
+      // Its own guard fires after each row's apply, so it cannot answer for the
+      // hop this `await` opens on the way out - and that hop is the whole story
+      // when the loop had nothing to await: an empty listing, or one whose rows
+      // are all dirty, still yields here, and a close landing in that window
+      // reached the tombstones and the absence sweep below.
+      if (this.isSupersededBoot(generation, bootOwner)) return;
       this.applyListedTombstones(
         listed.tombstones,
         listed.snapshotSeq,
@@ -747,8 +772,12 @@ export class DraftMirrorSession {
    * same thing to every caller, and every caller is on the far side of an
    * await.
    */
-  private isSupersededBoot(generation: number): boolean {
-    return this.isClosed() || generation !== this.bootGeneration;
+  private isSupersededBoot(
+    generation: number,
+    bootOwner: string | null,
+  ): boolean {
+    if (this.isClosed() || generation !== this.bootGeneration) return true;
+    return currentDraftBlobOwnerId() !== bootOwner;
   }
 
   /**
@@ -776,6 +805,7 @@ export class DraftMirrorSession {
   private async applyListedRows(
     drafts: ReadonlyArray<DraftDocument>,
     generation: number,
+    bootOwner: string | null,
     listedIds: Set<string>,
   ): Promise<boolean> {
     for (const document of drafts) {
@@ -786,7 +816,7 @@ export class DraftMirrorSession {
       });
       if (this.sink.isDirty(document.draftId)) continue;
       await this.sink.applyUpsert(document);
-      if (this.isSupersededBoot(generation)) return false;
+      if (this.isSupersededBoot(generation, bootOwner)) return false;
       this.rememberIncomingSynced(document);
     }
     return true;

@@ -9,13 +9,24 @@ import {
   buildPromptStashSnapshot,
   materializePromptStashEntry,
   PromptStashImagePreparationError,
+  restorePromptStashAnnotationCrops,
 } from "@/lib/composer/prompt-stash-content";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  reserveLandingImageBudget,
+  resetLandingImageBudgetReservationsForTesting,
+} from "@/lib/composer/landing-image-budget";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import type {
   PreparedPromptStashImage,
   PromptStashImageCodec,
   PromptStashImagePreparationSession,
 } from "@/lib/composer/prompt-stash-image-preparation";
-import { PromptStashCorruptBlobError } from "@/lib/composer/prompt-stash-repository";
+import {
+  PromptStashCapacityExceededError,
+  PromptStashCorruptBlobError,
+} from "@/lib/composer/prompt-stash-repository";
 import type {
   PromptStashEntry,
   PromptStashRestoreBlob,
@@ -276,6 +287,8 @@ const originalCreateImageBitmap = globalThis.createImageBitmap;
 
 describe("prompt-stash-content", () => {
   beforeEach(() => {
+    installFreshIndexedDb();
+    resetLandingImageBudgetReservationsForTesting();
     restoreBlobsMock.mockReset();
     prepareSpy.mockClear();
     // Static images under the threshold still decode once; give the browser
@@ -461,6 +474,46 @@ describe("prompt-stash-content", () => {
     expect(JSON.stringify(snapshot.entry.content)).toContain(
       "still worth keeping",
     );
+  });
+
+  it("admits the crop write-back through the budget rather than writing past it (DRIVE RED)", async () => {
+    // These writes go straight to the partition. Without admission a restore
+    // could push it past a cap that had just refused an ordinary paste - and
+    // the rooted-but-absent case is why the residency variant is the right one:
+    // a crop whose record already roots the hash is charged zero until its
+    // bytes are actually here.
+    const cropBytes = pngBytesOfSize(64);
+    const cropHash = await sha256Hex(cropBytes);
+    restoreBlobsMock.mockResolvedValue(
+      okRestoreBlobs([
+        [
+          cropHash,
+          {
+            bytes: cropBytes,
+            byteLength: cropBytes.byteLength,
+            mimeType: "image/png",
+          },
+        ],
+      ]),
+    );
+    // Fill the budget with roots that are measured and resident elsewhere.
+    const filler = reserveLandingImageBudget(null, [
+      { hash: "b".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(filler).not.toBeNull();
+
+    await expect(
+      restorePromptStashAnnotationCrops([
+        annotationRecord(cropHash, "crop.png"),
+      ]),
+    ).rejects.toBeInstanceOf(PromptStashCapacityExceededError);
+
+    filler?.release();
+    // The control: with room, the same restore writes the bytes.
+    await restorePromptStashAnnotationCrops([
+      annotationRecord(cropHash, "crop.png"),
+    ]);
+    expect(await getImageBytes(cropHash)).toEqual(cropBytes);
   });
 
   it("resolves hash-only images via the caller-supplied reader (chat / landing adapters)", async () => {

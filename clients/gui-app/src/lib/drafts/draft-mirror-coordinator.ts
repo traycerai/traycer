@@ -1268,7 +1268,16 @@ export async function ingestCloudDraftSummary(input: {
   // snapshot. Ownership never moves, so there is nothing else to admit: a
   // dirty own row keeps its content (`applyLandingHostDocument`), and a
   // replica head is exactly what the directory is for.
+  // The ACCOUNT this ingest belongs to, captured before the apply's own awaits.
+  const ingestOwner = currentDraftBlobOwnerId();
   await applyHostDocument(input.document);
+  // An apply that abandoned installed no row, so this document roots nothing
+  // and there is nothing for recovery to fetch FOR. Running it anyway is not
+  // merely wasted: recording its sources spends slots in a shared, per-digest
+  // candidate list and can evict the address of the account that IS being
+  // served. `applyHostDocument` swallows its own abandonment, so the condition
+  // is re-derived here rather than returned from it.
+  if (currentDraftBlobOwnerId() !== ingestOwner) return;
   await recoverIngestedCloudDraftImages(input);
 }
 

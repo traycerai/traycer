@@ -160,7 +160,19 @@ export function chatTileUiReducer(
       };
     case "updateInlineEditContent":
       if (state.inlineEdit === null) return state;
-      if (state.inlineEdit.pendingClientActionId !== null) return state;
+      // Deliberately NOT gated on `pendingClientActionId`. These ids are the
+      // RAW record of a send, and a rejected dispatch is settled by the
+      // projection (`projectInlineEditAgainstState`) rather than by an action -
+      // so after a rejection the raw state still names the failed send while
+      // the editor the user is looking at has been reopened. Refusing here
+      // froze that editor for good: the correction never reached the reducer,
+      // the retry's own mark was refused as a revision mismatch, and its
+      // acknowledgement then closed an editor still tracking the first attempt.
+      //
+      // Freezing during a LIVE send is the hook's job and is done from the live
+      // record (`inlineEditSendOutstanding`), which reads the projection - the
+      // same state that reopens the editor - so it lifts exactly when the
+      // editor does.
       return {
         ...state,
         inlineEdit: {

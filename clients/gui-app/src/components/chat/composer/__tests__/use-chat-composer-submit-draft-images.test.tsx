@@ -699,6 +699,50 @@ describe("useChatComposerSubmit draft images - F5 live capability", () => {
     useAuthStore.setState({ contextMetadata: null });
   });
 
+  it("labels an annotation attachment by what its bytes ARE, not by what the capture path assumed (DRIVE RED)", async () => {
+    // A crop is a PNG when the browser view captures it, and it is not one
+    // after a stash round trip: the stash canonicalizes a large PNG to WebP and
+    // re-points the record at those bytes. The submit hardcoded `image/png`, so
+    // WebP bytes travelled labelled PNG - in the atom, in the media type and in
+    // any data URL a preview builds from them.
+    const taskId = "chat-annotation-mime";
+    const hash = await seedConfirmedHash();
+    // A minimal RIFF/WEBP container: `RIFF` + size + `WEBP`.
+    const webpBytes = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x1a, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+      0x56, 0x50, 0x38, 0x4c,
+    ]);
+    annotationImageMocks.getImageBytes.mockResolvedValue(webpBytes);
+    resolveMocks.resolveDraftImageBytes.mockResolvedValue(
+      new Uint8Array([1, 2, 3, 4]),
+    );
+    useComposerDraftStore
+      .getState()
+      .addBrowserAnnotation(taskId, annotationRecordFor(hash));
+
+    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
+    const { result } = mountSubmitRerenderable({
+      taskId,
+      editor: fakeEditor(docWithHashOnlyImage(hash), null),
+      onSubmitMessage: submit,
+      targetHostId: GATE_HOST,
+      draftBlobBridgeSupported: false,
+    });
+
+    act(() => {
+      result.current.submitDraft("enter");
+    });
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+
+    const atoms = collectImageAtoms(submit.mock.calls[0][0].content);
+    const crop = atoms.find((atom) =>
+      atom.fileName.startsWith("browser-annotation-"),
+    );
+    expect(crop?.mimeType).toBe("image/webp");
+  });
+
   it("(8) a bridge flag flip DURING the annotation/image read is read live at the final decision, not captured at preparation-start", async () => {
     // Pre-fix, `hostHeldFor`'s `bridgeSupported` was frozen wherever it was
     // captured, so a downgrade mid-read went unseen: zero resolver calls, and

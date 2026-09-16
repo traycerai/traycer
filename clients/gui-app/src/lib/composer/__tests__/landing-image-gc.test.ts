@@ -438,15 +438,16 @@ describe("landing-image-gc", () => {
 
   it("restores bytes whose hash gains a root INSIDE the delete's own transaction hop (DRIVE RED)", async () => {
     const m = await loadModules({ desktop: true });
-    m.gc.markLandingEditorMounted();
     // Restored-from-disk bytes: no session entry, so the sweep's own snapshot
     // correctly calls them an orphan. This is the shape with no second copy
     // anywhere - a local paste that was never uploaded or published has no host
     // mirror and no cloud blob to re-fetch from, so a wrong delete is final.
+    //
+    // Seeded and armed BEFORE the gates that start a sweep: which sweep does
+    // the deleting is not the subject, and tying the test to how many awaits
+    // `reconcile` happens to have makes it a timing fixture.
     const hash = "restored-raced";
     await m.idb.set(hash, bytesOf([5, 6, 7, 8]), m.store.imageStore());
-    m.gc.markLandingDraftsReady();
-    await flush();
 
     // The acquisition lands where no caller-side check can see it: after the
     // sweep read the roots, inside the delete's own hop.
@@ -465,6 +466,9 @@ describe("landing-image-gc", () => {
       await realDel(key, m.store.imageStore());
     });
 
+    m.gc.markLandingEditorMounted();
+    m.gc.markLandingDraftsReady();
+    await flush();
     await m.gc.reconcile();
     await flush();
 

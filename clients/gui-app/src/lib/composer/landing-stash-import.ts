@@ -78,7 +78,7 @@ export async function importPromptStashContentToLanding(
     // a no-op rather than reserving zero candidates for it.
     return {
       content: entry.content,
-      reservation: { release: () => undefined },
+      reservation: { release: () => undefined, settleStored: () => undefined },
     };
   }
 

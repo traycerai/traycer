@@ -122,6 +122,8 @@ export function imageStore(): UseStore {
   return cachedStore.store;
 }
 
+let measuredSizesHydrated = false;
+
 /** The idb-keyval store for this partition's `hash` -> byte-length side table. */
 function imageSizeStore(): UseStore {
   const partition = landingImagePartition();
@@ -264,8 +266,12 @@ export async function getImageBytes(
   if (stored !== undefined) {
     knownHashes.add(hash);
     rememberMeasuredSize(hash, stored.byteLength);
+    return stored;
   }
-  return stored;
+  // The partition can be missing bytes a reclaim is holding mid-flight - it
+  // deletes before it knows whether it may. A read arriving in that window is
+  // not a miss.
+  return reclaimCustody.get(hash);
 }
 
 /**
@@ -322,16 +328,80 @@ export async function reclaimImageBytes(
   if (stillRooted(hash, isRooted)) return "kept";
   const retained = await get<ImageBytes>(hash, store);
   if (retained === undefined) {
+    // Nothing durable - unless a reclaim is already holding these bytes, in
+    // which case that custody IS the copy and reporting "absent" would drop it.
+    if (reclaimCustody.has(hash)) return "kept";
+    // A put that started during the read above has already seeded the session
+    // (that ordering is `writeImageUnderHash`'s whole point) and its durable
+    // write is still in flight. Erasing presence here would report the image
+    // absent while the session is holding it, and the next paste of that hash
+    // would be stripped as unbacked.
+    if (session.has(hash)) return "kept";
     knownHashes.delete(hash);
     return "absent";
   }
   if (stillRooted(hash, isRooted)) return "kept";
-  await deleteImageBytesUnchecked(hash);
-  if (!stillRooted(hash, isRooted)) return "reclaimed";
-  await set(hash, retained, store);
-  knownHashes.add(hash);
-  rememberMeasuredSize(hash, retained.byteLength);
-  return "kept";
+  // Custody BEFORE the delete, and store-visible. A local variable is not
+  // enough: between the delete and the restore the partition does not have
+  // these bytes, so a read that arrives in that window answers `undefined` for
+  // a hash that is about to be kept - and if the restore itself throws (a quota
+  // refusal, a closing database) the only copy is a local in a rejected call.
+  reclaimCustody.set(hash, retained);
+  try {
+    await del(hash, store);
+    if (!stillRooted(hash, isRooted)) {
+      knownHashes.delete(hash);
+      reclaimCustody.delete(hash);
+      return "reclaimed";
+    }
+    await set(hash, retained, store);
+    knownHashes.add(hash);
+    rememberMeasuredSize(hash, retained.byteLength);
+    reclaimCustody.delete(hash);
+    return "kept";
+  } catch (error: unknown) {
+    // Custody is deliberately NOT released. The delete may have committed, so
+    // these bytes can be the only copy left; readers keep finding them here and
+    // `flushReclaimCustody` re-attempts the durable write on the next sweep.
+    knownHashes.add(hash);
+    throw error;
+  }
+}
+
+/**
+ * Bytes a reclaim is holding while the partition does not have them. Emptied
+ * only when that reclaim has decided - deleted for good, or written back.
+ */
+const reclaimCustody = new Map<string, ImageBytes>();
+
+/**
+ * Re-attempt the durable write for every hash still in custody, and report how
+ * many are still held afterwards.
+ *
+ * Called at the START of a sweep rather than from the failing path itself: this
+ * module cannot reach the GC (the dependency runs the other way), and a retry
+ * chained onto the failure would repeat whatever refused it. A sweep is
+ * debounced and runs on every release edge, so custody converges without a
+ * timer of its own.
+ */
+export async function flushReclaimCustody(): Promise<number> {
+  for (const [hash, bytes] of [...reclaimCustody]) {
+    try {
+      await set(hash, bytes, imageStore());
+      knownHashes.add(hash);
+      rememberMeasuredSize(hash, bytes.byteLength);
+      reclaimCustody.delete(hash);
+    } catch {
+      // Still refused. Keep holding: dropping the entry here would destroy the
+      // only copy of bytes something references.
+    }
+  }
+  return reclaimCustody.size;
+}
+
+/** Test seam: what a reclaim is currently holding. */
+export function reclaimCustodyHashesForTests(): ReadonlyArray<string> {
+  return [...reclaimCustody.keys()];
 }
 
 /**
@@ -436,11 +506,15 @@ export function releaseSession(hash: string): void {
  * `getImageBytes` records the size it reads, so the measurement is the read.
  */
 async function hydrateMeasuredImageSizes(): Promise<void> {
+  // The ENUMERATION first, because it is the one that decides what "this
+  // partition does not hold that hash" is allowed to mean. Until it has run,
+  // the presence set is empty for a reason that has nothing to do with the
+  // partition's contents, and admission must not read it as absence.
+  const resident = await imageHashKeys();
   const rows = await entries<string, number>(imageSizeStore());
   for (const [hash, byteLength] of rows) {
     if (typeof byteLength === "number") measuredSizes.set(hash, byteLength);
   }
-  const resident = await imageHashKeys();
   for (const hash of resident) {
     if (measuredSizes.has(hash)) continue;
     await getImageBytes(hash);
@@ -451,18 +525,48 @@ async function hydrateMeasuredImageSizes(): Promise<void> {
  * Resolves once this partition's sizes are as known as they are going to get.
  * Admission consults it rather than blocking: see `landing-image-budget.ts`.
  */
-const measuredSizesHydration: Promise<void> = hydrateMeasuredImageSizes().catch(
-  () => undefined,
-);
+/**
+ * A FAILED hydration is not a hydrated empty partition.
+ *
+ * Swallowing the error and reporting "ready" would tell admission that every
+ * root it cannot measure is a dangling one - the most expensive possible
+ * misreading, since a store that cannot be opened is exactly when nothing can
+ * be measured. The flag is set only on the path that actually enumerated.
+ */
+const measuredSizesHydration: Promise<void> = hydrateMeasuredImageSizes()
+  .then(() => {
+    measuredSizesHydrated = true;
+  })
+  .catch(() => undefined);
+
+/**
+ * Whether the cold-start measurement above has finished.
+ *
+ * Until it has, this module knows neither what a hash measures NOR whether the
+ * partition holds it - `knownHashes` is seeded by that same pass. Admission has
+ * to read this rather than infer from an empty presence set, or a cold start
+ * charges every restored image zero and admits work the partition cannot hold.
+ */
+export function landingImageSizesHydrated(): boolean {
+  return measuredSizesHydrated;
+}
 
 /**
  * Resolves when the cold-start measurement above has finished. Admission does
- * not wait on it: an unmeasured root is charged conservatively rather than
- * free, so the direction of error while this is still running is a refusal, not
- * an overrun. Tests await it to make the measured numbers deterministic.
+ * not block on it - it charges conservatively instead - but tests await it to
+ * make the measured numbers deterministic.
  */
 export function awaitLandingImageSizes(): Promise<void> {
   return measuredSizesHydration;
+}
+
+/**
+ * Test seam for the cold-start gate. Real code never sets this - the startup
+ * pass does - but a suite has to be able to stand in the window before it, and
+ * that window is otherwise a race with module evaluation.
+ */
+export function setLandingImageSizesHydratedForTests(value: boolean): void {
+  measuredSizesHydrated = value;
 }
 
 export function __resetMeasuredLandingImageSizesForTests(): void {

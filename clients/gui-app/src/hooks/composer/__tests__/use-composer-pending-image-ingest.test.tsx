@@ -325,7 +325,7 @@ describe("ingestPastedComposerImages - F3: format verdict runs before budget adm
           real.release();
         });
         releaseSpies.push(releaseSpy);
-        return { release: releaseSpy };
+        return { release: releaseSpy, settleStored: () => undefined };
       },
     );
 
@@ -680,6 +680,9 @@ describe("F5: the 15s deadline and abort responsiveness (use-composer-pending-im
           release: () => {
             releaseSpy();
             real.release();
+          },
+          settleStored: (hash: string) => {
+            real.settleStored(hash);
           },
         };
       },

@@ -53,6 +53,7 @@ import {
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { putImage } from "@/lib/composer/landing-image-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -596,6 +597,134 @@ describe("DraftMirrorSession", () => {
     // the window, so none of it may run either.
     expect(sink.synced).toEqual([]);
     expect(sink.deletes).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("abandons a bootstrap when the ACCOUNT switches mid-listing, with no close at all (DRIVE RED)", async () => {
+    // Closing is how a sign-out reaches this session, and it does - eventually.
+    // The teardown is asynchronous, so between the switch and the close this
+    // session is open, on its original generation, and still applying: row 1's
+    // own apply correctly drops its bytes, and row 2 then installs account A's
+    // text under account B with every guard answering "carry on".
+    const first = landingDocument({ draftId: "d1", revision: 2 });
+    const second = landingDocument({ draftId: "d2", revision: 3 });
+    const applied: string[] = [];
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "a" },
+    });
+    const sink = createSink({
+      dirty: new Set(),
+      writes: [],
+      applyUpsert: (document) => {
+        applied.push(document.draftId);
+        if (document.draftId === "d1") {
+          useAuthStore.setState({
+            status: "signed-in",
+            contextMetadata: { userId: "user-b", username: "b" },
+          });
+        }
+        return Promise.resolve();
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([first, second], 9, EMPTY_LIST_TOMBSTONES),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(applied).toEqual(["d1"]);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // Row 2 is never applied, and nothing below the loop runs either.
+    expect(applied).toEqual(["d1"]);
+    expect(sink.synced).toEqual([]);
+    session.close();
+  });
+
+  it("abandons a bootstrap when the session closes in the hop OUT of the row loop (DRIVE RED)", async () => {
+    // Every row is dirty, so the loop awaits nothing and its own post-apply
+    // guard never runs. Awaiting the loop still yields, and a close landing in
+    // that hop used to reach the tombstones and the absence sweep - which is
+    // how a superseded bootstrap drops rows a newer one installed.
+    const dirty = landingDocument({ draftId: "d1", revision: 2 });
+    const dropped: string[] = [];
+    let closeSession: () => void = () => undefined;
+    const sink = createSink({
+      dirty: new Set(["d1"]),
+      writes: [],
+      dropAbsentFromList: (hostId, _listedIds) => {
+        dropped.push(hostId);
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([dirty], 9, [{ draftId: "t1", revision: 4 }]),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    // The close lands while the row loop is running - synchronously, from the
+    // dirty check, so the only guard left between it and the sink mutations is
+    // the one on the far side of the loop's own await.
+    closeSession = () => {
+      session.close();
+    };
+    let closed = false;
+    const dirtyIds = new Set(["d1"]);
+    Object.defineProperty(sink, "isDirty", {
+      value: (draftId: string): boolean => {
+        if (!closed) {
+          closed = true;
+          closeSession();
+        }
+        return dirtyIds.has(draftId);
+      },
+    });
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(closed).toBe(true);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sink.deletes).toEqual([]);
+    expect(sink.synced).toEqual([]);
     expect(dropped).toEqual([]);
   });
 

@@ -1,3 +1,4 @@
+import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {
@@ -1045,7 +1046,12 @@ async function resolveAnnotationImageAtoms(
     atoms.push({
       id: uuidv4(),
       fileName: record.imageFileName,
-      mimeType: "image/png",
+      // SNIFFED, not assumed. A crop is a PNG when the browser view captures
+      // it, and it is not one after a stash round trip: the stash canonicalizes
+      // a large PNG to WebP and re-points the record at those bytes. Labelling
+      // WebP bytes `image/png` was wrong in the atom, in the media type and in
+      // the data URL a preview builds from them.
+      mimeType: sniffImageMimeType(bytes) ?? "image/png",
       size: bytes.byteLength,
       b64content: bytesToBase64(bytes),
       hash: record.imageHash,

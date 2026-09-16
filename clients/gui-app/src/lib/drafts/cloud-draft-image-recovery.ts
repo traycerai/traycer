@@ -257,6 +257,21 @@ export interface CloudDraftImageRecoveryInput {
 export function recordCloudDraftImageSources(
   input: CloudDraftImageRecoveryInput,
 ): void {
+  // Refuse a source whose draft belongs to an account this window no longer
+  // serves. The candidate list is shared per digest and capped, so a stale
+  // publication is not inert: several abandoned ingests for one hash can fill
+  // it and evict the address of the account actually being served, which then
+  // reads `null` without issuing a single request. Filtering at the READ was
+  // not enough - by then the usable address is already gone.
+  if (input.identity.ownerUserId !== currentDraftBlobOwnerId()) {
+    appLogger.warn(
+      "[cloud-draft-image] refused a source from another account",
+      {
+        hostId: input.hostId,
+      },
+    );
+    return;
+  }
   const source: CloudDraftImageSource = {
     identity: input.identity,
     hostId: input.hostId,

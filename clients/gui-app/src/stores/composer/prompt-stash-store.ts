@@ -177,7 +177,9 @@ export const usePromptStashStore = create<PromptStashState>()((set, get) => ({
       // answer has changed. A check out here could only cover the gap up to
       // the call - and `hydrate()` above is itself an await.
       const { rows, revision } = await savePromptStashSnapshotWhile(
-        { entry, imagesByHash },
+        // An ingest carries an entry another device already captured, so there
+        // is nothing this one failed to take.
+        { entry, imagesByHash, droppedAnnotations: 0 },
         stillCurrent,
       );
       // And again before PUBLISHING: a committed row is only half of what a

@@ -226,6 +226,7 @@ function withQualification(
       content: withTrailingParagraph(snapshot.entry.content, qualification),
     },
     imagesByHash: snapshot.imagesByHash,
+    droppedAnnotations: snapshot.droppedAnnotations,
   };
 }
 

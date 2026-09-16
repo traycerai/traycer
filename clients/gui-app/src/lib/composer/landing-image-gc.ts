@@ -26,6 +26,7 @@
  */
 
 import {
+  flushReclaimCustody,
   imageHashKeys,
   reclaimImageBytes,
   releaseSession,
@@ -143,6 +144,16 @@ export async function reconcile(): Promise<void> {
   // DURING the IndexedDB read — writing its bytes and (per `putImage`) seeding the
   // session before that write — is reflected in `liveRoots`/`sessionKeys` and is
   // not mistaken for an orphan and deleted. [C2: the paste↔reconcile-await race]
+  // Before anything else: a previous sweep can be holding bytes whose durable
+  // write was refused, and those are readable only through that custody. Making
+  // them durable again is what lets this sweep reason about the partition at
+  // all.
+  const stillHeld = await flushReclaimCustody();
+  if (stillHeld > 0) {
+    appLogger.warn("[landing-image-gc] bytes still held after a failed write", {
+      stillHeld,
+    });
+  }
   const stored = await imageHashKeys();
   const liveRoots = landingLiveImageRootHashes();
   const sessionKeys = sessionHashKeys();

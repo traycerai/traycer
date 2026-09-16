@@ -22,7 +22,14 @@ export interface PromptStashDestinationIdentity {
 
 export type PromptStashDestinationResult =
   | { readonly status: "accepted" }
-  | { readonly status: "stale" };
+  | { readonly status: "stale" }
+  /**
+   * This destination cannot hold part of what the entry carries, so it took
+   * NOTHING. The stash is kept intact and the user is told which surface can
+   * take it - the alternative is a restore that quietly destroys the part this
+   * surface has no field for.
+   */
+  | { readonly status: "unsupported"; readonly reason: string };
 
 export interface PromptStashMaterializedContent {
   readonly content: JsonContent;
