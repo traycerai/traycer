@@ -466,8 +466,8 @@ const ACT_SWIPE_EXEMPT_TARGETS =
  * the installed app, where 36px is under what a thumb can reliably hit.
  *
  * The tall-viewport tier is restated rather than left to cascade. A modern
- * phone clears `min-height: 920px` in portrait, and `tailwind-merge` only
- * displaces a class whose modifiers match - so without it exactly those phones
+ * phone clears `min-height: 920px` in portrait, and `cn` only displaces a
+ * class whose modifiers match - so without it exactly those phones
  * would fall through to the desktop's 40px bump.
  *
  * Resolved once and handed to all three buttons, rather than branched at each

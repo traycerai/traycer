@@ -85,14 +85,14 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
       // overflow-y compute to `auto` too - any vertical spill inside it
       // becomes a user-visible vertical scroller rather than clipping. So
       // nothing may exceed the list's height: it sizes to its triggers
-      // (`h-auto` on the base height's exact modifier so tailwind-merge
+      // (`h-auto` on the base height's exact modifier so `cn`
       // replaces the fixed `h-8`), and the triggers themselves carry the full
       // 44px touch height (min-h-[44px] below), which also collapses the
       // coarse-pointer hit-slop `::after` (`height: max(100%, 44px)` in
       // mobile-shell-touch-targets.css) to an exact fit.
       //
       // Every override here has to spell its modifier the way `ui/tabs` spells
-      // its own, and the reason is not style. tailwind-merge only drops the
+      // its own, and the reason is not style. `cn` only drops the
       // base utility when both sides carry the IDENTICAL modifier chain; spell
       // them differently and both ship, at which point the cascade decides -
       // and the bare shadcn variants (`data-horizontal:`, `data-active:`,
@@ -128,7 +128,7 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
             // `variant="line"` list, but it answers it by out-specifying the
             // default fill rather than removing it, so the guarantee lasts only
             // as long as this list stays on that variant. Stated here in the
-            // primitive's own spelling, tailwind-merge drops the default fill
+            // primitive's own spelling, `cn` drops the default fill
             // outright and the outcome stops depending on which rule wins.
             //
             // The active indicator is a `::before` underline, NOT ui/tabs'

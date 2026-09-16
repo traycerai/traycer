@@ -881,7 +881,7 @@
    * Insetting a `fixed` overlay that a PRIMITIVE already positions has one
    * trap, and it is silent off-device where every token below is zero:
    *
-   *   - `tailwind-merge` only treats two classes as conflicting when their
+   *   - `cn` only treats two classes as conflicting when their
    *     modifiers match, so an override of a `data-[side=left]:inset-y-0` base
    *     has to carry `data-[side=left]:` too. Bare, it is not a smaller
    *     override - it is a second rule, and stylesheet order decides.

@@ -77,8 +77,8 @@ function SheetContent({
           // sensor housing without each one remembering.
           //
           // Margin, not a `top`/`inset-y` override: those rules are variant-
-          // prefixed, and tailwind-merge only displaces a class whose modifiers
-          // match, so a bare `top-safe-top` would tie rather than win. Margin
+          // prefixed, and `cn` only displaces a class whose modifiers match,
+          // so a bare `top-safe-top` would tie rather than win. Margin
           // is a different property and cannot tie.
           //
           // The bottom edge is left alone deliberately - a sheet anchored there

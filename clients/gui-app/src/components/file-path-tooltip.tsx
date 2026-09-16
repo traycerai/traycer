@@ -34,11 +34,11 @@ interface FilePathTooltipProps {
  * - Unicode neutrals like `/` would otherwise be reordered into the
  * wrong position.
  *
- * Font-size is delivered through inline `style` rather than a `text-*`
- * className: shadcn's `TooltipContent` already sets `text-ui-xs
- * text-background`, and adding a second `text-*` class would make
- * `tailwind-merge` collapse the group and drop the color, leaving the
- * tooltip invisible against its own background.
+ * The type is `TooltipContent`'s own; only the FACE is set here, because
+ * whether a label is a path is a fact about what is being labelled. The note
+ * that used to sit here - that a second `text-*` class would collapse the
+ * group and drop the tooltip's color - stopped being true when `cn.config.mjs`
+ * registered the custom `--text-*` tokens as font sizes.
  */
 export function FilePathTooltip(props: FilePathTooltipProps) {
   return (

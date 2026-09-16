@@ -78,7 +78,7 @@ export const PANEL_HEADER_ACTION_REVEAL_CLASS =
  * `disabled:opacity-50` is a `:disabled` pseudo-class (specificity 0,2,0) and
  * outweighs the plain `opacity-0` rest rule (0,1,0), which would otherwise pin
  * a *disabled* control visible at 50% even when the row is not hovered.
- * `disabled:opacity-0` restores hidden-at-rest (tailwind-merge keeps it over
+ * `disabled:opacity-0` restores hidden-at-rest (`cn` keeps it over
  * the base rule), and `disabled:group-hover/tree-item:opacity-50` keeps the
  * control dimmed once the row reveals it, signalling it is non-interactive.
  *

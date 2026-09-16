@@ -371,7 +371,7 @@ export function HomeFocusPromptRow(props: {
  * `min-w-0` cannot help there either: a flex item that may not shrink never
  * consults it. It is `shrink` on the BUTTON that lets the truncation happen, at
  * every width, and `cn()` is what makes it beat the variant - same modifier,
- * later argument, so `tailwind-merge` drops the `shrink-0` outright rather than
+ * later argument, so `cn` drops the `shrink-0` outright rather than
  * leaving the outcome to emit order.
  */
 function FocusStopButton(props: {
