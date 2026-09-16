@@ -389,6 +389,24 @@ const GROUND_LAYOUT = layoutWithCivic([
 ]);
 const GROUND_TILES: OfficeTileRect = { col: 0, row: 0, cols: 24, rows: 24 };
 
+/**
+ * How many ground sprites `pushGroundTiles` emits for this chunk - derived
+ * from the painter's OWN clamp (the requested rect intersected with the
+ * layout) rather than from the rect the caller asked for, which can hang off
+ * the floor.
+ */
+function groundTileCount(layout: OfficeLayout, tiles: OfficeTileRect): number {
+  const rows =
+    Math.min(layout.rows - 1, tiles.row + tiles.rows - 1) -
+    Math.max(0, tiles.row) +
+    1;
+  const cols =
+    Math.min(layout.cols - 1, tiles.col + tiles.cols - 1) -
+    Math.max(0, tiles.col) +
+    1;
+  return Math.max(0, rows) * Math.max(0, cols);
+}
+
 describe("floorPainter.floor: pushCivicGround tints every civic room (K2/K3 ground bake)", () => {
   it.each([1, 2] as const)(
     "gives both the open and the walled room exactly one tinted block at lod %i, at the room's own bounds * OFFICE_TILE",
@@ -419,25 +437,27 @@ describe("floorPainter.floor: pushCivicGround tints every civic room (K2/K3 grou
   );
 
   it.each([1, 2] as const)(
-    "puts the tint before every sprite at lod %i - pushCivicGround runs FIRST in floorChunk, so a baking host blits the ground under the floor rather than over it",
+    "splices the tint between the ground tiles and the fixtures at lod %i - not before both and not after both",
     (lod) => {
       const drawables = floorPainter.floor(GROUND_LAYOUT, GROUND_TILES, lod);
+      const groundCount = groundTileCount(GROUND_LAYOUT, GROUND_TILES);
 
-      const firstSpriteIndex = drawables.findIndex(
-        (drawable) => drawable.kind === "sprite",
-      );
-      const civicBlockIndices = drawables
-        .map((drawable, index) =>
-          drawable.kind === "block" && drawable.fill === "civic" ? index : -1,
-        )
-        .filter((index) => index >= 0);
+      const before = drawables.slice(0, groundCount);
+      const seam = drawables.slice(groundCount, groundCount + 2);
+      const after = drawables.slice(groundCount + 2);
 
-      // Not vacuous: there really is at least one sprite and one tint here.
-      expect(firstSpriteIndex).toBeGreaterThan(-1);
-      expect(civicBlockIndices.length).toBe(2);
-      for (const index of civicBlockIndices) {
-        expect(index).toBeLessThan(firstSpriteIndex);
-      }
+      // Not vacuous: `floorChunk` really does run a ground pass and a fixture
+      // pass here, so "between them" names a position that exists.
+      expect(groundCount).toBeGreaterThan(0);
+      expect(after.length).toBeGreaterThan(0);
+
+      // The ground pass is opaque `floor-a`/`floor-b` sprites. A tint emitted
+      // among THEM is painted over.
+      expect(civicBlocksIn(before).length).toBe(0);
+      // The fixture passes stand ON the floor. A tint emitted among them
+      // recolours the furniture instead of the ground.
+      expect(civicBlocksIn(after).length).toBe(0);
+      expect(civicBlocksIn(seam).length).toBe(2);
     },
   );
 

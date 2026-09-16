@@ -20,7 +20,14 @@ afterEach(() => {
  */
 describe("OfficeAutoAnnouncer", () => {
   it("is a screen-reader-only polite status region", () => {
-    render(<OfficeAutoAnnouncer decision={null} restoredView={null} />);
+    render(
+      <OfficeAutoAnnouncer
+        mode="office"
+        choice="auto"
+        decision={null}
+        restoredView={null}
+      />,
+    );
 
     const region = screen.getByTestId("comm-graph-office-auto-announcer");
     expect(region.getAttribute("role")).toBe("status");
@@ -33,7 +40,14 @@ describe("OfficeAutoAnnouncer", () => {
   });
 
   it("says Auto is still measuring when neither a decision nor a restored view is known", () => {
-    render(<OfficeAutoAnnouncer decision={null} restoredView={null} />);
+    render(
+      <OfficeAutoAnnouncer
+        mode="office"
+        choice="auto"
+        decision={null}
+        restoredView={null}
+      />,
+    );
 
     expect(
       screen.getByTestId("comm-graph-office-auto-announcer").textContent,
@@ -41,7 +55,14 @@ describe("OfficeAutoAnnouncer", () => {
   });
 
   it('says the restored sentence when only a restored view is known - a decision that was made and will not be re-made, not "measuring"', () => {
-    render(<OfficeAutoAnnouncer decision={null} restoredView="towers" />);
+    render(
+      <OfficeAutoAnnouncer
+        mode="office"
+        choice="auto"
+        decision={null}
+        restoredView="towers"
+      />,
+    );
 
     expect(
       screen.getByTestId("comm-graph-office-auto-announcer").textContent,
@@ -57,7 +78,14 @@ describe("OfficeAutoAnnouncer", () => {
         { view: "towers", zoom: 0.43 },
       ],
     };
-    render(<OfficeAutoAnnouncer decision={decision} restoredView={null} />);
+    render(
+      <OfficeAutoAnnouncer
+        mode="office"
+        choice="auto"
+        decision={decision}
+        restoredView={null}
+      />,
+    );
 
     expect(
       screen.getByTestId("comm-graph-office-auto-announcer").textContent,
@@ -72,7 +100,14 @@ describe("OfficeAutoAnnouncer", () => {
       agents: 1,
       fits: [{ view: "floor", zoom: 1 }],
     };
-    render(<OfficeAutoAnnouncer decision={decision} restoredView={null} />);
+    render(
+      <OfficeAutoAnnouncer
+        mode="office"
+        choice="auto"
+        decision={decision}
+        restoredView={null}
+      />,
+    );
 
     expect(
       screen.getByTestId("comm-graph-office-auto-announcer").textContent,
@@ -85,12 +120,49 @@ describe("OfficeAutoAnnouncer", () => {
       agents: 5,
       fits: [{ view: "building", zoom: 0.8 }],
     };
-    render(<OfficeAutoAnnouncer decision={decision} restoredView="towers" />);
+    render(
+      <OfficeAutoAnnouncer
+        mode="office"
+        choice="auto"
+        decision={decision}
+        restoredView="towers"
+      />,
+    );
 
     const text = screen.getByTestId(
       "comm-graph-office-auto-announcer",
     ).textContent;
     expect(text).toContain(OFFICE_VIEWS.building.label);
     expect(text).not.toContain("measured earlier");
+  });
+
+  // The tile renders this OUTSIDE its keyed canvas, so it is mounted on every
+  // comm-graph tile rather than only the Auto offices - which makes "there is
+  // nothing to announce" this component's own call, and these two the cases
+  // that used to be the `&&` at the call site.
+  it("says nothing on a graph tile - a graph has no view for Auto to have chosen", () => {
+    render(
+      <OfficeAutoAnnouncer
+        mode="graph"
+        choice="auto"
+        decision={null}
+        restoredView="towers"
+      />,
+    );
+
+    expect(screen.queryByTestId("comm-graph-office-auto-announcer")).toBeNull();
+  });
+
+  it("says nothing when the view was PICKED - a person who chose Building is not owed the news", () => {
+    render(
+      <OfficeAutoAnnouncer
+        mode="office"
+        choice="building"
+        decision={null}
+        restoredView="towers"
+      />,
+    );
+
+    expect(screen.queryByTestId("comm-graph-office-auto-announcer")).toBeNull();
   });
 });

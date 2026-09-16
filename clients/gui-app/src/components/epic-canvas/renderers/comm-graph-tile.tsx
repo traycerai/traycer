@@ -1047,39 +1047,46 @@ export function CommGraphTile(props: CommGraphTileProps) {
             onAutoProbe={handleAutoProbe}
             onRegisterFlush={registerOfficeFlush}
             viewPicker={
-              <>
-                <OfficeViewPicker
-                  choice={choice}
-                  autoViewId={resolvedViewId}
-                  decision={shownAutoDecision}
-                  onChoose={handleOfficeViewChange}
-                />
-                {/*
-                 * AUTO'S OUTCOME, ANNOUNCED AND NOT DRAWN, and only where Auto
-                 * is the thing deciding - a person who picked a view themselves
-                 * has nothing to be told.
-                 *
-                 * The visible chip this replaces is gone on purpose (feedback
-                 * round 1), but it was also the only live region on this
-                 * surface: the picker's trigger carries a fixed
-                 * `aria-label="Office view"`, so with the chip deleted the
-                 * measuring -> decided transition happened silently for anyone
-                 * not watching the canvas. `sr-only` keeps the sentence and
-                 * none of the pixels.
-                 */}
-                {choice === "auto" ? (
-                  <OfficeAutoAnnouncer
-                    decision={shownAutoDecision}
-                    restoredView={trustedAutoView}
-                  />
-                ) : null}
-              </>
+              <OfficeViewPicker
+                choice={choice}
+                autoViewId={resolvedViewId}
+                decision={shownAutoDecision}
+                onChoose={handleOfficeViewChange}
+              />
             }
           />
         ) : (
           <CommGraphCanvas {...canvasProps} />
         )}
       </div>
+      {/*
+       * AUTO'S OUTCOME, ANNOUNCED AND NOT DRAWN, and only where Auto is the
+       * thing deciding - a person who picked a view themselves has nothing to
+       * be told. The visible chip this replaces is gone on purpose (feedback
+       * round 1), but it was also the only live region on this surface: the
+       * picker's trigger carries a fixed `aria-label="Office view"`, so with
+       * the chip deleted the measuring -> decided transition happened silently
+       * for anyone not watching the canvas. `sr-only` keeps the sentence and
+       * none of the pixels.
+       *
+       * OUTSIDE THE KEYED CANVAS, and that placement is the whole point.
+       *
+       * `canvasKey` changes the moment Auto resolves, which remounts
+       * `CommGraphOfficeCanvas` and everything passed through it. A live region
+       * that remounts does not announce: its new text arrives as the initial
+       * content of a brand-new `role="status"` node rather than as a change to
+       * one the screen reader was already watching, so the decided view is
+       * exactly the sentence that gets lost. Mounted out here it survives the
+       * remount and updates in place - which is the only way it says anything
+       * at all, since measuring -> decided IS the announcement.
+       */}
+      <OfficeAutoAnnouncer
+        mode={node.view.mode}
+        choice={choice}
+        decision={shownAutoDecision}
+        restoredView={trustedAutoView}
+      />
+
       <CommGraphTransportBar epicId={node.epicId} events={snapshot.events} />
     </div>
   );

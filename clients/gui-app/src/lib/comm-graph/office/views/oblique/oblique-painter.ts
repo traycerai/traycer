@@ -229,13 +229,32 @@ function floor(
       x: prop.tile.col * OFFICE_TILE,
       y: prop.tile.row * OFFICE_TILE,
     }));
-  // FIRST, because it is GROUND: the floor tiles and the plaza's fixtures are
-  // both in `props` below, and the tint belongs under both. That ordering is
-  // only honoured because `civicGround` marks its blocks `ground: true` and so
-  // bakes alongside the sprites - see `officeBakesIntoStaticFloor`. Emitted
-  // last, or emitted first without the mark, it would be painted OVER the
-  // counter and the screens on the static path.
-  return [...civicGround(layout, tiles), ...props];
+  // THE TINT GOES BETWEEN THE GROUND AND WHAT STANDS ON IT, so this stream is
+  // split rather than concatenated whole. `STATIC_PROPS` mixes two different
+  // things: the storey's own opaque floor tiles, and the plaza's fixtures - the
+  // reception counter, the glass screens, the cross, the records door. A tint
+  // before the tiles is erased by them; a tint after the fixtures recolours
+  // them. It belongs in the seam.
+  //
+  // `ground: true` is what holds that seam through the static bake, which
+  // otherwise blits every sprite and then draws the tint last whatever this
+  // array says. See `officeBakesIntoStaticFloor`.
+  const groundTiles = props.filter((prop) => isObliqueGroundSprite(prop));
+  const standing = props.filter((prop) => !isObliqueGroundSprite(prop));
+  return [...groundTiles, ...civicGround(layout, tiles), ...standing];
+}
+
+/** The two sprites that ARE the storey's floor, as opposed to standing on it. */
+const OBLIQUE_GROUND_SPRITES: ReadonlySet<OfficeSpriteName> = new Set([
+  "floor-a",
+  "floor-b",
+]);
+
+function isObliqueGroundSprite(drawable: OfficeDrawable): boolean {
+  return (
+    drawable.kind === "sprite" &&
+    OBLIQUE_GROUND_SPRITES.has(drawable.sprite.name)
+  );
 }
 interface PropPaint {
   readonly ownerAgentId: string | null;

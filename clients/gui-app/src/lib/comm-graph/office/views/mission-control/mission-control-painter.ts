@@ -314,9 +314,6 @@ function paintFloor(
 ): ReadonlyArray<OfficeDrawable> {
   if (lod === 0) return blockMap(layout, tiles);
   const drawables: OfficeDrawable[] = [];
-  // GROUND FIRST. The hall's tiles and its fixed props are both emitted below,
-  // and a civic room's tint belongs under both of them.
-  drawables.push(...civicGround(layout, tiles));
   const lookups = floorLookups(layout);
   const lastCol = tiles.col + tiles.cols;
   const lastRow = tiles.row + tiles.rows;
@@ -338,6 +335,10 @@ function paintFloor(
       });
     }
   }
+  // BETWEEN THE HALL'S FLOOR AND WHAT STANDS ON IT. The tile loop above lays
+  // opaque floor sprites, so a tint before them is erased; `paintUnownedProps`
+  // below is the medbay's own furniture, so a tint after them recolours it.
+  drawables.push(...civicGround(layout, tiles));
   drawables.push(...paintUnownedProps(layout, tiles));
   return drawables;
 }
@@ -353,11 +354,11 @@ function paintFloor(
  * plan one view over, and fixing only the view somebody happened to screenshot
  * is how the next round gets the same complaint about a different office.
  *
- * Pushed FIRST, before the hall's tiles and its fixed props, because it is the
- * ground they stand on. `ground: true` is what makes that ordering survive the
- * static bake; without it the tint is composited over the medbay's own
- * furniture on every host that can make an offscreen surface. See
- * `officeBakesIntoStaticFloor`.
+ * Pushed AFTER the hall's floor tiles and BEFORE its fixed props, which is the
+ * one position that is neither erased nor painted over the furniture.
+ * `ground: true` is what makes that ordering survive the static bake; without
+ * it the tint is composited over the medbay's own furniture on every host that
+ * can make an offscreen surface. See `officeBakesIntoStaticFloor`.
  *
  * The alpha is {@link OFFICE_CIVIC_GROUND_ALPHA}, shared by all six views.
  */

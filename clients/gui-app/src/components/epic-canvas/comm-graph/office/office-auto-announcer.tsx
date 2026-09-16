@@ -33,6 +33,20 @@ import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 
 export interface OfficeAutoAnnouncerProps {
+  /**
+   * WHETHER THERE IS ANYTHING TO ANNOUNCE, decided here rather than at the
+   * call site.
+   *
+   * Auto is the only view choice made without a gesture, so it is the only one
+   * that owes the reader a sentence - a graph tile has no view to announce, and
+   * a person who picked Building themselves already knows. Both conditions live
+   * in this component because the tile renders it OUTSIDE the keyed canvas (see
+   * the comment there), and two `&&` at that call site is two branches on a
+   * function the complexity rule already holds at its limit.
+   */
+  readonly mode: "office" | "graph";
+  /** Which view the tile is on: only `"auto"` has an outcome to report. */
+  readonly choice: "auto" | OfficeViewId;
   /** This session's measurement, or `null` when none is in hand. */
   readonly decision: OfficeAutoDecision | null;
   /**
@@ -95,7 +109,8 @@ function announcementText(
 }
 
 export function OfficeAutoAnnouncer(props: OfficeAutoAnnouncerProps) {
-  const { decision, restoredView } = props;
+  const { choice, decision, mode, restoredView } = props;
+  if (mode !== "office" || choice !== "auto") return null;
   return (
     <span
       data-testid="comm-graph-office-auto-announcer"

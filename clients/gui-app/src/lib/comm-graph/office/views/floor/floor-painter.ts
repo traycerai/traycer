@@ -628,11 +628,15 @@ function floorChunk(
 ): ReadonlyArray<OfficeDrawable> {
   if (lod === 0) return blockMap(layout, tiles);
   const out: OfficeDrawable[] = [];
-  // GROUND FIRST, before the tiles themselves and everything standing on them:
-  // `ground: true` bakes it with the sprites, so the painter's order is the
-  // order both floor paths draw in. See `officeBakesIntoStaticFloor`.
-  pushCivicGround(out, layout, tiles);
   pushGroundTiles(out, layout, tiles);
+  // BETWEEN THE TWO, and it has to be exactly here. The floor tiles above are
+  // fully OPAQUE `floor-a`/`floor-b` sprites, so a tint emitted before them is
+  // erased; everything below stands ON the floor, so a tint emitted after them
+  // recolours the furniture instead of the ground. `ground: true` is what makes
+  // this position survive the static bake - without it the bake would blit
+  // every sprite first and draw the tint last whatever the array says. See
+  // `officeBakesIntoStaticFloor`.
+  pushCivicGround(out, layout, tiles);
   for (const room of layout.rooms) pushCabinWalls(out, room, tiles);
   for (const room of layout.rooms) pushPodFloors(out, room, tiles);
   // Every amenity's ring is drawn with the cabins' own two sprites, and the
