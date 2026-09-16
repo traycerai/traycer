@@ -5528,12 +5528,16 @@ export function createChatSessionStoreWithNotificationDependencies(
       for (const source of unrecordedPromptSources(
         state.failedSendRestoration,
         Object.values(state.pendingActions),
-        // No `deliveredLastCopyActionIds` filter here. Delivery DELETES the
-        // entry, in the same updater that adds the id to that set, so a
+        // No `deliveredLastCopyActionIds` filter here, and it would now be
+        // actively wrong. Delivery deletes the entry for a TEXT-ONLY prompt,
+        // in the same updater that adds the id to that set, so for those a
         // filter would be a second guard on the first one's result - and an
         // unreachable guard is worse than none: it attracts tests that then
-        // pass for a reason other than their name. One mechanism, stated
-        // where it lives.
+        // pass for a reason other than their name. For an ANNOTATED prompt
+        // the entry deliberately survives delivery, because the notice never
+        // showed the sidecar, and filtering on the delivered set would skip
+        // exactly the prompt this handoff exists to save. One mechanism,
+        // stated where it lives: the map holds what still needs stashing.
         Object.values(state.lastCopyPrompts),
         retryHandoffAccountFor,
       )) {
@@ -9501,15 +9505,31 @@ export function createChatSessionStoreWithNotificationDependencies(
             ]);
           }
           // The prompt has been SHOWN, so this record is no longer the only
-          // copy and the handoff must not stash it. Released at the same
-          // point as the hold, from the same condition, so the two cannot
-          // disagree about whether custody has moved on.
-          const lastCopyPrompts = Object.hasOwn(
-            state.lastCopyPrompts,
-            clientActionId,
-          )
-            ? withoutLastCopyPrompt(state.lastCopyPrompts, clientActionId)
-            : state.lastCopyPrompts;
+          // copy and the handoff must not stash it.
+          //
+          // Except that a notice shows the WORDS and only the words:
+          // `unrecoverableSendNotice` renders `quotedDraftOf(content)` and
+          // never looks at `browserAnnotations`. For an annotated prompt the
+          // toast hands the user the text while the records stay uncopied, so
+          // dropping the row here would take the last copy of the sidecar AND
+          // unroot its crops, which `collectPendingAnnotationImageHashes`
+          // names through this very map. Custody moves for what was actually
+          // delivered; the rest keeps its row until the handoff stashes it.
+          //
+          // This is why the row and the HOLD are no longer released from one
+          // condition. They now fail in opposite directions and only one of
+          // those is harmful: a hold with no row is a session pinned for a
+          // prompt the handoff cannot find, while a row with no hold simply
+          // means eviction comes sooner and disposal stashes the prompt on
+          // its way out. The words have genuinely been shown, so the hold is
+          // right to release.
+          const shown = Object.hasOwn(state.lastCopyPrompts, clientActionId)
+            ? state.lastCopyPrompts[clientActionId]
+            : null;
+          const lastCopyPrompts =
+            shown !== null && shown.browserAnnotations.length === 0
+              ? withoutLastCopyPrompt(state.lastCopyPrompts, clientActionId)
+              : state.lastCopyPrompts;
           if (
             deliveredNoticeActionIds === state.deliveredNoticeActionIds &&
             deliveredLastCopyActionIds === state.deliveredLastCopyActionIds &&

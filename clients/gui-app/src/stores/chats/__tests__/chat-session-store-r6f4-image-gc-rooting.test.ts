@@ -18,6 +18,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
@@ -193,6 +194,50 @@ function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
   });
 }
 
+function annotationRecord(imageHash: string): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId: "ann-r6f4",
+    tabId: "tab-1",
+    sessionId: "session-1",
+    origin: "https://example.test",
+    pageUrl: "https://example.test/checkout",
+    pageTitle: "Checkout",
+    capturedAt: 1_700_000_000_000,
+    comment: "the button is misaligned",
+    counts: { elements: 1, regions: 0, strokes: 2 },
+    elements: [],
+    imageFileName: "crop.png",
+    imageHash,
+    droppedElementCount: 0,
+  };
+}
+
+function textContent(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+function sendAnnotatedMessage(
+  harness: Harness,
+  content: JsonContent,
+  browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>,
+): { readonly clientActionId: string } {
+  const action = harness.handle.store.getState().sendMessage({
+    content,
+    sender: { type: "user", userId: OWNER_ID },
+    settings: SETTINGS,
+    attachments: buildAttachmentsFromJSONContent(content),
+    deliveryPolicy: "auto",
+    restore: { content, browserAnnotations },
+  });
+  expect(action).not.toBeNull();
+  if (action === null) throw new Error("sendMessage was refused");
+  return action;
+}
+
 function sendMessageWithContent(
   harness: Harness,
   content: JsonContent,
@@ -296,6 +341,55 @@ describe("R6F4(a): a lastCopyPrompts entry roots its own image hash", () => {
 
     const roots = landingLiveImageRootHashes();
     expect(roots.has(hashB)).toBe(true);
+  });
+});
+
+describe("R8: a notice shows the words, so it cannot take custody of a sidecar", () => {
+  it("keeps an annotated last copy and its crop root after the notice is delivered (DRIVE RED)", async () => {
+    // `markNoticeDelivered` deletes the `lastCopyPrompts` record on the
+    // premise that showing the prompt transfers custody. That premise holds
+    // for TEXT and only for text: `unrecoverableSendNotice` renders
+    // `quotedDraftOf(content)` and never looks at `browserAnnotations`. So
+    // for an annotated prompt the toast hands the user the words while the
+    // records remain uncopied - and deleting the row takes the last copy of
+    // them AND unroots their crops, which this very map now names.
+    const hashA = await seedConfirmedImage(pngBytesOfSize(32));
+    const cropHash = await seedConfirmedImage(pngBytesOfSize(44));
+
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+
+    const a = sendMessageWithContent(harness, hashOnlyContent(hashA, "A"));
+    rejectPlain(harness, a.clientActionId, "A not accepted.");
+
+    // B carries an annotation sidecar and loses the single restoration slot.
+    const b = sendAnnotatedMessage(harness, textContent("B"), [
+      annotationRecord(cropHash),
+    ]);
+    rejectPlain(harness, b.clientActionId, "B not accepted.");
+    const held =
+      harness.handle.store.getState().lastCopyPrompts[b.clientActionId];
+    expect(held.browserAnnotations.length).toBe(1);
+    expect(landingLiveImageRootHashes().has(cropHash)).toBe(true);
+
+    // The toast lands, quoting B's words and saying nothing about the crop.
+    const notice = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (candidate) => candidate.clientActionId === b.clientActionId,
+      );
+    if (notice === undefined) throw new Error("expected a notice for B");
+    harness.handle.store.getState().markNoticeDelivered(notice);
+
+    // The words have been shown. The sidecar has not, and this row is still
+    // the only thing holding it - so the handoff must still find it here.
+    expect(
+      Object.hasOwn(
+        harness.handle.store.getState().lastCopyPrompts,
+        b.clientActionId,
+      ),
+    ).toBe(true);
+    expect(landingLiveImageRootHashes().has(cropHash)).toBe(true);
   });
 });
 
