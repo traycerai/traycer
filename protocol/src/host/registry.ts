@@ -780,11 +780,13 @@ import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/co
 import {
   worktreeDeleteBatchByPathStreamV10,
   worktreeDeleteBatchByPathStreamV11,
+  worktreeDeleteBatchByPathStreamV12,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
   worktreeDeleteByPathStreamV12,
+  worktreeDeleteByPathStreamV13,
 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import {
@@ -849,6 +851,8 @@ import {
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
+  worktreeListHoldersRequestSchemaV11,
+  worktreeListHoldersResponseSchemaV11,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
@@ -1433,6 +1437,28 @@ export const worktreeListHoldersV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeListHoldersRequestSchema,
   responseSchema: worktreeListHoldersResponseSchema,
+});
+
+/**
+ * `worktree.listHolders@1.1` - response-only minor: `chat-turn` holders may
+ * carry `chatTier`. Request identical. A `@1.0` client reparses through its
+ * frozen V1 holder object, which strips the key.
+ */
+export const worktreeListHoldersV11 = defineRpcContract({
+  method: "worktree.listHolders",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: worktreeListHoldersRequestSchemaV11,
+  responseSchema: worktreeListHoldersResponseSchemaV11,
+});
+
+export const worktreeListHoldersUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeListHoldersV10,
+  typeof worktreeListHoldersV11
+>({
+  from: worktreeListHoldersV10.schemaVersion,
+  to: worktreeListHoldersV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // Host-wide worktree surface for Settings ▸ Worktrees. `listAllForHost`
@@ -8788,11 +8814,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "worktree.listHolders": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeListHoldersV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeListHoldersV11,
+          upgradeFromPreviousVersion: worktreeListHoldersUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11243,7 +11273,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "worktree.deleteByPath": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
@@ -11253,6 +11283,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: worktreeDeleteByPathStreamV12,
+        },
+        3: {
+          contract: worktreeDeleteByPathStreamV13,
         },
       },
     },
@@ -11266,13 +11299,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // which is what makes fallback safe for a destructive operation.
   "worktree.deleteBatchByPath": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeDeleteBatchByPathStreamV10,
         },
         1: {
           contract: worktreeDeleteBatchByPathStreamV11,
+        },
+        2: {
+          contract: worktreeDeleteBatchByPathStreamV12,
         },
       },
     },

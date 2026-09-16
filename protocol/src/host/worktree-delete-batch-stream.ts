@@ -77,7 +77,10 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { worktreeBusyHoldersWireFieldSchema } from "@traycer/protocol/framework/worktree-busy-holders";
+import {
+  worktreeBusyHoldersWireFieldSchema,
+  worktreeBusyHoldersWireFieldSchemaV1,
+} from "@traycer/protocol/framework/worktree-busy-holders";
 import { worktreeEntryScriptsSchema } from "@traycer/protocol/host/worktree-schemas";
 
 /**
@@ -308,7 +311,7 @@ export const worktreeDeleteBatchByPathServerFrameSchemaV11 =
       kind: z.literal("target.failed"),
       worktreePath: z.string().min(1),
       reason: z.string(),
-      holders: worktreeBusyHoldersWireFieldSchema,
+      holders: worktreeBusyHoldersWireFieldSchemaV1,
       code: z.literal("WORKTREE_BUSY").optional().catch(undefined),
       hasBinaryPayload: z.literal(false),
     }),
@@ -331,6 +334,73 @@ export const worktreeDeleteBatchByPathServerFrameSchemaV11 =
   ]);
 export type WorktreeDeleteBatchByPathServerFrameV11 = z.infer<
   typeof worktreeDeleteBatchByPathServerFrameSchemaV11
+>;
+
+/**
+ * `@1.2` - open request unchanged (aliased). `target.failed` holders may
+ * carry `chatTier` on `chat-turn` entries; the host emits the key only to a
+ * subscriber that negotiated this minor, and the frozen `@1.1` frames above
+ * are bound to the V1 holder object so an older subscriber never parses it.
+ */
+export const worktreeDeleteBatchByPathOpenRequestSchemaV12 =
+  worktreeDeleteBatchByPathOpenRequestSchemaV11;
+export type WorktreeDeleteBatchByPathOpenRequestV12 =
+  WorktreeDeleteBatchByPathOpenRequestV11;
+
+export const worktreeDeleteBatchByPathServerFrameSchemaV12 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("target.started"),
+      worktreePath: z.string().min(1),
+      hasTeardown: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.phase"),
+      worktreePath: z.string().min(1),
+      phase: worktreeDeleteBatchPhaseSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.output"),
+      worktreePath: z.string().min(1),
+      channel: worktreeDeleteBatchOutputChannelSchema,
+      chunk: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.complete"),
+      worktreePath: z.string().min(1),
+      deleted: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.failed"),
+      worktreePath: z.string().min(1),
+      reason: z.string(),
+      holders: worktreeBusyHoldersWireFieldSchema,
+      code: z.literal("WORKTREE_BUSY").optional().catch(undefined),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("command.complete"),
+      requestedCount: z.number().int().nonnegative(),
+      deletedCount: z.number().int().nonnegative(),
+      failedCount: z.number().int().nonnegative(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("command.failed"),
+      reason: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]);
+export type WorktreeDeleteBatchByPathServerFrameV12 = z.infer<
+  typeof worktreeDeleteBatchByPathServerFrameSchemaV12
 >;
 
 export const worktreeDeleteBatchByPathClientFrameSchema = z.discriminatedUnion(
@@ -359,5 +429,13 @@ export const worktreeDeleteBatchByPathStreamV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: worktreeDeleteBatchByPathOpenRequestSchemaV11,
   serverFrameSchema: worktreeDeleteBatchByPathServerFrameSchemaV11,
+  clientFrameSchema: worktreeDeleteBatchByPathClientFrameSchema,
+});
+
+export const worktreeDeleteBatchByPathStreamV12 = defineStreamRpcContract({
+  method: "worktree.deleteBatchByPath",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: worktreeDeleteBatchByPathOpenRequestSchemaV12,
+  serverFrameSchema: worktreeDeleteBatchByPathServerFrameSchemaV12,
   clientFrameSchema: worktreeDeleteBatchByPathClientFrameSchema,
 });
