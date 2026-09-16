@@ -124,6 +124,25 @@ describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
   });
 });
 
+describe("<PermissionsPicker /> - empty supportedPermissionModes means unconstrained", () => {
+  it("leaves every option enabled, with no 'Not supported by' copy, when supportedPermissionModes is []", () => {
+    renderPicker({
+      supportedPermissionModes: [],
+      harnessLabel: "Claude Code",
+      catalogSupportedModes: null,
+    });
+    openMenu();
+
+    for (const option of screen.getAllByRole("menuitemradio")) {
+      expect(option.getAttribute("aria-disabled")).not.toBe("true");
+    }
+    expect(screen.queryByText(/Not supported by/)).toBeNull();
+    expect(screen.queryByText("Needs a newer Traycer on this machine.")).toBe(
+      null,
+    );
+  });
+});
+
 describe("<PermissionsPicker /> - C1 description + meta line", () => {
   it("shows the exact auto description with the em dash", () => {
     renderPicker({});

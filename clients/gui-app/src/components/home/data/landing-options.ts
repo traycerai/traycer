@@ -178,6 +178,33 @@ export function fallbackPermissionMode(value: PermissionMode): PermissionMode {
   return PERMISSION_FALLBACK_MODE[value] ?? value;
 }
 
+/**
+ * Whether a harness row's advertised modes permit `mode`.
+ *
+ * **Absent and EMPTY both mean "unconstrained", and the empty case is the one
+ * that gets missed.** `null` is "no harness scope yet" - the Settings default
+ * row, or a catalog still loading. An empty array is a harness that ANSWERED
+ * and declared no constraint, and the authority for reading it that way is the
+ * host: `HarnessRuntime.assertAdapterPermissionModeSupported` opens with
+ * `if (adapter.supportedPermissionModes.length === 0) return;`, so such a
+ * harness accepts every mode. A reader that treats empty as "supports nothing"
+ * therefore refuses - or silently rewrites - a tuple the host would have run.
+ *
+ * ONE COPY, and that is the point of it existing. The rule was written out four
+ * times: here (through {@link normalizePermissionMode}), in the desktop picker's
+ * per-option `isSupported`, in the phone sheet's, and - wrongly, as a bare
+ * `.includes("auto")` - in the clone clamp, which is where the missing empty
+ * case became a silent demotion of a user's chosen mode.
+ */
+export function harnessHonorsPermissionMode(
+  supportedPermissionModes: ReadonlyArray<PermissionMode> | null,
+  mode: PermissionMode,
+): boolean {
+  if (supportedPermissionModes === null) return true;
+  if (supportedPermissionModes.length === 0) return true;
+  return supportedPermissionModes.includes(mode);
+}
+
 // Clamp the composer's sticky permission to a value the active harness
 // actually honors.
 //
@@ -200,9 +227,14 @@ export function normalizePermissionMode(
   value: PermissionMode,
   supportedPermissionModes: ReadonlyArray<PermissionMode> | null,
 ): PermissionMode {
-  if (supportedPermissionModes === null) return value;
-  if (supportedPermissionModes.length === 0) return value;
-  if (supportedPermissionModes.includes(value)) return value;
+  // The null arm is repeated here rather than left to the predicate alone:
+  // the predicate already answers true for it, but the compiler cannot see
+  // that, and the fallback path below needs the array narrowed.
+  if (
+    supportedPermissionModes === null ||
+    harnessHonorsPermissionMode(supportedPermissionModes, value)
+  )
+    return value;
   const declaredFallback = PERMISSION_FALLBACK_MODE[value];
   if (
     declaredFallback !== null &&

@@ -4,6 +4,7 @@ import { Check } from "lucide-react";
 import {
   AUTO_MID_TURN_NOTICE,
   PERMISSION_OPTIONS,
+  harnessHonorsPermissionMode,
   normalizePermissionMode,
   unsupportedPermissionModeCopy,
   type PermissionMode,
@@ -83,13 +84,13 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
             <OptionsSectionLabel>Permissions</OptionsSectionLabel>
             {PERMISSION_OPTIONS.map((option) => {
               const Icon = option.icon;
-              // Inlined rather than hoisted into a boolean alias: TypeScript
-              // narrows `supported` to non-null only through the check itself.
-              // Empty is treated as `null` - see `normalizePermissionMode`.
-              const isSupported =
-                supported === null ||
-                supported.length === 0 ||
-                supported.includes(option.id);
+              // Through the shared predicate, which is where the "empty means
+              // unconstrained" rule lives now - see
+              // `harnessHonorsPermissionMode`.
+              const isSupported = harnessHonorsPermissionMode(
+                supported,
+                option.id,
+              );
               return (
                 <OptionRow
                   key={option.id}

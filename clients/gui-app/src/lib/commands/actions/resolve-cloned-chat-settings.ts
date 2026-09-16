@@ -6,7 +6,10 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
-import { fallbackPermissionMode } from "@/components/home/data/landing-options";
+import {
+  fallbackPermissionMode,
+  harnessHonorsPermissionMode,
+} from "@/components/home/data/landing-options";
 
 export interface ResolvedClonedChatSettings {
   readonly status: "ready";
@@ -175,7 +178,19 @@ async function permissionModeForTarget(
   // reason. Clamping here would quietly rewrite the mode on the way to an
   // error about something else.
   if (targetRow === undefined) return settings;
-  if (targetRow.supportedPermissionModes.includes("auto")) return settings;
+  // Through the shared predicate, not a bare `.includes`. An EMPTY
+  // `supportedPermissionModes` is a harness that answered and constrained
+  // nothing - the host's own assert short-circuits on it - so a raw `includes`
+  // read it as "no auto here" and silently rewrote the user's mode on a target
+  // that would have accepted it.
+  if (
+    harnessHonorsPermissionMode(
+      targetRow.supportedPermissionModes,
+      settings.permissionMode,
+    )
+  ) {
+    return settings;
+  }
   return {
     ...settings,
     permissionMode: fallbackPermissionMode(settings.permissionMode),

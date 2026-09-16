@@ -95,6 +95,18 @@ describe("ComposerOptionsSheet", () => {
     expect(props.onPermissionChange).not.toHaveBeenCalled();
   });
 
+  it("leaves every mode enabled when supportedPermissionModes is an empty array", async () => {
+    const props = { ...defaults(), supportedPermissionModes: [] };
+    renderSheet(props);
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio.hasAttribute("disabled")).toBe(false);
+    }
+    const supervised = screen.getByRole("radio", { name: /Supervised/ });
+    expect(supervised.textContent).not.toContain("Not supported by");
+    await userEvent.click(screen.getByRole("radio", { name: /Full access/ }));
+    expect(props.onPermissionChange).toHaveBeenCalledWith("full_access");
+  });
+
   it("checks the effective permission when the sticky one is unsupported", () => {
     // Sticky is "supervised", which this harness doesn't honor - the check must
     // sit on the mode that will actually run, as the desktop picker does.

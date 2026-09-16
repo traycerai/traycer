@@ -3,10 +3,42 @@ import {
   PERMISSION_OPTIONS,
   fallbackPermissionMode,
   findPermissionOption,
+  harnessHonorsPermissionMode,
   isPermissionMode,
   normalizePermissionMode,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
+
+const ALL_MODES: ReadonlyArray<PermissionMode> = PERMISSION_OPTIONS.map(
+  (option) => option.id,
+);
+
+describe("harnessHonorsPermissionMode", () => {
+  it("honors every mode when supportedPermissionModes is null - no harness scope yet", () => {
+    for (const mode of ALL_MODES) {
+      expect(harnessHonorsPermissionMode(null, mode)).toBe(true);
+    }
+  });
+
+  it("honors every mode when supportedPermissionModes is an empty array - a harness that answered and constrained nothing", () => {
+    for (const mode of ALL_MODES) {
+      expect(harnessHonorsPermissionMode([], mode)).toBe(true);
+    }
+  });
+
+  it("honors only the modes a populated array names", () => {
+    const supported: ReadonlyArray<PermissionMode> = [
+      "supervised",
+      "full_access",
+    ];
+    expect(harnessHonorsPermissionMode(supported, "supervised")).toBe(true);
+    expect(harnessHonorsPermissionMode(supported, "full_access")).toBe(true);
+    expect(harnessHonorsPermissionMode(supported, "auto_accept_edits")).toBe(
+      false,
+    );
+    expect(harnessHonorsPermissionMode(supported, "auto")).toBe(false);
+  });
+});
 
 describe("normalizePermissionMode", () => {
   it("demotes sticky auto to auto_accept_edits on an old host that serves the pre-auto trio - THE regression this ticket exists for", () => {

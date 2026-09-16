@@ -464,6 +464,34 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
+  // THE REGRESSION this ticket exists for: `permissionModeForTarget` used to
+  // read the target row with a bare `targetRow.supportedPermissionModes
+  // .includes("auto")`. An EMPTY array is a harness that answered and
+  // declared no constraint (the host's own
+  // `HarnessRuntime.assertAdapterPermissionModeSupported` short-circuits on
+  // it), so a bare `.includes` read it as "no auto here" and silently
+  // demoted a mode the target would have accepted. The fix routes through
+  // `harnessHonorsPermissionMode`, which treats `[]` like `null`.
+  it("keeps auto when the target row named by settings.harnessId declares an empty supportedPermissionModes", async () => {
+    const sourceClient = buildClient([], []);
+    const targetClient = buildClient(
+      [profile("ambient", "ambient", "Terminal account", "acct-9")],
+      [harnessOption({ id: "claude", supportedPermissionModes: [] })],
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings: autoSourceSettings,
+      sourceClient,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      settings: autoSourceSettings,
+      fallenBackToAmbient: false,
+    });
+  });
+
   // JOB 2 (Codex, P1): the sibling of the case above, under the MIXED
   // catalog that used to be asserted the other way. `settings.harnessId` is
   // `claude`, and the target's `claude` row offers no `auto` - the presence

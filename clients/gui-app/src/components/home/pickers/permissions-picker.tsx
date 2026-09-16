@@ -18,6 +18,7 @@ import {
   findPermissionLabel,
   findPermissionOption,
   isPermissionMode,
+  harnessHonorsPermissionMode,
   normalizePermissionMode,
   unsupportedPermissionModeCopy,
   type PermissionMode,
@@ -197,10 +198,10 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
         >
           {PERMISSION_OPTIONS.map((option) => {
             const OptionIcon = option.icon;
-            const isSupported =
-              supportedPermissionModes === null ||
-              supportedPermissionModes.length === 0 ||
-              supportedPermissionModes.includes(option.id);
+            const isSupported = harnessHonorsPermissionMode(
+              supportedPermissionModes,
+              option.id,
+            );
             return (
               <DropdownMenuRadioItem
                 key={option.id}
