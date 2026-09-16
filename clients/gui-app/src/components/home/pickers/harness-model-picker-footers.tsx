@@ -19,6 +19,7 @@ import {
   usePickerReasoningLeaderForIndex,
 } from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
+import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import { useReasoningSliderGesture } from "@/components/home/pickers/use-reasoning-slider-gesture";
 import { FastModeFooterButton } from "@/components/home/pickers/fast-mode-footer-button";
 import {
@@ -484,8 +485,8 @@ function ReasoningLevelSlider(props: ReasoningLevelSliderProps) {
             centre at the two ends (`getThumbInBoundsOffset`) - without it the
             first and last dot sit half a thumb outside the thumb's reach. The
             pill thumb is 1.5rem, so this is `px-3`; `py-1` matches the slider's
-            own padding. Stack above the thumb so its shortcut stays visible. */}
-        <div className="pointer-events-none absolute inset-0 z-10 px-3 py-1">
+            own padding. Interactive stops stay below the thumb. */}
+        <div className="pointer-events-none absolute inset-0 px-3 py-1">
           <div className="relative h-full">
             {options.map((option, index) => (
               <ReasoningLevelStop
@@ -578,16 +579,21 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
       <button
         type="button"
         tabIndex={-1}
-        aria-label={option.label}
+        aria-label={pickerLeaderControlLabel(
+          option.label,
+          index,
+          disabled ? null : leaderModifier,
+          "to set",
+        )}
         data-testid={`model-reasoning-stop-${index}`}
         disabled={disabled}
         style={{ left: `${percent}%` }}
         onPointerLeave={() => setHovered(false)}
         className={cn(
           "group pointer-events-auto absolute top-1/2 flex h-6 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full disabled:cursor-not-allowed pointer-coarse:w-6",
-          // The selected stop passes pointer events through to the thumb,
-          // while keeping its shortcut badge visible above it.
-          selected && "pointer-events-none",
+          // Only the inert selected stop rises above the thumb to show its
+          // shortcut. Neighboring hit targets must stay beneath the thumb.
+          selected && "pointer-events-none z-10",
         )}
         onClick={() => {
           if (props.movedByGesture()) return;
@@ -612,10 +618,8 @@ const ReasoningLevelStop = memo(function ReasoningLevelStop(
           )}
         />
         <PickerLeaderBadge
-          show={showShortcut}
+          modifier={disabled ? null : leaderModifier}
           index={index}
-          hintAction="to set"
-          hintTarget={option.label}
           testId={`model-reasoning-digit-${singleDigitLeaderDigitFor(index)}`}
           placement="center"
         />
@@ -656,6 +660,12 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
       ref={buttonRef}
       type="button"
       aria-pressed={selected}
+      aria-label={pickerLeaderControlLabel(
+        option.label,
+        index,
+        disabled ? null : leaderModifier,
+        "to set",
+      )}
       disabled={disabled}
       className={cn(
         "inline-flex max-w-[min(22vw,6.5rem)] shrink-0 items-center rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
@@ -666,10 +676,8 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
       <span className="relative inline-flex min-w-0 items-center">
         <span className="truncate">{option.label}</span>
         <PickerLeaderBadge
-          show={!disabled && leaderModifier !== null}
+          modifier={disabled ? null : leaderModifier}
           index={index}
-          hintAction="to set"
-          hintTarget={option.label}
           testId={`model-reasoning-digit-${singleDigitLeaderDigitFor(index)}`}
           placement="trailing"
         />

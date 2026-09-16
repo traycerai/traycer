@@ -1,58 +1,20 @@
 import { useCallback, type ReactNode } from "react";
 import { RefreshIcon } from "@/components/refresh-icon";
-import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
-import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { Button } from "@/components/ui/button";
 import { PrSourceNoticeHint } from "@/components/epic-canvas/pr/pr-source-notice";
-import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
+import type { PrListSubscriptionResult } from "@/hooks/pr/use-pr-list-subscription";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import { newestObservedAt } from "@/lib/pr/pr-list-projection";
 import { useRelativeTimestamp } from "@/lib/relative-time";
-import {
-  useLeftPanelSectionCollapsed,
-  useMainPanelCollapsed,
-} from "@/stores/epics/left-panel-store";
 
 const PR_REFRESH_TIMEOUT_MS = 10_000;
 
-/**
- * Header actions for the Pull Requests panel: epic-wide staleness + Refresh.
- * Host switcher is intentionally omitted in T5 — the list follows the
- * canvas-serving host via `useCanvasHostId`, matching the Git Diff panel's
- * default-host stream client; a dedicated switcher affordance can
- * land with workspace-picker parity later if needed.
- *
- * Note: Actions stay mounted when the section collapses (only Body unmounts)
- * and when the whole sidebar collapses (CSS-only). The same visibility gate
- * as the body is applied here so a collapsed surface does not keep a
- * foreground subscription alive.
- */
-export function PrPanelActions(
-  props: LeftPanelSlotProps & { readonly collapsed: boolean },
-): ReactNode {
-  if (props.collapsed) return null;
-  return <PrPanelActionsLive epicId={props.epicId} tabId={props.tabId} />;
-}
-
-function PrPanelActionsLive(props: {
-  readonly epicId: string;
-  readonly tabId: string;
+/** Actions share the body's selected-host subscription on desktop and mobile. */
+export function PrPanelActions(props: {
+  readonly subscription: PrListSubscriptionResult;
+  readonly enabled: boolean;
 }): ReactNode {
-  const hostId = useCanvasHostId();
-  const mainCollapsed = useMainPanelCollapsed(props.tabId);
-  const sectionCollapsed = useLeftPanelSectionCollapsed("pull-requests");
-  const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");
-  const methodSupported = methodSupport !== "unsupported";
-  const enabled = !mainCollapsed && !sectionCollapsed && methodSupported;
-
-  const subscription = usePrListSubscription({
-    hostId,
-    epicId: props.epicId,
-    mode: "foreground",
-    enabled,
-  });
-
+  const { subscription, enabled } = props;
   const observedAt =
     subscription.data === null
       ? null

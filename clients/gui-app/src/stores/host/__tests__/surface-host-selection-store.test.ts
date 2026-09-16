@@ -9,11 +9,14 @@ import {
   notifyEffectiveHostChanged,
   resolvedSurfaceHostId,
   subscribeFollowingSurfaceReset,
+  tabSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
 
 const PERSIST_KEY = surfaceHostSelectionKey(null);
 const GIT_KEY = gitDiffPanelSurfaceKey("tab-1");
+const PR_KEY_ONE = tabSurfaceKey("pull-requests", "tab-pr-1");
+const PR_KEY_TWO = tabSurfaceKey("pull-requests", "tab-pr-2");
 const TREE_KEY = "file-tree-test";
 
 /** The persist middleware writes on a microtask. */
@@ -73,6 +76,31 @@ describe("useSurfaceHostSelectionStore", () => {
         leases: [],
       }),
     ).toBe("host-b");
+  });
+
+  it("keeps Pull Requests pins isolated per view tab and preserves sticky failover", () => {
+    const store = useSurfaceHostSelectionStore.getState();
+    store.setSelection(PR_KEY_ONE, "host-b");
+    store.setSelection(PR_KEY_TWO, "host-c");
+
+    expect(useSurfaceHostSelectionStore.getState().selections).toMatchObject({
+      [PR_KEY_ONE]: "host-b",
+      [PR_KEY_TWO]: "host-c",
+    });
+    expect(
+      resolvedSurfaceHostId("host-b", "host-a", {
+        authorityAttached: true,
+        leases: [
+          { hostId: "host-b", status: "dead", dead: { reason: "offline" } },
+        ],
+      }),
+    ).toBe("host-a");
+    expect(useSurfaceHostSelectionStore.getState().selections[PR_KEY_ONE]).toBe(
+      "host-b",
+    );
+    expect(useSurfaceHostSelectionStore.getState().selections[PR_KEY_TWO]).toBe(
+      "host-c",
+    );
   });
 
   it("setSelection(null) returns the instance to following", () => {
