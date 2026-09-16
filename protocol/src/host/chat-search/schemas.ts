@@ -104,10 +104,14 @@ export const chatSearchRequestSchema = z.object({
 });
 export type ChatSearchRequest = z.infer<typeof chatSearchRequestSchema>;
 
-export const chatSearchRangeSchema = z.object({
-  start: z.number().int().nonnegative(),
-  end: z.number().int().nonnegative(),
-});
+export const chatSearchRangeSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+  })
+  .refine((range) => range.end >= range.start, {
+    message: "a highlight range ends at or after it starts",
+  });
 export type ChatSearchRange = z.infer<typeof chatSearchRangeSchema>;
 
 export const chatSearchSnippetSchema = z.object({
