@@ -150,6 +150,15 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
             "Continuing on the Terminal account - your profile isn't available on this host.",
           );
         },
+        onPermissionModeUnsupported: (resolution) => {
+          setCloning(false);
+          // Named modes, not a generic failure: the user picked Auto and the
+          // target cannot run it OR its fallback, so the honest message says
+          // which host and what was tried rather than leaving them to guess.
+          toast(
+            `${targetHostLabel} can't run this chat's permission mode - ${resolution.attemptedModes.join(" or ")} aren't available for ${resolution.harnessId} there.`,
+          );
+        },
         onProfileSelectionRequired: (resolution) => {
           setCloning(false);
           setProfileRecovery({

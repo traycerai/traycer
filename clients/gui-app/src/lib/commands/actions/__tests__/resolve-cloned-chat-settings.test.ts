@@ -679,3 +679,142 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     expect(requestedMethods).toEqual([]);
   });
 });
+
+// FIX 1 (P1): the demotion chain used to be applied ONE step and unchecked -
+// `auto` became `auto_accept_edits` on a `["full_access"]` row and went to
+// `epic.createChat` as a tuple that host refuses outright. Now every rung of
+// `demotionChain()` is checked against the target row in turn, and only when
+// NONE fit does the clone refuse with `permission-mode-unsupported` instead
+// of sending an unsupported tuple.
+describe("resolveClonedChatSettings refuses when no rung of the demotion chain fits, and never widens past auto", () => {
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  const autoSourceSettings: ChatRunSettings = {
+    ...BASE_SETTINGS,
+    permissionMode: "auto",
+  };
+
+  // 1a: neither `auto` nor its fallback `auto_accept_edits` fits the target
+  // row - the refusal, with both attempted modes named in the order tried.
+  it("refuses with permission-mode-unsupported when the target row supports neither auto nor its fallback", async () => {
+    targetHostKnowsAutoMode();
+    const sourceClient = buildClient([], []);
+    const targetClient = buildClient(
+      [profile("ambient", "ambient", "Terminal account", "acct-9")],
+      [
+        harnessOption({
+          id: "claude",
+          supportedPermissionModes: ["full_access"],
+        }),
+      ],
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings: autoSourceSettings,
+      sourceClient,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "permission-mode-unsupported",
+      harnessId: "claude",
+      attemptedModes: ["auto", "auto_accept_edits"],
+    });
+  });
+
+  // 1c: the FIRST rung (auto itself) already fits, so the walk must return
+  // the settings object it was HANDED rather than a freshly-spread copy -
+  // the `candidate === settings.permissionMode ? settings : ...` branch this
+  // pins is what makes every untouched clone reference-stable.
+  it("returns the exact settings object, unchanged, when the target row already supports auto", async () => {
+    targetHostKnowsAutoMode();
+    const sourceClient = buildClient([], []);
+    const targetClient = buildClient(
+      [profile("ambient", "ambient", "Terminal account", "acct-9")],
+      [
+        harnessOption({
+          id: "claude",
+          supportedPermissionModes: ["auto", "full_access"],
+        }),
+      ],
+    );
+    const result = await resolveClonedChatSettings({
+      sourceSettings: autoSourceSettings,
+      sourceClient,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      settings: autoSourceSettings,
+      fallenBackToAmbient: false,
+    });
+    if (result.status !== "ready") throw new Error("expected ready");
+    expect(result.settings).toBe(autoSourceSettings);
+  });
+
+  // 1d: a non-`auto` source mode must never enter this clamp at all, even
+  // against a target row that would reject it outright - pins that the fix
+  // did not accidentally widen the walk to every mode. Mirrors the sibling
+  // early-return case above, but names the rejecting row explicitly and
+  // proves the catalog was never even consulted.
+  it("never widens the clamp to a non-auto mode, even against a target row that would reject it", async () => {
+    const requestedMethods: string[] = [];
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => {} },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "providers.list": () => ({
+            providers: [
+              claudeState([
+                profile("ambient", "ambient", "Terminal account", "acct-9"),
+              ]),
+            ],
+            native: null,
+          }),
+          "agent.gui.listHarnesses": () => {
+            requestedMethods.push("agent.gui.listHarnesses");
+            return {
+              harnesses: [
+                harnessOption({
+                  id: "claude",
+                  supportedPermissionModes: ["full_access"],
+                }),
+              ],
+            };
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const targetClient = spine.createRequester(mockLocalHostEntry);
+    const supervisedSourceSettings: ChatRunSettings = {
+      ...BASE_SETTINGS,
+      permissionMode: "supervised",
+    };
+
+    const result = await resolveClonedChatSettings({
+      sourceSettings: supervisedSourceSettings,
+      sourceClient: buildClient([], []),
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      settings: supervisedSourceSettings,
+      fallenBackToAmbient: false,
+    });
+    expect(requestedMethods).toEqual([]);
+  });
+});

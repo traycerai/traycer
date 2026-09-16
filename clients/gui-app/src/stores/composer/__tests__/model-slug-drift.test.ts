@@ -52,6 +52,7 @@ function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
     models,
     modelsLoaded: true,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
   };
 }
 
@@ -72,6 +73,7 @@ function createStore(
         ? null
         : (settings) => onSettingsChange(settings.model),
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 }

@@ -360,6 +360,55 @@ export function catalogLineKnowsAutoMode(
 }
 
 /**
+ * Whether a surface may offer `auto`, from BOTH proofs a surface can hold.
+ *
+ * The two are different methods and negotiate independently, which is the
+ * whole reason this exists:
+ *
+ * - {@link catalogLineKnowsAutoMode} on `agent.gui.listHarnesses@9.1` says
+ *   this host can OFFER the mode - a host below it filters `auto` out of every
+ *   catalog row it serves;
+ * - `chatLineCarriesAutoMode` on `chat.subscribe@1.12` says this chat can
+ *   CARRY the value on a client frame. Below it,
+ *   `projectChatClientFrameForVersion` THROWS rather than stripping the field,
+ *   so an offer the send cannot honour is a crash at the stream boundary and
+ *   not a silent downgrade.
+ *
+ * A chat composer needs both. Gating on the catalog alone is the
+ * gate-on-a-sibling-method defect: the catalog line is evidence about the
+ * catalog's shape and about nothing else.
+ *
+ * `chatLineCarriesAutoMode` has THREE states, and `null` is the one that makes
+ * this usable from more than one surface:
+ *
+ * - `true` / `false` - a live chat session answered about ITS negotiated line;
+ * - `null` - NO chat session is in scope, so the catalog line is all this
+ *   surface can know. The landing composer is the case: it has no chat yet,
+ *   and the chat it creates negotiates only once it opens.
+ *
+ * `null` therefore passes through rather than vetoing, exactly as it does in
+ * {@link composerOffersPermissionMode} one level up - refusing a mode because
+ * nothing has been asked is not the claim "a line said no".
+ *
+ * **Why this cannot be read per-host.** `chat.subscribe` is a STREAM method.
+ * The negotiated-manifest registry behind `useHostMethodSchemaVersion` is fed
+ * only by the UNARY connection's `openAck`, so it holds no stream method at
+ * all and `getNegotiatedHostMethodVersion(hostId, "chat.subscribe")` answers
+ * `null` for every host forever. The version is also per-SESSION rather than
+ * per-host - sibling tabs negotiate separately - so the fact has to travel
+ * from a live session (`ChatStreamClient.autoPermissionModeProtocolSupported`)
+ * and there is no host-wide answer to substitute.
+ */
+export function autoModeOfferableHere(
+  catalogLine: SchemaVersion | null,
+  chatLineCarriesAutoMode: boolean | null,
+): boolean {
+  if (!catalogLineKnowsAutoMode(catalogLine)) return false;
+  // `!== false`, not truthy: `null` is "no chat in scope", not a refusal.
+  return chatLineCarriesAutoMode !== false;
+}
+
+/**
  * Every permission mode ANY harness on this host honors - the union across the
  * catalog, not one row's set.
  *

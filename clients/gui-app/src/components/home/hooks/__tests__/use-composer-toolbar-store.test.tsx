@@ -194,6 +194,7 @@ function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
     hostClient: DEFAULT_TEST_HOST_CLIENT,
     hostId: TEST_HOST_ID,
     tuiOnly,
+    chatLineCarriesAutoMode: null,
   };
 }
 
@@ -1698,6 +1699,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostClient: hostBClient,
         hostId: "host-b",
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       }),
     );
 
@@ -1718,6 +1720,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostClient: null,
         hostId: null,
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       }),
     );
 
@@ -1746,6 +1749,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           hostClient: props.hostClient,
           hostId: props.hostId,
           tuiOnly: false,
+          chatLineCarriesAutoMode: null,
         }),
       { initialProps: { hostClient: hostAClient, hostId: "host-a" } },
     );

@@ -150,6 +150,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       activeTurnStatus: null,
       steerCapable: false,
       steerProtocolSupported: true,
+      autoPermissionModeProtocolSupported: null,
       getActiveTurnForSteer: () => null,
       stopDisabled: true,
       onStopTurn: () => null,

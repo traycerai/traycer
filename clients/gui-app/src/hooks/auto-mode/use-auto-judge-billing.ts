@@ -1,5 +1,8 @@
 import { useMemo } from "react";
-import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import {
+  guiHarnessIdSchema,
+  type GuiHarnessId,
+} from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -7,7 +10,10 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  useGuiHarnessesQueryForClient,
+  useGuiHarnessModelsQueryForClient,
+} from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   autoJudgeBillingForRun,
   harnessHasNativeAutoJudge,
@@ -18,6 +24,7 @@ import { providersListReportsAutoJudge } from "@/lib/providers/provider-auto-jud
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
 import {
+  judgeModelUnavailable,
   judgeProfileUnavailable,
   offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -99,6 +106,32 @@ function billingInputsSettled(input: {
   return (
     catalogsSettled && (input.isProviderNative || input.judgeRecordAnswered)
   );
+}
+
+/**
+ * The judge harness id as a `GuiHarnessId`, or the run harness as a stand-in.
+ *
+ * `AutoJudgeSelection.harnessId` is a plain string on the wire, and the models
+ * query takes the narrowed union. A stored id outside it cannot name a real
+ * catalog, so the query is gated off for it anyway (`judgeHarnessId !== null`
+ * plus a parse that fails) and the model read answers "cannot say".
+ */
+/**
+ * The slugs the judge harness currently lists, or `undefined` while the catalog
+ * has not answered - the value {@link judgeModelUnavailable} reads as "cannot
+ * say". Extracted for the complexity ceiling, same reason as its neighbours.
+ */
+function offeredModelSlugs(
+  data:
+    | { readonly models: ReadonlyArray<{ readonly slug: string }> }
+    | undefined,
+): ReadonlyArray<string> | undefined {
+  return data?.models.map((model) => model.slug);
+}
+
+function guiHarnessIdFor(judgeHarnessId: string | null): GuiHarnessId {
+  const parsed = guiHarnessIdSchema.safeParse(judgeHarnessId);
+  return parsed.success ? parsed.data : "traycer";
 }
 
 function storedJudgeProfileUnavailable(
@@ -243,6 +276,22 @@ export function useAutoJudgeBilling(
     selection?.profileId ?? null,
     providers,
   );
+  // The judge harness's own model catalog. Cache-only by this query's own
+  // design, and gated on there being a stored judge at all, so a composer adds
+  // no fetch for a host with no record. `undefined` until it answers, which
+  // `judgeModelUnavailable` reads as "cannot say" rather than "gone" - the same
+  // direction as the profile read beside it, and the one that keeps the
+  // disclosure steady on a cold load.
+  const judgeModelsQuery = useGuiHarnessModelsQueryForClient(
+    client,
+    guiHarnessIdFor(judgeHarnessId),
+    null,
+    { enabled: autoModeHost && judgeHarnessId !== null, subscribed: false },
+  );
+  const storedModelUnavailable = judgeModelUnavailable(
+    selection?.model ?? "",
+    offeredModelSlugs(judgeModelsQuery.data),
+  );
   // The host's own verdict that it CANNOT run the judge it has stored
   // (`provider-disabled`, `no-default`, `unsupported-harness`). Optional on the
   // wire, so an older host answers `undefined` and reads as "not blocked".
@@ -269,7 +318,8 @@ export function useAutoJudgeBilling(
             runHarnessId: harnessId,
             isProviderNative,
             blocked,
-            judgeProfileUnavailable: storedProfileUnavailable,
+            judgeRecordUnrunnable:
+              storedProfileUnavailable || storedModelUnavailable,
           })
         : null,
     [
@@ -279,6 +329,7 @@ export function useAutoJudgeBilling(
       isProviderNative,
       blocked,
       storedProfileUnavailable,
+      storedModelUnavailable,
     ],
   );
 }

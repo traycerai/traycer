@@ -157,7 +157,23 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     client: FakeClient | null,
     activity: { readonly enabled: boolean; readonly subscribed: boolean },
   ) => useGuiHarnessesQueryForClientMock(client, activity),
+  // The judge harness's model list. Declared EXPLICITLY rather than left off:
+  // a partial module mock throws on the first access, so every case in this
+  // file died at import when the hook grew this read. `data: undefined` is the
+  // honest default here - "the catalog has not answered" - which
+  // `judgeModelUnavailable` reads as "cannot say", so existing cases keep the
+  // billing answer they were written for and the model dimension is exercised
+  // only where a case opts in.
+  useGuiHarnessModelsQueryForClient: () => judgeModelsQueryMock(),
 }));
+
+const judgeModelsQueryMock = vi.fn<
+  () => {
+    readonly data:
+      | { readonly models: ReadonlyArray<{ slug: string }> }
+      | undefined;
+  }
+>(() => ({ data: undefined }));
 
 function harnessRow(nativeAutoJudge: boolean): GuiHarnessOption {
   return guiHarnessOptionSchema.parse({
@@ -247,6 +263,10 @@ afterEach(() => {
     isSuccess: true,
     isError: false,
   }));
+  // Re-established every test, like its three siblings above: a case that
+  // opts into a concrete judge-model catalog via `.mockReturnValue` must not
+  // leak that catalog into the next test's default "cannot say" read.
+  judgeModelsQueryMock.mockReturnValue({ data: undefined });
 });
 
 useHostQueryMock.mockImplementation(() => ({ data: autoJudgeGetData }));
@@ -439,6 +459,63 @@ describe("useAutoJudgeBilling", () => {
         providerState({ profiles: [providerProfile("kept-profile")] }),
       ],
     };
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+    );
+
+    expect(result.current).toEqual({
+      kind: "provider",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+    });
+  });
+
+  // FIX 2 (P2): the sibling of the profile-unavailable case above, one field
+  // over - the stored judge's MODEL has left its harness's own catalog rather
+  // than its provider's profile list. `judgeModelUnavailable` has no display
+  // fallback to compare against (unlike the picker's store), so the hook asks
+  // the harness's model catalog directly - the read this module mock declares
+  // explicitly above so a partial-mock throw doesn't kill every case here.
+  it("resolves to blocked when the stored judge names a model its harness no longer lists", () => {
+    autoJudgeGetData = {
+      selection: {
+        harnessId: "claude",
+        model: "gone-model",
+        profileId: null,
+      },
+    };
+    providersListData = {
+      providers: [providerState({})],
+    };
+    judgeModelsQueryMock.mockReturnValue({
+      data: { models: [{ slug: "kept-model" }] },
+    });
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),
+    );
+
+    expect(result.current).toEqual({ kind: "blocked" });
+  });
+
+  // Control: the same stored judge, with the SAME model still present in its
+  // harness's catalog - proves the case above fires on the model comparison
+  // and not merely on having an external (non-traycer) judge harness stored.
+  it("still bills the provider account when the stored judge's model is still offered", () => {
+    autoJudgeGetData = {
+      selection: {
+        harnessId: "claude",
+        model: "kept-model",
+        profileId: null,
+      },
+    };
+    providersListData = {
+      providers: [providerState({})],
+    };
+    judgeModelsQueryMock.mockReturnValue({
+      data: { models: [{ slug: "kept-model" }] },
+    });
 
     const { result } = renderHook(() =>
       useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID),

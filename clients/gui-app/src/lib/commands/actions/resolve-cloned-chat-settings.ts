@@ -9,8 +9,9 @@ import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-tra
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import {
   fallbackPermissionMode,
-  catalogLineKnowsAutoMode,
+  autoModeOfferableHere,
   composerOffersPermissionMode,
+  type PermissionMode,
 } from "@/components/home/data/landing-options";
 
 export interface ResolvedClonedChatSettings {
@@ -43,9 +44,34 @@ export type ClonedChatProfileRecoveryRequired =
   | ClonedChatProfileSelectionRequired
   | ClonedChatCatalogUnavailable;
 
+/**
+ * The target's matching harness accepts neither the source's mode nor anything
+ * its demotion chain offers, so there is no tuple to create with.
+ *
+ * A REFUSAL rather than a third clamp, and the reason is round 11's one-way
+ * rule: `auto` demotes to `auto_accept_edits` because dropping the judge is the
+ * honest half-measure, while a walk to the safest SUPPORTED mode would land a
+ * `["full_access"]` target on `supervised` - stricter than the chat the user is
+ * cloning, which no one asked for. When the chain runs out, both remaining
+ * options are wrong (an unsupported tuple the host rejects, or a mode the user
+ * did not choose), so the clone stops and says so.
+ *
+ * Deliberately NOT part of `ClonedChatProfileRecoveryRequired`: nothing about a
+ * profile is wrong here, and folding it in would hand this to the
+ * profile-picker recovery UI, which has no action that could fix it.
+ */
+export interface ClonedChatPermissionModeUnsupported {
+  readonly status: "permission-mode-unsupported";
+  readonly harnessId: string;
+  /** The source's mode first, then every rung of its demotion chain - what was
+   *  tried, in order, so the message can name them. */
+  readonly attemptedModes: ReadonlyArray<PermissionMode>;
+}
+
 export type ClonedChatSettingsResolution =
   | ResolvedClonedChatSettings
-  | ClonedChatProfileRecoveryRequired;
+  | ClonedChatProfileRecoveryRequired
+  | ClonedChatPermissionModeUnsupported;
 
 // The wire array's ambient row keys itself by the literal "ambient" sentinel;
 // every run/session-level profileId (chat settings included) uses `null` for
@@ -90,10 +116,14 @@ export async function resolveClonedChatSettings(input: {
 }): Promise<ClonedChatSettingsResolution> {
   // Clamp the MODE against the target's catalog before anything else, so every
   // return below carries a tuple that host can actually accept.
-  const sourceSettings = await permissionModeForTarget(
+  const clamped = await permissionModeForTarget(
     input.sourceSettings,
     input.targetClient,
   );
+  // The refusal short-circuits everything below: there is no tuple to resolve a
+  // profile for, and continuing would put an unsupported mode into the create.
+  if ("status" in clamped) return clamped;
+  const sourceSettings = clamped;
   const providerId = providerCliIdForHarness(sourceSettings.harnessId);
   if (providerId === null) {
     return {
@@ -157,7 +187,7 @@ export async function resolveClonedChatSettings(input: {
 async function permissionModeForTarget(
   settings: ChatRunSettings,
   targetClient: HostClient<HostRpcRegistry>,
-): Promise<ChatRunSettings> {
+): Promise<ChatRunSettings | ClonedChatPermissionModeUnsupported> {
   if (settings.permissionMode !== "auto") return settings;
   const harnesses = await targetClient
     .request("agent.gui.listHarnesses", {})
@@ -193,24 +223,66 @@ async function permissionModeForTarget(
   // here - a `null` reads as "cannot spell it", the safe direction, and demotes
   // exactly as an unsupported row does.
   const targetHostId = targetClient.getActiveHostId() ?? null;
-  const targetKnowsAutoMode = catalogLineKnowsAutoMode(
+  // Through the same two-proof predicate every composer uses, with the chat
+  // half explicitly `null`: a clone CREATES a chat on the target, so no
+  // `chat.subscribe` line has been negotiated for it and the catalog line is
+  // genuinely all this path can know. Routed through `autoModeOfferableHere`
+  // rather than calling `catalogLineKnowsAutoMode` directly so the second
+  // proof is visibly ANSWERED here rather than silently absent - if a future
+  // clone path gains a live session, this is the argument that changes.
+  const targetKnowsAutoMode = autoModeOfferableHere(
     targetHostId === null
       ? null
       : getNegotiatedHostMethodVersion(targetHostId, "agent.gui.listHarnesses"),
+    null,
   );
-  if (
-    composerOffersPermissionMode(
-      targetRow.supportedPermissionModes,
-      settings.permissionMode,
-      targetKnowsAutoMode,
-    )
-  ) {
-    return settings;
+  // The source's mode first, then each rung of its demotion chain, each one
+  // checked against the target row. The chain was previously applied ONE step
+  // and unchecked, which is the defect: `auto` became `auto_accept_edits` on a
+  // `["full_access"]` row and went to `epic.createChat` as a tuple that host
+  // refuses. A rung that the target does not accept is not a landing place.
+  const attemptedModes = [
+    settings.permissionMode,
+    ...demotionChain(settings.permissionMode),
+  ];
+  for (const candidate of attemptedModes) {
+    if (
+      composerOffersPermissionMode(
+        targetRow.supportedPermissionModes,
+        candidate,
+        targetKnowsAutoMode,
+      )
+    ) {
+      return candidate === settings.permissionMode
+        ? settings
+        : { ...settings, permissionMode: candidate };
+    }
   }
   return {
-    ...settings,
-    permissionMode: fallbackPermissionMode(settings.permissionMode),
+    status: "permission-mode-unsupported",
+    harnessId: settings.harnessId,
+    attemptedModes,
   };
+}
+
+/**
+ * Every mode `value` demotes THROUGH, in order, excluding `value` itself.
+ *
+ * Built by applying {@link fallbackPermissionMode} to a fixed point rather than
+ * once: that helper answers itself when a mode declares no fallback, so the
+ * walk terminates on its own and a chain that grows a third rung later is
+ * followed here with no edit. Today `auto` yields `["auto_accept_edits"]` and
+ * every other mode yields `[]`.
+ */
+function demotionChain(value: PermissionMode): ReadonlyArray<PermissionMode> {
+  const chain: PermissionMode[] = [];
+  let current = value;
+  for (;;) {
+    const next = fallbackPermissionMode(current);
+    if (next === current) return chain;
+    chain.push(next);
+    current = next;
+  }
 }
 
 async function readProviderProfiles(

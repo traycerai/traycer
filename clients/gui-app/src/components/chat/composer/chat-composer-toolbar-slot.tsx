@@ -27,6 +27,13 @@ interface ChatComposerToolbarSlotProps {
   /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  /**
+   * This chat session's `chat.subscribe` line, from
+   * `ChatSessionState.autoPermissionModeProtocolSupported` - the half of the
+   * Auto gate that only a live session knows. `null` until the handshake
+   * answers, which leaves the harness-catalog line deciding alone.
+   */
+  readonly autoPermissionModeProtocolSupported: boolean | null;
 }
 
 /**
@@ -70,6 +77,7 @@ function ChatComposerToolbarSlotImpl(props: ChatComposerToolbarSlotProps) {
       createProfileHostId={props.createProfileHostId}
       runTargetHostId={props.runTargetHostId}
       terminalLoginSurface={props.terminalLoginSurface}
+      chatLineCarriesAutoMode={props.autoPermissionModeProtocolSupported}
     />
   );
 }

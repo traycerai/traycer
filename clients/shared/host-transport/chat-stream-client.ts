@@ -13,6 +13,7 @@ import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
   projectChatClientFrameForVersion,
+  supportsAutoPermissionMode,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
@@ -289,6 +290,36 @@ export class ChatStreamClient {
     // the exact failure this guard exists to prevent.
     const version = this.session.getNegotiatedSchemaVersion();
     return version !== null && version.major === 1 && version.minor >= 5;
+  }
+
+  /**
+   * Whether THIS session's negotiated line can CARRY `permissionMode: "auto"`
+   * on a client frame.
+   *
+   * The same question {@link projectChatClientFrameForVersion} asks one layer
+   * down, asked EARLY so a surface can decline to offer the mode instead of
+   * throwing at the projection cliff once the user has already chosen it. Both
+   * read `supportsAutoPermissionMode`, so the offer and the send can never
+   * disagree about a line.
+   *
+   * **This is the only honest source for that fact, and the obvious substitute
+   * is silently wrong.** `chat.subscribe` is a STREAM method, and the
+   * negotiated-manifest registry behind `useHostMethodSchemaVersion` is fed
+   * from exactly one place - the UNARY connection's `openAck`, whose manifest
+   * the host derives from the unary registry alone. So
+   * `getNegotiatedHostMethodVersion(hostId, "chat.subscribe")` is `null` for
+   * every host that has ever connected, and a gate built on it would read
+   * "cannot carry auto" everywhere, including on hosts that carry it fine.
+   *
+   * It is also per-SESSION and not per-host, for the reason
+   * {@link sameTurnSteeringProtocolSupported} gives: every open chat tab
+   * negotiates its own line, so there is no host-wide answer to read even in
+   * principle.
+   */
+  autoPermissionModeProtocolSupported(): boolean {
+    return supportsAutoPermissionMode(
+      this.session.getNegotiatedSchemaVersion(),
+    );
   }
 
   /**

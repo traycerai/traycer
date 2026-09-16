@@ -163,6 +163,13 @@ export interface ChatLowerTurnState {
    * can steer at all, keeping a new renderer from steering a <=1.4 host.
    */
   readonly steerProtocolSupported: boolean;
+  /**
+   * Whether that same negotiated line can carry `permissionMode: "auto"`
+   * (`@1.12`), or `null` while the session cannot say. A sibling of
+   * `steerProtocolSupported` in every respect - same line, same per-session
+   * scope - and it gates whether the toolbar may OFFER Auto at all.
+   */
+  readonly autoPermissionModeProtocolSupported: boolean | null;
   /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly stopDisabled: boolean;
@@ -324,6 +331,8 @@ export function ChatLowerInteractionSurfaces(
   const turnStopDisabled = props.turn.stopDisabled;
   const turnSteerCapable = props.turn.steerCapable;
   const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
+  const turnAutoPermissionModeProtocolSupported =
+    props.turn.autoPermissionModeProtocolSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
   // Intercept the composer Stop button: when this chat has active
@@ -342,6 +351,8 @@ export function ChatLowerInteractionSurfaces(
       activeTurnStatus: turnActiveTurnStatus,
       steerCapable: turnSteerCapable,
       steerProtocolSupported: turnSteerProtocolSupported,
+      autoPermissionModeProtocolSupported:
+        turnAutoPermissionModeProtocolSupported,
       getActiveTurnForSteer: turnGetActiveTurnForSteer,
       stopDisabled: turnStopDisabled,
       onStopTurn: requestStopTurn,
@@ -350,6 +361,7 @@ export function ChatLowerInteractionSurfaces(
       turnActiveTurnStatus,
       turnSteerCapable,
       turnSteerProtocolSupported,
+      turnAutoPermissionModeProtocolSupported,
       turnGetActiveTurnForSteer,
       turnStopDisabled,
       requestStopTurn,
@@ -1099,6 +1111,9 @@ function LiveChatComposer(props: {
       activeTurnStatus={model.turn.activeTurnStatus}
       steerCapable={model.turn.steerCapable}
       steerProtocolSupported={model.turn.steerProtocolSupported}
+      autoPermissionModeProtocolSupported={
+        model.turn.autoPermissionModeProtocolSupported
+      }
       getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}

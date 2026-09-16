@@ -302,6 +302,33 @@ export function autoJudgeRecordHealth(input: {
  * reading that as "the stored profile is gone" would flash the warning, and
  * suppress the billing line, on every cold load.
  */
+/**
+ * Whether the judge's STORED model is gone from what its harness offers.
+ *
+ * The composer's half of what Settings detects as `storedModelUnavailable`, and
+ * deliberately a DIFFERENT mechanism for the same fact - which is worth stating
+ * rather than hiding, because "share one read" would be the wrong instinct
+ * here. The picker asks its store, which resolves a substitute whenever the
+ * stored model is not on offer, so presented-vs-stored IS the detector there.
+ * The composer has no picker and no substitute; it has the raw catalog, so it
+ * asks the catalog directly. Two questions, one fact, and neither surface can
+ * answer the other's.
+ *
+ * Both "cannot say" values are `false`, matching {@link judgeProfileUnavailable}:
+ * `""` is the no-carry seed for an unset record (the store is SUPPOSED to
+ * resolve it to the harness default), and `undefined` offers is a catalog that
+ * has not answered - reading either as "the model is gone" would suppress the
+ * disclosure on every cold load.
+ */
+export function judgeModelUnavailable(
+  storedModelSlug: string,
+  offeredModelSlugs: ReadonlyArray<string> | undefined,
+): boolean {
+  if (storedModelSlug.length === 0) return false;
+  if (offeredModelSlugs === undefined) return false;
+  return !offeredModelSlugs.includes(storedModelSlug);
+}
+
 export function judgeProfileUnavailable(
   storedProfileId: string | null,
   offeredProfileIds: ReadonlyArray<string | null> | undefined,

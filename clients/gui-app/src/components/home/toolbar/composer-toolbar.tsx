@@ -2,7 +2,7 @@ import { memo, useMemo } from "react";
 import { useStore } from "zustand";
 
 import {
-  catalogLineKnowsAutoMode,
+  autoModeOfferableHere,
   catalogSupportedPermissionModes,
 } from "@/components/home/data/landing-options";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
@@ -49,6 +49,13 @@ interface ComposerToolbarProps {
   /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  /**
+   * Whether THIS chat's negotiated `chat.subscribe` line can carry `auto`, or
+   * `null` on a composer with no chat session in scope (the landing composer).
+   * See {@link autoModeOfferableHere} for why the catalog line alone is not
+   * enough, and why this cannot be read per-host.
+   */
+  readonly chatLineCarriesAutoMode: boolean | null;
 }
 
 function ComposerToolbarImpl(props: ComposerToolbarProps) {
@@ -68,6 +75,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
+    chatLineCarriesAutoMode,
   } = props;
 
   // Left-group slices. The store is the single source for harness-level
@@ -98,6 +106,12 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   // cannot spell `auto`", and the two are different claims. A named host whose
   // line is unreadable still answers `false` - the composer is about to send on
   // it - which is what `catalogLineKnowsAutoMode(null)` gives.
+  //
+  // ANDed with this chat's own `chat.subscribe` line, because the catalog line
+  // is evidence about what the host can OFFER and the frame that CARRIES the
+  // value is a different method - see `autoModeOfferableHere`. On the landing
+  // composer that second half is `null` (no chat yet) and the catalog line
+  // decides alone, which is all this surface can know.
   const listHarnessesLine = useHostMethodSchemaVersion(
     runTargetHostId,
     "agent.gui.listHarnesses",
@@ -105,7 +119,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   const hostKnowsAutoMode =
     runTargetHostId === null
       ? null
-      : catalogLineKnowsAutoMode(listHarnessesLine);
+      : autoModeOfferableHere(listHarnessesLine, chatLineCarriesAutoMode);
   // The harness this composer will RUN, which decides the disclosure alongside
   // the host's stored judge: a provider set to its own classifier bypasses
   // Traycer's judge entirely. Read off the same store slice the picker shows,

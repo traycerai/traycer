@@ -5,6 +5,7 @@ import { guiHarnessOptionSchema } from "@traycer/protocol/host/agent/gui/unary-s
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import {
   PERMISSION_OPTIONS,
+  autoModeOfferableHere,
   catalogLineKnowsAutoMode,
   catalogSupportedPermissionModes,
   composerOffersPermissionMode,
@@ -258,6 +259,39 @@ describe("catalogLineKnowsAutoMode", () => {
       minor: AUTO_MODE_LINE.minor,
     };
     expect(catalogLineKnowsAutoMode(higherMajor)).toBe(false);
+  });
+});
+
+// The `chat.subscribe` proof, which the catalog proof cannot supply - two
+// independently-negotiated methods, both of which a chat composer needs
+// before it may show/send `auto`. See `autoModeOfferableHere`'s doc comment.
+describe("autoModeOfferableHere", () => {
+  const belowCatalogLine: SchemaVersion = {
+    major: AUTO_MODE_LINE.major,
+    minor: AUTO_MODE_LINE.minor - 1,
+  };
+
+  it("catalog line below 9.1, chat line true -> false (the catalog still vetoes)", () => {
+    expect(autoModeOfferableHere(belowCatalogLine, true)).toBe(false);
+  });
+
+  // THE FIX: gating on the catalog line alone previously let this through as
+  // `true`, offering `auto` on a chat whose negotiated `chat.subscribe` line
+  // cannot carry it - the send then throws at the projection cliff.
+  it("catalog line 9.1, chat line false -> false", () => {
+    expect(autoModeOfferableHere(AUTO_MODE_LINE, false)).toBe(false);
+  });
+
+  it("catalog line 9.1, chat line true -> true", () => {
+    expect(autoModeOfferableHere(AUTO_MODE_LINE, true)).toBe(true);
+  });
+
+  it("catalog line 9.1, chat line null -> true (no chat in scope: the catalog decides alone)", () => {
+    expect(autoModeOfferableHere(AUTO_MODE_LINE, null)).toBe(true);
+  });
+
+  it("catalog line null, chat line true -> false", () => {
+    expect(autoModeOfferableHere(null, true)).toBe(false);
   });
 });
 

@@ -34,6 +34,7 @@ function makeStore(modelSlug: string) {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 }
@@ -56,6 +57,7 @@ function renderToolbar(modelSlug: string, onSubmit: () => void) {
       createProfileHostId={null}
       runTargetHostId={null}
       terminalLoginSurface={null}
+      chatLineCarriesAutoMode={null}
     />,
   );
 }

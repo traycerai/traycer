@@ -225,7 +225,16 @@ export type ChatStreamClientHandle = Pick<
   | "requestResnapshot"
 > &
   Partial<
-    Pick<ChatStreamClient, "interviewSettlementActionsProtocolSupported">
+    Pick<
+      ChatStreamClient,
+      | "interviewSettlementActionsProtocolSupported"
+      // Optional for the same reason as its neighbour, and its ABSENCE is
+      // read as `null` ("this handle cannot say") rather than `false`. A
+      // double that never implemented the probe is not a line that refused
+      // `auto`, and collapsing the two would veto the mode across every
+      // fixture that predates it.
+      | "autoPermissionModeProtocolSupported"
+    >
   >;
 
 export type ChatStreamClientFactory = (
@@ -1032,6 +1041,19 @@ export interface ChatSessionState {
   readonly steerProtocolSupported: boolean;
   /** `chat.subscribe@1.7` support for detached interview delivery retries. */
   readonly interviewDeliveryRetryProtocolSupported: boolean;
+  /**
+   * Whether THIS tab's negotiated `chat.subscribe` line can carry
+   * `permissionMode: "auto"` on a client frame (`@1.12`), or `null` while the
+   * session cannot say - not yet `open`, or a handle without the probe.
+   *
+   * The mode is OFFERED from the harness catalog line
+   * (`agent.gui.listHarnesses@9.1`) and CARRIED on this one, which are
+   * different methods and negotiate independently. A composer that gates only
+   * on the catalog can light up Auto on a line that then refuses the frame -
+   * `projectChatClientFrameForVersion` throws rather than dropping it - so a
+   * chat composer has to hold both and this is the half only a session knows.
+   */
+  readonly autoPermissionModeProtocolSupported: boolean | null;
   /**
    * The host's own `isTurnInProgress()`: is a turn genuinely active or
    * activating right now? Narrower than `runStatus !== "idle"`, which also
@@ -6867,6 +6889,21 @@ export function createChatSessionStoreWithNotificationDependencies(
             }
             return false;
           };
+          // THREE states, unlike the two gates above, and the third is the
+          // point. `null` is "this session cannot say yet" - the handshake has
+          // not completed, or a handle that predates the probe - and a surface
+          // reading it falls back to what the harness CATALOG line proves.
+          // `false` is a line that answered and cannot carry `auto`.
+          //
+          // Collapsing the unknown into `false` would veto Auto on every
+          // not-yet-open session and every older fixture, which is a much
+          // louder wrong answer than the latent case this gate exists for.
+          const resolveAutoPermissionModeProtocolSupported = () => {
+            if (status !== "open") return null;
+            return (
+              streamClient?.autoPermissionModeProtocolSupported?.() ?? null
+            );
+          };
           // One attempt that failed before delivering a snapshot, counted for
           // the tile's bounded loading gate (see `PreSnapshotRetryEvidence`).
           //
@@ -6903,6 +6940,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             steerProtocolSupported: resolveSteerProtocolSupported(),
             interviewDeliveryRetryProtocolSupported:
               resolveInterviewDeliveryRetryProtocolSupported(),
+            autoPermissionModeProtocolSupported:
+              resolveAutoPermissionModeProtocolSupported(),
             fatalClose: resolveFatalClose(),
             preSnapshotRetries: resolvePreSnapshotRetries(),
           };
@@ -7137,6 +7176,9 @@ export function createChatSessionStoreWithNotificationDependencies(
       activeTurn: null,
       steerProtocolSupported: false,
       interviewDeliveryRetryProtocolSupported: false,
+      // `null`, not `false` - no session has answered yet, so the catalog line
+      // decides alone rather than the mode being vetoed before a handshake.
+      autoPermissionModeProtocolSupported: null,
       turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
@@ -7234,6 +7276,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           connectionStatus: "connecting",
           steerProtocolSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
+          autoPermissionModeProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
           // A LATER pre-snapshot wait begins here, and the tile's anchor

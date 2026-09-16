@@ -1022,6 +1022,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
+    chatLineCarriesAutoMode: null,
     hostId: TEST_HOST_ID,
   });
   if (resolvedInput.storeModels !== undefined) {
@@ -1032,6 +1033,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       models: resolvedInput.storeModels,
       modelsLoaded: true,
       tuiOnly: resolvedInput.tuiOnly ?? false,
+      chatLineCarriesAutoMode: null,
     });
   }
   const selections: HarnessModelSelection[] = [];
@@ -1377,6 +1379,7 @@ describe("<HarnessModelPicker />", () => {
         models,
         modelsLoaded: true,
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       });
     });
   }

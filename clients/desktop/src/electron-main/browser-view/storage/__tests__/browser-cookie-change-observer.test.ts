@@ -5,6 +5,7 @@ import type {
   BrowserPrimaryProfileDelta,
 } from "@traycer/protocol/host/browser/contracts";
 import {
+  BROWSER_COOKIE_DELTA_MAX_WAIT_MS,
   BROWSER_COOKIE_DELTA_WINDOW_MS,
   BROWSER_COOKIE_REMOVAL_GRACE_MS,
   BrowserCookieChangeObserver,
@@ -219,7 +220,10 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     // Still inside the window: nothing has flushed yet.
     expect(deltas).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS - 900);
+    // The quiet timer is re-armed on every change, so the flush lands
+    // BROWSER_COOKIE_DELTA_WINDOW_MS after the LAST change (cookieC, at
+    // t=900), not BROWSER_COOKIE_DELTA_WINDOW_MS after the window opened.
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
 
     expect(deltas).toHaveLength(1);
     const delta = deltas[0];
@@ -321,6 +325,110 @@ describe("BrowserCookieChangeObserver coalescing", () => {
       "example.com",
       "other.test",
     ]);
+
+    observer.dispose();
+  });
+});
+
+describe("BrowserCookieChangeObserver quiet timer and max-wait cap", () => {
+  it("flushes once, 2s after the LAST event of a burst - the quiet timer is re-armed on every change", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.set(makeCookie({ name: "a", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(1_500);
+    source.set(makeCookie({ name: "b", domain: "example.com" }));
+    // Still within the quiet window re-armed by "b": only 1.5s of the
+    // required 2s of silence since it landed have passed.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(deltas).toHaveLength(0);
+
+    // The remaining 0.5s of quiet since "b" closes the window.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.cookies.map((cookie) => cookie.name).sort()).toEqual([
+      "a",
+      "b",
+    ]);
+
+    observer.dispose();
+  });
+
+  it("caps a continuous 1 Hz writer at the max-wait timer: it never goes quiet, so it flushes at 10s and again at 20s", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    const openedAt = Date.now();
+
+    // A change every second never leaves the quiet timer's 2s of silence, so
+    // only the max-wait timer - armed on each window's first event - can ever
+    // close a window here.
+    for (let second = 0; second < 20; second += 1) {
+      source.set(makeCookie({ name: `sid-${second}`, domain: "example.com" }));
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    const perWindow = BROWSER_COOKIE_DELTA_MAX_WAIT_MS / 1_000;
+    expect(deltas).toHaveLength(2);
+    expect(deltas[0]?.issuedAt).toBe(openedAt);
+    expect(deltas[0]?.cookies).toHaveLength(perWindow);
+    expect(deltas[1]?.issuedAt).toBe(
+      openedAt + BROWSER_COOKIE_DELTA_MAX_WAIT_MS,
+    );
+    expect(deltas[1]?.cookies).toHaveLength(2 * perWindow);
+
+    observer.dispose();
+  });
+
+  it("includes a change that lands mid-churn in the window's next flush, within the 10s cap", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    for (let second = 0; second < 10; second += 1) {
+      // A login arrives mid-churn, amid a steady stream of unrelated writes
+      // that alone would keep this window open past its quiet timer.
+      source.set(
+        second === 5
+          ? makeCookie({ name: "sid", domain: "example.com" })
+          : makeCookie({ name: `noise-${second}`, domain: "example.com" }),
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    // The max-wait timer, armed on the window's first event, closes it at 10s
+    // regardless of the continuous churn - the login is not left waiting
+    // behind an indefinitely-extended quiet window.
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.cookies.map((cookie) => cookie.name)).toContain("sid");
+
+    observer.dispose();
+  });
+
+  it("removal claims survive the timer change: an unrelated re-arming change does not erase a genuine removal", async () => {
+    const source = new FakeCookieChangeSource();
+    const goneCookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(goneCookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(goneCookie);
+    // An unrelated change re-arms the quiet timer before the removal's own
+    // quiet window would otherwise have closed.
+    await vi.advanceTimersByTimeAsync(1_000);
+    source.set(makeCookie({ name: "fresh", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    expect(delta.removedKeys).toEqual([
+      { domain: "example.com", name: "sid", path: "/" },
+    ]);
+    expect(delta.cookies.map((cookie) => cookie.name)).toEqual(["fresh"]);
 
     observer.dispose();
   });

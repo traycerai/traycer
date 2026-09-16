@@ -10,7 +10,7 @@ import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-tra
 import {
   findDefaultModel,
   findSelectedModel,
-  catalogLineKnowsAutoMode,
+  autoModeOfferableHere,
   normalizePermissionMode,
   normalizeReasoningForModel,
   normalizeServiceTierForModel,
@@ -67,6 +67,19 @@ export interface ComposerToolbarCatalog {
    * are dropped rather than attributed to the wrong host.
    */
   readonly hostId: string | null;
+  /**
+   * Whether the chat this composer sends on has negotiated a `chat.subscribe`
+   * line that can CARRY `permissionMode: "auto"` (`@1.12`), or `null` when no
+   * chat session is in scope - the landing composer, and Settings' judge
+   * picker, neither of which has one.
+   *
+   * A HOST fact pushed in like the rest of this record, but it is NOT readable
+   * from the negotiated-manifest registry the way `hostId`'s catalog line is:
+   * `chat.subscribe` is a stream method and that registry only ever holds
+   * unary ones. It has to arrive from a live session. See
+   * `autoModeOfferableHere`.
+   */
+  readonly chatLineCarriesAutoMode: boolean | null;
   /** `undefined` while the harness list is loading / the surface is inactive. */
   readonly harnesses: ReadonlyArray<HarnessOption> | undefined;
   /**
@@ -197,6 +210,8 @@ export interface CreateComposerToolbarStoreInput {
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /** Seeds `catalog.tuiOnly`; kept in sync at runtime via `setCatalog`. */
   readonly tuiOnly: boolean;
+  /** Seeds `catalog.chatLineCarriesAutoMode`; kept in sync via `setCatalog`. */
+  readonly chatLineCarriesAutoMode: boolean | null;
   /** Seeds `catalog.hostId`; kept in sync at runtime via `setCatalog`. */
   readonly hostId: string | null;
 }
@@ -206,6 +221,7 @@ export function createComposerToolbarStore(
 ): ComposerToolbarStore {
   const initialCatalog: ComposerToolbarCatalog = {
     hostId: input.hostId,
+    chatLineCarriesAutoMode: input.chatLineCarriesAutoMode,
     harnesses: undefined,
     modelsHarnessId: input.values.selection.harnessId,
     models: EMPTY_MODELS,
@@ -415,11 +431,17 @@ function deriveToolbarState(
       ? // No host in scope yet - not a host that cannot spell `auto`. The
         // clamp passes the mode through and re-runs when a catalog arrives.
         null
-      : catalogLineKnowsAutoMode(
+      : autoModeOfferableHere(
           getNegotiatedHostMethodVersion(
             catalog.hostId,
             "agent.gui.listHarnesses",
           ),
+          // The second proof, which the registry above cannot supply: that
+          // line says the host can OFFER `auto`, and a different method
+          // CARRIES it. This is the clamp, so it is what actually decides the
+          // value the composer SENDS - the picker's own gate only decides what
+          // it shows.
+          catalog.chatLineCarriesAutoMode,
         );
   const derived: ComposerToolbarDerived = {
     selection,

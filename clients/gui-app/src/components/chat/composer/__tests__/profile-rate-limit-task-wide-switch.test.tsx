@@ -408,6 +408,7 @@ describe("rate-limit banner task-wide switch", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: null,
     });
     renderBanner({

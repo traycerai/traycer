@@ -17,6 +17,7 @@ import {
   autoJudgeRecordHealth,
   autoJudgeSeed,
   autoJudgeSeedKeyForAttempt,
+  judgeModelUnavailable,
   judgeProfileUnavailable,
   offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -604,6 +605,30 @@ describe("judgeProfileUnavailable", () => {
     expect(
       judgeProfileUnavailable("profile-1", ["some-other-profile", null]),
     ).toBe(true);
+  });
+});
+
+// FIX 2 (P2): the composer's own read of the same question `judgeProfileUnavailable`
+// asks about a profile, one field over - the harness catalog has no substitute
+// for a vanished MODEL the way the picker's store does, so it asks the catalog
+// directly rather than comparing presented-vs-stored.
+describe("judgeModelUnavailable", () => {
+  it("is false for the no-carry seed ('') - an unset record has nothing to have lost", () => {
+    expect(judgeModelUnavailable("", ["a", "b"])).toBe(false);
+  });
+
+  it("is false when offeredModelSlugs is undefined - the harness's model catalog has not answered yet", () => {
+    // Must not flash the disclosure-suppressing finding on a cold load before
+    // the models read has settled.
+    expect(judgeModelUnavailable("gpt-x", undefined)).toBe(false);
+  });
+
+  it("is false when the stored model is present in a settled offered list", () => {
+    expect(judgeModelUnavailable("a", ["a", "b"])).toBe(false);
+  });
+
+  it("is true when the stored model is absent from a settled, non-empty offered list", () => {
+    expect(judgeModelUnavailable("gone-model", ["a", "b"])).toBe(true);
   });
 });
 

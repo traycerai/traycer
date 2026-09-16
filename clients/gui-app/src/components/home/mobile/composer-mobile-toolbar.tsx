@@ -4,7 +4,7 @@ import { useStore } from "zustand";
 import { ComposerSendButton } from "@/components/home/composer/composer-send-button";
 import { ComposerOptionsSheet } from "@/components/home/mobile/composer-options-sheet";
 import {
-  catalogLineKnowsAutoMode,
+  autoModeOfferableHere,
   catalogSupportedPermissionModes,
   findPermissionOption,
   normalizePermissionMode,
@@ -44,6 +44,12 @@ interface ComposerMobileToolbarProps {
   readonly runTargetHostId: string | null;
   /** Where the picker's setup terminal lands - see `HarnessModelPicker`. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  /**
+   * Whether THIS chat's negotiated `chat.subscribe` line can carry `auto`, or
+   * `null` with no chat session in scope - see `ComposerToolbar`'s prop of the
+   * same name and {@link autoModeOfferableHere}.
+   */
+  readonly chatLineCarriesAutoMode: boolean | null;
 }
 
 /**
@@ -73,6 +79,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
+    chatLineCarriesAutoMode,
   } = props;
 
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -100,6 +107,10 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   // cannot spell `auto`", and the two are different claims. A named host whose
   // line is unreadable still answers `false` - the composer is about to send on
   // it - which is what `catalogLineKnowsAutoMode(null)` gives.
+  //
+  // ANDed with this chat's own `chat.subscribe` line, exactly as on desktop -
+  // the catalog line says the host can OFFER the mode, a different method
+  // CARRIES it. See `autoModeOfferableHere`.
   const listHarnessesLine = useHostMethodSchemaVersion(
     runTargetHostId,
     "agent.gui.listHarnesses",
@@ -107,7 +118,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   const hostKnowsAutoMode =
     runTargetHostId === null
       ? null
-      : catalogLineKnowsAutoMode(listHarnessesLine);
+      : autoModeOfferableHere(listHarnessesLine, chatLineCarriesAutoMode);
   // Same two inputs as the desktop toolbar - see `ComposerToolbar`.
   const runHarnessId = useStore(store, (s) => s.selection.harnessId);
   const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);

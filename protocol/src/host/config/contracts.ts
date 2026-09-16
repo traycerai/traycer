@@ -3,6 +3,10 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import {
+  configBrowserGetRequestSchema,
+  configBrowserResponseSchema,
+  configBrowserSetRequestSchema,
+  configBrowserSetResponseSchema,
   configEnvDeleteRequestSchema,
   configEnvDeleteResponseSchema,
   configEnvListRequestSchema,
@@ -156,4 +160,20 @@ export const configLogLevelsSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configLogLevelsSetRequestSchema,
   responseSchema: configLogLevelsSetResponseSchema,
+});
+
+/** Reads the machine-user-global agent browser-access switch. */
+export const configBrowserGetV10 = defineRpcContract({
+  method: "config.browser.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configBrowserGetRequestSchema,
+  responseSchema: configBrowserResponseSchema,
+});
+
+/** Writes the machine-user-global agent browser-access switch. */
+export const configBrowserSetV10 = defineRpcContract({
+  method: "config.browser.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configBrowserSetRequestSchema,
+  responseSchema: configBrowserSetResponseSchema,
 });

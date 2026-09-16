@@ -190,6 +190,13 @@ interface ChatComposerProps {
    */
   readonly steerProtocolSupported: boolean;
   /**
+   * Whether this chat's negotiated `chat.subscribe` line can carry
+   * `permissionMode: "auto"` (`@1.12`), or `null` while the session cannot
+   * say. Threaded to the toolbar exactly as `steerProtocolSupported` is: both
+   * are facts about THIS session's line that no host-wide read can answer.
+   */
+  readonly autoPermissionModeProtocolSupported: boolean | null;
+  /**
    * Reads the live active turn at submit time (not a reactive prop) so the
    * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
    * callback per streamed token - mirrors `steerQueuedItemNow`'s live read.
@@ -298,6 +305,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     activeTurnStatus,
     steerCapable,
     steerProtocolSupported,
+    autoPermissionModeProtocolSupported,
     getActiveTurnForSteer,
     editingQueueItemId,
     onCancelQueueEdit,
@@ -411,7 +419,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused ? "chat-tile" : null,
     seedSource,
     onSettingsChange,
-    { hostClient, hostId: tabHostId, tuiOnly: false },
+    {
+      hostClient,
+      hostId: tabHostId,
+      tuiOnly: false,
+      // The one composer with a live chat session, so the one that can supply
+      // the second proof. This reaches the STICKY CLAMP, which decides the
+      // mode actually sent - the toolbar's own gate only decides what is
+      // offered, and a sticky `auto` would otherwise survive both.
+      chatLineCarriesAutoMode: autoPermissionModeProtocolSupported,
+    },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -804,6 +821,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     createProfileHostId={tabHostId}
                     runTargetHostId={tabHostId}
                     terminalLoginSurface={terminalLoginSurface}
+                    autoPermissionModeProtocolSupported={
+                      autoPermissionModeProtocolSupported
+                    }
                   />
                 }
               />

@@ -19,6 +19,7 @@ import { agentModeSchema } from "@traycer/protocol/common/schemas";
 import {
   permissionModeSchema,
   permissionModeSchemaPreAuto,
+  type PermissionMode,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
@@ -1808,6 +1809,71 @@ export const agentConfigureDowngradeV60ToV30 = defineDowngradePath<
     return { ok: true, value: parsed.data };
   },
 });
+
+/**
+ * Whether the negotiated `agent.configure` line's RESPONSE can carry `mode`.
+ *
+ * ## Why this exists, and why it is a pre-flight rather than a projection
+ *
+ * A caller below the live major sends no permission mode at all; the upgrade
+ * paths supply `permissionMode: null`, which means PRESERVE. The host is
+ * therefore free to apply the mutation - the request is representable - and
+ * only the RESPONSE discovers the problem: it echoes the whole settings tuple,
+ * the frozen response schema's `permissionMode` is `permissionModeSchemaPreAuto`
+ * on every line below the live one, and an agent already in `auto` fails the
+ * reparse. The bridge then answers `DOWNGRADE_UNSUPPORTED` AFTER the agent has
+ * changed, so the caller reads a failed configure over a successful mutation
+ * and has no way to learn what the agent now is.
+ *
+ * The other remedy - projecting `auto` down to `auto_accept_edits` so the
+ * response parses - is deliberately NOT taken, for the reason
+ * `chat-frame-compat.ts` gives for refusing rather than projecting on
+ * `chat.subscribe`, and it is stronger here: this response is the WHOLE
+ * settings tuple, so a caller that echoes it back on its next configure would
+ * silently end auto mode on an agent someone set to it. Reporting a mode the
+ * agent is not in is a lie about a permission-relevant field.
+ *
+ * So the host calls this BEFORE mutating and refuses the configure, leaving the
+ * agent untouched and the caller correct about it.
+ *
+ * ## Derived, not restated
+ *
+ * The answer comes from parsing `mode` against the very schema the downgrade
+ * will use, so a line that later widens its enum starts answering `true` here
+ * with no edit - and a new frozen line added below without a row in this table
+ * is a compile error, not a silent `true`.
+ */
+export function agentConfigureResponseCanCarryPermissionMode(
+  negotiatedMajor: number,
+  mode: PermissionMode,
+): boolean {
+  const settings = AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR[negotiatedMajor];
+  // An unknown major is not a line this client negotiated; treat it as capable
+  // rather than refusing a configure for a version we cannot reason about. The
+  // downgrade bridge is still the backstop.
+  if (settings === undefined) return true;
+  return settings.shape.permissionMode.safeParse(mode).success;
+}
+
+const AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR: Readonly<
+  Record<
+    number,
+    | typeof agentConfigureSettingsSchemaV1
+    | typeof agentConfigureSettingsSchemaV2
+    | typeof agentConfigureSettingsSchemaV3
+    | typeof agentConfigureSettingsSchemaV4
+    | typeof agentConfigureSettingsSchemaV5
+    | typeof agentConfigureSettingsSchema
+    | undefined
+  >
+> = {
+  1: agentConfigureSettingsSchemaV1,
+  2: agentConfigureSettingsSchemaV2,
+  3: agentConfigureSettingsSchemaV3,
+  4: agentConfigureSettingsSchemaV4,
+  5: agentConfigureSettingsSchemaV5,
+  6: agentConfigureSettingsSchema,
+};
 
 export const agentConfigureUpgradeV10ToV20 = defineUpgradePath<
   typeof agentConfigureV10,

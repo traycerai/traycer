@@ -409,6 +409,7 @@ function renderPickerWithFixture(
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: "host-a",
   });
   render(

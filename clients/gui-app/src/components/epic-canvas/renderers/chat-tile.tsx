@@ -1827,6 +1827,8 @@ function useChatTileSessionViewModel(
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
       steerProtocolSupported: s.steerProtocolSupported,
+      autoPermissionModeProtocolSupported:
+        s.autoPermissionModeProtocolSupported,
       interviewDeliveryRetryProtocolSupported:
         s.interviewDeliveryRetryProtocolSupported,
       turnInProgress: s.turnInProgress,
@@ -3198,6 +3200,10 @@ function useChatTileSessionViewModel(
   // settings-drift comparison, avoiding a reactive activeTurn prop.
   const steerCapable = state.activeTurn?.sameTurnSteeringSupported ?? false;
   const steerProtocolSupported = state.steerProtocolSupported;
+  // Same stability argument as `steerProtocolSupported`: fixed once the
+  // handshake lands, so it never churns the memoized composer per token.
+  const autoPermissionModeProtocolSupported =
+    state.autoPermissionModeProtocolSupported;
   const getActiveTurnForSteer = useCallback(
     () => handle.store.getState().activeTurn,
     [handle.store],
@@ -3207,6 +3213,7 @@ function useChatTileSessionViewModel(
       activeTurnStatus: composerActiveTurnStatus,
       steerCapable,
       steerProtocolSupported,
+      autoPermissionModeProtocolSupported,
       getActiveTurnForSteer,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
@@ -3215,6 +3222,7 @@ function useChatTileSessionViewModel(
       composerActiveTurnStatus,
       steerCapable,
       steerProtocolSupported,
+      autoPermissionModeProtocolSupported,
       getActiveTurnForSteer,
       stopDisabled,
       chatActions.stopTurn,

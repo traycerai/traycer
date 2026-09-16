@@ -60,6 +60,7 @@ function mountSubmit(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 

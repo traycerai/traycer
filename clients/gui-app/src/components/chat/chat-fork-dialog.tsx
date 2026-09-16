@@ -424,7 +424,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     // not the tab's. The per-host last-used buckets it keys describe the
     // machine the fork will run on, so a cross-host fork must read and write
     // the target's bucket, never the source tab's.
-    { hostClient: selectedHostClient, hostId: selectedHostId, tuiOnly: false },
+    {
+      hostClient: selectedHostClient,
+      hostId: selectedHostId,
+      tuiOnly: false,
+      // A fork CREATES a chat; nothing has negotiated a `chat.subscribe` line
+      // for it yet, so the harness-catalog line decides `auto` alone.
+      chatLineCarriesAutoMode: null,
+    },
   );
   // Cross-host asks the STRONGER question, and only cross-host.
   //

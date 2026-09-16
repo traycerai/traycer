@@ -514,6 +514,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onStopTurn: () => null,
     steerCapable: false,
     steerProtocolSupported: true,
+    autoPermissionModeProtocolSupported: null,
     getActiveTurnForSteer: () => null,
   };
   const interview: ChatLowerInterviewState = {

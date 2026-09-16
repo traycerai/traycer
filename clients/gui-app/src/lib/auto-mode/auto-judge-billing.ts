@@ -131,24 +131,31 @@ export function autoJudgeBillingForRun(input: {
    */
   readonly blocked: AutoJudgeBlocked | null | undefined;
   /**
-   * The stored judge names an explicit profile its provider no longer offers.
+   * A CLIENT-DETECTED reason the stored judge cannot run - today an explicit
+   * profile its provider no longer offers, or a model its harness no longer
+   * lists.
    *
    * A SEPARATE input rather than a synthesized `blocked` value, because
-   * `AutoJudgeBlocked.reason` has no missing-profile member and inventing one
+   * `AutoJudgeBlocked.reason` has no member for either cause and inventing one
    * would put a reason on the wire's type that no host ever sends. The host
-   * cannot report this at all - it is a client-side comparison of the stored
-   * `profileId` against what `providers.list` currently offers
-   * (`judgeProfileUnavailable`) - so it arrives on its own channel and is
-   * folded in here, once, where the precedence already lives.
+   * cannot report either at all - both are client-side comparisons of the
+   * stored record against what the client currently has on hand: the
+   * `profileId` against `providers.list` (`judgeProfileUnavailable`), and the
+   * model slug against that harness's own catalog (`judgeModelUnavailable`).
+   *
+   * ONE channel rather than a flag per cause, because the user-visible answer
+   * is identical for every cause - a second arm would be a second way to say
+   * one thing. It arrives here and is folded in once, where the precedence
+   * already lives.
    */
-  readonly judgeProfileUnavailable: boolean;
+  readonly judgeRecordUnrunnable: boolean;
 }): AutoJudgeBilling {
   const {
     judgeHarnessId,
     runHarnessId,
     isProviderNative,
     blocked,
-    judgeProfileUnavailable,
+    judgeRecordUnrunnable,
   } = input;
   // Precedence, and the order is the whole content of this function.
   //
@@ -172,7 +179,7 @@ export function autoJudgeBillingForRun(input: {
   // the same reason the host's blocker is: a provider running its own
   // classifier does not consult Traycer's stored judge, so a vanished profile
   // on that record describes a call that was never going to happen.
-  if (judgeProfileUnavailable) return BLOCKED_BILLING;
+  if (judgeRecordUnrunnable) return BLOCKED_BILLING;
   return autoJudgeBillingFor(judgeHarnessId);
 }
 

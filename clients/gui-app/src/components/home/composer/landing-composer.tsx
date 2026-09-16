@@ -349,7 +349,13 @@ export function LandingComposer(props: LandingComposerProps) {
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
-    { hostClient, hostId: activeHostId, tuiOnly: composerMode === "terminal" },
+    {
+      hostClient,
+      hostId: activeHostId,
+      tuiOnly: composerMode === "terminal",
+      // The landing composer has no chat yet - see `ComposerBody`.
+      chatLineCarriesAutoMode: null,
+    },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);

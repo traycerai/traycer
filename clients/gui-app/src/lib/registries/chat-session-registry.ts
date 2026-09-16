@@ -338,6 +338,8 @@ export function useChatSessionHandle(
         requestResnapshot: () => result.client.requestResnapshot(),
         interviewSettlementActionsProtocolSupported: () =>
           result.client.interviewSettlementActionsProtocolSupported(),
+        autoPermissionModeProtocolSupported: () =>
+          result.client.autoPermissionModeProtocolSupported(),
       };
     };
 

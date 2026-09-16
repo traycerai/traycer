@@ -276,7 +276,13 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     null,
     fallbackSeedSource(settingsSeed, hostClient),
     null,
-    { hostClient, hostId, tuiOnly: true },
+    {
+      hostClient,
+      hostId,
+      tuiOnly: true,
+      // Terminal agents have no `chat.subscribe` stream at all.
+      chatLineCarriesAutoMode: null,
+    },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);

@@ -321,6 +321,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     hostClient: launchHostClient,
     hostId: memoryHostId,
     tuiOnly: true,
+    chatLineCarriesAutoMode: null,
   });
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;

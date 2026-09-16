@@ -82,6 +82,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: null,
     });
 
@@ -403,6 +404,7 @@ function mountSubmitHook(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 

@@ -89,6 +89,7 @@ function useAutoJudgeToolbarStore(input: {
       values: seed.values,
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId,
     }),
   );
@@ -138,6 +139,7 @@ function useAutoJudgeToolbarStore(input: {
       models: models ?? EMPTY_JUDGE_MODELS,
       modelsLoaded,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
     });
   }, [store, hostId, harnesses, harnessId, models, modelsLoaded]);
 
