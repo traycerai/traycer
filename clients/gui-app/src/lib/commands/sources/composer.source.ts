@@ -124,9 +124,7 @@ function buildDraftsItem(shortcut: ChordString | null): CommandItem {
     id: "composer:drafts",
     label: "Drafts",
     description: "Open the drafts list for this composer.",
-    // "stash" stays a keyword: the control replaced the prompt stash, and the
-    // word is what a user who learned the old feature will search for.
-    keywords: ["drafts", "stash", "saved", "prompt"],
+    keywords: ["drafts", "saved", "prompt"],
     group: "suggested",
     scope: "actions",
     shortcut,

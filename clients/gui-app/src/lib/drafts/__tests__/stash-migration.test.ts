@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ImageBlob } from "@/lib/attachments/image-bytes";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import {

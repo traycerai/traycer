@@ -111,7 +111,6 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
-  "gui-app/src/components/chat/composer/prompt-stash-control.tsx": 7,
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
@@ -198,10 +197,6 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
   },
   "gui-app/src/components/providers/profile-dropdown.tsx": {
     chars: ["r"],
-    why: "single-letter accelerator on a visible label inside an open menu",
-  },
-  "gui-app/src/components/chat/composer/prompt-stash-control.tsx": {
-    chars: ["d"],
     why: "single-letter accelerator on a visible label inside an open menu",
   },
   "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": {

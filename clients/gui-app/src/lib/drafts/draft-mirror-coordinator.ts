@@ -212,24 +212,6 @@ export function bindLandingAdoptionHost(hostId: string | null): void {
   landingAdoptionHostId = hostId;
 }
 
-// removed in T07. `hooks/composer/use-prompt-stash.ts` still calls these; a
-// stash capture no longer reaches a host at all (the plane it published to is
-// what this file now converts away), so both are no-ops until the stash UI is
-// deleted with that hook.
-export function publishStashEntry(
-  _hostId: string,
-  _entry: unknown,
-): Promise<void> {
-  return Promise.resolve();
-}
-
-export function consumeStashOnHost(
-  _hostId: string | null,
-  _entryId: string,
-): Promise<void> {
-  return Promise.resolve();
-}
-
 export function draftsCloudScopeId(hostId: string): string | null {
   return (
     cloudScopeIdByHost.get(hostId) ??

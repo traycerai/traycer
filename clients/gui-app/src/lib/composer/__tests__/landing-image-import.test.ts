@@ -360,7 +360,7 @@ describe("importImagesIntoLanding", () => {
           "draft-1",
         ),
       ),
-    ).rejects.toThrow("A stashed image is missing from durable storage.");
+    ).rejects.toThrow("An image is missing from durable storage.");
     expect(putSpy).not.toHaveBeenCalled();
   });
 
@@ -375,7 +375,7 @@ describe("importImagesIntoLanding", () => {
           "draft-1",
         ),
       ),
-    ).rejects.toThrow("A stashed image is missing from durable storage.");
+    ).rejects.toThrow("An image is missing from durable storage.");
     expect(readBlobCalls).toEqual([]);
     expect(putSpy).not.toHaveBeenCalled();
   });
@@ -457,6 +457,69 @@ describe("importImagesIntoLanding", () => {
     expect(await getImageBytes(String(images[0]?.attrs?.hash))).toEqual(bytesA);
     expect(await getImageBytes(String(images[1]?.attrs?.hash))).toEqual(bytesB);
     result.reservation.release();
+  });
+
+  /**
+   * Carried over from the landing destination suite deleted with the retired
+   * capture plane, which reached this through that plane's adapter; the
+   * coverage is about `importImagesIntoLanding` itself, so only its byte
+   * fixture changed. An import must write into the CURRENT window's partition,
+   * so
+   * two windows importing the same-shaped content must open two different
+   * databases - `landing-image-store.test.ts` covers partition selection one
+   * level down, this pins the importer actually routing through it.
+   */
+  it("opens a distinct landing-image DB name per windowId during import", async () => {
+    const { createStore: idbCreateStore } = await import("idb-keyval");
+    const { landingImagePartition } =
+      await import("@/lib/composer/landing-image-store");
+
+    const bytesA = bytesOf([1, 0, 0]);
+    const bytesB = bytesOf([0, 1, 0]);
+    const hashA = await seedSourceImage(bytesA);
+    const hashB = await seedSourceImage(bytesB);
+
+    Reflect.set(globalThis, "runnerHost", {
+      windows: { windowId: "window-a" },
+    });
+    expect(landingImagePartition()).toBe("window-a");
+    vi.mocked(idbCreateStore).mockClear();
+    const importedA = requireDefined(
+      await importImagesIntoLanding(
+        importArgs(
+          multiImageDoc([imageAttrs("a", hashA, bytesA.byteLength)]),
+          [hashA],
+          "draft-a",
+        ),
+      ),
+      "import A",
+    );
+    expect(idbCreateStore).toHaveBeenCalledWith(
+      expect.stringContaining(":window-a:landing-images"),
+      "bytes",
+    );
+    importedA.reservation.release();
+
+    Reflect.set(globalThis, "runnerHost", {
+      windows: { windowId: "window-b" },
+    });
+    expect(landingImagePartition()).toBe("window-b");
+    vi.mocked(idbCreateStore).mockClear();
+    const importedB = requireDefined(
+      await importImagesIntoLanding(
+        importArgs(
+          multiImageDoc([imageAttrs("b", hashB, bytesB.byteLength)]),
+          [hashB],
+          "draft-b",
+        ),
+      ),
+      "import B",
+    );
+    expect(idbCreateStore).toHaveBeenCalledWith(
+      expect.stringContaining(":window-b:landing-images"),
+      "bytes",
+    );
+    importedB.reservation.release();
   });
 
   it("releases reservation on put failure so a later full-budget reserve succeeds", async () => {

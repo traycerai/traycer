@@ -15,12 +15,12 @@ import {
   releaseSession,
 } from "@/lib/composer/landing-image-store";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
-import { installFreshIndexedDb } from "./prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "./fake-idb";
 
 /**
- * `landing-image-move.ts` against a REAL fake-indexeddb factory per test (the
- * same harness the prompt-stash repository suites use -
- * `installFreshIndexedDb`), rather than a mocked storage layer: the module's
+ * `landing-image-move.ts` against a REAL fake-indexeddb factory per test
+ * (`installFreshIndexedDb`, the shared harness), rather than a mocked storage
+ * layer: the module's
  * contract IS the cross-DB byte copy, which a mocked in-memory map can't
  * exercise honestly.
  *
@@ -70,10 +70,9 @@ function handoffStoreFor(draftId: string) {
 }
 
 /**
- * fake-indexeddb structured-clones a `Uint8Array` across its own realm (same
- * reasoning as `prompt-stash-repository-test-helpers.ts`'s
- * `expectUint8ArrayBytes`), so a round-tripped value fails a plain `toEqual`
- * against the original even though its bytes match. Compare by content.
+ * fake-indexeddb structured-clones a `Uint8Array` across its own realm, so a
+ * round-tripped value fails a plain `toEqual` against the original even though
+ * its bytes match. Compare by content.
  */
 function expectBytes(value: unknown, expected: Uint8Array): void {
   expect(ArrayBuffer.isView(value)).toBe(true);

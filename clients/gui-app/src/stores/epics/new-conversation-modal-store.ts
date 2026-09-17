@@ -50,10 +50,10 @@ export interface NewConversationModalDraftPatch {
   readonly composerMode: ComposerMode | null;
   readonly workspace: LandingDraftWorkspaceSnapshot | null;
   /**
-   * Bumped on every real `setContent` change. The prompt-stash source adapter
-   * captures this alongside the epicId as a compare-and-swap token: a stash
-   * only clears this draft when the revision it captured still matches, so an
-   * edit made while the stash was durably saving is kept.
+   * Bumped on every real `setContent` change. A compare-and-swap token for an
+   * asynchronous reader that captures it alongside the epicId and only acts on
+   * this draft while the revision it captured still matches, so an edit made
+   * while that read was in flight is kept.
    */
   readonly revision: number;
   readonly draftId: string | null;

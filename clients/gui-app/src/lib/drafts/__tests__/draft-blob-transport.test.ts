@@ -3,7 +3,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   forgetBlobUnsupportedHost,
   putDraftBlobs,

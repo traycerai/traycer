@@ -15,7 +15,7 @@ import {
   ingestCloudDraftSummary,
   resetDraftMirrorCoordinatorForTests,
 } from "@/lib/drafts/draft-mirror-coordinator";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   completeLandingDraftDelete,
   landingDraftIsRetired,

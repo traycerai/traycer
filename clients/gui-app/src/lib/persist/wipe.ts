@@ -16,8 +16,9 @@ import { resetTabRecoveryHistory } from "@/lib/tab-recovery/history";
 //      non-`traycer-gui-app:` key survive.
 //   3. Drop renderer dbs       — delete every per-window IndexedDB partition
 //      for pasted image bytes and file-edit recovery drafts, plus the
-//      app-global prompt-stash database, so wiped state doesn't leak stash or
-//      draft bytes. Enumeration is Chromium-only; absent → no-op.
+//      app-global legacy stash database the drafts migration reads, so wiped
+//      state doesn't leak draft bytes. Enumeration is Chromium-only;
+//      absent → no-op.
 //   4. Reload last             — re-hydrate from the now-cleared storage / host
 //      state without racing a pending write.
 
@@ -44,11 +45,9 @@ const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 // suffix below pins the db namespace so the wipe only drops image partitions,
 // never any other future `traycer-gui-app:`-prefixed db.
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";
-const PROMPT_STASH_DB_SUFFIX = ":prompt-stash";
 const RENDERER_DB_SUFFIXES = [
   LANDING_IMAGE_DB_SUFFIX,
   FILE_EDIT_RECOVERY_DB_SUFFIX,
-  PROMPT_STASH_DB_SUFFIX,
 ] as const;
 
 function sweepStorage(storage: Storage): number {
@@ -126,10 +125,10 @@ async function enumeratedRendererDatabaseNames(
 }
 
 // Drop every landing-image and file-edit-recovery partition this run can
-// enumerate, plus the prompt-stash database unconditionally by its exact,
-// fixed name - unlike the per-window partitions, the stash has exactly one
-// name known ahead of time, so its deletion never depends on `databases()`
-// support. `indexedDB` itself absent (e.g. a non-browser runtime) still
+// enumerate, plus the legacy stash database unconditionally by its exact,
+// fixed name (`STASH_DB_NAME`, owned by the drafts migration) - unlike the
+// per-window partitions, it has exactly one name known ahead of time, so its
+// deletion never depends on `databases()` support. `indexedDB` itself absent (e.g. a non-browser runtime) still
 // no-ops the whole thing so the wipe reaches the reload.
 async function deleteRendererDatabases(): Promise<void> {
   const factory = indexedDBFactory();
@@ -149,9 +148,9 @@ async function deleteRendererDatabases(): Promise<void> {
   // the rest of the wipe or - critically - the reload (step 4), which is the
   // real recovery for this renderer. The bytes are
   // re-pasteable (landing), recoverable from disk (file-edit), or already
-  // gone from the user's perspective (stash, whose entries the localStorage
-  // sweep never touched but whose db this same step is the only thing that
-  // reclaims).
+  // gone from the user's perspective (the legacy stash, whose entries the
+  // localStorage sweep never touched but whose db this same step is the only
+  // thing that reclaims).
   let failedCount = 0;
   await Promise.all(
     Array.from(names).map((name) =>

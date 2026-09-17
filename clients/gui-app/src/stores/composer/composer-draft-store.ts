@@ -46,16 +46,15 @@ export interface DraftState {
   /**
    * Bumped on every real content change - typed/pasted edits via
    * `setSnapshot` AND external replacements via `replaceDraft` (queue-edit
-   * restore, failed-send handoff, `clearDraft`). The prompt-stash source
-   * adapter captures this alongside the chatId as a compare-and-swap token:
-   * a stash only clears this draft when the revision it captured still
-   * matches, so an edit made while the stash was durably saving is kept.
+   * restore, failed-send handoff, `clearDraft`). A compare-and-swap token for
+   * an asynchronous reader that captures it alongside the chatId and only
+   * acts on this draft while the revision it captured still matches, so an
+   * edit made while that read was in flight is kept.
    *
-   * The sidecar mutation bumps it too, unlike `resetEpoch`: the stash carries
-   * only the DOCUMENT, while the `clearDraft` it performs on a matching token
-   * wipes `browserAnnotations` as well. An annotation attached while that
-   * IndexedDB save was in flight would otherwise be destroyed with nothing
-   * holding it.
+   * The sidecar mutation bumps it too, unlike `resetEpoch`: such a token
+   * covers only the DOCUMENT, while a `clearDraft` performed on a match wipes
+   * `browserAnnotations` as well. An annotation attached while the read was
+   * in flight would otherwise be destroyed with nothing holding it.
    */
   readonly revision: number;
   /** Client-minted host row id; null until the first local edit. */
@@ -637,8 +636,8 @@ function normalizedLegacyResetEpoch(rawDraft: Record<string, unknown>): number {
  * static `DraftState` type - JSON crossing the localStorage boundary is not
  * guaranteed to match it. `current.revision + 1` on an `undefined` value
  * produces `NaN`, which then never compares equal to itself
- * (`NaN !== NaN` is always `true`), permanently blocking the prompt-stash CAS
- * from ever clearing that draft again. Normalize once, here, at the one
+ * (`NaN !== NaN` is always `true`), permanently blocking any compare-and-swap
+ * on this field from ever matching that draft again. Normalize once, here, at the one
  * place untrusted persisted data enters the store - everywhere else
  * (`ensureDraft`, `setSnapshot`, `replaceDraft`) only ever reads a value this
  * function already produced or `EMPTY_COMPOSER_DRAFT.revision`, both real
@@ -906,10 +905,10 @@ export function collectComposerDirtyWrites(): ReadonlyArray<{
  * preserves it, so a fresh id minted after a send starts at `revision > 0` and
  * an empty row for it is still published. Closing that needs per-draft
  * bookkeeping (a "revision when this id was minted" stamp), NOT resetting
- * `revision` on detach: the prompt stash captures `{chatId, revision}` as a
- * compare-and-swap token and `clearIfUnchanged` compares nothing else, so
- * making revisions repeat across sends lets an in-flight stash save match a
- * LATER draft and erase it. Monotonic is what makes that token safe.
+ * `revision` on detach: a compare-and-swap on `{chatId, revision}` compares
+ * nothing else, so making revisions repeat across sends would let an
+ * in-flight write match a LATER draft and erase it. Monotonic is what makes
+ * that token safe.
  */
 function isNeverTypedEmptyComposerDraft(draft: DraftState): boolean {
   return draft.revision === 0 && isEmptyLandingDraftContent(draft.content);
