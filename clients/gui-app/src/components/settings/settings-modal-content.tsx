@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import { GettingStartedSettingsPanel } from "./panels/getting-started-settings-panel";
+import { SettingsSetupGuide } from "./settings-setup-guide";
 import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import {
@@ -83,6 +85,7 @@ export function SettingsModalContent(
  * error here) without a `case` per entry.
  */
 const SETTINGS_PANELS = {
+  "getting-started": GettingStartedSettingsPanel,
   general: GeneralSettingsPanel,
   browser: BrowserSettingsPanel,
   appearance: AppearanceSettingsPanel,
@@ -114,6 +117,12 @@ export function SettingsPanelForSection(props: {
   // tab render their panel THROUGH this function, so one watcher covers both
   // and there is no arrangement of surfaces that gets two of them.
   useSettingsAnchorReveal(props.section);
+  const rootRef = useRef<HTMLDivElement>(null);
   const Panel = SETTINGS_PANELS[props.section];
-  return <Panel />;
+  return (
+    <div ref={rootRef} className="contents">
+      <Panel />
+      <SettingsSetupGuide section={props.section} rootRef={rootRef} />
+    </div>
+  );
 }

@@ -346,28 +346,56 @@ describe("buildSessionImportView - disabled rows", () => {
 });
 
 describe("buildSessionImportView - group header counts and tri-state", () => {
-  it("keeps a group header's selectableCount/selectedCount over the whole group, not the filtered slice", () => {
+  it("counts a group header over the searched rows it sits above, and ticks only those", () => {
+    // Eleven rows the query hides and one it leaves, all pre-selected on
+    // arrival: the header has to read the one row under it, not the twelve in
+    // the folder, because its checkbox moves exactly what it counts.
     const matching = candidate({
       nativeSessionId: "match",
       title: "Fix login bug",
     });
-    const other = candidate({
-      nativeSessionId: "other",
-      title: "Refactor styles",
-    });
-    const arrivingGroup = group(folderLocation("/repo/a"), [matching, other]);
+    const hidden = Array.from({ length: 11 }, (_unused, index) =>
+      candidate({
+        nativeSessionId: `hidden-${index}`,
+        title: `Refactor styles ${index}`,
+      }),
+    );
+    const arrivingGroup = group(folderLocation("/repo/a"), [
+      matching,
+      ...hidden,
+    ]);
+    const groupKey = sessionImportGroupKey(arrivingGroup.location);
 
-    const state = applyActions([
+    let state = applyActions([
       { kind: "scanGroupArrived", group: arrivingGroup },
       { kind: "queryChanged", query: "login" },
+      { kind: "groupSelectionSet", groupKey, selected: false },
     ]);
-    const view = buildSessionImportView(state);
+    let view = buildSessionImportView(state);
 
     expect(view.groups).toHaveLength(1);
     expect(view.groups[0]?.rows).toHaveLength(1);
     expect(view.groups[0]?.totalCount).toBe(1);
-    expect(view.groups[0]?.selectableCount).toBe(2);
-    expect(view.groups[0]?.selectedCount).toBe(2);
+    // The header reads "0 of 1 selected".
+    expect(view.groups[0]?.selectableCount).toBe(1);
+    expect(view.groups[0]?.selectedCount).toBe(0);
+    expect(view.groups[0]?.selectionState).toBe("none");
+    // Clearing the header left every hidden row exactly as it was.
+    expect(state.selected.size).toBe(11);
+    expect(
+      state.selected.has(sessionImportSelectionKey("claude", "match")),
+    ).toBe(false);
+
+    state = sessionImportWizardReducer(state, {
+      kind: "groupSelectionSet",
+      groupKey,
+      selected: true,
+    });
+    view = buildSessionImportView(state);
+
+    expect(view.groups[0]?.selectedCount).toBe(1);
+    expect(view.groups[0]?.selectionState).toBe("all");
+    expect(state.selected.size).toBe(12);
   });
 
   it("computes selectionState as all, then partial, then none as candidates are untoggled, and none for a group with zero importable candidates", () => {
@@ -547,12 +575,12 @@ describe("buildSessionImportView - search + provider filter", () => {
     expect(view.groups[0]?.rows).toHaveLength(2);
   });
 
-  it("matches a title:null candidate by firstPrompt, and candidateDisplayTitle falls back title -> firstPrompt -> Untitled session, collapsing/truncating a long prompt", () => {
+  it("matches a title:null candidate by firstPrompt, and candidateDisplayTitle falls back title -> firstPrompt -> Untitled task, collapsing/truncating a long prompt", () => {
     const withTitle = candidate({ title: "Explicit title" });
     expect(candidateDisplayTitle(withTitle)).toBe("Explicit title");
 
     const untitled = candidate({ title: null, firstPrompt: null });
-    expect(candidateDisplayTitle(untitled)).toBe("Untitled session");
+    expect(candidateDisplayTitle(untitled)).toBe("Untitled task");
 
     const whitespacePrompt = candidate({
       title: null,
@@ -1221,7 +1249,7 @@ describe("buildSessionImportView - Deleted Folders group", () => {
     expect(buildSessionImportView(state).groups[0]?.selectionState).toBe("all");
   });
 
-  it("searching by one missing folder's path shows only its rows, while the header counts still span both folders", () => {
+  it("searching by one missing folder's path shows only its rows, and the header counts follow them", () => {
     const groupA = group(missingLocationA, [
       candidate({ nativeSessionId: "s1" }),
     ]);
@@ -1240,10 +1268,11 @@ describe("buildSessionImportView - Deleted Folders group", () => {
     expect(view.groups[0]?.rows.map((row) => row.selectionKey)).toEqual([
       sessionImportSelectionKey("claude", "s1"),
     ]);
-    // The header count follows the visible searched rows; the selectable
-    // denominator still spans both source folders.
+    // Both counts follow the visible searched rows, though the group still
+    // stands for two source folders.
     expect(view.groups[0]?.totalCount).toBe(1);
-    expect(view.groups[0]?.selectableCount).toBe(2);
+    expect(view.groups[0]?.selectableCount).toBe(1);
+    expect(view.groups[0]?.selectedCount).toBe(1);
   });
 
   it("does not pre-select a missing folder arriving after the Deleted Folders header was cleared, but does pre-select one arriving after it was re-ticked", () => {
@@ -1494,11 +1523,11 @@ describe("sessionImportNotImportedLine", () => {
       new Map(),
     );
     expect(sessionImportNotImportedLine(groups)).toBe(
-      "Not imported: 2 sessions with no messages",
+      "Not imported: 2 tasks with no messages",
     );
   });
 
-  it("keeps the line plain when the causes are mixed, and singular for one session", () => {
+  it("keeps the line plain when the causes are mixed, and singular for one task", () => {
     const mixed = groupSessionImportFailures(
       [
         failureEntry("s1", "source_empty", ""),
@@ -1506,15 +1535,13 @@ describe("sessionImportNotImportedLine", () => {
       ],
       new Map(),
     );
-    expect(sessionImportNotImportedLine(mixed)).toBe(
-      "Not imported: 2 sessions",
-    );
+    expect(sessionImportNotImportedLine(mixed)).toBe("Not imported: 2 tasks");
     const one = groupSessionImportFailures(
       [failureEntry("s1", "source_unreadable", "disk error")],
       new Map(),
     );
     expect(sessionImportNotImportedLine(one)).toBe(
-      "Not imported: 1 session that could not be read",
+      "Not imported: 1 task that could not be read",
     );
   });
 });

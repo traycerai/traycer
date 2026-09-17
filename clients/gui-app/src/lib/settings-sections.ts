@@ -6,6 +6,7 @@ import {
   Boxes,
   Gavel,
   GitBranch,
+  ListChecks,
   Globe,
   Keyboard,
   LineChart,
@@ -24,6 +25,7 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
+  | "getting-started"
   | "general"
   | "browser"
   | "appearance"
@@ -86,7 +88,7 @@ export const FALLBACK_SETTINGS_SECTION_ID =
  * it varies by host it sits under the picker") becomes structural rather than
  * memorised.
  */
-export type SettingsSectionGroupId = "app" | "account" | "host";
+export type SettingsSectionGroupId = "guide" | "app" | "account" | "host";
 
 export interface SettingsSectionGroup {
   readonly id: SettingsSectionGroupId;
@@ -94,13 +96,13 @@ export interface SettingsSectionGroup {
 }
 
 /**
- * Application and Account lead: both are short, both are fixed, and neither
- * ever changes shape, so they hold stable positions at the top of the rail.
+ * Getting started leads in its own group, followed by Application and Account.
  * The host group goes last because it is the only one whose contents are
  * scoped — it carries the picker, and everything beneath the picker belongs
  * to whichever host that picker names.
  */
 export const SETTINGS_SECTION_GROUPS: ReadonlyArray<SettingsSectionGroup> = [
+  { id: "guide", label: "Guide" },
   { id: "app", label: "Application" },
   { id: "account", label: "Account" },
   { id: "host", label: "Host" },
@@ -159,6 +161,13 @@ export interface SettingsSection {
  * inconsistent move, not the consistent one.
  */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
+  {
+    id: "getting-started",
+    label: "Getting started",
+    icon: ListChecks,
+    group: "guide",
+  },
+
   {
     id: "general",
     label: "General",

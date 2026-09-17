@@ -52,6 +52,7 @@ import type {
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export function BrowserSettingsSection(): ReactNode {
@@ -340,7 +341,14 @@ function SavedLoginsToggleRow(props: {
             aria-label="Save website sessions on this computer"
             onCheckedChange={(next) => {
               if (next) {
-                props.saveLogins.setEnabled(true);
+                // The guide moves on only once the machine reports saving ON:
+                // a refused or downgraded write leaves the import step locked.
+                void props.saveLogins.setEnabled(true).then((settled) => {
+                  if (settled === true)
+                    useOnboardingStore
+                      .getState()
+                      .notifySetupEvent("browser-save-enabled");
+                });
                 return;
               }
               setConfirming(true);
@@ -358,7 +366,7 @@ function SavedLoginsToggleRow(props: {
         isPending={props.saveLogins.pending}
         blockedReason={null}
         onConfirm={() => {
-          props.saveLogins.setEnabled(false);
+          void props.saveLogins.setEnabled(false);
           setConfirming(false);
         }}
       />
@@ -384,6 +392,7 @@ function ImportLoginsRow(props: {
           size="sm"
           disabled={!enabled}
           onClick={onOpen}
+          data-testid="settings-import-logins-trigger"
         >
           Choose source…
         </Button>

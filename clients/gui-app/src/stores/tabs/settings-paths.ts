@@ -31,6 +31,7 @@ export const SETTINGS_PATHS = new Set([
   "diagnostics",
   "fallback",
   "general",
+  "getting-started",
   "host",
   "keybindings",
   "layout",
