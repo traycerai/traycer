@@ -461,7 +461,7 @@ describe("ComposerDraftsControl", () => {
     );
     openList();
 
-    expect(screen.getByRole("button", { name: "This epic" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "This task" })).toBeTruthy();
     // The scope's own chat is the live buffer, never a row; the start page's
     // drafts belong to All.
     expect(listedRowIds()).toEqual(["draft-new-chat", "draft-chat-2"]);

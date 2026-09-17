@@ -294,7 +294,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
         <DraftsFilterToggle
           value={filter}
           currentLabel={
-            scope.surface === "landing" ? "Start page" : "This epic"
+            scope.surface === "landing" ? "Start page" : "This task"
           }
           onChange={setFilter}
         />

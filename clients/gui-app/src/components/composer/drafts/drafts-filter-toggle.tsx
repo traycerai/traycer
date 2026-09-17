@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 interface DraftsFilterToggleProps {
   readonly value: DraftInventoryFilter;
-  /** What `current` is called on this surface: `Start page` or `This epic`. */
+  /** What `current` is called on this surface: `Start page` or `This task`. */
   readonly currentLabel: string;
   readonly onChange: (next: DraftInventoryFilter) => void;
 }
