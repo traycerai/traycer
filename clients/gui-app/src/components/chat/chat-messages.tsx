@@ -1165,11 +1165,17 @@ function rescheduleManualHoldWake(input: {
 }
 
 /**
- * The hold's clock and its one piece of memory, passed in rather than kept in a
- * module singleton so each surface holds its own event and tests can drive it.
+ * Everything the hold needs that is not the event itself, passed in rather than
+ * kept in a module singleton so each surface holds its own and tests can drive
+ * it. Two fields in, two out.
  *
- * `held` is written by the observer: set when a hold begins, cleared when the
- * sentence is finally consumed.
+ * In: {@link now}, one clock reading for the whole observation, and
+ * {@link canSpeak}, what the `observe` after this one will do with an
+ * announcement.
+ *
+ * Out, both written by the observer: {@link held}, set when a hold begins and
+ * cleared when the sentence is finally consumed, and {@link deliverable}, which
+ * the wake scheduler reads.
  */
 interface ManualHoldClock {
   /** `Date.now()` for this observation. */
