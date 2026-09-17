@@ -3,6 +3,7 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
   contentBlockSchemaPreFallback,
+  contentBlockSchemaPreBrowser,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
@@ -697,6 +698,32 @@ export const assistantMessageSchemaPreShellHost = z.object({
 export const messageSchemaPreShellHost = z.discriminatedUnion("role", [
   userMessageSchema,
   assistantMessageSchemaPreShellHost,
+]);
+
+// ── Wire-freeze variant (pre-browser, `chat.subscribe@1.11`-`@1.12`) ───────
+// These lines include the shell-host fields but predate the browser-session
+// enrichment. Keep the assistant block union hand-bound to the pre-browser
+// copy so a live text block cannot widen either released line.
+export const assistantMessageSchemaPreBrowser = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchema,
+  blocks: z.array(contentBlockSchemaPreBrowser),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  envCredentialVar: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+  turnProfile: assistantTurnProfileSchema.optional(),
+});
+
+export const messageSchemaPreBrowser = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchemaPreBrowser,
 ]);
 
 export const messageSchemaV18 = z.discriminatedUnion("role", [

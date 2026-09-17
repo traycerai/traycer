@@ -907,12 +907,12 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   settled the current shape. Groups are ordered by frequency and risk
   (most-touched first, destructive last), not alphabetized; row internals,
   controls, and confirmation flows are unchanged from before either reorg.
-  - **Chat & composer**: **Default permission mode**, Voice input
-    (`voice-settings-section.tsx`), Quote reply on text selection, Steer with
-    Cmd/Ctrl+Enter (toggles the fixed chord's mid-turn-steering semantics -
-    stays out of Keybindings, which is for rebinding). Pin context usage
-    breakdown used to sit here and now lives in **Layout › Chat** - it places
-    a panel rather than changing what the composer does.
+  - **Chat & composer**: Voice input (`voice-settings-section.tsx`), Quote
+    reply on text selection, Steer with Cmd/Ctrl+Enter (toggles the fixed
+    chord's mid-turn-steering semantics - stays out of Keybindings, which is
+    for rebinding). `Pin context usage breakdown` used to sit here and now
+    lives in **Layout › Chat** - it places a panel rather than changing what
+    the composer does.
     - **Default permission mode** is the only writer of
       `settingsStore.defaultPermission`, which until this row existed was
       initialized and never written. It renders the composer's own
@@ -935,14 +935,53 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       why the gate now reads `sessionImport.run`'s own negotiated line rather
       than a catalog row, so an import no longer silently demotes on a remote
       host.
-  - **Browser**: the in-app browser has no toggle - it is always on, and the
-    group carries no master switch. What is left of the group is the
-    conditional **Detected dev origins** row (terminal URLs with local hosts
-    or explicit ports, kept for browser-origin classification), so the whole
-    `SettingsGroup` is skipped when none were detected rather than drawing a
-    heading over an empty card. The link-open and agent-tab-surfacing selects
-    that used to lead this group live in **Opening behavior** now - see that
-    section for the fields and their semantics.
+  - **Running agents**: Prevent sleep while running
+    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
+    "Two different mobile questions") is the only row left. The two
+    resource-visibility toggles that used to sit beside it - the global
+    resources button and the sidebar resource chips - moved to **Layout**
+    (Status bar and Sidebar respectively), which is where WHERE-a-thing-sits
+    controls live now. Because that leaves one self-hiding row, the group
+    itself is returned by `prevent-sleep-settings-section.tsx` rather than
+    wrapped here, so the heading disappears with the row instead of drawing
+    over an empty card.
+  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
+    your work and Data migration used to share this group under the name
+    "Setup & migration"; both moved to the scoped host's **Overview**, because
+    each acts on ONE machine's local data and General is app-wide - the rows
+    could only ever speak for whichever host the window happened to point at,
+    while naming none. The tour stays because it is genuinely window-level:
+    replaying it re-runs this app's onboarding, which no host owns. The group
+    is named for its subject rather than for its single row.
+  - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
+"danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
+    only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
+    destructive action here that is genuinely about this APP rather than about
+    a host. File Edit Snapshots and Remove Traycer both moved to
+    `host-scope/host-danger-zone.tsx` on the scoped host's own Overview: each
+    acts on ONE host's data, and a host-scoped destructive row sitting on an
+    app-wide page is how a snapshot wipe could be aimed at a host the page
+    never named. Their arm-time target capture lives there too, alongside the
+    remote counterpart added with the Overview restructure, **Remove from
+    account** - see the Host Overview section for its copy rule. The zone's
+    distinct restrained-red card/label tone is unchanged from before the
+    reorg, just carried by the shared group component instead of bespoke
+    markup.
+- `Browser` (`panels/browser-settings-panel.tsx`, `/settings/browser`, Application):
+  default search engine, browser agent access and detected dev origins, browser tile
+  placement, agent-opened tab surfacing, and saved website sessions. Search
+  entries belong to this section, including conditional host/desktop controls.
+  Host and desktop scope remain explicit in each control's copy.
+  - **Search** selects Google (default), DuckDuckGo, Bing, or Kagi. The shared
+    address-bar normalizer navigates recognizable addresses and encodes other
+    input as a query in native and streamed tabs. The preference is persisted
+    and invalid or missing values fall back to Google.
+  - **Browser placement** shows the effective browser destination. Selecting
+    one enables per-category placement while preserving other categories'
+    current effective values. No preference keys or defaults are migrated.
+  - **Agent-opened tabs** keeps `agentTabSurfacing` and the existing canvas/PiP
+    rules. It controls explicit REPL opens; page-created tabs keep their
+    existing popup/link behavior.
   - **Website sessions** (`browser-settings-section.tsx`'s second group,
     `data-testid="settings-saved-logins"`): where session data from the in-app
     browser is kept, and the only place it can be turned off, removed, or
@@ -1071,111 +1110,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       again instead of hiding it for the session. **Remove all** calls the
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
-  - **Running agents**: Prevent sleep while running
-    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
-    "Two different mobile questions") is the only row left. The two
-    resource-visibility toggles that used to sit beside it - the global
-    resources button and the sidebar resource chips - moved to **Layout**
-    (Status bar and Sidebar respectively), which is where WHERE-a-thing-sits
-    controls live now. Because that leaves one self-hiding row, the group
-    itself is returned by `prevent-sleep-settings-section.tsx` rather than
-    wrapped here, so the heading disappears with the row instead of drawing
-    over an empty card.
-  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
-    your work and Data migration used to share this group under the name
-    "Setup & migration"; both moved to the scoped host's **Overview**, because
-    each acts on ONE machine's local data and General is app-wide - the rows
-    could only ever speak for whichever host the window happened to point at,
-    while naming none. The tour stays because it is genuinely window-level:
-    replaying it re-runs this app's onboarding, which no host owns. The group
-    is named for its subject rather than for its single row.
-  - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
-"danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
-    only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
-    destructive action here that is genuinely about this APP rather than about
-    a host. File Edit Snapshots and Remove Traycer both moved to
-    `host-scope/host-danger-zone.tsx` on the scoped host's own Overview: each
-    acts on ONE host's data, and a host-scoped destructive row sitting on an
-    app-wide page is how a snapshot wipe could be aimed at a host the page
-    never named. Their arm-time target capture lives there too, alongside the
-    remote counterpart added with the Overview restructure, **Remove from
-    account** - see the Host Overview section for its copy rule. The zone's
-    distinct restrained-red card/label tone is unchanged from before the
-    reorg, just carried by the shared group component instead of bespoke
-    markup.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
-  `/settings/opening-behavior`, third in the Application group) Where a click
-  LANDS. TWO `SettingsGroup`s - Links and Tile placement - each one enum
-  select per store field, written through the store's single patch setters -
-  no local state, no disabled states. Store keys are unchanged from the
-  three-group layout (`content` / `conversation` / `browser`, `per-kind` /
-  `per-category`); only the labels are product vocabulary now.
-  - Options are named for the DESTINATION, not the container: `In this pane`,
-    `In a new split`, `Per tile type` - and for links, `In Traycer`,
-    `In default browser`, `Per link type`. A user asks "where does this
-    open", so the answer belongs in the option, not in the reader's head.
-  - Every `EnumSelect`'s `ariaLabel` is its visible label VERBATIM
-    (`Open links`, `Markdown`, `Open new tiles`, `Files, diffs & artifacts`,
-    ...). Destination-shaped option copy only reads correctly under a control
-    the user can find by the name they can see; a spoken name that says
-    something else ("Content tiles") breaks voice control, which types what is
-    on screen.
-  - One `TRIGGER_CLASS` (`w-[min(60vw,12rem)]`) for every trigger: two widths
-    made the override rows look like a different KIND of control rather than a
-    narrower one.
-  - A revealed per-type fragment is wrapped in one `bg-foreground/3` div, so
-    the override rows read as subordinate to the row that revealed them. An
-    alpha of the foreground, not `bg-muted` - see the raised-surface rule in
-    `clients/gui-app/AGENTS.md`.
-  - The four unconfigurable modifiers get ONE platform-aware legend under the
-    groups (`modLabel()` / `altLabel()` / `shiftLabel()` from
-    `lib/keybindings/platform`), not a clause in each row's copy: repeating
-    them per row spent description space the row's own scope needed.
-  - **Links**: "Open links" (no description - the legend carries the
-    modifiers) writes `linkOpen.default` (`in-app | external | per-kind`,
-    default `in-app`); `per-kind` reveals Markdown / Terminal / GitHub /
-    Images, each `in-app | external`, each described by WHERE those links are
-    encountered. `linkOpenModeForKind` resolves a kind against the default.
-  - **Tile placement**: "Open new tiles" writes `tilePlacement.default`
-    (`tab | split | per-category`, default `per-category`); `per-category`
-    reveals **Files, diffs & artifacts** (`content`), **Agents & terminals**
-    (`conversation`) and **Browsers** (`browser`) - product nouns for what the
-    user opens, not the store's category words. Browser alone adds **Picture
-    in picture** (`BrowserTilePlacement`) because the other two have no PiP
-    host. A fourth row, **Side chats** (`sideChat`), covers the `/btw` /
-    `/side` aside: it is a plain `chat` tile, so no tile kind maps to the
-    row - the open carries it as a `beside` placement
-    (`ExplicitTilePlacement`) naming the source chat's pane, and the row
-    decides only how "beside" is drawn ("As a tab of the source chat" /
-    "In a split beside the source chat"). Its own row rather than Agents &
-    terminals because an aside is read next to its conversation whatever
-    the user chose for new agents. Defaults content=tab, conversation=tab,
-    browser=split, sideChat=split;
-    `tilePlacementForCategory` resolves a category against the default. On a
-    single-tile viewport (`useIsMobileViewport()`) the row gains the
-    DESCRIPTION "Narrow windows show one tile at a time, so everything opens
-    in this pane." - a description, not the amber `hint`, because nothing is
-    wrong and nothing was overridden: the window is simply narrow.
-  - **Agent-opened tabs** lives in Tile placement too (after the per-type
-    fragment, unconditional - it is a placement question wearing another
-    name, and a group of one row read like a third topic). `agentTabSurfacing`
-    (`surface | off`, default `off`) - what the GUI does when a HOST opens a
-    browser tab (the agent's REPL `openTab` tool, or a headless page popup),
-    described as "when an agent or a page opens a browser tab without you
-    clicking anything". `surface` ("Like any browser tile") places the tab
-    using the Browsers placement above: `pip` floats it unless a
-    user-converted PiP is showing or the epic surface is hidden, and
-    `tab`/`split` place a canvas tile grouped by session - same-session opens
-    become tabs of one pane - even in hidden epics. `off` ("Leave in the
-    sidebar") answers Electron foreground creates with a hidden off-screen
-    view so the open still succeeds, and leaves headless tabs in the sidebar.
-    Disposition decisions live in
-    `lib/browser-view/tiles/surface-host-opened-tab.ts`; headless-origin tabs
-    are diffed from `browser.sessions` lifecycle frames in the dock, seeded
-    snapshot-only so surfacing stays ephemeral across reloads.
-  - The pre-refactor keys (`browserLinkDefaultMode`,
-    `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
-    migrated once in the store's persist `merge` and then dropped.
+  `/settings/opening-behavior`): link routing (Open links and per-link-type
+  choices), general tile placement and per-type overrides
+  for files, conversations, and side chats. The global default still applies
+  to all categories, including browsers; browser-specific controls live in
+  Browser. `settings-enum-select.tsx` supplies the shared accessible select.
+  Existing store keys and their legacy migrations remain unchanged.
 - `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
   followed by **Start page**, **Interface**, **Fonts and text**, **Motion and
   readability**, **Terminal**, **Agent office**, and **Icon colors** via
