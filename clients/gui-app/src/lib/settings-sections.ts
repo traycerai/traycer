@@ -6,6 +6,7 @@ import {
   Boxes,
   Gavel,
   GitBranch,
+  Globe,
   Keyboard,
   LineChart,
   Palette,
@@ -24,6 +25,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
+  | "browser"
   | "appearance"
   | "layout"
   | "opening-behavior"
@@ -127,12 +129,13 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now nineteen. The whole
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-one. The whole
  * host group - Overview, Providers, Worktrees, the host's Notifications,
  * Permissions, Agent selection, Fallback, Shell and Diagnostics - is the
- * eleventh through nineteenth and goes without. Overview is the newest to lose
- * one, to Layout taking the seventh Application slot. Permissions and Fallback
- * were both added into the digit-less tail and so moved no existing shortcut -
+ * twelfth through twentieth desktop entries and goes without. Browser is
+ * the third Application entry, so Layout is the eighth and Usage is the first
+ * account entry without a digit on desktop. Permissions and Fallback were
+ * both added into the digit-less tail and so moved no existing shortcut -
  * Permissions sits between Notifications and Agent selection, Fallback between
  * Agent selection and Shell, all already there.
  *
@@ -168,9 +171,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Palette,
     group: "app",
   },
-  // Where a click LANDS - links, tile placement, and agent-opened browser
-  // tabs. One page rather than a control each in Browser, Appearance and
-  // General, because all three answer the same question.
+  {
+    id: "browser",
+    label: "Browser",
+    icon: Globe,
+    group: "app",
+  },
   {
     id: "opening-behavior",
     label: "Opening behavior",

@@ -93,6 +93,7 @@ export type AnalyticsSettingsSection =
   | "diagnostics"
   | "fallback"
   | "general"
+  | "browser"
   | "host"
   | "keybindings"
   | "layout"
@@ -331,6 +332,7 @@ export type AnalyticsSetting =
   | "layout.composer.reasoningFooterControl"
   | "layout.sidebar.resourceMetrics"
   | "linkOpen"
+  | "browserSearchEngine"
   | "pinContextUsageBreakdown"
   | "pinnedContextBreakdownFields"
   | "pointerCursors"
@@ -1187,6 +1189,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     diagnostics: true,
     fallback: true,
     general: true,
+    browser: true,
     host: true,
     keybindings: true,
     layout: true,
@@ -1263,6 +1266,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.composer.reasoningFooterControl": true,
     "layout.sidebar.resourceMetrics": true,
     linkOpen: true,
+    browserSearchEngine: true,
     pinContextUsageBreakdown: true,
     pinnedContextBreakdownFields: true,
     pointerCursors: true,

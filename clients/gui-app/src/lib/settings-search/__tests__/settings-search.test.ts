@@ -166,7 +166,7 @@ describe("settings search", () => {
     expect(landingFor("terminal font", DESKTOP)).toBe(
       "appearance#appearance-terminal-font",
     );
-    expect(landingFor("website sessions", DESKTOP)).toBe("general#<top>");
+    expect(landingFor("website sessions", DESKTOP)).toBe("browser#<top>");
   });
 
   it("returns nothing for a query with no plausible match", () => {
@@ -335,13 +335,15 @@ describe("settings search", () => {
       );
     });
 
-    it("never offers the data-gated Browser rows", () => {
+    it("never offers the data-gated Browser rows, but still offers the page itself", () => {
       // "Detected dev origins" renders only once a terminal has printed a
       // local URL. No shell can promise that, so no shell offers it.
       expect(labelsFor("dev origins", DESKTOP)).not.toContain(
         "Detected dev origins",
       );
-      expect(labelsFor("browser", DESKTOP)).not.toContain("Browser");
+      // The Browser PAGE is unconditional - only its dev-origins/website-
+      // sessions rows are data/host-gated - so "browser" now surfaces it.
+      expect(labelsFor("browser", DESKTOP)).toContain("Browser");
     });
 
     it("sends selected-host vocabulary to the Overview page", () => {
@@ -387,7 +389,7 @@ describe("settings search", () => {
       // the page.
       for (const context of [DESKTOP, MOBILE]) {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
-          expect(landingsFor(query, context), query).toContain("general#<top>");
+          expect(landingsFor(query, context), query).toContain("browser#<top>");
         }
         for (const query of ["notification hooks", "webhook", "toast"]) {
           expect(landingsFor(query, context), query).toContain(

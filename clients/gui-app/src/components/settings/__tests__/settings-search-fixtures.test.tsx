@@ -11,6 +11,7 @@ import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fi
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
+import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
@@ -65,6 +66,7 @@ const MOUNTS: {
   appearance: <AppearanceSettingsPanel />,
   layout: <LayoutSettingsPanel />,
   "opening-behavior": <OpeningBehaviorPanel />,
+  browser: <BrowserSettingsPanel />,
   "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
 };

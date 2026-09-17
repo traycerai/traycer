@@ -19,19 +19,7 @@ export const GENERAL = defineSettingsSection("general", {
   page: {
     label: "General",
     description: "App behavior, agent activity, and local data controls.",
-    keywords: [
-      "preferences",
-      "options",
-      "misc",
-      "website sessions",
-      "save website sessions",
-      "bring in existing sessions",
-      "saved website sessions",
-      "cookies",
-      "logins",
-      "stay signed in",
-      "browser profile",
-    ],
+    keywords: ["preferences", "options", "misc"],
   },
   chatComposer: {
     kind: "group",
@@ -104,81 +92,6 @@ export const GENERAL = defineSettingsSection("general", {
       "ctrl",
       "shortcut",
     ],
-  },
-  // Gated on DATA and on the HOST: the card renders once a terminal has printed
-  // a local URL, or once the active host advertises `config.browser.get` —
-  // neither of which a shell can promise, so it folds into the page.
-  browser: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Browser",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  // The row's description names the active host, so the rendered sentence is a
-  // `status` and this static copy is what search reads.
-  agentBrowserAccess: {
-    kind: "row",
-    group: "browser",
-    search: { contributesTo: "page" },
-    label: "Let agents use the in-app browser",
-    description:
-      "Agents get Traycer's browser as a tool and are told to use it for web pages. Turn off to let them use their own browser tooling.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "browser", "playwright", "mcp"],
-  },
-  detectedDevOrigins: {
-    kind: "row",
-    group: "browser",
-    search: { contributesTo: "page" },
-    label: "Detected dev origins",
-    description:
-      "Terminal URLs with local hosts or explicit ports are kept for browser-origin classification.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  // Gated on the HOST RUNTIME: the group also needs a bound host runtime and a
-  // first successful read of the browser bridge, so none of it is a target.
-  websiteSessions: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Website sessions",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  saveWebsiteSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Save website sessions on this computer",
-    // Says whether saving is on or paused, so the sentence is the row's status.
-    description: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  savedWebsiteSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Saved website sessions",
-    description:
-      "Shared with connected Traycer hosts. Removing a site may sign you out there.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  bringInExistingSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Bring in existing sessions",
-    description:
-      "Choose a browser or cookie file, then review the sites before importing.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
   },
   // Drawn by `PreventSleepSettingsSection` around its one row - the two
   // resource-visibility toggles that used to sit beside it moved to Layout -

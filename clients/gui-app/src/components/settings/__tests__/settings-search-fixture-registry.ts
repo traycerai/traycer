@@ -157,6 +157,14 @@ export const SETTINGS_SEARCH_FIXTURES = [
     section: "opening-behavior",
     shells: [{ name: "every bridge absent", context: NO_BRIDGES }],
   },
+  // Every anchored entry on this page (search, browser placement,
+  // agent-opened tabs) renders unconditionally; the dev-origins/website-
+  // sessions groups are host/data-gated but only `contributesTo: "page"`, so
+  // they carry no anchor of their own and need no separate shell to prove.
+  {
+    section: "browser",
+    shells: [{ name: "every bridge absent", context: NO_BRIDGES }],
+  },
   {
     section: "app-notifications",
     shells: [
