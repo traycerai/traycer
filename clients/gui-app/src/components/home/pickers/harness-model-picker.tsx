@@ -1264,7 +1264,12 @@ function useBrowsedProviderCatalogEntry(input: {
     input.catalogHarnesses.find(
       (harness) => harness.id === input.browsedProviderId,
     ) ?? null;
-  const fetchGate = input.catalogActive && entry?.available === true;
+  // A pending entry promoted by cached models needs no fetch. A known-positive
+  // host verdict with no models still needs this targeted cold-cache load.
+  const fetchGate =
+    input.catalogActive &&
+    entry?.available === true &&
+    (!entry.availabilityPending || entry.models.length === 0);
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     input.runTargetClient,
     input.browsedProviderId,
