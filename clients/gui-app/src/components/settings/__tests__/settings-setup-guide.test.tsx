@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { StrictMode, useRef } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSetupGuide } from "@/components/settings/settings-setup-guide";
@@ -57,6 +57,21 @@ describe("SettingsSetupGuide", () => {
   });
 
   afterEach(cleanup);
+
+  it("keeps the guide running through StrictMode's mount probe", async () => {
+    render(
+      <StrictMode>
+        <Harness section="appearance" />
+      </StrictMode>,
+    );
+
+    // The card is lazy, so it lands after the probe has already run.
+    expect(await screen.findByTestId("guide-coachmark")).toBeTruthy();
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 2,
+    });
+  });
 
   it("hides a step whose section is not the mounted one", () => {
     useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 3 } });

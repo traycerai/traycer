@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type RefObject } from "react";
+import { lazy, Suspense, type RefObject } from "react";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
@@ -17,7 +17,11 @@ export function SettingsSetupGuide(props: {
 }) {
   const active = useOnboardingStore((state) => state.activeSetup);
   const pause = useOnboardingStore((state) => state.pauseSetup);
-  useEffect(() => () => pause(), [pause]);
+  // No pause on unmount: development roots render under StrictMode, whose
+  // mount probe runs every effect's cleanup once, which would clear the guide
+  // the moment it started. `activeSetup` is session-local presence, so a
+  // closed Settings simply resumes the same step when it reopens; Escape and
+  // the card's close button are the deliberate pauses.
   if (active === null) return null;
   const guide = setupGuide(active.id);
   const step = guide.steps[active.step];

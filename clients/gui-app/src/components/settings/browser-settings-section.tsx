@@ -341,10 +341,14 @@ function SavedLoginsToggleRow(props: {
             aria-label="Save website sessions on this computer"
             onCheckedChange={(next) => {
               if (next) {
-                props.saveLogins.setEnabled(true);
-                useOnboardingStore
-                  .getState()
-                  .notifySetupEvent("browser-save-enabled");
+                // The guide moves on only once the machine reports saving ON:
+                // a refused or downgraded write leaves the import step locked.
+                void props.saveLogins.setEnabled(true).then((settled) => {
+                  if (settled === true)
+                    useOnboardingStore
+                      .getState()
+                      .notifySetupEvent("browser-save-enabled");
+                });
                 return;
               }
               setConfirming(true);
@@ -362,7 +366,7 @@ function SavedLoginsToggleRow(props: {
         isPending={props.saveLogins.pending}
         blockedReason={null}
         onConfirm={() => {
-          props.saveLogins.setEnabled(false);
+          void props.saveLogins.setEnabled(false);
           setConfirming(false);
         }}
       />
