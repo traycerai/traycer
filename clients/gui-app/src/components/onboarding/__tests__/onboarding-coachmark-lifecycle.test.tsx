@@ -76,7 +76,11 @@ function createVisibleTarget(): HTMLButtonElement {
 async function advance(ms: number): Promise<void> {
   for (let pass = 0; pass < 3; pass += 1)
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(ms);
+      // Flush what is already queued, advance the requested span exactly once
+      // against the timers that flush armed, then flush what the span queued.
+      // Advancing on every pass would triple the span and let a transition
+      // that overran its budget still pass.
+      await vi.advanceTimersByTimeAsync(pass === 1 ? ms : 0);
     });
 }
 

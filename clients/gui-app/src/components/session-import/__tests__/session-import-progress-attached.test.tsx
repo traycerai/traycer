@@ -194,7 +194,7 @@ describe("SessionImportProgress", () => {
     useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
-      .applyStarted(HOST, { runId: "run-1", total: 3, attached: false });
+      .applyStarted(HOST, { runId: "run-1", total: 4, attached: false });
     useSessionImportRunStore.getState().applyComplete(HOST, {
       runId: "run-1",
       counts: { imported: 1, skippedAlreadyImported: 1, failed: 2 },
