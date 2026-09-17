@@ -81,7 +81,6 @@ function renderSegment(props: { readonly hasExplicitPick: boolean }): void {
   render(
     <TooltipProvider delayDuration={0}>
       <StatusBarResourceSegment
-        density="full"
         hostId="host-b"
         hostLabel="Office Linux"
         hasExplicitPick={props.hasExplicitPick}
@@ -140,6 +139,21 @@ describe("<StatusBarResourceSegment />", () => {
 
     expect(metricText("cpu")).toContain("12%");
     expect(metricText("processes")).toContain("14");
+  });
+
+  it("prints every metric with its label - the segment never shortens itself for a narrow window", () => {
+    // The usage cluster beside it is the box that gives way, by scrolling;
+    // this readout is pinned at its natural width and says the same thing at
+    // every width, so a reader never has to guess which number is which.
+    registry.projection = liveProjection("host-b");
+
+    renderSegment({ hasExplicitPick: true });
+
+    expect(metricText("cpu")).toBe("cpu12%");
+    expect(metricText("processes")).toBe("procs14");
+    expect(
+      screen.getByTestId("status-bar-resource-segment").className,
+    ).toContain("shrink-0");
   });
 
   it("draws no numbers from a projection belonging to another machine", () => {
@@ -204,8 +218,7 @@ describe("<StatusBarResourceSegment />", () => {
   it("names every metric and its reading, so the numbers survive the label", () => {
     // The same `aria-label` rule the empty state relies on cuts the other way
     // once there IS a readout: the name REPLACES the flattened contents, so a
-    // bare "Resources" hid every figure in the segment from a screen reader at
-    // every density - not only the ones that drop the visible label.
+    // bare "Resources" hid every figure in the segment from a screen reader.
     registry.projection = liveProjection("host-b");
 
     renderSegment({ hasExplicitPick: true });

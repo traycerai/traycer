@@ -185,6 +185,14 @@ if (runsFirstShard) {
       exitCode,
       runBrowserRegression("scripts/panel-motion-position-browser.mjs"),
     );
+    // Same gate: whether the status bar's usage cluster overflows and
+    // scrolls at a real width, which edge its fade lands on, and whether the
+    // resource readout beside it stays whole are all layout - jsdom reports
+    // every box as 0px wide and cannot see what a mask class does.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/status-bar-usage-scroll-browser.mjs"),
+    );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
