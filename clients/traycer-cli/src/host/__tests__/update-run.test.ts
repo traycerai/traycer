@@ -2063,6 +2063,172 @@ describe("runHostUpdate - bound intents", () => {
     expect(mocks.installHostDowngradeInSegment).toHaveBeenCalledTimes(1);
   });
 
+  // Starting an update accepts a local installed version that cannot be
+  // ordered against the release. A claimed busy park retains that permission;
+  // comparable downgrades still require the consent tested above.
+
+  it("a busy park with an INCOMPARABLE (local-*) baseline is resumed by continue with allowDowngrade false - the birth path already accepts it (D6 parity)", async () => {
+    const installedVersion = "local-host-runtime-2026-01-01T00-00-00-000Z";
+    await seedInstalled(installedVersion);
+    world.runningVersion = installedVersion;
+    const attemptId = await parkUpgrade("2.0.0");
+    const parked = await requireRecord();
+    expect(parked.claim).toMatchObject({
+      installedVersion,
+      allowDowngrade: false,
+      acceptStoreFormatLoss: false,
+    });
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      expectGeneration: String(parked.generation),
+      expectSequence: String(parked.sequence),
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.releasedReason).toBeNull();
+    expect(outcome.legacy.version).toBe("2.0.0");
+    expect((await requireRecord()).phase).toBe("complete");
+    // The stage the park already placed is reused - no re-download.
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+  });
+
+  it("the same INCOMPARABLE-baseline resume also succeeds when the park's own trigger was AUTOMATIC", async () => {
+    const installedVersion = "local-host-runtime-2026-02-02T00-00-00-000Z";
+    await seedInstalled(installedVersion);
+    world.runningVersion = installedVersion;
+    world.latest = "2.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValueOnce(busyError());
+    await expect(
+      runUpdate({ env: { TRAYCER_HOST_UPDATE_TRIGGER: "automatic" } }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+    const parked = await requireRecord();
+    expect(parked.phase).toBe("waiting-for-work");
+    expect(parked.trigger).toBe("automatic");
+    expect(parked.claim).toMatchObject({
+      installedVersion,
+      allowDowngrade: false,
+    });
+    mocks.writes.length = 0;
+    mocks.downloadAndStageHostInSegment.mockClear();
+    mocks.applyHostWithAttempt.mockClear();
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: parked.attemptId,
+      versionRequest: "2.0.0",
+    });
+
+    expect(outcome.releasedReason).toBeNull();
+    expect(outcome.legacy.version).toBe("2.0.0");
+    const record = await requireRecord();
+    expect(record.phase).toBe("complete");
+    // `continue` resumes the record's OWN trigger, never the dispatcher's.
+    expect(record.trigger).toBe("automatic");
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+  });
+
+  it("a resumed park with an incomparable baseline is still TERMINALIZED failed{install-changed} when another actor re-lands the SAME local build under a NEW installId", async () => {
+    // The install-generation guard (`revalidateInstallIdentity`) is a
+    // SEPARATE re-validation from the consent fix and must keep firing. Same
+    // version string as the baseline, new installId: version equality alone
+    // cannot see this move, only the generation comparison can.
+    const installedVersion = "local-host-runtime-2026-03-03T00-00-00-000Z";
+    await seedInstalled(installedVersion);
+    world.runningVersion = installedVersion;
+    const attemptId = await parkUpgrade("2.0.0");
+
+    world.installId = "install-consumed-local";
+    world.installedAt = "2026-03-03T00:05:00.000Z";
+    await seedInstalled(installedVersion);
+
+    // No explicit --version: `requestedVersion` must be `null` here so the
+    // explicit-request "outgrown" check in `revalidateInstallIdentity` (held
+    // to the REQUEST, not the record) does not fire first - a live local
+    // string can never be compared against an explicit target, and that
+    // earlier check would otherwise report `E_UNEXPECTED` for this move
+    // rather than reaching the generation guard this pin is about. A bound
+    // `continue` needs no `--version`: the record it is bound to already
+    // names the target.
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        ackNonce: "nonce-abcdefgh",
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
+    });
+
+    const record = await requireRecord();
+    expect(record.attemptId).toBe(attemptId);
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      code: "install-changed",
+      phase: "preparing",
+    });
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(await readAck("nonce-abcdefgh")).toMatchObject({
+      kind: "claimed",
+      attemptId,
+    });
+  });
+
+  it("a resumed park with an incomparable baseline is still refused by the claim's fingerprint when its stage is replaced at the SAME version", async () => {
+    // Same safeguard-survives-the-fix intent as above, for the OTHER
+    // durability check a claimed park carries: the stage fingerprint, which
+    // has nothing to do with version ordering at all.
+    const installedVersion = "local-host-runtime-2026-04-04T00-00-00-000Z";
+    await seedInstalled(installedVersion);
+    world.runningVersion = installedVersion;
+    const attemptId = await parkUpgrade("2.0.0");
+    const claimed = (await requireRecord()).claim?.stageFingerprint ?? null;
+    await seedStaged("2.0.0");
+    expect(world.stageId).not.toBe(claimed);
+
+    await expect(
+      runUpdate({
+        intent: "continue",
+        expectAttempt: attemptId,
+        versionRequest: "2.0.0",
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.UNEXPECTED });
+
+    expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ expectedStageFingerprint: claimed }),
+    );
+    expect(world.installedVersion).toBe(installedVersion);
+  });
+
+  it("a claimed park whose recorded TARGET is not valid SemVer is still refused, even with a comparable baseline and allowDowngrade false - the incomparable exception admits only a malformed baseline, never a malformed target", async () => {
+    // Incomparability may come from a corrupt target, not a local install.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const attemptId = await parkUpgrade("2.0.0");
+    // No legal run can mint this record - the plan always resolves a valid
+    // registry version - but a record is durable and may have been
+    // corrupted by anything. Re-stage to match it too, so this resume needs
+    // no transfer and reaches the selector's consent test directly rather
+    // than a registry lookup for a version that does not exist.
+    await editRecordOnDisk((parsed) => {
+      parsed.targetVersion = "not-a-real-version";
+    });
+    await seedStaged("not-a-real-version");
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+    });
+
+    expect(outcome.releasedReason).toBe("refused-unverifiable");
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+    expect((await requireRecord()).phase).toBe("waiting-for-work");
+  });
+
   it("a park whose stage another actor consumed is TERMINALIZED failed{install-changed}, not released", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
