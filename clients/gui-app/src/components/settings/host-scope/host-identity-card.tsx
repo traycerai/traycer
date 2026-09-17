@@ -177,8 +177,8 @@ export function HostIdentityCard(props: {
               <span
                 className={cn(
                   "font-medium",
-                  host.health.tone === "live" && "text-emerald-500",
-                  host.health.tone === "warn" && "text-amber-500",
+                  host.health.tone === "live" && "text-success-foreground",
+                  host.health.tone === "warn" && "text-warning-foreground",
                   host.health.tone === "idle" && "text-muted-foreground",
                 )}
                 data-testid="host-identity-health"
@@ -262,7 +262,7 @@ function HostBusyChip(props: {
       className={cn(
         "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-ui-xs font-medium",
         live
-          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-400"
+          ? "border-success/25 bg-success/10 text-success-foreground"
           : "border-border/60 bg-foreground/5 text-muted-foreground",
       )}
       data-testid="host-active-sessions"

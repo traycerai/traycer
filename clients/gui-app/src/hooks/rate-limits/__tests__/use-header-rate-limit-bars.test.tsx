@@ -5,6 +5,7 @@ import type {
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import type {
   RateLimitFetchEligibility,
   RateLimitProviderId,
@@ -50,12 +51,28 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () => mocks.configured,
   useVisibleRateLimitProviders: () => mocks.configured,
 }));
-vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
-  resolveRateLimitProfileId: (
-    _selection: unknown,
-    providerId: RateLimitProviderId,
-  ) => mocks.profileIds.get(providerId) ?? null,
-}));
+// A provider with a scripted answer gets it; the rest resolve for real, so
+// the cases about WHICH account the glyph reads can exercise the real chain
+// (checked → last-used → first profile → ambient) against the layout store.
+vi.mock(
+  "@/hooks/rate-limits/use-rate-limit-profile-selection",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/rate-limits/use-rate-limit-profile-selection")
+      >();
+    return {
+      resolveRateLimitProfileId: (
+        selection: RateLimitProfileSelection,
+        providerId: RateLimitProviderId,
+        profiles: ReadonlyArray<ProviderProfile>,
+      ) =>
+        mocks.profileIds.has(providerId)
+          ? (mocks.profileIds.get(providerId) ?? null)
+          : actual.resolveRateLimitProfileId(selection, providerId, profiles),
+    };
+  },
+);
 // Production calls `useHostQueriesWithResponseMap` (not the plain
 // `useHostQueries`) - see that hook's own doc comment - so this mock exports
 // both names with equivalent behavior; the extra `mapResponse` field
@@ -86,14 +103,27 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+  type UsageControlsPlacement,
+} from "@/stores/settings/layout-store";
 
-const PROFILE_SELECTION = {
+const PROFILE_SELECTION: RateLimitProfileSelection = {
   shownProfiles: {},
   lastProfileByHarness: {},
 };
 
-function renderHeaderRateLimitBars() {
-  return renderHook(() => useHeaderRateLimitBars(PROFILE_SELECTION));
+function renderHeaderRateLimitBars(
+  profileSelection: RateLimitProfileSelection,
+) {
+  return renderHook(() => useHeaderRateLimitBars(profileSelection));
+}
+
+function selectPlacement(placement: UsageControlsPlacement): void {
+  useLayoutStore.setState({
+    statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement },
+  });
 }
 
 function rlWindow(
@@ -237,6 +267,7 @@ beforeEach(() => {
   mocks.results = new Map();
   mocks.profileIds = new Map();
   mocks.requests = [];
+  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
 });
 
 afterEach(() => {
@@ -246,7 +277,7 @@ afterEach(() => {
 
 describe("useHeaderRateLimitBars", () => {
   it("returns no bars when zero providers are configured", () => {
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([]);
   });
 
@@ -255,7 +286,7 @@ describe("useHeaderRateLimitBars", () => {
       data: undefined,
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([]);
   });
 
@@ -280,7 +311,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([
       {
         providerId: "codex",
@@ -323,7 +354,7 @@ describe("useHeaderRateLimitBars", () => {
       isError: false,
     });
 
-    renderHeaderRateLimitBars();
+    renderHeaderRateLimitBars(PROFILE_SELECTION);
 
     expect(mocks.requests).toEqual([
       { providerId: "codex", profileId: "codex-work" },
@@ -376,11 +407,87 @@ describe("useHeaderRateLimitBars", () => {
       },
     });
 
-    renderHeaderRateLimitBars();
+    renderHeaderRateLimitBars(PROFILE_SELECTION);
 
     expect(mocks.requests).toEqual([
       { providerId: "codex", profileId: "codex-work" },
     ]);
+  });
+
+  // Two Codex accounts, B checked for the strip and A the last one used in a
+  // composer. Which one the glyph reads depends on whether the strip is on
+  // screen: the checks are a strip preference, and the usage panel offers
+  // no control over them while the strip is not mounted.
+  describe("the account the glyph reads", () => {
+    const accountA: ProviderProfile = {
+      profileId: "codex-a",
+      enabled: true,
+      kind: "managed",
+      authType: "oauth",
+      label: "A",
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      identity: null,
+      usageUpdatedAt: null,
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      duplicateOfProfileId: null,
+      accentColor: null,
+      ambientDriftNotice: null,
+    };
+    const accountB: ProviderProfile = {
+      ...accountA,
+      profileId: "codex-b",
+      label: "B",
+    };
+    const selection: RateLimitProfileSelection = {
+      shownProfiles: { codex: ["codex-b"] },
+      lastProfileByHarness: { codex: "codex-a" },
+    };
+
+    function configureTwoAccountCodex(): void {
+      setProviderWithProfiles({
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [accountA, accountB],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+        result: {
+          data: response(
+            codexFixture({
+              primary: rlWindow(40, 300),
+              secondary: rlWindow(20, 10_080),
+            }),
+          ),
+          isError: false,
+        },
+      });
+    }
+
+    it("follows the checked account while the strip is on screen", () => {
+      selectPlacement("status-bar");
+      configureTwoAccountCodex();
+
+      renderHeaderRateLimitBars(selection);
+
+      expect(mocks.requests).toEqual([
+        { providerId: "codex", profileId: "codex-b" },
+      ]);
+    });
+
+    it("resolves without the checks under the header placement", () => {
+      selectPlacement("header");
+      configureTwoAccountCodex();
+
+      renderHeaderRateLimitBars(selection);
+
+      expect(mocks.requests).toEqual([
+        { providerId: "codex", profileId: "codex-a" },
+      ]);
+    });
   });
 
   it("fills both bars from Codex's 5h + Weekly windows when only Codex is configured", () => {
@@ -393,7 +500,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([
       {
         providerId: "codex",
@@ -422,7 +529,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current[0]?.severity).toBe("limited");
     expect(result.current[1]?.severity).toBe("healthy");
   });
@@ -437,7 +544,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([
       {
         providerId: "claude-code",
@@ -466,7 +573,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([]);
   });
 
@@ -485,7 +592,7 @@ describe("useHeaderRateLimitBars", () => {
       data: undefined,
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([]);
   });
 
@@ -498,7 +605,7 @@ describe("useHeaderRateLimitBars", () => {
       data: response(kiloCodeFixture()),
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([]);
   });
 
@@ -507,7 +614,7 @@ describe("useHeaderRateLimitBars", () => {
       data: response(unavailableFixture()),
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([]);
   });
 
@@ -521,7 +628,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: true,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([
       {
         providerId: "codex",
@@ -561,7 +668,7 @@ describe("useHeaderRateLimitBars", () => {
       },
       isError: false,
     });
-    const { result } = renderHeaderRateLimitBars();
+    const { result } = renderHeaderRateLimitBars(PROFILE_SELECTION);
     expect(result.current).toEqual([
       {
         providerId: "codex",

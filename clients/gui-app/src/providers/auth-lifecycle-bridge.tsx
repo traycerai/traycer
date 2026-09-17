@@ -1,6 +1,7 @@
 import { useCallback, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
+import { disposingForIdentityTeardown } from "@/stores/chats/chat-session-store";
 import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-registry";
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
@@ -39,7 +40,20 @@ export function EpicSessionLifecycleBridge(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
-    if (transition.kind === "signedOut" || transition.kind === "userSwitched") {
+    if (transition.kind !== "signedOut" && transition.kind !== "userSwitched") {
+      return;
+    }
+    // The whole teardown runs with the cross-account prompt handoff
+    // suppressed. A disposing chat session otherwise writes its unrecorded
+    // prompt into the prompt stash - one global IndexedDB database, no
+    // per-account partition - so the outgoing account's text would be waiting
+    // in the next account's composer. That is the same leak this bridge
+    // already closes for the retained-draft TOAST at the bottom of this
+    // function, by the same argument; the durable copy has to go the same way.
+    //
+    // Wrapping everything, not just `disposeAllChatSessions`, because an epic
+    // session going down here takes its chat sessions with it.
+    disposingForIdentityTeardown(() => {
       disposeAllOpenEpicSessions();
       disposeAllChatSessions();
       disposeAllTerminalSessions();
@@ -94,7 +108,7 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
-    }
+    });
   }, []);
 
   useAuthIdentityTransition(status, userId, onTransition);

@@ -131,7 +131,7 @@ export function useSettingsAnchorReveal(
       // same result again while it was lit showed nothing. The scroll's
       // `getBoundingClientRect` reads are the recalc that separates the two.
       clearFlash();
-      scrollPaneToCenter(target);
+      scrollPaneToCenter(target, null);
       target.setAttribute(FLASH_ATTRIBUTE, "true");
       flashedRef.current = target;
       flashTimerRef.current = window.setTimeout(clearFlash, FLASH_MS);
@@ -196,7 +196,10 @@ export const ANCHOR_ATTRIBUTE = "data-settings-anchor";
  * the group heading above it, and the heading is half of what tells the user
  * they landed in the right place.
  */
-function scrollPaneToCenter(target: Element): void {
+export function scrollPaneToCenter(
+  target: Element,
+  behavior: ScrollBehavior | null,
+): void {
   const pane = nearestScrollingAncestor(target);
   if (pane === null) return;
   const paneRect = pane.getBoundingClientRect();
@@ -206,7 +209,7 @@ function scrollPaneToCenter(target: Element): void {
     targetTopInPane - (pane.clientHeight - targetRect.height) / 2;
   pane.scrollTo({
     top: Math.max(0, centered),
-    behavior: prefersReducedMotion() ? "auto" : "smooth",
+    behavior: behavior ?? (prefersReducedMotion() ? "auto" : "smooth"),
   });
 }
 

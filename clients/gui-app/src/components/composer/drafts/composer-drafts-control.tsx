@@ -44,7 +44,6 @@ import {
   type DraftInventoryScope,
 } from "@/lib/drafts/draft-inventory";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
-import { cn } from "@/lib/utils";
 
 export interface ComposerDraftsControlProps {
   readonly scope: DraftInventoryScope;
@@ -283,9 +282,10 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   const list = (
     <Command
       loop
+      variant="embedded"
       value={selectedId ?? ""}
       onValueChange={setHighlightedId}
-      className="max-h-full min-h-0 rounded-lg bg-transparent p-0"
+      className="max-h-full min-h-0"
     >
       <div className="flex items-center justify-between gap-2 border-b border-border/60 px-2.5 py-1.5">
         <span className="text-ui-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -305,7 +305,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
             {filter === "current" ? "No drafts here yet" : "No drafts"}
           </p>
         ) : (
-          <CommandGroup className="p-1">
+          <CommandGroup>
             {rows.map((row) => (
               <DraftRow
                 key={row.id}
@@ -330,13 +330,10 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   const trigger = (
     <Button
       type="button"
-      variant="outline"
+      variant="muted-outline"
       size="xs"
       aria-label={draftsTriggerLabel(currentCount)}
-      className={cn(
-        "rounded-full bg-background/95 px-2.5 text-muted-foreground shadow-sm hover:text-foreground",
-        open && "text-foreground",
-      )}
+      className="rounded-full shadow-sm"
       // Desktop keeps the editor focused behind the open list; vaul needs the
       // pointer sequence it would otherwise lose (critique G6).
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
@@ -361,7 +358,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
             reaches it, and the edge it is anchored to is the one it has to pad
             itself: without this the last row's tap targets sit under the home
             indicator. */}
-        <DrawerContent className="max-h-[min(80dvh,40rem)] gap-0 overflow-hidden p-0 pb-safe-bottom">
+        <DrawerContent className="max-h-[min(80dvh,40rem)] gap-0 overflow-hidden pb-safe-bottom">
           <DrawerTitle className="sr-only">Drafts</DrawerTitle>
           {list}
         </DrawerContent>
@@ -379,7 +376,8 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
           side="top"
           align="end"
           sideOffset={6}
-          className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg gap-0 overflow-hidden p-0"
+          layout="bare"
+          className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg overflow-hidden"
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => {
             event.preventDefault();

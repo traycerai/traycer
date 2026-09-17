@@ -67,7 +67,7 @@ export function TeardownInlineDisclosure(props: {
   if (actors.length === 0 && props.unknownConsequence === null) return null;
   return (
     <div
-      className="mt-2 min-w-0 rounded-md border-l-2 border-amber-500/70 bg-amber-500/8 px-2.5 py-2"
+      className="mt-2 min-w-0 rounded-md border-l-2 border-warning/70 bg-warning/8 px-2.5 py-2"
       data-testid="teardown-disclosure-inline"
     >
       <p className="text-ui-xs font-medium text-foreground">{props.heading}</p>

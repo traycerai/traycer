@@ -6,9 +6,12 @@
  * used to own playback is gone; the per-epic cursor store survived it, so the
  * graph still remembers where it was left when the tile is closed and reopened.
  *
- * THE TRACK IS THE LOG. Markers are the events themselves, one per row, at their
- * own timestamps - not buckets, not a sample. Crowding IS the information: a
- * burst of traffic should look like a burst.
+ * THE TRACK IS THE LOG. Markers are the events themselves, one per row - not
+ * buckets, not a sample. Crowding IS the information: a burst of traffic should
+ * look like a burst, which is also why the axis they sit on measures REPLAY
+ * time rather than wall time (see `comm-graph-transport.ts`): an idle hour that
+ * playback crosses in one step no longer takes half the bar away from the
+ * exchanges either side of it.
  *
  * LIVE IS THE RIGHT EDGE, not a mode. `cursor === null` puts the playhead at the
  * end of everything captured and lets new rows extend the track under it;
@@ -23,6 +26,7 @@
  * `lib/comm-graph/comm-graph-transport.ts` where it can be tested on numbers.
  */
 import {
+  memo,
   useCallback,
   useMemo,
   useRef,
@@ -40,8 +44,8 @@ import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import {
   commGraphEventAtFraction,
   commGraphPlayheadFraction,
-  commGraphTimeRange,
   commGraphTransportMarkers,
+  commGraphTransportTrack,
   type CommGraphTransportMarker,
 } from "@/lib/comm-graph/comm-graph-transport";
 import {
@@ -50,6 +54,19 @@ import {
 } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
 
 const MARKER_PREVIEW_MAX_CHARS = 120;
+
+/**
+ * Marker tooltips, by the row they describe.
+ *
+ * A title is a markdown parse and a single-line format, and the track renders
+ * ONE MARKER PER ROW - so an epic with a couple of thousand rows in it was
+ * parsing a couple of thousand messages every time the bar re-rendered, which
+ * during playback is every tick. The text is a pure function of a row and a row
+ * never changes, so it is computed once and kept for as long as the row is
+ * reachable. A `WeakMap` rather than a bounded cache because the key IS the
+ * lifetime: rows the log has dropped take their titles with them.
+ */
+const markerTitles = new WeakMap<CommGraphEvent, string>();
 
 export interface CommGraphTransportBarProps {
   readonly epicId: string;
@@ -62,7 +79,15 @@ export interface CommGraphTransportBarProps {
 }
 
 function markerTitle(event: CommGraphEvent): string {
-  const when = new Date(event.timestamp).toLocaleTimeString();
+  const cached = markerTitles.get(event);
+  if (cached !== undefined) return cached;
+  const title = buildMarkerTitle(event);
+  markerTitles.set(event, title);
+  return title;
+}
+
+function buildMarkerTitle(event: CommGraphEvent): string {
+  const when = cursorTimeText(event.timestamp);
   const text = event.messageText;
   if (text === null || text.length === 0) return when;
   const preview = formatSingleLine(markdownToPlainText(text), {
@@ -77,21 +102,24 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
   const { epicId, events } = props;
   const transport = useCommGraphTransport(epicId, events);
 
-  const range = useMemo(() => commGraphTimeRange(events), [events]);
+  // ONE MEMO FOR BOTH, from the same array: the markers index into the track's
+  // own offsets, so a track built from a different log than the markers were
+  // would place them by somebody else's arithmetic.
+  const track = useMemo(() => commGraphTransportTrack(events), [events]);
   const markers = useMemo(
-    () => (range === null ? [] : commGraphTransportMarkers(events, range)),
-    [events, range],
+    () => (track === null ? [] : commGraphTransportMarkers(events, track)),
+    [events, track],
   );
-  const playhead = commGraphPlayheadFraction(transport.cursor, range);
+  const playhead = commGraphPlayheadFraction(events, transport.cursor, track);
 
   const seekToFraction = useCallback(
     (fraction: number) => {
-      if (range === null) return;
-      const event = commGraphEventAtFraction(events, range, fraction);
+      if (track === null) return;
+      const event = commGraphEventAtFraction(events, track, fraction);
       if (event === null) return;
       transport.seekToEvent(event);
     },
-    [events, range, transport],
+    [events, track, transport],
   );
 
   return (
@@ -131,6 +159,8 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
         playhead={playhead}
         onSeekToFraction={seekToFraction}
       />
+
+      <CommGraphCursorTime transport={transport} events={events} />
 
       {/*
         WITH NOTHING CAPTURED THERE IS NO LIVE BADGE either: "Live" next to an
@@ -248,28 +278,7 @@ function CommGraphTransportTrack(props: {
         className="absolute inset-y-0 left-0 rounded-sm bg-primary/10"
         style={{ width: `${playhead * 100}%` }}
       />
-      {markers.map((marker) => (
-        <TooltipWrapper
-          key={marker.key}
-          label={markerTitle(marker.event)}
-          side="top"
-          sideOffset={4}
-          align="center"
-        >
-          <span
-            aria-hidden
-            data-testid={`comm-graph-transport-marker-${marker.key}`}
-            data-kind={marker.event.kind}
-            className={cn(
-              "absolute top-1 bottom-1 w-px -translate-x-1/2",
-              marker.event.kind === "a2a_notice"
-                ? "bg-amber-500/70"
-                : "bg-foreground/25",
-            )}
-            style={{ left: `${marker.fraction * 100}%` }}
-          />
-        </TooltipWrapper>
-      ))}
+      <CommGraphTransportMarkerLayer markers={markers} />
       <div
         aria-hidden
         data-testid="comm-graph-transport-playhead"
@@ -279,6 +288,54 @@ function CommGraphTransportTrack(props: {
     </div>
   );
 }
+
+/**
+ * THE TICKS, AND NOTHING THAT MOVES.
+ *
+ * Split out and memoized because the track around it re-renders on every step
+ * of playback - the playhead and the elapsed fill are what a step MOVES - and
+ * the markers are not among the things that moved. Left inline, a tick of
+ * playback reconciled one Radix tooltip per captured row, thirty times a
+ * second, for rows whose positions had not changed since the last frame; that
+ * is the same "even at 4x, the graph is filling super slow" the speed ladder
+ * answers from the other end, and raising the ladder without this would only
+ * have asked the bar to do it more often.
+ *
+ * `markers` comes from one memo over `events`, so this re-renders exactly when
+ * a row lands - which is also the only time a fraction can change.
+ */
+const CommGraphTransportMarkerLayer = memo(
+  function CommGraphTransportMarkerLayer(props: {
+    readonly markers: ReadonlyArray<CommGraphTransportMarker>;
+  }) {
+    return (
+      <>
+        {props.markers.map((marker) => (
+          <TooltipWrapper
+            key={marker.key}
+            label={markerTitle(marker.event)}
+            side="top"
+            sideOffset={4}
+            align="center"
+          >
+            <span
+              aria-hidden
+              data-testid={`comm-graph-transport-marker-${marker.key}`}
+              data-kind={marker.event.kind}
+              className={cn(
+                "absolute top-1 bottom-1 w-px -translate-x-1/2",
+                marker.event.kind === "a2a_notice"
+                  ? "bg-warning/70"
+                  : "bg-foreground/25",
+              )}
+              style={{ left: `${marker.fraction * 100}%` }}
+            />
+          </TooltipWrapper>
+        ))}
+      </>
+    );
+  },
+);
 
 /**
  * WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports
@@ -311,6 +368,125 @@ function CommGraphEmptyTrack(props: { readonly following: boolean }) {
 }
 
 /**
+ * WHICH MOMENT A DETACHED GRAPH IS SHOWING.
+ *
+ * It used to be a chip over the office floor - `Paused at 14:32:07` in the
+ * top-left corner, the last read-only sentence drawn over the drawing, and
+ * removed with the rest of them in feedback round 2 ("no more hidden labels or
+ * anything left now, right?").
+ *
+ * The reading itself is worth keeping, because nothing else says it: a floor
+ * scrubbed back to an hour ago is pixel-identical to a live one, and the
+ * playhead gives a position without a time. So it moved to the scrubber, where
+ * a media player puts it and where it costs a canvas nothing - the same value
+ * the chip read (`cursor.timestamp`), in the bar that owns the cursor.
+ *
+ * NO "PAUSED AT" / "REPLAYING" PREFIX any more. The chip carried one because it
+ * stood alone over a floor; here it sits a few pixels from the play/pause
+ * button, which is already showing which of the two this is.
+ *
+ * NOTHING WHILE LIVE - not the current time, which would be a clock, and not a
+ * dash holding the space. Live has no cursor to report, and the Live badge
+ * beside it says so.
+ *
+ * BUT IT HOLDS ITS FOOTPRINT WHILE LIVE, which is a different question and one
+ * the chip never had to answer. This sits in the bar's flex row beside a track
+ * that is `flex-1 min-w-0`, so a readout that mounts on the first seek TAKES
+ * ITS WIDTH OUT OF THE TRACK - and the first seek is a pointer-down ON that
+ * track. The playhead would land some seventy pixels left of the finger that
+ * placed it, every marker would slide with it, and the next `pointermove`
+ * would measure a narrower rect and resolve the same screen position to a
+ * different row. So the width is reserved by an invisible time and the reading
+ * is laid over it: the footprint is a CONSTANT, and nothing moves when a
+ * cursor appears.
+ *
+ * AND THE RESERVATION IS EXACT, because the clock it reserves for cannot vary
+ * in width. Two earlier attempts reserved a MEASURED width - the newest row's
+ * time, then the longest of twenty-four hourly probes - and both were
+ * approximations dressed as guarantees: a locale's `9:05:09 AM` is a character
+ * shorter than its `12:05:09 PM`, and once that was handled by character
+ * count, `AM` and `PM` are still two different widths in a proportional face
+ * at the same length. A reservation you have to measure is one that is wrong
+ * somewhere you did not probe. {@link TRANSPORT_TIME_FORMAT} removes the
+ * variance instead of chasing it - see there.
+ */
+function CommGraphCursorTime(props: {
+  readonly transport: CommGraphTransport;
+  readonly events: ReadonlyArray<CommGraphEvent>;
+}) {
+  const { events, transport } = props;
+  // Nothing captured: no reading to hold room for, and the Live badge beside
+  // this is hidden for the same reason.
+  if (events.length === 0) return null;
+  const cursor = transport.cursor;
+  return (
+    <span
+      // `shrink-0` against a track that is `flex-1 min-w-0`: the readout is a
+      // fixed handful of digits and the track is what should give up width.
+      className="relative shrink-0 text-ui-xs text-muted-foreground tabular-nums"
+    >
+      <span
+        aria-hidden
+        data-testid="comm-graph-transport-cursor-time-reserve"
+        className="invisible"
+      >
+        {RESERVED_TIME_TEXT}
+      </span>
+      {cursor === null ? null : (
+        <span
+          data-testid="comm-graph-transport-cursor-time"
+          className="absolute inset-0 whitespace-nowrap"
+        >
+          {cursorTimeText(cursor.timestamp)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * THE BAR'S CLOCK, in a shape whose rendered width is the same at every
+ * instant - which is what lets the readout above reserve its room exactly
+ * rather than approximately.
+ *
+ * Every field is two digits and the hour cycle is `h23`, so the output is
+ * digits and separators and NOTHING ELSE: no day period, so no `AM` against
+ * `PM`; no one-digit hour against a two-digit one. `tabular-nums` on the
+ * element gives every digit the same advance, and a locale's separators do not
+ * change with the time, so the string is the same width whenever it is read.
+ * `comm-graph-transport-bar-cost.test.ts` pins both halves of that - one
+ * length across the whole day, and not a letter in it.
+ *
+ * The locale still chooses the separators and the field order; what is fixed
+ * is the SHAPE. A 12-hour locale reads 14:32:07 here rather than 2:32:07 PM,
+ * which is the price of the guarantee and a fair one under a scrubber, where
+ * the neighbouring speed is `tabular-nums` for the same reason.
+ *
+ * ONE formatter for the readout and the marker tooltips alike - two clocks in
+ * one bar disagreeing about how to write an instant is its own defect, and
+ * constructing an `Intl.DateTimeFormat` is expensive enough to hoist out of a
+ * function the tooltip cache calls per row.
+ */
+const TRANSPORT_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/** One spelling of an instant, so the reading and its reserved box agree. */
+function cursorTimeText(timestamp: number): string {
+  return TRANSPORT_TIME_FORMAT.format(timestamp);
+}
+
+/**
+ * Any instant at all, because they are all the same width - see
+ * {@link TRANSPORT_TIME_FORMAT}. Held as a constant rather than formatted per
+ * render: this is read on every tick of playback.
+ */
+const RESERVED_TIME_TEXT = cursorTimeText(0);
+
+/**
  * The Live badge. A TOGGLE, not a one-way door: pressed while detached it
  * re-attaches and remembers where you were; pressed again while live it takes
  * you back there. With nothing to go back to it is a plain "Live".
@@ -324,18 +500,13 @@ function CommGraphFollowLiveButton(props: {
     <Button
       type="button"
       size="xs"
-      variant="ghost"
+      variant="muted"
       aria-pressed={transport.following}
       data-testid="comm-graph-transport-follow-live"
       data-following={transport.following ? "true" : "false"}
       data-can-return={canReturn ? "true" : "false"}
       onClick={canReturn ? transport.returnToReplay : transport.followLive}
-      className={cn(
-        "shrink-0",
-        transport.following
-          ? "bg-primary/5 text-primary"
-          : "text-muted-foreground",
-      )}
+      className="shrink-0"
     >
       <LivePulse
         size="xs"

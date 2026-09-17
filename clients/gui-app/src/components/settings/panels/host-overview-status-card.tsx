@@ -19,7 +19,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { cn } from "@/lib/utils";
 import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
@@ -182,9 +181,9 @@ export function HostOverviewNameAction(props: {
     <Button
       ref={buttonRef}
       type="button"
-      variant="ghost"
-      size="sm"
-      className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+      variant="muted"
+      size="inline"
+      className="size-7 shrink-0"
       // Opening a disabled editor is the other half of the same focus-loss
       // finding: block the TRIGGER while there is no name data to edit - and
       // while a write is still settling, since the editor closes before the
@@ -300,10 +299,8 @@ function HostOverviewMenuAction(props: {
       }}
       data-testid={props.testId}
       data-degraded={degrade ?? undefined}
-      className={cn(
-        "flex-col items-start gap-0.5 py-1.5",
-        degraded && "text-muted-foreground",
-      )}
+      className="flex-col items-start gap-0.5"
+      variant={degraded ? "muted" : "default"}
     >
       <span className="flex items-center gap-2">
         {/* The spinner takes the icon's place rather than sitting beside it, so
@@ -442,9 +439,9 @@ export function HostOverviewHeaderActions(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
-            size="sm"
-            className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+            variant="muted"
+            size="inline"
+            className="size-7 shrink-0"
             aria-label={`More actions for ${hostName}`}
             data-testid="host-overview-menu"
           >

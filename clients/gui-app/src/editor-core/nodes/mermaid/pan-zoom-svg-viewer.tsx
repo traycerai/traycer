@@ -243,9 +243,8 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
               style={{
                 width: `${intrinsic.width}px`,
                 height: `${intrinsic.height}px`,
-                lineHeight: 0,
               }}
-              className="tc-mermaid-pan-zoom__content [&>svg]:!size-full [&>svg]:!max-w-none [&>div>svg]:!size-full [&>div>svg]:!max-w-none"
+              className="tc-mermaid-pan-zoom__content leading-none [&>svg]:!size-full [&>svg]:!max-w-none [&>div>svg]:!size-full [&>div>svg]:!max-w-none"
             >
               {renderedSvg}
             </div>

@@ -372,10 +372,8 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("4% used")).toBeTruthy();
     expect(screen.getByText("Weekly")).toBeTruthy();
     expect(screen.getByText("68% used")).toBeTruthy();
-    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
-      0,
-    );
-    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-info").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-warning").length).toBe(0);
   });
 
   it("uses the same Healthy, Running low, and Limited tones in Settings and Usage Limits", () => {
@@ -412,25 +410,23 @@ describe("CodexRateLimitView (extended fields)", () => {
     const settings = render(
       <CodexRateLimitView data={severityFixture} variant="settings" />,
     );
-    expect(settings.container.querySelectorAll(".bg-amber-500")).toHaveLength(
-      2,
+    expect(settings.container.querySelectorAll(".bg-warning")).toHaveLength(2);
+    expect(settings.container.querySelectorAll(".bg-destructive")).toHaveLength(
+      1,
     );
-    expect(settings.container.querySelectorAll(".bg-red-500")).toHaveLength(1);
-    expect(settings.container.querySelectorAll(".bg-blue-500")).toHaveLength(1);
+    expect(settings.container.querySelectorAll(".bg-info")).toHaveLength(1);
     cleanup();
 
     const usageLimits = render(
       <CodexRateLimitView data={severityFixture} variant="popover-detail" />,
     );
+    expect(usageLimits.container.querySelectorAll(".bg-warning")).toHaveLength(
+      2,
+    );
     expect(
-      usageLimits.container.querySelectorAll(".bg-amber-500"),
-    ).toHaveLength(2);
-    expect(usageLimits.container.querySelectorAll(".bg-red-500")).toHaveLength(
-      1,
-    );
-    expect(usageLimits.container.querySelectorAll(".bg-blue-500")).toHaveLength(
-      1,
-    );
+      usageLimits.container.querySelectorAll(".bg-destructive"),
+    ).toHaveLength(1);
+    expect(usageLimits.container.querySelectorAll(".bg-info")).toHaveLength(1);
   });
 
   it("draws every popover window track with a foreground-opacity fill so an empty bar stays visible", () => {
@@ -460,7 +456,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     const tracks = container.querySelectorAll(".bg-foreground\\/15");
     expect(tracks.length).toBeGreaterThan(0);
     expect(container.querySelectorAll(".bg-green-500").length).toBe(0);
-    const fill = container.querySelector(".bg-blue-500");
+    const fill = container.querySelector(".bg-info");
     expect(fill).toBeInstanceOf(HTMLElement);
     if (!(fill instanceof HTMLElement)) {
       throw new Error("Expected a blue rate-limit fill");
@@ -872,7 +868,7 @@ describe("GrokRateLimitView", () => {
     expect(screen.getByText("12% used")).toBeTruthy();
     // Real bar fill (MeterRow track + severity color), not a plain text row.
     expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(1);
-    expect(container.querySelectorAll(".bg-blue-500").length).toBe(1);
+    expect(container.querySelectorAll(".bg-info").length).toBe(1);
     // Fallback plan/date rows stay off when a real period window exists.
     expect(screen.queryByText("Plan")).toBeNull();
     expect(screen.queryByText("Billing period")).toBeNull();
@@ -1091,7 +1087,9 @@ describe("OpenCodeRateLimitView", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("12% used")).toBeTruthy();
-    expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
+    expect(
+      container.querySelectorAll(".bg-destructive").length,
+    ).toBeGreaterThan(0);
   });
 
   it("does not retain a rate-limited badge or red bar after that window expires", () => {
@@ -1108,7 +1106,7 @@ describe("OpenCodeRateLimitView", () => {
       />,
     );
     expect(screen.queryByText("Go limit reached")).toBeNull();
-    expect(container.querySelector(".bg-red-500")).toBeNull();
+    expect(container.querySelector(".bg-destructive")).toBeNull();
   });
 
   it("opens the OpenCode auth page through openLink when Manage Go is clicked", () => {
@@ -1456,8 +1454,8 @@ describe("CursorRateLimitView", () => {
     expect(screen.queryByText("-$12.10")).toBeNull();
     expect(screen.getByText("Bonus usage")).toBeTruthy();
     expect(screen.getByText("$12.10")).toBeTruthy();
-    expect(container.querySelector(".bg-amber-500")).toBeTruthy();
-    expect(container.querySelector(".bg-red-500")).toBeNull();
+    expect(container.querySelector(".bg-warning")).toBeTruthy();
+    expect(container.querySelector(".bg-destructive")).toBeNull();
   });
 
   it("falls back to the billing-cycle range when no bucket was reported", () => {

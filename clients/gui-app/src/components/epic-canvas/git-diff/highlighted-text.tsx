@@ -9,7 +9,7 @@ export interface HighlightedTextProps {
 
 // Subtle filled highlight so matched characters read as hits in both the
 // foreground filename span and the muted directory span.
-const MATCH_CLASS_NAME = "rounded-[2px] bg-primary/25 text-foreground";
+const MATCH_CLASS_NAME = "rounded-xs bg-primary/25 text-foreground";
 
 /**
  * Renders `text` with the given ranges wrapped in highlight `<mark>`s. Empty

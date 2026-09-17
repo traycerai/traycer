@@ -199,7 +199,7 @@ function TemporaryDebugReminderRow(props: {
       >
         {pending ? (
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId={undefined}
             variant={undefined}
           />

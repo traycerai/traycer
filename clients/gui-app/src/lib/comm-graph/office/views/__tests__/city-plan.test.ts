@@ -868,7 +868,7 @@ describe("planCity", () => {
     },
   );
 
-  it("caps every building's storeys at seven, however busy the agent", () => {
+  it("caps every building's storeys at fourteen, however busy the agent", () => {
     const input = inputFor("triage", 60, VIEWPORT_1280);
     const busy = new Map<string, number>();
     for (const agent of input.agents) busy.set(agent.id, 400);
@@ -884,10 +884,40 @@ describe("planCity", () => {
     for (const storeys of frozen.storeysBySeatId.values()) {
       maxStoreys = Math.max(maxStoreys, storeys);
     }
-    expect(maxStoreys).toBeLessThanOrEqual(7);
+    expect(maxStoreys).toBeLessThanOrEqual(14);
     // Every occupied seat is busy enough to hit the cap, so the cap is what
     // actually bites here rather than an accident of low activity.
-    expect(maxStoreys).toBe(7);
+    expect(maxStoreys).toBe(14);
+  });
+
+  it("floors every non-HQ agent's building at three storeys, however idle the agent (CITY_MIN_STOREYS)", () => {
+    const input = inputFor("triage", 60, VIEWPORT_1280);
+    const quiet = new Map<string, number>();
+    for (const agent of input.agents) quiet.set(agent.id, 0);
+    const layout = planCity({ ...input, activityById: quiet });
+    const frozen = readCityFrozen(layout);
+    if (frozen === null) throw new Error("expected City's frozen packing");
+    // The HQ ignores activity altogether (it is always the tallest thing on
+    // the skyline - see the spire test below), so it is excluded here: this
+    // case is about the FLOOR a merely-idle agent's own building hits, not
+    // about HQ at all.
+    expect(frozen.spireSeatIds.size).toBe(1);
+    const [spireSeatId] = [...frozen.spireSeatIds];
+    // Walk agent-OWNED desks specifically, not every entry in
+    // `storeysBySeatId` - an empty reserve lot also reads three storeys, but
+    // for an unrelated reason (`agentId === null` short-circuits straight to
+    // `CITY_MIN_STOREYS` in `raiseSkyline`), and that would let this
+    // assertion pass even if idle AGENTS stopped hitting the floor.
+    expect(layout.desks.size).toBeGreaterThan(0);
+    let sawNonHqDesk = false;
+    for (const desk of layout.desks.values()) {
+      if (desk.seatId === spireSeatId) continue;
+      sawNonHqDesk = true;
+      expect(frozen.storeysBySeatId.get(desk.seatId)).toBe(3);
+    }
+    // The sweep actually walked a non-HQ agent's desk, not just the
+    // (excluded) HQ seat.
+    expect(sawNonHqDesk).toBe(true);
   });
 
   it("freezes heights across a status flip and an activity drop", () => {
@@ -1087,7 +1117,9 @@ describe("planCity", () => {
     expect(frozen.spireSeatIds.size).toBe(1);
     const [spireSeatId] = [...frozen.spireSeatIds];
     const spireStoreys = frozen.storeysBySeatId.get(spireSeatId);
-    expect(spireStoreys).toBe(7);
+    // The corner office ignores activity and always takes CITY_MAX_STOREYS -
+    // storeysFor's `if (isHq) return CITY_MAX_STOREYS;` short-circuit.
+    expect(spireStoreys).toBe(14);
     for (const [seatId, storeys] of frozen.storeysBySeatId) {
       if (seatId === spireSeatId) continue;
       expect(storeys).toBeLessThanOrEqual(spireStoreys ?? 0);
@@ -1161,7 +1193,12 @@ describe("planCity", () => {
         cols: 70,
         rows: 88,
       });
-      expect(size1280).toEqual({ width: 2528, height: 1356 });
+      // Height only, +56: the corner office is always CITY_MAX_STOREYS (see
+      // storeysFor's `isHq` branch), so its jump from 7 to 14 storeys adds
+      // 7 * ISO_STOREY_HEIGHT = 56px to whichever building sets the world's
+      // tallest stack. Cols and rows - the FOOTPRINT - are unaffected; only
+      // the skyline grew.
+      expect(size1280).toEqual({ width: 2528, height: 1412 });
     });
 
     it("agrees with the projector's own bounds", () => {
@@ -1175,7 +1212,11 @@ describe("planCity", () => {
         VIEWPORT_1280.height / size1280.height,
       );
       // 0.5063, down from 0.5229: a taller world fits a little smaller.
-      expect(fit).toBeCloseTo(0.51, 2);
+      // Now 0.4958, down again and past a crossover: the taller world (see
+      // the pixel-size case above) makes HEIGHT the binding edge instead of
+      // width - 700/1412 (~0.4958) now undercuts 1280/2528 (~0.5063), where
+      // width used to be the smaller ratio.
+      expect(fit).toBeCloseTo(0.5, 2);
     });
 
     it("pins the fit at 680x440", () => {
@@ -1204,7 +1245,10 @@ describe("planCity", () => {
         cols: 44,
         rows: 61,
       });
-      expect(size).toEqual({ width: 1680, height: 932 });
+      // Height only, +56, for the same reason as the 1,000-agent case above:
+      // the HQ's storeys jumped from 7 to 14 (CITY_MAX_STOREYS), adding
+      // 7 * ISO_STOREY_HEIGHT to the tallest stack. Footprint unchanged.
+      expect(size).toEqual({ width: 1680, height: 988 });
     });
 
     it("pins the fit at both viewports", () => {
@@ -1213,7 +1257,12 @@ describe("planCity", () => {
         VIEWPORT_1280.height / size.height,
       );
       // 0.7511 and 0.4048, from 0.8294 and 0.4521.
-      expect(fit1280).toBeCloseTo(0.75, 2);
+      // fit1280 now 0.7085 (height stays the binding edge: 700/988 still
+      // undercuts 1280/1680): CITY_MAX_STOREYS's 7 -> 14 jump adds
+      // 7 * ISO_STOREY_HEIGHT = 56px to the HQ's always-tallest stack (see
+      // the 1,000-agent case above), which is the whole source of the extra
+      // height.
+      expect(fit1280).toBeCloseTo(0.71, 2);
       const input680 = inputFor("triage", 309, VIEWPORT_680);
       const size680 = measureCity(input680);
       const fit680 = Math.min(

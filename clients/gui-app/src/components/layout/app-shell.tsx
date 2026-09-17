@@ -29,7 +29,10 @@ import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import {
+  selectStatusBarShown,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 
 interface AppShellProps {
   children: ReactNode;
@@ -46,21 +49,13 @@ export function AppShell(props: AppShellProps) {
   // Phones get the hamburger navigation drawer; it is only mounted below md so
   // desktop mounts nothing extra and stays unchanged.
   const isMobile = useIsMobileViewport();
-  // A mobile VIEWPORT, not a mobile build: a narrow desktop window behaves the
-  // same way.
-  //
-  // Mobile ignores `placement` entirely and answers with its own switch, which
-  // is off by default. `placement` names which of two surfaces hosts the usage
-  // gauge and the resource monitor, and on a phone that question has no second
-  // answer: `MobileAppHeader` keeps both controls whatever the strip does, so
-  // a phone reading `placement` would be reading a preference about a surface
-  // it does not have. The footer still competes with the software keyboard and
-  // the nav drawer, which is what `MobileAppStatusBar` gates on and why it is
-  // off until asked for.
+  // The shared answer, not an inline read of the store: the usage panel's
+  // per-account eye and the header glyph gate on the same question, and a
+  // strip that one of them thought was mounted while this shell did not would
+  // offer a control for a surface that is not there. `selectStatusBarShown`
+  // explains why a mobile viewport ignores `placement`.
   const showStatusBar = useLayoutStore((state) =>
-    isMobile
-      ? state.statusBar.mobileFooter
-      : state.statusBar.placement === "status-bar",
+    selectStatusBarShown(state, isMobile),
   );
   // Observed, never rendered. A publication fork resolves itself now - the
   // banner and the dialog that used to read this query are gone - but the

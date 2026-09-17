@@ -110,6 +110,7 @@ function response(
           "auto_accept_edits",
           "full_access",
         ],
+        nativeAutoJudge: false,
         availabilityPending,
       },
     ],
@@ -167,6 +168,7 @@ function harnesses(
     modes: ["gui"],
     requiresApiKey: false,
     supportedPermissionModes: ["supervised"],
+    nativeAutoJudge: false,
     availabilityPending: false,
   }));
 }
@@ -1658,5 +1660,403 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
       await Promise.resolve();
     });
     expect(fixture.modelCalls).toEqual(["claude"]);
+  });
+});
+
+// Same shape as `modelsResponse` above, keyed to the "claude" harness id the
+// `response()` fixture already uses - so the returned payload's own
+// `harnessId` field matches what these tests request, instead of borrowing
+// the "opencode" fixture's mismatched label.
+function claudeModelsResponse(count: number): ListGuiAgentModelsResponse {
+  return {
+    harnessId: "claude",
+    models: Array.from({ length: count }, (_unused, index) => ({
+      harnessId: "claude",
+      slug: `model-${index}`,
+      label: `Model ${index}`,
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      deprecationNotice: null,
+      metadata: {},
+    })),
+  };
+}
+
+// Unlike the module-level `response()` fixture (which always attaches a
+// non-null `error` whenever `available` is false), this leaves `error`
+// explicit per call. `mapResponse` below treats `availabilityPending &&
+// !available && error !== null` as an immediate KNOWN negative rather than
+// the ambiguous "still probing" case that falls back to history - so a test
+// that wants the ambiguous-pending case (the one `lastSettledAvailable`'s
+// history fallback exists for) must pass `error: null` deliberately, which
+// `response()`'s implicit rule cannot express.
+function claudeHarnessRow(input: {
+  readonly available: boolean;
+  readonly availabilityPending: boolean;
+  readonly error: string | null;
+}): ListGuiHarnessesResponse["harnesses"][number] {
+  return {
+    id: "claude",
+    label: "Claude Code",
+    enabled: true,
+    available: input.available,
+    nativeAutoJudge: false,
+    error: input.error,
+    modes: ["gui", "tui"],
+    requiresApiKey: false,
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ],
+    availabilityPending: input.availabilityPending,
+  };
+}
+
+// `lastSettledAvailable` is accumulated in `useGuiHarnessesQueryForClient`'s
+// `mapResponse` from the PREVIOUS cached response, so these drive real
+// `agent.gui.listHarnesses` re-fetches (`query.fetch()`, as the existing
+// "clears unavailable progress" test above already does) rather than
+// `queryClient.setQueryData` - a direct cache write bypasses `mapResponse`
+// entirely and would silently pass a metadata field these tests exist to
+// verify is actually being computed.
+// Real timers throughout this describe block, deliberately - not
+// `vi.useFakeTimers()`. Every test here mounts the catalog cold, and the
+// model fan-out's query observer is only CREATED once the harnesses fetch's
+// data lands (`harnessIds` in `useGuiHarnessCatalogForClient` is derived from
+// `harnessesQuery.data`), so its own fetch dispatches one render later than
+// the harnesses fetch resolves. A fixed-count `advanceTimersByTimeAsync(0)`
+// flush is exactly the kind of timing guess that is fragile against React's
+// actual effect/microtask scheduling; `waitFor` (real timers, polling) is the
+// same technique the pre-existing `describe("…ForClient catalog hooks are
+// scoped…")` block above already uses for this identical two-hop shape (see
+// "does one default-host catalog fill when an endpoint arrives after a
+// boot-time refresh").
+describe("useGuiHarnessCatalog pending-availability retention (resurrection guard)", () => {
+  afterEach(() => {
+    hostBindingMock.current = null;
+    useSelectionAuthorityStore.getState().reset();
+    cleanup();
+  });
+
+  it("retains a warm harness's models with no new model request while it revalidates from AVAILABLE (ambiguous pending, no error yet), drops them once it settles unavailable, and does not resurrect them on a later ambiguous pending revalidation", async () => {
+    let next: ListGuiHarnessesResponse = {
+      harnesses: [
+        claudeHarnessRow({
+          available: true,
+          availabilityPending: false,
+          error: null,
+        }),
+      ],
+    };
+    let modelCalls = 0;
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => next,
+      "agent.gui.listModels": () => {
+        modelCalls += 1;
+        return claudeModelsResponse(2);
+      },
+    });
+
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models).toHaveLength(2);
+    });
+    expect(result.current.harnesses[0]?.available).toBe(true);
+    expect(modelCalls).toBe(1);
+
+    const query = harnessesQuery(fixture.queryClient);
+
+    // Revalidating from a confirmed-available state: pending, unavailable,
+    // NO error yet (the host is mid re-probe and has not concluded anything)
+    // - the truly ambiguous case, which falls back to the prior settled
+    // verdict (available). The picker must keep showing the warm rows
+    // (`available` stays true, `models` stays populated) and must not issue
+    // a second model request for them - the pending arm's query is
+    // `enabled: false` by construction.
+    next = {
+      harnesses: [
+        claudeHarnessRow({
+          available: false,
+          availabilityPending: true,
+          error: null,
+        }),
+      ],
+    };
+    await act(async () => {
+      await query.fetch();
+    });
+    // `query.fetch()` writes the new cache entry synchronously, but nothing
+    // here guarantees this SEPARATE `renderHook` observer's re-render has
+    // been committed by the time `act()` resolves - `waitFor` is the honest
+    // wait for that propagation, not a fixed flush count.
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.available).toBe(true);
+    });
+    expect(result.current.harnesses[0]?.models).toHaveLength(2);
+    expect(result.current.harnesses[0]?.modelsLoading).toBe(false);
+    expect(modelCalls).toBe(1);
+
+    // Settles unavailable: the retained-models exemption must not apply -
+    // the row drops to unavailable with no models, which is what drives the
+    // picker's "Add API key" / "unavailable" CTA instead of a stale list.
+    next = {
+      harnesses: [
+        claudeHarnessRow({
+          available: false,
+          availabilityPending: false,
+          error: "probe timed out",
+        }),
+      ],
+    };
+    await act(async () => {
+      await query.fetch();
+    });
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.available).toBe(false);
+    });
+    expect(result.current.harnesses[0]?.models).toHaveLength(0);
+
+    // THE REGRESSION: a later ambiguous pending revalidation (unavailable,
+    // no error yet), now that the harness has a confirmed-unavailable
+    // verdict on record (`lastSettledAvailable === false`), must NOT
+    // resurrect the models still sitting in the never-garbage-collected
+    // (`gcTime: Infinity`) listModels cache entry from the very first fetch
+    // above.
+    next = {
+      harnesses: [
+        claudeHarnessRow({
+          available: false,
+          availabilityPending: true,
+          error: null,
+        }),
+      ],
+    };
+    await act(async () => {
+      await query.fetch();
+    });
+    // Same field, same VALUE as the settled-unavailable step just asserted -
+    // `waitFor` here is what proves this render actually happened (and
+    // stayed false) rather than the assertion trivially passing on stale
+    // data left over from the previous step.
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.availabilityPending).toBe(true);
+    });
+    expect(result.current.harnesses[0]?.available).toBe(false);
+    expect(result.current.harnesses[0]?.models).toHaveLength(0);
+    expect(modelCalls).toBe(1); // never re-fetched, and never needed to be
+  });
+
+  it("treats a still-pending row that already carries an error as a known negative immediately - it does not wait for a settled response, or fall back to a prior positive, before dropping retained rows", async () => {
+    let next: ListGuiHarnessesResponse = {
+      harnesses: [
+        claudeHarnessRow({
+          available: true,
+          availabilityPending: false,
+          error: null,
+        }),
+      ],
+    };
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => next,
+      "agent.gui.listModels": () => claudeModelsResponse(2),
+    });
+
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    // Two hops on a cold mount - see this describe block's own comment for
+    // why this waits rather than guessing a fixed number of timer advances.
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.models).toHaveLength(2);
+    });
+    expect(result.current.harnesses[0]?.available).toBe(true);
+
+    // Still pending (`availabilityPending: true` - never settled), but the
+    // host already attached an error to this probe (e.g. the provider CLI
+    // vanished mid re-check). That is a known negative NOW, not an ambiguous
+    // in-flight state to fall back to the prior positive for.
+    next = {
+      harnesses: [
+        claudeHarnessRow({
+          available: false,
+          availabilityPending: true,
+          error: "provider CLI not found",
+        }),
+      ],
+    };
+    const query = harnessesQuery(fixture.queryClient);
+    await act(async () => {
+      await query.fetch();
+    });
+
+    await waitFor(() => {
+      expect(result.current.harnesses[0]?.available).toBe(false);
+    });
+    expect(result.current.harnesses[0]?.models).toHaveLength(0);
+  });
+
+  it("a cold harness (never settled before) that starts out ambiguously pending (no error) reports unavailable with no models, and issues no model request", async () => {
+    let modelCalls = 0;
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => ({
+        harnesses: [
+          claudeHarnessRow({
+            available: false,
+            availabilityPending: true,
+            error: null,
+          }),
+        ],
+      }),
+      "agent.gui.listModels": () => {
+        modelCalls += 1;
+        return claudeModelsResponse(2);
+      },
+    });
+
+    const { result } = renderHook(
+      () =>
+        useGuiHarnessCatalog(null, {
+          enabled: true,
+          subscribed: true,
+          modelsFetch: "all-harnesses",
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.harnesses).toHaveLength(1);
+    });
+    // This harness never becomes eligible for a model fetch (neither the
+    // main fan-out nor the pending arm - see below), so there is no positive
+    // condition to `waitFor` here; give the (absent) fetch a beat the same
+    // way "issues ZERO listModels on a cold cache" above does, then assert
+    // the negative.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // With no prior settled verdict, `lastSettledAvailable` falls back to
+    // `null` (not `false`), so this is NOT the resurrection guard's
+    // exclusion - it is the separate "nothing cached yet" case: the pending
+    // arm is still watched (`lastSettledAvailable !== false` holds for
+    // `null`) but its query has no data to retain, so it renders as
+    // unavailable/no-models rather than an eternal spinner with no source.
+    expect(result.current.harnesses[0]?.available).toBe(false);
+    expect(result.current.harnesses[0]?.models).toHaveLength(0);
+    expect(modelCalls).toBe(0);
+  });
+
+  it("keeps a settled negative verdict across a long observer-absence gap: gcTime: Infinity on the harnesses query means a later ambiguous-pending remount still reads the retained negative instead of resurrecting", async () => {
+    // Unlike the rest of this describe block, this test needs to fast-forward
+    // past the window a FINITE gcTime would have evicted the harnesses
+    // query's cache entry in (TanStack Query's default is 5 minutes, cleared
+    // once the last observer unmounts) - real wall-clock time isn't
+    // affordable here, so this one test uses fake timers. The mock messenger
+    // (`MockHostMessenger`) resolves purely via promises with no
+    // `setTimeout` of its own, and `vi.waitFor` advances fake timers on every
+    // poll tick (confirmed against vitest's own implementation), so the two
+    // combine cleanly.
+    vi.useFakeTimers();
+    try {
+      let next: ListGuiHarnessesResponse = {
+        harnesses: [
+          claudeHarnessRow({
+            available: false,
+            availabilityPending: false,
+            error: "provider CLI not found",
+          }),
+        ],
+      };
+      let modelCalls = 0;
+      const fixture = createCatalogFixture({
+        "agent.gui.listHarnesses": () => next,
+        "agent.gui.listModels": () => {
+          modelCalls += 1;
+          return claudeModelsResponse(2);
+        },
+      });
+
+      const first = renderHook(
+        () =>
+          useGuiHarnessCatalog(null, {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          }),
+        { wrapper: fixture.Wrapper },
+      );
+      await vi.waitFor(() => {
+        expect(first.result.current.harnesses[0]?.available).toBe(false);
+      });
+      expect(first.result.current.harnesses[0]?.models).toHaveLength(0);
+      expect(modelCalls).toBe(0);
+
+      // Drop every observer of the harnesses query - the only thing that
+      // schedules its cache-clear at gcTime - then advance well past the
+      // 5-minute default.
+      first.unmount();
+      cleanup();
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(harnessesQuery(fixture.queryClient).state.data).toBeDefined();
+
+      // A fresh mount, now ambiguously pending (ties the resurrection
+      // guard's history fallback instead of a known verdict). If the cache
+      // entry above had actually been evicted, `mapResponse` would find no
+      // `previous` row, `lastSettledAvailable` would fall back to `null`
+      // (not `false`), the pending-model fan-out's `!== false` gate would
+      // admit this harness, and the resulting retained models would
+      // resurrect `available` to `true` - exactly what gcTime: Infinity
+      // exists to prevent.
+      next = {
+        harnesses: [
+          claudeHarnessRow({
+            available: false,
+            availabilityPending: true,
+            error: null,
+          }),
+        ],
+      };
+      const second = renderHook(
+        () =>
+          useGuiHarnessCatalog(null, {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          }),
+        { wrapper: fixture.Wrapper },
+      );
+      await vi.waitFor(() => {
+        expect(second.result.current.harnesses[0]).toBeDefined();
+      });
+      // Give the (absent) pending-model fetch a beat, the same way "a cold
+      // harness ... issues no model request" above does, then assert the
+      // negative stayed put.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(second.result.current.harnesses[0]?.available).toBe(false);
+      expect(second.result.current.harnesses[0]?.models).toHaveLength(0);
+      expect(modelCalls).toBe(0);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 });

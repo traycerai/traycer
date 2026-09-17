@@ -44,7 +44,7 @@ export function DraftRow(props: DraftRowProps) {
     <CommandItem
       value={row.id}
       data-draft-row-id={row.id}
-      className="group/draft-row flex cursor-pointer flex-col items-stretch gap-0.5 overflow-hidden rounded-md px-2 py-1.5 [&>svg:last-child]:hidden"
+      className="group/draft-row flex cursor-pointer flex-col items-stretch gap-0.5 overflow-hidden [&>svg:last-child]:hidden"
       // Desktop keeps editor focus while the list is open; on a phone the tap
       // has to reach vaul's own pointer handling.
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
@@ -64,12 +64,12 @@ export function DraftRow(props: DraftRowProps) {
       <span className="flex w-full min-w-0 items-center gap-1.5 text-ui-xs leading-5 text-muted-foreground">
         <span className="min-w-0 flex-1" />
         {sourceChip === null ? null : (
-          <Badge variant="secondary" className="h-4 shrink-0 px-1.5">
+          <Badge variant="secondary" size="xs" className="shrink-0">
             <span className="max-w-40 truncate">{sourceChip}</span>
           </Badge>
         )}
         {row.open ? (
-          <Badge variant="secondary" className="h-4 shrink-0 px-1.5">
+          <Badge variant="secondary" size="xs" className="shrink-0">
             Open
           </Badge>
         ) : null}
@@ -180,7 +180,7 @@ function DraftRowKeyButton(props: {
         {word}
       </span>
       <ShortcutHint>
-        <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+        <Kbd variant="mono" size="xs">
           {glyph}
         </Kbd>
       </ShortcutHint>

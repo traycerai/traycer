@@ -4,38 +4,23 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
-import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
-import { cn } from "@/lib/utils";
 import {
   useLayoutStore,
   type PercentMode,
 } from "@/stores/settings/layout-store";
 
 /**
- * The class the measured content box wears, which is not one class: it depends
- * on whether there is anything to measure.
+ * The box the readings sit in, at its NATURAL width.
  *
- * With segments the box is `shrink-0`, so its `scrollWidth` is the width the
- * readings WANT rather than the width they were given - the other half of the
- * ladder's overflow question, and a box that shrank to fit would answer it
- * "no" forever. With one sentence instead there is no ladder (its `enabled` is
- * off in exactly that state), and the sentence should behave like ordinary
- * text in a box too small for it, which `truncate` can only do inside a parent
- * allowed to squeeze it.
- *
- * A function rather than two constants because both boxes that render these
- * readings - the strip and the Settings preview - have to make the same choice
- * from the same input, and a second call site copying the ternary is how the
- * two drift.
+ * `shrink-0` is the whole point: the box lives inside a scroller, and a box
+ * that shrank to fit the room would never overflow it - the readings would be
+ * squeezed and clipped rather than scrolled to. One constant rather than two
+ * literals because both boxes that render these readings - the strip and the
+ * Settings preview - have to be the same box, and a second call site copying
+ * the string is how the two drift.
  */
-export function statusBarUsageContentClass(
-  cluster: StatusBarRateLimitCluster,
-): string {
-  return cn(
-    "inline-flex items-center gap-2 px-1.5",
-    cluster.kind === "segments" ? "shrink-0" : "min-w-0",
-  );
-}
+export const STATUS_BAR_USAGE_CONTENT_CLASS =
+  "inline-flex shrink-0 items-center gap-2 px-1.5";
 
 /**
  * What a segment is called wherever a segment is named: the provider, and the
@@ -61,43 +46,72 @@ export function statusBarSegmentKey(
 }
 
 /**
- * One segment and its tightest reading, or the segment's name alone when it
- * has none.
+ * WHOSE segments the cluster is drawing, as one string that changes exactly
+ * when the host or the segment set does - a host switch, a provider hidden or
+ * shown, an account checked or unchecked - and not when a reading inside a
+ * segment moves. What scrolls back to the start on a change is keyed on this.
  *
- * Here rather than beside the `+N` chip that draws it, because the Settings
- * preview's caption has to say the same line OUTSIDE its frame - `inert` puts
- * the chip's own tooltip out of reach there - and two spellings of one reading
- * is exactly what this module exists to prevent.
+ * The host is part of it because the ids alone can coincide across hosts: two
+ * machines each drawing the ambient login of the same providers produce the
+ * same segment keys, and the strip keeps its subtree across a host switch, so
+ * without the host the scroll position would survive a switch to a strip
+ * that reads entirely different numbers. `JSON.stringify` rather than a
+ * joined string so a `null` host and a host id can never spell the same key.
  */
-export function providerReadingText(
-  segment: StatusBarProviderSegmentModel,
-  percentMode: PercentMode,
+export function statusBarUsageScrollKey(
+  hostId: string | null,
+  cluster: StatusBarRateLimitCluster,
 ): string {
-  const name = statusBarSegmentName(segment);
-  if (segment.tightest === null) return name;
-  return `${name} ${windowPercentText(segment.tightest.usedPercent, percentMode)}`;
+  return JSON.stringify([
+    hostId,
+    ...statusBarClusterSegments(cluster).map(statusBarSegmentKey),
+  ]);
 }
 
 /** One empty list for the three cluster states that draw no segments. */
 const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
 
 /**
- * Everything about the readings that the user chose rather than the strip
- * measured.
+ * Everything about the readings that the user chose.
  *
  * One value because two surfaces draw these readings - the strip and the
- * Settings preview - and both need the same four answers for the same two
- * things: the ladder's active rungs, and what a segment prints at the rung it
- * lands on. Passing them together is what keeps a preview from being a second
- * opinion about the settings it exists to show. Which of a provider's limits
- * are drawn is NOT here: that is resolved into the segment model itself, so a
- * segment already carries the windows it should draw.
+ * Settings preview - and both need the same four answers to one question:
+ * what a segment prints. Passing them together is what keeps a preview from
+ * being a second opinion about the settings it exists to show. Which of a
+ * provider's limits are drawn is NOT here: that is resolved into the segment
+ * model itself, so a segment already carries the windows it should draw.
  */
 export interface StatusBarUsageDisplay {
   readonly percentMode: PercentMode;
   readonly showModeWord: boolean;
   readonly showBar: boolean;
   readonly showTimer: boolean;
+}
+
+/**
+ * What a reading is made of, as three independent answers the render path
+ * can test rather than a preference object it would have to interpret.
+ *
+ * The strip draws every drawn account at exactly this detail at every width -
+ * the percentage and the window's label are always printed, and nothing is
+ * taken away to make room, because what does not fit scrolls into view
+ * instead. So the parts are the preferences and nothing else: a part is off
+ * only when the user switched it off.
+ */
+export interface StatusBarUsageParts {
+  readonly modeWord: boolean;
+  readonly bar: boolean;
+  readonly timer: boolean;
+}
+
+export function statusBarUsageParts(
+  display: StatusBarUsageDisplay,
+): StatusBarUsageParts {
+  return {
+    modeWord: display.showModeWord,
+    bar: display.showBar,
+    timer: display.showTimer,
+  };
 }
 
 /**
@@ -131,8 +145,8 @@ export function statusBarClusterSegments(
  *
  * Lives beside the readings rather than inside the segment because two surfaces
  * have to say it and only one of them can say it in a tooltip: the Settings
- * preview is `inert`, so nothing inside its frame can ever open one, and the
- * caption under it has to carry the same words. A second phrasing of the same
+ * preview's readings are `inert`, so nothing in them can ever open one, and
+ * the caption under the frame has to carry the same words. A second phrasing of the same
  * state is how a preview starts disagreeing with the strip it previews.
  */
 export function statusBarSegmentTooltip(

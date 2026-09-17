@@ -1,3 +1,8 @@
+import {
+  useOnboardingStore,
+  onboardingCompletedCount,
+  onboardingGuideCount,
+} from "@/stores/onboarding/onboarding-store";
 import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
@@ -30,6 +35,7 @@ import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -54,7 +60,7 @@ export interface SettingsSidebarProps {
 /**
  * The sidebar carries the scope model.
  *
- * Application and Account come first — short, fixed, never re-shaped — and the
+ * Getting started leads, followed by Application and Account, and the
  * host group goes last, headed by ONE picker with its scoped sections beneath.
  * The picker is deliberately NOT a level of navigation: Providers already
  * spends the app's nesting budget on a rail plus a tab bar, so a host tier
@@ -111,7 +117,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
         : SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
             <Fragment key={group.id}>
               {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
-              <SettingsSidebarGroupHeader label={group.label} />
+              {group.id !== "guide" ? (
+                <SettingsSidebarGroupHeader label={group.label} />
+              ) : null}
               {group.id === "host" ? (
                 <SettingsSidebarHostPicker scope={scope} />
               ) : null}
@@ -280,7 +288,7 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
               section.label,
             )}
             testId={`settings-section-digit-${digit}`}
-            className="text-muted-foreground"
+            className={undefined}
           />
         )}
       </AnimatePresence>
@@ -310,7 +318,11 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
             : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
         )}
       >
-        <Icon className="size-4 shrink-0" />
+        {section.id === "getting-started" ? (
+          <GettingStartedProgress />
+        ) : (
+          <Icon className="size-4 shrink-0" />
+        )}
         {label}
         {badge}
       </button>
@@ -361,12 +373,61 @@ function SettingsSidebarRouteItem(props: {
           : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
       )}
     >
-      <Icon className="size-4 shrink-0" />
+      {section.id === "getting-started" ? (
+        <GettingStartedProgress />
+      ) : (
+        <Icon className="size-4 shrink-0" />
+      )}
       {label}
       {badge}
       {variant === "mobile-list" ? (
         <ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />
       ) : null}
     </Link>
+  );
+}
+
+function GettingStartedProgress() {
+  // The same shell the checklist itself counts by: a guide this build cannot
+  // offer is no part of the ring's total either.
+  const browserView = useRunnerHostOrNull()?.browserView ?? null;
+  const shell = { browserView: browserView !== null };
+  const complete = useOnboardingStore((state) =>
+    onboardingCompletedCount(state, shell),
+  );
+  const total = onboardingGuideCount(shell);
+  return (
+    <svg
+      role="progressbar"
+      aria-label="Getting started"
+      aria-valuemin={0}
+      aria-valuemax={total}
+      aria-valuenow={complete}
+      aria-valuetext={`${complete} of ${total} guides complete`}
+      viewBox="0 0 20 20"
+      className="size-4 shrink-0 -rotate-90"
+    >
+      <circle
+        cx="10"
+        cy="10"
+        r="8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        opacity="0.2"
+      />
+      <circle
+        cx="10"
+        cy="10"
+        r="8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        pathLength="100"
+        strokeDasharray={`${(complete / total) * 100} 100`}
+        strokeLinecap={complete === 0 ? "butt" : "round"}
+        className="transition-[stroke-dasharray] duration-200 motion-reduce:transition-none"
+      />
+    </svg>
   );
 }

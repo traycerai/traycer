@@ -72,7 +72,7 @@ export async function runFixAction(
   issue: HostDoctorIssue,
   /**
    * The local host these fixes are for. EVERY arm below now carries it: the
-   * log read, the free-port repair, and the three lifecycle repairs via
+   * free-port repair and the three lifecycle repairs via
    * `runDoctorRepairQueued`. There is deliberately no unfenced arm left, so a
    * fix added to this switch cannot reach the bridge without naming a host.
    *
@@ -120,9 +120,6 @@ export async function runFixAction(
         repair: "restart",
         expectedHostId,
       });
-    case "host-logs":
-      await management.getHostLogs({ tailLines: 200, expectedHostId });
-      return { kind: "applied" };
     case "host-free-port-and-restart": {
       const input = parseFreePortInput(issue);
       if (input === null) {
@@ -247,15 +244,16 @@ export function parseFreePortInput(
 export function severityBorderClass(
   severity: HostDoctorIssue["severity"],
 ): string {
-  if (severity === "error" || severity === "fatal") return "border-rose-700/40";
-  if (severity === "warning") return "border-amber-700/40";
+  if (severity === "error" || severity === "fatal")
+    return "border-destructive/40";
+  if (severity === "warning") return "border-warning/40";
   return "border-border/60";
 }
 
 export function severityBadgeClass(
   severity: HostDoctorIssue["severity"],
 ): string {
-  if (severity === "error" || severity === "fatal") return "bg-rose-500";
-  if (severity === "warning") return "bg-amber-400";
-  return "bg-sky-500";
+  if (severity === "error" || severity === "fatal") return "bg-destructive";
+  if (severity === "warning") return "bg-warning";
+  return "bg-info";
 }

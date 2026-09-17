@@ -38,7 +38,7 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
         <Zap
           className={cn(
             "size-full",
-            active && "fill-current text-amber-500",
+            active && "fill-current text-warning-foreground",
             inlineShortcut && leader !== null && "invisible",
           )}
           strokeWidth={2}

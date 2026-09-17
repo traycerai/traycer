@@ -168,6 +168,11 @@ export function ComposerBody({
     createProfileHostId: hostId,
     runTargetHostId: hostId,
     terminalLoginSurface,
+    // The LANDING composer: there is no chat yet, so no `chat.subscribe` line
+    // has been negotiated and this surface genuinely cannot say. `null` leaves
+    // the harness-catalog line to decide alone, which is all it can know - the
+    // chat this creates negotiates its own line when it opens.
+    chatLineCarriesAutoMode: null,
   } as const;
 
   return (
@@ -238,10 +243,7 @@ export function ComposerBody({
               {toolbarLayout === "collapsed" ? (
                 <ComposerMobileToolbar {...sharedToolbarProps} />
               ) : (
-                <ComposerToolbar
-                  {...sharedToolbarProps}
-                  showNextTurnPermissionNote={false}
-                />
+                <ComposerToolbar {...sharedToolbarProps} />
               )}
             </SurfaceActivityProvider>
           </div>

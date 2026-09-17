@@ -1804,13 +1804,37 @@ export function landingDraftRememberSynced(
   draftId: string,
   hostRevision: number,
   collectedGeneration: number,
+  ownerHostId: string | null,
 ): void {
   useLandingDraftStore.setState((state) => ({
     drafts: state.drafts.map((draft) => {
       if (draft.id !== draftId) return draft;
+      // A revision numbers a row on ONE host, so the clamp below belongs to
+      // one numbering line and must not outlive it. `adoptLandingDraft` moves
+      // a draft to another host WITHOUT resetting `hostRevision`, and that
+      // host numbers from scratch - clamping its ACK against the old owner's
+      // high-water mark would refuse the new owner's real documents for good.
+      // A null on EITHER side is "not known to be a different line": the
+      // row's first ACK, or a tombstone that carries no document to ask.
+      // Unknown clamps, because never going backward is the safe half.
+      const sameLine =
+        ownerHostId === null ||
+        draft.ownerHostId === null ||
+        draft.ownerHostId === ownerHostId;
       return {
         ...draft,
-        hostRevision: Math.max(draft.hostRevision, hostRevision),
+        hostRevision: sameLine
+          ? Math.max(draft.hostRevision, hostRevision)
+          : hostRevision,
+        // Record WHOSE revision this is. Nothing else on the ACK path does,
+        // so without it a draft that was only ever published - never sent a
+        // host document - keeps a null owner forever, and the frontier check
+        // in `applyLandingHostDocument`, which is keyed on owner equality,
+        // silently opts out on the most ordinary draft there is.
+        ownerHostId:
+          hostRevision > 0 && ownerHostId !== null
+            ? ownerHostId
+            : draft.ownerHostId,
         syncedGeneration:
           collectedGeneration >= draft.generation
             ? draft.generation
@@ -1930,10 +1954,13 @@ export function applyLandingHostDocument(
   ) {
     // A local edit in flight wins on content; the host wins on placement.
     adoptLandingDraft(document.draftId, document.adoption.hostId);
+    // The document's OWNER, not its adoption host: this records whose
+    // revision `document.revision` is, and the two differ on a replica.
     landingDraftRememberSynced(
       document.draftId,
       document.revision,
       existing.syncedGeneration,
+      document.ownerHostId,
     );
     return true;
   }

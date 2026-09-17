@@ -204,7 +204,8 @@ function ReauthBannerShell({
                 source: "Provider sign-in",
               })}
               presentation="icon"
-              className="-my-1 -mr-1 text-destructive"
+              variant="destructive-ghost"
+              className="-my-1 -mr-1"
             />
           </div>
         </div>
@@ -984,9 +985,9 @@ function TokenReauthForm({
         {envVars.length > 1 ? (
           <Select value={activeVar} onValueChange={setPickedVar}>
             <SelectTrigger
-              size="sm"
+              size="xs"
               aria-label="Credential type"
-              className="w-[min(60vw,16rem)] font-mono text-ui-xs"
+              className="w-[min(60vw,16rem)] font-mono"
             >
               <SelectValue />
             </SelectTrigger>
@@ -1007,7 +1008,7 @@ function TokenReauthForm({
           id={inputId}
           type="password"
           autoComplete="off"
-          className="min-w-0 flex-1 font-mono text-ui-sm"
+          className="min-w-0 flex-1"
           placeholder={`Paste your ${activeCredentialLabel}`}
           value={draft}
           onChange={(e) => {
@@ -1018,6 +1019,8 @@ function TokenReauthForm({
           onKeyDown={(e) => {
             if (e.key === "Enter") onSave();
           }}
+          font="mono"
+          size="sm"
         />
         <Button
           size="sm"

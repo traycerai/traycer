@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import {
   initialChatHandoffKey,
   migrateInitialChatHandoffState,
@@ -305,5 +306,48 @@ describe("initial-chat-handoff-store markInitialTurnStarted", () => {
         .markInitialTurnStarted(SCOPE, CHAT_ID),
     ).toBe(false);
     expect(statusOf()).toBe("failed");
+  });
+});
+
+describe("a registered handoff's content is a GC root for its images", () => {
+  beforeEach(() => {
+    useInitialChatHandoffStore.getState().resetForTests();
+  });
+
+  const IMAGE_HASH = "a".repeat(64);
+  const CONTENT_WITH_IMAGE: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "imageAttachment",
+        attrs: {
+          id: "img-1",
+          fileName: "screenshot.png",
+          mimeType: "image/png",
+          size: 128,
+          hash: IMAGE_HASH,
+        },
+      },
+    ],
+  };
+
+  it("keeps the initial prompt's image hash live until consumed", () => {
+    useInitialChatHandoffStore.getState().register({
+      ...SCOPE,
+      chatId: CHAT_ID,
+      content: CONTENT_WITH_IMAGE,
+      settings: SETTINGS,
+      worktreeIntent: null,
+      placement: null,
+      messageId: "msg-1",
+      clientActionId: "cai-1",
+      createdAt: 1,
+    });
+
+    expect(landingLiveImageRootHashes().has(IMAGE_HASH)).toBe(true);
+
+    useInitialChatHandoffStore.getState().consume(SCOPE);
+
+    expect(landingLiveImageRootHashes().has(IMAGE_HASH)).toBe(false);
   });
 });

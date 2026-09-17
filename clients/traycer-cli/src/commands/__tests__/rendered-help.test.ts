@@ -1404,6 +1404,18 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       );
     });
 
+    it("agent send --help explains response-id direction", () => {
+      const program = freshProgram();
+      const help = renderHelp(findByPath(program, ["agent", "send"])).replace(
+        /\s+/g,
+        " ",
+      );
+      expect(help).toContain(
+        "--response-id <id> Answer a request received from this recipient; omit on your own follow-ups",
+      );
+      expect(help).not.toContain("Close an open thread");
+    });
+
     it("host --help lists 'free-port-and-restart' and not the bare 'free-port' (false-match guard)", () => {
       const program = freshProgram();
       const help = renderHelp(findByPath(program, ["host"]));

@@ -33,6 +33,7 @@ const spies = vi.hoisted(() => ({
   retryBrowserSessions: vi.fn(),
   retryTerminalBindings: vi.fn(),
   setBrowserPinSelection: vi.fn(),
+  setTerminalPinSelection: vi.fn(),
   retryBrowserHosts: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: spies.toast }));
@@ -48,6 +49,23 @@ const browserHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
 const browserPinSelectionMock = vi.hoisted<{ current: string | null }>(() => ({
   current: null,
 }));
+// The new-terminal surface's own pin, kept separate from the browser
+// surface's so one can't leak into the other's resolution.
+const terminalPinSelectionMock = vi.hoisted<{ current: string | null }>(() => ({
+  current: null,
+}));
+// The `effective` fallback tier, kept separate from `browserHostIdMock`
+// (which several existing tests use to force the browser surface's resolved
+// host directly).
+const effectiveHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
+  current: "default-host",
+}));
+// Overridable per test so a sole-task-host scenario can supply a projection
+// whose chats/tuiAgents all name one host; defaults to `FAKE_PROJECTION`
+// once that is declared below.
+const activeEpicProjectionMock = vi.hoisted<{
+  current: EpicProjectedSlices | null;
+}>(() => ({ current: null }));
 const browserItemsMock = vi.hoisted<{
   current: ReadonlyArray<BrowserSessionInfo>;
 }>(() => ({ current: [] }));
@@ -179,7 +197,7 @@ function chat(
     settings: null,
   };
 }
-function agent(id: string, title: string): TuiAgentProjection {
+function agent(id: string, title: string, hostId: string): TuiAgentProjection {
   return {
     id,
     // An ordinary registry-backed agent - this suite exercises the open
@@ -192,7 +210,7 @@ function agent(id: string, title: string): TuiAgentProjection {
     createdAt: 0,
     updatedAt: 0,
     userId: null,
-    hostId: "agent-host",
+    hostId,
     workspaceFolders: [],
     workspaceMode: undefined,
     model: null,
@@ -245,7 +263,10 @@ const FAKE_PROJECTION: EpicProjectedSlices = {
       "c:colon": chat("c:colon", "Colon Chat", "default-host", null),
     },
   },
-  tuiAgents: { allIds: ["a1"], byId: { a1: agent("a1", "Agent One") } },
+  tuiAgents: {
+    allIds: ["a1"],
+    byId: { a1: agent("a1", "Agent One", "agent-host") },
+  },
   artifacts: {
     allIds: ["s1", "t1"],
     byId: {
@@ -266,13 +287,29 @@ const FAKE_PROJECTION: EpicProjectedSlices = {
     },
   },
 };
+activeEpicProjectionMock.current = FAKE_PROJECTION;
+
+/** A projection whose chats and tui agents all name the same one host. */
+function soleHostProjection(hostId: string): EpicProjectedSlices {
+  return {
+    ...EMPTY_PROJECTED_SLICES,
+    chats: {
+      allIds: ["only-chat"],
+      byId: { "only-chat": chat("only-chat", "Only chat", hostId, null) },
+    },
+    tuiAgents: {
+      allIds: ["only-agent"],
+      byId: { "only-agent": agent("only-agent", "Only agent", hostId) },
+    },
+  };
+}
 
 vi.mock("@/lib/commands/actions", () => ({
   openTileIntoTargetGroup: spies.openTileIntoTargetGroup,
   openCreatedChatWhenProjected: vi.fn(),
 }));
 vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
-  useActiveEpicProjection: () => FAKE_PROJECTION,
+  useActiveEpicProjection: () => activeEpicProjectionMock.current,
   // The host serving the active epic's projection - what the opener stamps
   // into tiles and reads the epic's own records from (PR #1243 round 6). The
   // suite's "active host" knob drives it, so every arm below reads as before.
@@ -296,12 +333,31 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
         },
 }));
 vi.mock("@/hooks/host/use-surface-host-pin", () => ({
-  useTabSurfaceKey: (_kind: string, tabId: string) => `browsers:${tabId}`,
-  useSurfaceHostPin: () => ({
-    selection: browserPinSelectionMock.current,
-    resolvedHostId: browserHostIdMock.current,
-    setSelection: spies.setBrowserPinSelection,
-  }),
+  // Keeps the kind in the key (not collapsed to a shared "browsers:" prefix)
+  // so the resolver below can tell a browser surface from a new-terminal one.
+  useTabSurfaceKey: (kind: string, tabId: string) => `${kind}:${tabId}`,
+  // Resolves pin, then default, then the suite's "effective" knob - with the
+  // pin/fallback pair picked by which surface is asking.
+  useSurfaceHostPinWithDefault: (
+    surfaceKey: string,
+    defaultHostId: string | null,
+  ) => {
+    const isTerminal = surfaceKey.startsWith("new-terminal:");
+    const selection = isTerminal
+      ? terminalPinSelectionMock.current
+      : browserPinSelectionMock.current;
+    return {
+      selection,
+      resolvedHostId:
+        selection ??
+        defaultHostId ??
+        (isTerminal ? effectiveHostIdMock.current : browserHostIdMock.current),
+      followingHostId: defaultHostId ?? effectiveHostIdMock.current,
+      setSelection: isTerminal
+        ? spies.setTerminalPinSelection
+        : spies.setBrowserPinSelection,
+    };
+  },
 }));
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   useHostOptions: () => ({
@@ -598,6 +654,9 @@ afterEach(() => {
   activeHostIdMock.current = "default-host";
   browserHostIdMock.current = "default-host";
   browserPinSelectionMock.current = null;
+  terminalPinSelectionMock.current = null;
+  effectiveHostIdMock.current = "default-host";
+  activeEpicProjectionMock.current = FAKE_PROJECTION;
   browserItemsMock.current = [];
   browserLifecycleMock.current = "live";
   browserInventoryReadyMock.current = true;
@@ -852,7 +911,11 @@ describe("Terminals opener sub-page", () => {
   });
 
   it("keeps reachable remote hosts selectable while no active host is resolved", () => {
-    activeHostIdMock.current = null;
+    // The new-terminal surface no longer reads `useActiveEpicHostId` at all -
+    // its resolution runs through `useActiveEpicSurfaceHostPin`, whose only
+    // fallback tier (with the multi-host `FAKE_PROJECTION` supplying no sole
+    // task default) is the app's effective host.
+    effectiveHostIdMock.current = null;
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
     if (newTerminal.subpage === null) {
@@ -1168,6 +1231,91 @@ describe("Terminals opener sub-page", () => {
     expect(opened.ref.origin).toBe("setup");
     expect(isHostEpicTerminalRef(opened.ref)).toBe(false);
   });
+
+  describe("new-terminal task-default host resolution", () => {
+    it("lists the sole task host's own workspaces directly when it differs from the app's effective host", () => {
+      activeEpicProjectionMock.current = soleHostProjection("terminal-host");
+      effectiveHostIdMock.current = "default-host";
+      const items = renderItems(useTerminalsOpenerItems);
+      const newTerminal = items[0];
+      if (newTerminal.subpage === null) {
+        throw new Error("expected terminal workspace subpage");
+      }
+
+      const workspaces = renderItems(newTerminal.subpage.useItems);
+      const remoteWorkspace = workspaces.find(
+        (item) => item.label === "/remote/feature-worktree",
+      );
+      // Listed directly on the top-level subpage - not nested behind a
+      // "Remote Terminal Mac" host row, since it's already the resolved host.
+      expect(remoteWorkspace?.subpage).toBeNull();
+      expect(
+        workspaces.some((item) => item.label === "Remote Terminal Mac"),
+      ).toBe(false);
+
+      runById(workspaces, remoteWorkspace?.id ?? "missing");
+      const opened = lastTileOpen();
+      expect(opened.ref.type).toBe("terminal");
+      expect(opened.ref.hostId).toBe("terminal-host");
+      if (opened.ref.type !== "terminal") {
+        throw new Error("expected terminal ref");
+      }
+      expect(launchedTerminalCwd(opened.ref)).toBe("/remote/feature-worktree");
+    });
+
+    it("keeps an explicit new-terminal pin on the effective host even with a sole, different task host", () => {
+      activeEpicProjectionMock.current = soleHostProjection("terminal-host");
+      effectiveHostIdMock.current = "default-host";
+      terminalPinSelectionMock.current = "default-host";
+      const items = renderItems(useTerminalsOpenerItems);
+      const newTerminal = items[0];
+      if (newTerminal.subpage === null) {
+        throw new Error("expected terminal workspace subpage");
+      }
+
+      const workspaces = renderItems(newTerminal.subpage.useItems);
+      expect(
+        workspaces.some((item) => item.label === "/work/active-repo"),
+      ).toBe(true);
+      expect(
+        workspaces.some((item) => item.label === "/remote/feature-worktree"),
+      ).toBe(false);
+      // The sole task host is now the "other" one, reachable as a nested
+      // sub-page rather than folded into the pinned host's own list.
+      expect(
+        workspaces.some((item) => item.label === "Remote Terminal Mac"),
+      ).toBe(true);
+    });
+
+    it("falls back to the app's effective host when the task has no sole host", () => {
+      // `FAKE_PROJECTION` (the default) names four different hosts across its
+      // chats/tuiAgents, so there is no sole task default to resolve to.
+      activeEpicProjectionMock.current = FAKE_PROJECTION;
+      effectiveHostIdMock.current = "default-host";
+      const items = renderItems(useTerminalsOpenerItems);
+      const newTerminal = items[0];
+      if (newTerminal.subpage === null) {
+        throw new Error("expected terminal workspace subpage");
+      }
+
+      const workspaces = renderItems(newTerminal.subpage.useItems);
+      expect(
+        workspaces.some((item) => item.label === "/work/active-repo"),
+      ).toBe(true);
+
+      // Zero task hosts (an empty projection) falls back the same way.
+      activeEpicProjectionMock.current = EMPTY_PROJECTED_SLICES;
+      const emptyItems = renderItems(useTerminalsOpenerItems);
+      const emptyNewTerminal = emptyItems[0];
+      if (emptyNewTerminal.subpage === null) {
+        throw new Error("expected terminal workspace subpage");
+      }
+      const emptyWorkspaces = renderItems(emptyNewTerminal.subpage.useItems);
+      expect(
+        emptyWorkspaces.some((item) => item.label === "/work/active-repo"),
+      ).toBe(true);
+    });
+  });
 });
 
 describe("Browser opener sub-page", () => {
@@ -1206,7 +1354,7 @@ describe("Browser opener sub-page", () => {
     const hostItems = renderHook(() => hostSubpage.useItems(CTX)).result
       .current;
     expect(hostItems.map((item) => [item.label, item.statusBadge])).toEqual([
-      ["Follow active host", "Default Mac"],
+      ["Follow task host", "Default Mac"],
       ["Default Mac", "Active"],
       ["Browser Mac", "Selected"],
     ]);
@@ -1346,6 +1494,49 @@ describe("Browser opener sub-page", () => {
       const items = renderBrowserItemsWithQuery([], query);
       expect(items.map((item) => item.id)).not.toContain("open:browser:url");
     }
+  });
+
+  it("routes listing and New browser through the task's sole remote host with no pin, and labels the follow item for it", async () => {
+    // No explicit pin (`browserPinSelectionMock` stays null) and the app's
+    // own active host stays "default-host" - only the task's agents name
+    // "browser-host", so this is the derived default this feature adds, not
+    // the app-wide effective host winning by coincidence.
+    activeEpicProjectionMock.current = soleHostProjection("browser-host");
+    spies.openBrowserTab.mockResolvedValueOnce({
+      sessionId: "session-task",
+      tabId: "tab-task",
+    });
+    const items = renderBrowserItems([]);
+
+    expect(items[0]).toMatchObject({
+      id: "open:browser:host",
+      statusBadge: "Browser Mac",
+    });
+
+    const hostSubpage = items[0].subpage;
+    if (hostSubpage === null) throw new Error("expected host subpage");
+    const hostItems = renderHook(() => hostSubpage.useItems(CTX)).result
+      .current;
+    expect(hostItems.map((item) => [item.label, item.statusBadge])).toEqual([
+      ["Follow task host", "Selected · Browser Mac"],
+      ["Default Mac", "Active"],
+      ["Browser Mac", undefined],
+    ]);
+
+    act(() => runById(items, "open:browser:new"));
+    expect(spies.openBrowserTab).toHaveBeenCalledWith(
+      null,
+      DEFAULT_BROWSER_TILE_URL,
+    );
+    await waitFor(() => {
+      expect(spies.openTileIntoTargetGroup).toHaveBeenCalledOnce();
+    });
+    expect(lastTileOpen().ref).toMatchObject({
+      type: "browser-session",
+      hostId: "browser-host",
+      sessionId: "session-task",
+      tabId: "tab-task",
+    });
   });
 });
 

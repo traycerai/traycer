@@ -1,5 +1,10 @@
 import type { ReactNode } from "react";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import type { FuzzyRange } from "@/lib/fuzzy-folder-match";
 
 /**
@@ -62,8 +67,10 @@ export function FullPathSheet(props: {
       }}
     >
       <SheetContent side="bottom" className="gap-0 pb-safe-bottom">
-        <SheetTitle className="px-4 pt-4 text-ui-sm">Full path</SheetTitle>
-        <p className="px-4 pt-2 pb-4 font-mono text-ui-sm break-all select-all">
+        <SheetHeader>
+          <SheetTitle>Full path</SheetTitle>
+        </SheetHeader>
+        <p className="px-4 pb-4 font-mono text-ui-sm break-all select-all">
           {props.path}
         </p>
       </SheetContent>

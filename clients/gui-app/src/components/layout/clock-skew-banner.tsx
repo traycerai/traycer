@@ -51,7 +51,7 @@ export function ClockSkewBanner(): ReactNode {
       aria-label="System clock is incorrect"
       data-testid="clock-skew-banner"
       data-offset-ms={offsetMs}
-      className="flex w-full items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-ui-xs text-amber-950 dark:text-amber-100"
+      className="flex w-full items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-ui-xs text-warning-foreground"
     >
       <AlarmClock className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">

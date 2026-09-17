@@ -118,7 +118,7 @@ function DesktopZoomIndicator(props: {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 8, scale: 0.98 }}
           transition={INDICATOR_TRANSITION}
-          className="fixed bottom-safe-bottom-gutter left-safe-center-x z-[70] flex -translate-x-1/2 items-center gap-2 text-popover-foreground"
+          className="fixed bottom-safe-bottom-gutter left-safe-center-x z-70 flex -translate-x-1/2 items-center gap-2 text-popover-foreground"
           role="status"
           aria-live="polite"
           data-testid="desktop-zoom-indicator"
@@ -135,10 +135,10 @@ function DesktopZoomIndicator(props: {
             >
               <Button
                 type="button"
-                variant="ghost"
+                variant="muted"
                 size="icon-sm"
                 aria-label="Zoom out"
-                className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+                className="size-8"
                 onClick={() => {
                   void actions.stepOut().catch(() => undefined);
                 }}
@@ -160,10 +160,10 @@ function DesktopZoomIndicator(props: {
             >
               <Button
                 type="button"
-                variant="ghost"
+                variant="muted"
                 size="icon-sm"
                 aria-label="Zoom in"
-                className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+                className="size-8"
                 onClick={() => {
                   void actions.stepIn().catch(() => undefined);
                 }}
@@ -177,7 +177,7 @@ function DesktopZoomIndicator(props: {
             variant="outline"
             size="sm"
             className={cn(
-              "h-10 rounded-md border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground",
+              "h-10 border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground",
               "dark:border-border dark:bg-popover dark:hover:bg-accent",
             )}
             data-testid="desktop-zoom-reset-island"
@@ -190,7 +190,7 @@ function DesktopZoomIndicator(props: {
             Reset to 100%
             {resetPending ? (
               <AgentSpinningDots
-                className="ml-1 text-current"
+                className="ml-1"
                 testId="desktop-zoom-reset-pending"
                 variant="dots2"
               />

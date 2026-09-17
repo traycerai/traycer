@@ -35,6 +35,11 @@ import {
   isTaskTodoToolName,
   parseTaskTodoToolPayloads,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
+import {
+  RETRY_ENDED_ERROR_CODE,
+  RETRY_IN_PROGRESS_ERROR_CODE,
+  RETRY_RECOVERED_ERROR_CODE,
+} from "@traycer/protocol/host/agent/gui/retry-feedback";
 
 // Mirror the host accumulator: a persisted tool_call/approval block carries
 // precomputed display fields, not the raw input. Computed via the same protocol
@@ -276,6 +281,39 @@ function plainTextBlock(
     timestamp,
     text,
     providerNotice: null,
+  };
+}
+
+function codexAssistantMessage(
+  turnId: string,
+  timestamp: number,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    ...assistantMessage(turnId, timestamp),
+    sender: {
+      ...ASSISTANT_SENDER,
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+    },
+  };
+}
+
+function codexRetryBlock(input: {
+  readonly blockId: string;
+  readonly timestamp: number;
+  readonly code: string;
+  readonly message: string;
+}): Extract<Message, { role: "assistant" }>["blocks"][number] {
+  return {
+    type: "error",
+    blockId: input.blockId,
+    status: "completed",
+    timestamp: input.timestamp,
+    message: input.message,
+    recoverable: true,
+    code: input.code,
+    failure: null,
   };
 }
 
@@ -760,6 +798,454 @@ describe("useRenderedMessages", () => {
       { label: "Reason", value: "highRiskCyberActivity" },
     ]);
     expect(notice.parentId).toBeNull();
+  });
+
+  it.each([true, false])(
+    "projects a live Codex retry as an informational harness provider notice when activeTurn is present: %s",
+    (hasActiveTurn) => {
+      const assistant = codexAssistantMessage("turn-codex-retry", 2000);
+      assistant.blocks = [
+        codexRetryBlock({
+          blockId: "codex-retry-1",
+          timestamp: 2001,
+          code: RETRY_IN_PROGRESS_ERROR_CODE,
+          message: "Reconnecting… 2/5",
+        }),
+      ];
+
+      const activeTurn = {
+        agentMode: "regular" as const,
+        sameTurnSteeringSupported: false,
+        turnId: "turn-codex-retry",
+        status: "running" as const,
+        harnessId: "codex" as const,
+        model: "gpt-5-codex",
+        profileId: null,
+        userMessageId: null,
+        startedAt: 2000,
+        updatedAt: 2001,
+        reasoningEffort: null,
+        serviceTier: null,
+      };
+      const { result } = renderRenderedMessages({
+        messages: [assistant],
+        activeTurn: hasActiveTurn ? activeTurn : null,
+        runStatus: hasActiveTurn ? "running" : "idle",
+      });
+
+      const segment = result.current[0]?.segments[0];
+      expect(segment).toMatchObject({
+        kind: "provider_notice",
+        noticeKind: "harness_message",
+        presentation: "retry",
+        tone: "info",
+        title: "Reconnecting 2/5",
+        message: null,
+        details: [{ label: "Reported by Codex", value: "Reconnecting… 2/5" }],
+      });
+    },
+  );
+
+  it.each([
+    RETRY_RECOVERED_ERROR_CODE,
+    RETRY_ENDED_ERROR_CODE,
+    RETRY_IN_PROGRESS_ERROR_CODE,
+  ])(
+    "hides a finished Codex retry marker (%s) without hiding an ordinary error",
+    (code) => {
+      const assistant = codexAssistantMessage(`turn-finished-${code}`, 2000);
+      assistant.blocks = [
+        codexRetryBlock({
+          blockId: "codex-retry-finished",
+          timestamp: 2001,
+          code,
+          message: "Provider retry feedback",
+        }),
+        {
+          type: "error",
+          blockId: "ordinary-error",
+          status: "errored",
+          timestamp: 2002,
+          message: "The Codex turn failed permanently.",
+          recoverable: false,
+          code: "server_error",
+          failure: null,
+        },
+      ];
+
+      const completedEvent: ChatEvent = {
+        eventId: `event:turn.completed:${assistant.turnId}`,
+        type: "turn.completed",
+        timestamp: 2003,
+        clientActionId: null,
+        actor: null,
+        message: "Turn completed.",
+        turnId: assistant.turnId,
+        messageId: null,
+        queueItemId: null,
+        approvalId: null,
+        blockId: null,
+        severity: "info",
+        metadata: null,
+      };
+      const { result } = renderRenderedMessages({
+        messages: [assistant],
+        events: [completedEvent],
+      });
+      const assistantRow = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistantRow?.segments.map((segment) => segment.kind)).toEqual([
+        "error",
+      ]);
+      expect(assistantRow?.segments[0]).toMatchObject({
+        kind: "error",
+        message: "The Codex turn failed permanently.",
+      });
+    },
+  );
+
+  it("invalidates a same-millisecond active retry row when its message changes", () => {
+    const retryBlock = (message: string) =>
+      codexRetryBlock({
+        blockId: "codex-retry-same-ms",
+        timestamp: 2001,
+        code: RETRY_IN_PROGRESS_ERROR_CODE,
+        message,
+      });
+    const before = codexAssistantMessage("turn-codex-same-ms", 2000);
+    before.blocks = [retryBlock("Reconnecting… 2/5")];
+    const after = codexAssistantMessage("turn-codex-same-ms", 2000);
+    after.blocks = [retryBlock("Reconnecting… 3/5")];
+    const activeTurn = {
+      agentMode: "regular" as const,
+      sameTurnSteeringSupported: false,
+      turnId: "turn-codex-same-ms",
+      status: "running" as const,
+      harnessId: "codex" as const,
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: null,
+      startedAt: 2000,
+      updatedAt: 2001,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    const driver = renderRenderedMessages({
+      messages: [before],
+      activeTurn,
+      runStatus: "running",
+    });
+
+    expect(driver.result.current[0]?.segments[0]).toMatchObject({
+      kind: "provider_notice",
+      presentation: "retry",
+      title: "Reconnecting 2/5",
+      message: null,
+    });
+    driver.patch({ messages: [after] });
+    expect(driver.result.current[0]?.segments[0]).toMatchObject({
+      kind: "provider_notice",
+      presentation: "retry",
+      title: "Reconnecting 3/5",
+      message: null,
+      details: [{ value: "Reconnecting… 3/5" }],
+    });
+  });
+
+  it("invalidates a legacy assistant error when recoverable and failure fields change", () => {
+    const before: Message = {
+      ...codexAssistantMessage("turn-legacy-error", 2000),
+      blocks: [
+        {
+          type: "error",
+          blockId: "legacy-error",
+          status: "completed",
+          timestamp: 2001,
+          message: "The provider stream ended unexpectedly.",
+          recoverable: true,
+          code: "PROVIDER_STREAM_ERROR",
+          failure: null,
+        },
+      ],
+    };
+    const after: Message = {
+      ...codexAssistantMessage("turn-legacy-error", 2000),
+      blocks: [
+        {
+          type: "error",
+          blockId: "legacy-error",
+          status: "completed",
+          timestamp: 2001,
+          message: "The provider stream ended unexpectedly.",
+          recoverable: false,
+          code: "PROVIDER_STREAM_ERROR",
+          failure: {
+            reason: "rate_limit",
+            resetsAt: 3000,
+            resetsAtSource: "provider",
+            scope: "five_hour",
+            providerDetail: "usage_limit_exceeded",
+          },
+        },
+      ],
+    };
+    const driver = renderRenderedMessages({ messages: [before] });
+
+    expect(driver.result.current.at(0)?.segments.at(0)).toMatchObject({
+      kind: "error",
+      recoverable: true,
+      failure: null,
+    });
+
+    driver.patch({ messages: [after] });
+
+    expect(driver.result.current.at(0)?.segments.at(0)).toMatchObject({
+      kind: "error",
+      recoverable: false,
+      failure: {
+        reason: "rate_limit",
+        resetsAt: 3000,
+        resetsAtSource: "provider",
+        scope: "five_hour",
+        providerDetail: "usage_limit_exceeded",
+      },
+    });
+  });
+
+  it("does not emit a row or completion footer for a finished all-hidden retry-only turn", () => {
+    const assistant = codexAssistantMessage("turn-hidden-retry", 2000);
+    assistant.blocks = [
+      codexRetryBlock({
+        blockId: "hidden-retry",
+        timestamp: 2001,
+        code: RETRY_ENDED_ERROR_CODE,
+        message: "The Codex retry attempt ended.",
+      }),
+    ];
+
+    const completedEvent: ChatEvent = {
+      eventId: "event:turn.completed:turn-hidden-retry",
+      type: "turn.completed",
+      timestamp: 2002,
+      clientActionId: null,
+      actor: null,
+      message: "Turn completed.",
+      turnId: "turn-hidden-retry",
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    };
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      events: [completedEvent],
+    });
+
+    expect(
+      result.current.find((message) => message.role === "assistant"),
+    ).toBeUndefined();
+    expect(
+      result.current.some((message) => message.showCompletionFooter === true),
+    ).toBe(false);
+  });
+
+  it("keeps the canonical answer at part:1 when a settled retry row precedes a steer", () => {
+    const content = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "continue" }],
+        },
+      ],
+    };
+    const assistant = codexAssistantMessage("turn-codex-steer-retry", 2000);
+    assistant.blocks = [
+      codexRetryBlock({
+        blockId: "codex-retry-settled",
+        timestamp: 2001,
+        code: RETRY_RECOVERED_ERROR_CODE,
+        message: "Codex resumed this turn.",
+      }),
+      {
+        type: "steer",
+        blockId: "steer:codex-retry",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-codex-retry",
+        messageId: "message-codex-retry-steer",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+      {
+        type: "text",
+        blockId: "answer-after-retry",
+        status: "completed",
+        timestamp: 2003,
+        text: "Answer after retry.",
+        providerNotice: null,
+      },
+    ];
+    const steered = {
+      ...userMessage("message-codex-retry-steer"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+    });
+    expect(result.current.map((message) => message.id)).toEqual([
+      "message-codex-retry-steer",
+      "assistant:turn-codex-steer-retry:part:1",
+    ]);
+    expect(
+      result.current.some((message) => message.id.endsWith("part:0")),
+    ).toBe(false);
+    expect(result.current[1]?.segments).toMatchObject([
+      { kind: "text", markdown: "Answer after retry." },
+    ]);
+  });
+
+  it("retains a hidden trailing retry boundary below a steer while the turn is still running", () => {
+    const content = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+    const assistant = codexAssistantMessage("turn-retry-boundary", 2000);
+    assistant.blocks = [
+      plainTextBlock("answer-before-steer", 2001, "Answer before steer."),
+      {
+        type: "steer",
+        blockId: "steer:retry-boundary",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-retry-boundary",
+        messageId: "message-retry-boundary",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+      codexRetryBlock({
+        blockId: "retry-ended-boundary",
+        timestamp: 2003,
+        code: RETRY_ENDED_ERROR_CODE,
+        message: "The Codex retry attempt ended.",
+      }),
+    ];
+    const steered = {
+      ...userMessage("message-retry-boundary"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-retry-boundary",
+        status: "running",
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        profileId: null,
+        userMessageId: null,
+        startedAt: 2000,
+        updatedAt: 2003,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      runStatus: "running",
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual([
+      "assistant:turn-retry-boundary:part:0",
+      "message-retry-boundary",
+      "assistant:turn-retry-boundary:part:1",
+    ]);
+    expect(result.current[2]).toMatchObject({
+      id: "assistant:turn-retry-boundary:part:1",
+      role: "assistant",
+      runState: "running",
+      segments: [],
+    });
+  });
+
+  it("keeps the completion footer below a steer on the hidden trailing retry slice", () => {
+    const content = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+    const assistant = {
+      ...codexAssistantMessage("turn-complete-boundary", 2000),
+      timestamp: 2004,
+    };
+    assistant.blocks = [
+      plainTextBlock(
+        "answer-before-complete-steer",
+        2001,
+        "Answer before steer.",
+      ),
+      {
+        type: "steer",
+        blockId: "steer:complete-boundary",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-complete-boundary",
+        messageId: "message-complete-boundary",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+      codexRetryBlock({
+        blockId: "retry-ended-complete-boundary",
+        timestamp: 2003,
+        code: RETRY_ENDED_ERROR_CODE,
+        message: "The Codex retry attempt ended.",
+      }),
+    ];
+    const steered = {
+      ...userMessage("message-complete-boundary"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+    const completedEvent: ChatEvent = {
+      eventId: "event:turn.completed:turn-complete-boundary",
+      type: "turn.completed",
+      timestamp: 2004,
+      clientActionId: null,
+      actor: null,
+      message: "Turn completed.",
+      turnId: "turn-complete-boundary",
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+      events: [completedEvent],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual([
+      "assistant:turn-complete-boundary:part:0",
+      "message-complete-boundary",
+      "assistant:turn-complete-boundary:part:1",
+    ]);
+    expect(result.current[2]).toMatchObject({
+      id: "assistant:turn-complete-boundary:part:1",
+      role: "assistant",
+      segments: [],
+      showCompletionFooter: true,
+      completedAt: 2004,
+    });
   });
 
   it("caches user-message renders by Message reference identity", () => {
@@ -2784,6 +3270,8 @@ describe("useRenderedMessages", () => {
           description: "Apply edit",
           input: null,
           requestedAt: 15_000,
+          reason: null,
+          reviewing: null,
           kind: "tool",
           planId: null,
           actions: [],

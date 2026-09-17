@@ -105,7 +105,24 @@ function encodeStashPortable(portable: DraftStashPortable): JsonObject {
     content: encodeJsonContent(portable.content),
     blobHashes: [...portable.blobHashes],
     createdAt: portable.createdAt,
+    annotations: encodeStashAnnotations(portable.annotations),
   };
+}
+
+/**
+ * Annotation records are already plain JSON by construction (the schema admits
+ * nothing else), so this is a guard rather than a conversion - the same shape
+ * `encodeJsonContent` uses, and for the same reason: a value that is not JSON
+ * must fail HERE, not silently produce an undecodable document.
+ */
+function encodeStashAnnotations(
+  annotations: DraftStashPortable["annotations"],
+): JsonValue {
+  const records = [...annotations];
+  if (!isJsonValue(records)) {
+    throw new Error("Draft stash annotations are not JSON");
+  }
+  return records;
 }
 
 function encodeWorkspace(workspace: DraftWorkspaceSnapshot): JsonObject {

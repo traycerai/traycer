@@ -13,7 +13,7 @@ import {
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   getImageBytes,
   imageHashKeys,
   putImage,
@@ -179,7 +179,7 @@ async function seedSourceImage(
 
 async function drainLandingStore(): Promise<void> {
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
 }
@@ -332,11 +332,14 @@ describe("importImagesIntoLanding", () => {
     expect(putSpy).not.toHaveBeenCalled();
   });
 
-  it("returns null when reserveLandingImageBudget rejects", async () => {
+  it("returns null when the residency admission rejects", async () => {
+    // RESIDENCY, not the ordinary path: these bytes are about to become
+    // resident under a hash the stash entry already roots while absent, and
+    // the ordinary path charges such a candidate nothing.
     const bytes = bytesOf([9, 9]);
     const stashHash = await seedSourceImage(bytes);
     const budget = await import("@/lib/composer/landing-image-budget");
-    vi.spyOn(budget, "reserveLandingImageBudget").mockReturnValue(null);
+    vi.spyOn(budget, "tryReserveLandingImageResidency").mockReturnValue(null);
     const putSpy = vi.spyOn(landingImageStore, "putImage");
 
     const result = await importImagesIntoLanding(

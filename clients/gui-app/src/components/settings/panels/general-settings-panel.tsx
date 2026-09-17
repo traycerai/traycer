@@ -1,13 +1,12 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
-import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
+import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -23,7 +22,6 @@ import type {
 } from "@/lib/windows/types";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import {
   GENERAL,
@@ -38,8 +36,8 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 }
 
 export function GeneralSettingsPanel() {
-  const navigate = useNavigate();
-  const restartOnboarding = useOnboardingStore((s) => s.restart);
+  const defaultPermission = useSettingsStore((s) => s.defaultPermission);
+  const setDefaultPermission = useSettingsStore((s) => s.setDefaultPermission);
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
   const steerOnModEnterEnabled = useSettingsStore(
@@ -69,6 +67,50 @@ export function GeneralSettingsPanel() {
           dataTestId={undefined}
           fill={false}
         >
+          <SettingsRow
+            row={GENERAL.definitions.defaultPermission}
+            control={
+              <PermissionsPicker
+                value={defaultPermission}
+                disabled={false}
+                onChange={(next) => {
+                  trackGeneralSetting("defaultPermission");
+                  setDefaultPermission(next);
+                }}
+                // No harness scope: the default is install-wide and every
+                // option stays enabled. A provider that does not honour the
+                // chosen mode narrows it in the composer, where a harness is
+                // actually selected.
+                supportedPermissionModes={null}
+                harnessLabel={null}
+                // Install-wide and harness-agnostic, so there is no catalog to
+                // union, no turn to be mid-way through, no one host whose judge
+                // this row could name, and no negotiated catalog line to read.
+                //
+                // `hostKnowsAutoMode={null}` is the THIRD state, and it is load
+                // bearing rather than a formality: `null` means no host is in
+                // scope, exactly as `supportedPermissionModes={null}` above
+                // means no harness is. `false` would be a different claim -
+                // "a machine was asked and cannot spell `auto`" - and this row
+                // has asked no machine anything. It once passed `false` with a
+                // comment calling the value inert, which was true while the
+                // flag only vetoed the upgrade sentence and stopped being true
+                // the moment it also gated the option: the row silently refused
+                // to let anyone choose Auto as their default.
+                //
+                // Nothing is lost by offering it here. A default is a
+                // preference, and the composer clamps it per host at the point
+                // a host actually exists - the same division of labour the
+                // `supportedPermissionModes` comment above describes for
+                // harnesses.
+                catalogSupportedModes={null}
+                hostKnowsAutoMode={null}
+                turnActive={false}
+                judgeBilling={null}
+                closeFocus="trigger"
+              />
+            }
+          />
           <VoiceSettingsSection />
           <SettingsRow
             row={GENERAL.definitions.quoteReply}
@@ -97,8 +139,6 @@ export function GeneralSettingsPanel() {
             }
           />
         </SettingsGroup>
-
-        <BrowserSettingsSection />
 
         {/* Carries its own "Running agents" group: one row is left in it after
           the two resource-visibility toggles moved to Layout, and that row
@@ -147,41 +187,6 @@ export function GeneralSettingsPanel() {
             />
           </SettingsGroup>
         ) : null}
-
-        {/* One row, and named for the SUBJECT rather than for itself: the
-            tour is a window-level replay of onboarding, so it belongs on the
-            app-wide page. Import and Data migration used to sit beside it and
-            do not - each moves one machine's local data, and neither could
-            name the machine from here. Both are now on that host's own
-            Overview, under the sidebar's host picker. */}
-        <SettingsGroup
-          group={GENERAL.definitions.onboarding}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <SettingsRow
-            row={GENERAL.definitions.productTour}
-            control={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                data-testid="settings-replay-onboarding"
-                onClick={() => {
-                  restartOnboarding();
-                  void navigate({
-                    to: "/onboarding",
-                    search: { replay: true },
-                  });
-                }}
-              >
-                Replay tour
-              </Button>
-            }
-          />
-        </SettingsGroup>
 
         <DangerZoneSection />
       </div>

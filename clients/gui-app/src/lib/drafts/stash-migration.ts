@@ -31,6 +31,7 @@ import { readComposerHostIdSnapshot } from "@/lib/composer/composer-host-snapsho
 import type { LandingImageBudgetReservation } from "@/lib/composer/landing-image-budget";
 import { landingDraftsReady } from "@/lib/composer/landing-image-gc";
 import { importImagesIntoLanding } from "@/lib/composer/landing-image-import";
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { isJsonContent, isRecord } from "@/lib/editor/prosemirror-json";
@@ -221,6 +222,11 @@ export function stashEntryIsConverted(stashId: string): boolean {
   return Object.hasOwn(readConvertedMap(), stashId);
 }
 
+/** The draft a previous conversion of `stashId` installed, or `null`. */
+function convertedDraftIdFor(stashId: string): string | null {
+  return readConvertedMap()[stashId] ?? null;
+}
+
 export interface StashConversionInput {
   readonly stashId: string;
   readonly content: JsonContent;
@@ -228,7 +234,35 @@ export interface StashConversionInput {
   /** `createdAt` for a local entry, the document's `lastTouchedAt` otherwise. */
   readonly lastTouchedAt: number;
   readonly readBlob: (hash: string) => Promise<ImageBlob | null>;
+  /**
+   * The caller's account fence, re-asked SYNCHRONOUSLY immediately before the
+   * install.
+   *
+   * A check the caller makes before calling this proves nothing: the image
+   * import below awaits blob reads and IndexedDB writes, and an entry with no
+   * images still yields through this async function. The landing draft store
+   * is keyed per WINDOW, not per account, and `installLandingDraft` takes no
+   * owner - so an install that lands after a sign-out files the outgoing
+   * account's private text in the incoming account's drafts list, and roots
+   * its images in that account's partition.
+   */
+  readonly stillCurrent: () => boolean;
 }
+
+/**
+ * What one conversion did.
+ *
+ * `abandoned` is deliberately distinct from `already-converted`: both install
+ * nothing, and the caller's response to them is opposite. An
+ * already-converted entry is DONE - its source can be retired and the database
+ * eventually dropped. An abandoned one was refused by the account fence, so
+ * its source must stay exactly where it is for a later session to convert
+ * under the right account, and no receipt may be written for it.
+ */
+export type StashConversionOutcome =
+  | { readonly status: "converted"; readonly draftId: string }
+  | { readonly status: "already-converted"; readonly draftId: string }
+  | { readonly status: "abandoned" };
 
 /**
  * Conversions running right now, keyed by stash id. The local IndexedDB pass
@@ -236,13 +270,13 @@ export interface StashConversionInput {
  * only written at the end, so both would pass the check at the top and
  * install their own draft. The second caller joins the first instead.
  */
-const conversionsInFlight = new Map<string, Promise<string | null>>();
+const conversionsInFlight = new Map<string, Promise<StashConversionOutcome>>();
 
 /**
  * Convert one stash entry into a closed, unadopted start-page draft and
- * record it in the converted map. Returns the new draft id, or `null` when
- * this stash id was converted before (here or in a peer window); two
- * concurrent calls for one id share a single conversion.
+ * record it in the converted map. Two concurrent calls for one id share a
+ * single conversion; see {@link StashConversionOutcome} for what the answer
+ * means.
  *
  * Images route through `importImagesIntoLanding`, which holds its budget
  * reservation across the writes AND this install, so the bytes are never
@@ -258,7 +292,7 @@ const conversionsInFlight = new Map<string, Promise<string | null>>();
  */
 export function convertStashEntry(
   input: StashConversionInput,
-): Promise<string | null> {
+): Promise<StashConversionOutcome> {
   const joined = conversionsInFlight.get(input.stashId);
   if (joined !== undefined) return joined;
   const running = runStashConversion(input);
@@ -270,8 +304,11 @@ export function convertStashEntry(
 
 async function runStashConversion(
   input: StashConversionInput,
-): Promise<string | null> {
-  if (stashEntryIsConverted(input.stashId)) return null;
+): Promise<StashConversionOutcome> {
+  const alreadyConverted = convertedDraftIdFor(input.stashId);
+  if (alreadyConverted !== null) {
+    return { status: "already-converted", draftId: alreadyConverted };
+  }
   let content = input.content;
   let reservation: LandingImageBudgetReservation | null = null;
   try {
@@ -296,7 +333,13 @@ async function runStashConversion(
   try {
     // Re-checked after the image reads: a peer window may have converted this
     // same id into the shared map while they were in flight.
-    if (stashEntryIsConverted(input.stashId)) return null;
+    const raced = convertedDraftIdFor(input.stashId);
+    if (raced !== null) return { status: "already-converted", draftId: raced };
+    // SYNCHRONOUS with the install below, with no await between them. Every
+    // await above this line - the blob reads, the `putImage` writes, and this
+    // function's own suspension for an entry with no images at all - is a
+    // window in which the account could have changed.
+    if (!input.stillCurrent()) return { status: "abandoned" };
     const draftId = mintDraftId();
     useLandingDraftStore.getState().installLandingDraft({
       id: draftId,
@@ -322,7 +365,7 @@ async function runStashConversion(
     // and the worst case is one duplicate on the next launch, never a loss.
     await flushActiveDesktopPerWindowProjection();
     rememberConverted(input.stashId, draftId);
-    return draftId;
+    return { status: "converted", draftId };
   } finally {
     // Always: an install or flush that threw must not pin the reservation
     // for the rest of the session.
@@ -366,14 +409,29 @@ export async function migrateLocalStash(): Promise<void> {
       // row at the top of the list on this first launch - and out of the
       // front of the adopted-mirror LRU, which evicts oldest first (C4).
       const migrationStart = Date.now();
+      // Captured ONCE, before the first conversion. The pass can run for
+      // seconds across many entries, and every one of them installs into a
+      // per-window store with no account of its own - so the fence has to name
+      // the account this migration BELONGS to, not whichever one happens to be
+      // current when a given entry finishes.
+      const migrationOwner = currentDraftBlobOwnerId();
+      const stillCurrent = (): boolean =>
+        currentDraftBlobOwnerId() === migrationOwner;
       for (const [rank, entry] of entries.entries()) {
-        await convertStashEntry({
+        const outcome = await convertStashEntry({
           stashId: entry.id,
           content: entry.content,
           blobHashes: entry.blobHashes,
           lastTouchedAt: migrationStart - rank,
           readBlob: (hash) => readStashBlob(db, hash),
+          stillCurrent,
         });
+        // Stop the whole pass, not just this entry. The account moved, so
+        // every remaining entry would be refused for the same reason - and
+        // the database has to survive for the next launch to convert them
+        // under the right account, which the `remaining` gate below ensures
+        // because no receipt was written for any of them.
+        if (outcome.status === "abandoned") return;
       }
       // Re-read rather than trust the loop: a peer window may have written
       // entries while this one ran, and its conversions may not be in the

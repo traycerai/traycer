@@ -24,6 +24,7 @@ import type {
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
+  BrowserSessionReference,
   ContentBlock,
   DiffSource,
   FileEditReason,
@@ -208,6 +209,8 @@ export interface ProviderNoticeSegment {
   // their details, and the resumed-turn marker for `fallback_wait_resumed` -
   // and none of that can be inferred from a tone and a title.
   noticeKind: ProviderNoticeKind;
+  /** Local display choice for a transient Codex retry; never persisted. */
+  presentation?: "retry";
   tone: ProviderNoticeTone;
   title: string;
   message: string | null;
@@ -381,6 +384,7 @@ export type MessageSegment =
       id: string;
       kind: "text";
       markdown: string;
+      browserSession?: BrowserSessionReference;
       isStreaming: boolean;
       assistantImageContext?: AssistantMarkdownImageContext;
     }
@@ -452,6 +456,19 @@ export type MessageSegment =
       sourceChatId: string;
       sourceChatTitle: string;
       sourceHostId: string;
+    }
+  | {
+      id: string;
+      kind: "auto-judge-unattended-denial";
+      /**
+       * Synthesized in `rendered-messages` from an `approval.denied` event
+       * whose auto-mode journal metadata says nobody was there to ask - the
+       * event itself is the record. Both fields are `null` when the journal
+       * recorded no rule or reason; the row exists on the attendance fact
+       * alone.
+       */
+      rule: string | null;
+      reason: string | null;
     }
   | {
       id: string;

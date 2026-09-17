@@ -18,6 +18,7 @@ import {
   resetStashMigrationForTests,
 } from "@/lib/drafts/stash-migration";
 import { setActiveDesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
@@ -197,6 +198,13 @@ function draftTexts(): string[] {
   });
 }
 
+function signedInAs(userId: string): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId, username: userId },
+  });
+}
+
 beforeEach(() => {
   installFreshIndexedDb();
   idbData.clear();
@@ -208,6 +216,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setActiveDesktopPerWindowProjectionBridge(null);
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
   vi.restoreAllMocks();
 });
 
@@ -273,6 +282,42 @@ describe("local stash migration", () => {
     expect(await databaseNames()).toContain(STASH_DB_NAME);
   });
 
+  it("stops the pass and keeps the database when the account changes mid-run (DRIVE RED)", async () => {
+    // The migration runs once per launch across every entry, and each install
+    // lands in a per-WINDOW store with no account of its own. A switch partway
+    // through would file the rest of the outgoing account's prompts in the
+    // incoming account's Drafts list - so the fence is captured once, at the
+    // start, and a refusal ends the pass rather than skipping one entry.
+    await seedTwoEntries();
+    signedInAs("user-migration");
+    const installed: string[] = [];
+    const realInstall = useLandingDraftStore.getState().installLandingDraft;
+    vi.spyOn(
+      useLandingDraftStore.getState(),
+      "installLandingDraft",
+    ).mockImplementation((input) => {
+      installed.push(input.id);
+      // The switch lands after the FIRST row is in, so the second entry meets
+      // a moved account.
+      signedInAs("somebody-else");
+      return realInstall(input);
+    });
+
+    await migrateLocalStash();
+
+    expect(installed).toHaveLength(1);
+    expect(draftTexts()).toEqual(["newer"]);
+    // The abandoned entry wrote no receipt, so the `remaining` gate keeps the
+    // database for the next launch to convert it under the right account.
+    expect(await databaseNames()).toContain(STASH_DB_NAME);
+    const converted: unknown = JSON.parse(
+      window.localStorage.getItem("traycer-gui-app:stash-migration") ?? "{}",
+    );
+    expect(Object.keys(converted as Record<string, string>)).toEqual([
+      "stash-newer",
+    ]);
+  });
+
   it("does not create the stash database when there is none", async () => {
     await migrateLocalStash();
 
@@ -311,6 +356,7 @@ describe("local stash migration", () => {
       blobHashes: [hash],
       lastTouchedAt: 500,
       readBlob: () => deferred,
+      stillCurrent: () => true,
     };
 
     // The local IndexedDB pass and a host apply of the same id, overlapping:
@@ -319,9 +365,12 @@ describe("local stash migration", () => {
     const first = convertStashEntry(args);
     const second = convertStashEntry(args);
     resolveBlob({ bytes, mimeType: "image/png" });
-    const [firstId, secondId] = await Promise.all([first, second]);
+    const [firstOutcome, secondOutcome] = await Promise.all([first, second]);
 
     expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
-    expect(secondId).toBe(firstId);
+    expect(firstOutcome.status).toBe("converted");
+    // The JOINER, not a second conversion: both calls share one promise, so
+    // the loser sees the winner's own outcome rather than `already-converted`.
+    expect(secondOutcome).toEqual(firstOutcome);
   });
 });

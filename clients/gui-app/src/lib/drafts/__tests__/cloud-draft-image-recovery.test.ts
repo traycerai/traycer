@@ -1,0 +1,1025 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  getImageBytes,
+  sessionImageBytes,
+} from "@/lib/composer/landing-image-store";
+import { reconcile } from "@/lib/composer/landing-image-gc";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  forgetCloudDraftPayloadUnsupportedHost,
+  recordCloudDraftImageSources,
+  readCloudDraftImageBytes,
+  recoverCloudDraftImages,
+  resetCloudDraftImageRecoveryForTests,
+} from "@/lib/drafts/cloud-draft-image-recovery";
+import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
+
+// Passthrough, with the SCHEDULER observable. A recovery write that outlives
+// its draft has to hand the reclaim to the root-aware sweep, and nothing else
+// this module returns reports whether it did. The tests that exercise the
+// sweep call `reconcile()` directly, so stubbing the scheduler changes nothing
+// for them.
+const imageGcMocks = vi.hoisted(() => ({
+  scheduleLandingImageReconcile: vi.fn(),
+}));
+
+vi.mock("@/lib/composer/landing-image-gc", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/composer/landing-image-gc")>();
+  return {
+    ...actual,
+    scheduleLandingImageReconcile: imageGcMocks.scheduleLandingImageReconcile,
+  };
+});
+
+// Passthrough by default; one test below wraps `putImageBytesAtHash` so an
+// account switch can land INSIDE the write, which is the only way to reach the
+// post-write identity fence. Same shape the pending-ingest suite uses.
+const landingImageStoreMocks = vi.hoisted(() => ({
+  putImageBytesAtHash:
+    vi.fn<(hash: string, bytes: ImageBytes) => Promise<boolean>>(),
+  actualPutImageBytesAtHash: null as
+    | ((hash: string, bytes: ImageBytes) => Promise<boolean>)
+    | null,
+}));
+
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
+  landingImageStoreMocks.actualPutImageBytesAtHash = actual.putImageBytesAtHash;
+  landingImageStoreMocks.putImageBytesAtHash.mockImplementation(
+    actual.putImageBytesAtHash,
+  );
+  return {
+    ...actual,
+    putImageBytesAtHash: landingImageStoreMocks.putImageBytesAtHash,
+  };
+});
+
+/**
+ * The account every fixture identity below belongs to. The signed-in fixture
+ * and the recorded sources have to name the SAME owner: a cloud source carries
+ * the identity it was minted under and is not spendable under another.
+ */
+const OWNER = "user-1";
+
+const IDENTITY: CloudChatIdentity = {
+  taskId: "scp_1",
+  chatId: "draft-1",
+  ownerUserId: OWNER,
+};
+
+type FakeRequest = HostRequester<HostRpcRegistry>["request"];
+
+/**
+ * What a fake answers, before it is narrowed to the registry's per-method
+ * response type.
+ *
+ * `HostRequester["request"]` is generic over the method, so a handler written
+ * to answer ONE method cannot satisfy it directly - the assertion has to happen
+ * once, at the boundary where the fake becomes a client. Same shape the sibling
+ * draft-coordinator tests use.
+ */
+type FakeHandler = (method: string, params: unknown) => unknown;
+
+interface RecordedCall {
+  readonly method: string;
+  readonly params: unknown;
+}
+
+/** A `DraftBlobClient` whose `request` calls are recorded for assertions. */
+function recordingClient(handle: FakeHandler): {
+  readonly client: DraftBlobClient;
+  readonly calls: RecordedCall[];
+} {
+  const calls: RecordedCall[] = [];
+  const request = ((method: string, params: unknown) => {
+    calls.push({ method, params });
+    return handle(method, params);
+  }) as FakeRequest;
+  return { client: { request }, calls };
+}
+
+/** A client that answers every `epic.readCloudChatPayload` the same way. */
+function okClient(
+  bytesBase64: string,
+  byteLength: number,
+): {
+  readonly client: DraftBlobClient;
+  readonly calls: RecordedCall[];
+} {
+  return recordingClient((_method, _params) =>
+    Promise.resolve({
+      outcome: { status: "ok" as const, bytesBase64, byteLength },
+    }),
+  );
+}
+
+async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function toBase64(bytes: Uint8Array<ArrayBuffer>): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+// `landing-image-store` keeps an in-memory session cache keyed by hash that
+// `installFreshIndexedDb()` does NOT clear between tests (it only replaces
+// the IndexedDB backend) - so any two tests using the same byte content would
+// silently share a cache hit. Every call below mints content that has never
+// been used before, in this file or any other, so no test's assertion can be
+// satisfied by a stale write.
+let uniqueByteSeed = 0;
+
+function uniqueBytes(length: number): Uint8Array<ArrayBuffer> {
+  uniqueByteSeed += 1;
+  const seed = uniqueByteSeed;
+  return new Uint8Array(
+    Array.from({ length }, (_unused, index) => (seed * 31 + index * 7) % 256),
+  );
+}
+
+function bytesA(): Uint8Array<ArrayBuffer> {
+  return uniqueBytes(5);
+}
+
+function bytesB(): Uint8Array<ArrayBuffer> {
+  return uniqueBytes(4);
+}
+
+beforeEach(() => {
+  installFreshIndexedDb();
+  useAuthStore.setState({
+    status: "signed-in",
+    // The store guarantees non-null `contextMetadata` in every signed-in
+    // state, and the owner id in it is what scopes a cloud source: a record
+    // minted under one account is not spendable under another. A bare
+    // `{ status: "signed-in" }` is a state production cannot produce, and it
+    // made every source here look like another account's.
+    contextMetadata: { userId: OWNER, username: OWNER },
+  });
+});
+
+afterEach(() => {
+  resetCloudDraftImageRecoveryForTests();
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
+});
+
+describe("cloud-draft-image-recovery", () => {
+  it("fetches, verifies and stores bytes for a recorded hash", async () => {
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const { client, calls } = okClient(toBase64(bytes), bytes.byteLength);
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+    const result = await readCloudDraftImageBytes(hash);
+
+    expect(result).toEqual(bytes);
+    expect(await getImageBytes(hash)).toEqual(bytes);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("epic.readCloudChatPayload");
+    expect(calls[0]?.params).toEqual({
+      ...IDENTITY,
+      ref: { kind: "image-attachment", sha256: hash },
+    });
+  });
+
+  it("hands a successful recovery write to the root-aware sweep (DRIVE RED)", async () => {
+    // The payload request and the IndexedDB write are both non-cancellable, so
+    // this write can land after its draft was deleted and after that removal's
+    // reconciliation has already run. It seeds bytes AND a session entry -
+    // itself a GC root - with nothing scheduled to look again, so repeated
+    // late transfers accumulate outside the live-root budget rather than
+    // against it. The sweep re-reads the live roots, so a write whose row IS
+    // still live costs nothing: it finds the hash rooted and leaves it.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+    imageGcMocks.scheduleLandingImageReconcile.mockClear();
+
+    expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+    expect(imageGcMocks.scheduleLandingImageReconcile).toHaveBeenCalled();
+  });
+
+  it("refuses a digest mismatch: stores nothing and answers null, with a matching-bytes positive control", async () => {
+    const requested = bytesA();
+    const wrongHash = await sha256HexOf(requested);
+    const wrongBytes = bytesB(); // does NOT hash to `wrongHash`
+    const { client: mismatchClient } = okClient(
+      toBase64(wrongBytes),
+      wrongBytes.byteLength,
+    );
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: mismatchClient,
+      hashes: [wrongHash],
+    });
+
+    const mismatchResult = await readCloudDraftImageBytes(wrongHash);
+    expect(mismatchResult).toBeNull();
+    expect(await getImageBytes(wrongHash)).toBeUndefined();
+
+    // Positive control: the identical setup, but the served bytes actually
+    // hash to the requested digest, stores and returns them. Proves the test
+    // above would go red if verification were removed.
+    const goodBytes = bytesB();
+    const goodHash = await sha256HexOf(goodBytes);
+    const { client: matchClient } = okClient(
+      toBase64(goodBytes),
+      goodBytes.byteLength,
+    );
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: matchClient,
+      hashes: [goodHash],
+    });
+    const goodResult = await readCloudDraftImageBytes(goodHash);
+    expect(goodResult).toEqual(goodBytes);
+    expect(await getImageBytes(goodHash)).toEqual(goodBytes);
+  });
+
+  it("leaves a hash-only node when the cloud blob is unavailable, per-image not per-pass", async () => {
+    const missingBytes = bytesA();
+    const missingHash = await sha256HexOf(missingBytes);
+    const availableBytes = bytesB();
+    const availableHash = await sha256HexOf(availableBytes);
+
+    const { client } = recordingClient((_method, params) => {
+      const { ref } = params as { ref: { sha256: string } };
+      if (ref.sha256 === missingHash) {
+        return Promise.resolve({ outcome: { status: "unavailable" as const } });
+      }
+      return Promise.resolve({
+        outcome: {
+          status: "ok" as const,
+          bytesBase64: toBase64(availableBytes),
+          byteLength: availableBytes.byteLength,
+        },
+      });
+    });
+
+    await recoverCloudDraftImages({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [missingHash, availableHash],
+    });
+
+    expect(await getImageBytes(missingHash)).toBeUndefined();
+    // Sibling hash in the same eager pass: proves the pass ran to completion
+    // rather than dying on the first miss.
+    expect(await getImageBytes(availableHash)).toEqual(availableBytes);
+  });
+
+  it("never throws: a transport rejection answers null through both the lazy leg and the eager pass", async () => {
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const { client } = recordingClient((_method, _params) =>
+      Promise.reject(new Error("transport died")),
+    );
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+    await expect(readCloudDraftImageBytes(hash)).resolves.toBeNull();
+
+    resetCloudDraftImageRecoveryForTests();
+    await expect(
+      recoverCloudDraftImages({
+        identity: IDENTITY,
+        hostId: "host-a",
+        client,
+        hashes: [hash],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("issues no request for an unrecorded hash, paired with a recorded hash that does", async () => {
+    const unrecordedHash = "f".repeat(64);
+    const bytes = bytesA();
+    const recordedHash = await sha256HexOf(bytes);
+    const { client, calls } = okClient(toBase64(bytes), bytes.byteLength);
+
+    const unrecordedResult = await readCloudDraftImageBytes(unrecordedHash);
+    expect(unrecordedResult).toBeNull();
+    expect(calls).toHaveLength(0);
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [recordedHash],
+    });
+    const recordedResult = await readCloudDraftImageBytes(recordedHash);
+    expect(recordedResult).toEqual(bytes);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("memoizes E_HOST_UNSUPPORTED per host, with a positive control on a different host", async () => {
+    const bytesOne = bytesA();
+    const hashOne = await sha256HexOf(bytesOne);
+    const bytesTwo = bytesB();
+    const hashTwo = await sha256HexOf(bytesTwo);
+
+    const { client: unsupportedClient, calls: unsupportedCalls } =
+      recordingClient((_method, _params) =>
+        Promise.reject(
+          new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            message: "old host",
+            requestId: "r1",
+            method: "epic.readCloudChatPayload",
+            fatalDetails: null,
+          }),
+        ),
+      );
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: unsupportedClient,
+      hashes: [hashOne],
+    });
+    const first = await readCloudDraftImageBytes(hashOne);
+    expect(first).toBeNull();
+    expect(unsupportedCalls).toHaveLength(1);
+
+    // A second hash recorded against the SAME host: no second request.
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: unsupportedClient,
+      hashes: [hashTwo],
+    });
+    const second = await readCloudDraftImageBytes(hashTwo);
+    expect(second).toBeNull();
+    expect(unsupportedCalls).toHaveLength(1);
+
+    // Positive control: a hash recorded against a DIFFERENT host still issues
+    // its request, proving the memo is per-host, not global.
+    const { client: otherHostClient, calls: otherHostCalls } = okClient(
+      toBase64(bytesTwo),
+      bytesTwo.byteLength,
+    );
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-c",
+      client: otherHostClient,
+      hashes: [hashTwo],
+    });
+    const third = await readCloudDraftImageBytes(hashTwo);
+    expect(third).toEqual(bytesTwo);
+    expect(otherHostCalls).toHaveLength(1);
+  });
+
+  it("single-flights two concurrent reads of the same hash into one request", async () => {
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    let resolveRequest: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const { client, calls } = recordingClient((_method, _params) =>
+      gate.then(() => ({
+        outcome: {
+          status: "ok" as const,
+          bytesBase64: toBase64(bytes),
+          byteLength: bytes.byteLength,
+        },
+      })),
+    );
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    const first = readCloudDraftImageBytes(hash);
+    const second = readCloudDraftImageBytes(hash);
+    expect(calls).toHaveLength(1);
+    resolveRequest?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(calls).toHaveLength(1);
+    expect(firstResult).toEqual(bytes);
+    expect(secondResult).toEqual(bytes);
+  });
+
+  it("gates dispatch on the auth verdict re-read at dispatch time", async () => {
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const { client, calls } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    useAuthStore.setState({ status: "signed-out" });
+    const signedOutResult = await readCloudDraftImageBytes(hash);
+    expect(signedOutResult).toBeNull();
+    expect(calls).toHaveLength(0);
+
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: OWNER, username: OWNER },
+    });
+    const signedInResult = await readCloudDraftImageBytes(hash);
+    expect(signedInResult).toEqual(bytes);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("skips a hash the local partition already holds in the eager pass", async () => {
+    const localBytes = bytesA();
+    const localHash = await sha256HexOf(localBytes);
+    const remoteBytes = bytesB();
+    const remoteHash = await sha256HexOf(remoteBytes);
+
+    // Pre-seed the partition for `localHash` via a first, independent
+    // recovery (exercises real production code, not a store bypass).
+    const { client: seedClient } = okClient(
+      toBase64(localBytes),
+      localBytes.byteLength,
+    );
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-seed",
+      client: seedClient,
+      hashes: [localHash],
+    });
+    expect(await readCloudDraftImageBytes(localHash)).toEqual(localBytes);
+
+    const { client, calls } = recordingClient((_method, params) => {
+      const { ref } = params as { ref: { sha256: string } };
+      return Promise.resolve({
+        outcome: {
+          status: "ok" as const,
+          bytesBase64: toBase64(
+            ref.sha256 === remoteHash ? remoteBytes : localBytes,
+          ),
+          byteLength:
+            ref.sha256 === remoteHash
+              ? remoteBytes.byteLength
+              : localBytes.byteLength,
+        },
+      });
+    });
+
+    await recoverCloudDraftImages({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [localHash, remoteHash],
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params).toMatchObject({
+      ref: { sha256: remoteHash },
+    });
+    expect(await getImageBytes(remoteHash)).toEqual(remoteBytes);
+  });
+
+  it("bounds eager-pass concurrency to 4 in-flight requests while still fetching every hash", async () => {
+    const hashes: string[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      hashes.push(await sha256HexOf(new Uint8Array([index, index + 1])));
+    }
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const requested: string[] = [];
+    const { client } = recordingClient((_method, params) => {
+      const { ref } = params as { ref: { sha256: string } };
+      requested.push(ref.sha256);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const index = hashes.indexOf(ref.sha256);
+      const bytes = new Uint8Array([index, index + 1]);
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          inFlight -= 1;
+          resolve({
+            outcome: {
+              status: "ok" as const,
+              bytesBase64: toBase64(bytes),
+              byteLength: bytes.byteLength,
+            },
+          });
+        }, 5);
+      });
+    });
+
+    await recoverCloudDraftImages({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes,
+    });
+
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+    expect(requested.sort()).toEqual([...hashes].sort());
+  });
+  it("keeps an older draft's address when a newer draft names the same digest without a usable blob (DRIVE RED)", async () => {
+    // A cloud read is addressed by a DRAFT, not by a digest. Two drafts can
+    // name one image and only one of them have a retrievable blob - a head may
+    // reference an image whose publication was skipped, or whose blob was
+    // swept since. Replacing the address outright made the LATER draft the
+    // only one ever asked, so the first draft's perfectly good blob became
+    // permanently unreachable.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    const good = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+    const swept = recordingClient((_method, _params) => ({
+      outcome: { status: "unavailable" as const },
+    }));
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: good.client,
+      hashes: [hash],
+    });
+    // A LATER draft names the same digest; its own blob is gone.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-2" },
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    expect(result).toEqual(bytes);
+    expect(await getImageBytes(hash)).toEqual(bytes);
+    // Newest first, so the swept address is tried and missed before the older
+    // one answers - the order is the freshness rule, the fallback is the fix.
+    expect(swept.calls).toHaveLength(1);
+    expect(good.calls).toHaveLength(1);
+  });
+
+  it("re-recording the same draft does not spend a candidate slot", async () => {
+    // A re-ingest of one draft carries a fresh requester for the same address.
+    // Without the identity-keyed dedupe those duplicates would push the only
+    // other candidate out of a three-deep list.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    const good = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+    const sweptClient = (): DraftBlobClient =>
+      recordingClient(() => ({ outcome: { status: "unavailable" as const } }))
+        .client;
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: good.client,
+      hashes: [hash],
+    });
+    for (let index = 0; index < 5; index += 1) {
+      recordCloudDraftImageSources({
+        identity: { ...IDENTITY, chatId: "draft-noisy" },
+        hostId: "host-a",
+        client: sweptClient(),
+        hashes: [hash],
+      });
+    }
+
+    expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+  });
+  it("a payload refusal from a retired capability epoch does not re-mark an upgraded host (DRIVE RED)", async () => {
+    // `epic.readCloudChatPayload` is not cancellable, so a request started
+    // before a re-bootstrap can reject with E_HOST_UNSUPPORTED after the reset
+    // has already cleared the verdict. Re-recording it there undoes the
+    // re-probe with the very answer the re-probe existed to discard, and every
+    // candidate on that host is skipped again until the next reconnect.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseRefusal: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseRefusal = resolve;
+    });
+    const refusing = recordingClient(async (_method, _params) => {
+      await gate;
+      throw new HostRpcError({
+        code: "E_HOST_UNSUPPORTED",
+        message: "old host",
+        requestId: "r",
+        method: "epic.readCloudChatPayload",
+        fatalDetails: null,
+      });
+    });
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-upgrading",
+      client: refusing.client,
+      hashes: [hash],
+    });
+    const refusedRead = readCloudDraftImageBytes(hash);
+    // The mirror re-bootstraps while that refusal is still on the wire.
+    forgetCloudDraftPayloadUnsupportedHost("host-upgrading");
+    releaseRefusal();
+    expect(await refusedRead).toBeNull();
+
+    // The upgraded host is asked again rather than short-circuited.
+    const serving = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-after-upgrade" },
+      hostId: "host-upgrading",
+      client: serving.client,
+      hashes: [hash],
+    });
+
+    expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+    expect(serving.calls).toHaveLength(1);
+  });
+  it("tries a source recorded WHILE a transfer is already running (DRIVE RED)", async () => {
+    // A transfer is single-flight per hash, so a later draft recording a usable
+    // address does not get its own transfer - it joins this one. Walking a
+    // snapshot of the candidate list meant the joiner inherited a `null` for an
+    // address that was never tried.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseSwept: () => void = () => undefined;
+    const sweptGate = new Promise<void>((resolve) => {
+      releaseSwept = resolve;
+    });
+    const swept = recordingClient(async (_method, _params) => {
+      await sweptGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const good = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    // A second draft names the same digest while that request is in flight.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-recorded-late" },
+      hostId: "host-a",
+      client: good.client,
+      hashes: [hash],
+    });
+    releaseSwept();
+
+    expect(await reading).toEqual(bytes);
+    expect(good.calls).toHaveLength(1);
+  });
+  it("refuses a late source from an account this window no longer serves (DRIVE RED)", async () => {
+    // The candidate list is shared per digest and capped at three. Ingests that
+    // were in flight when the account changed apply no rows - correctly - but
+    // their recovery publication still ran, and three of them filled the list
+    // and evicted the address of the account actually being served. That
+    // account then read `null` without issuing a single request, for a digest
+    // whose bytes were one RPC away.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-other", username: "other" },
+    });
+    const theirs = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+    recordCloudDraftImageSources({
+      identity: {
+        taskId: "scp_other",
+        chatId: "draft-other",
+        ownerUserId: "user-other",
+      },
+      hostId: "host-b",
+      client: theirs.client,
+      hashes: [hash],
+    });
+
+    // Three late ingests belonging to the PREVIOUS account, enough to fill the
+    // list on their own.
+    const stale = recordingClient((_method, _params) => ({
+      outcome: { status: "unavailable" as const },
+    }));
+    for (const chatId of ["stale-1", "stale-2", "stale-3"]) {
+      recordCloudDraftImageSources({
+        identity: { ...IDENTITY, chatId },
+        hostId: "host-a",
+        client: stale.client,
+        hashes: [hash],
+      });
+    }
+
+    expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
+    expect(theirs.calls).toHaveLength(1);
+    expect(stale.calls).toHaveLength(0);
+  });
+
+  it("stops a walk whose ACCOUNT moved, even when the next candidate belongs to the NEW one (DRIVE RED)", async () => {
+    // The sibling above is why the candidate list is re-read per iteration, and
+    // re-reading it is what made this reachable. Content addressing means two
+    // accounts can legitimately record a source for the same digest, so the
+    // candidate that appears mid-walk can be one the NEW account owns - it
+    // matches the live owner, and every per-attempt check passes. The bytes
+    // then go back to the caller that asked under the OLD account, which is a
+    // cross-account answer nothing downstream can see. The identity belongs to
+    // the WALK, so it is captured once and carried.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseSwept: () => void = () => undefined;
+    const sweptGate = new Promise<void>((resolve) => {
+      releaseSwept = resolve;
+    });
+    const swept = recordingClient(async (_method, _params) => {
+      await sweptGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const theirs = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-other", username: "other" },
+    });
+    recordCloudDraftImageSources({
+      identity: {
+        taskId: "scp_other",
+        chatId: "draft-other",
+        ownerUserId: "user-other",
+      },
+      hostId: "host-a",
+      client: theirs.client,
+      hashes: [hash],
+    });
+    releaseSwept();
+
+    expect(await reading).toBeNull();
+    // Not merely unanswered - unasked. A walk that has outlived its account
+    // should stop spending requests, not spend them and discard the result.
+    expect(theirs.calls).toHaveLength(0);
+    expect(sessionImageBytes(hash)).toBeNull();
+    expect(await getImageBytes(hash)).toBeUndefined();
+  });
+  it("retries a source whose REQUESTER was replaced, same identity (DRIVE RED)", async () => {
+    // `sameCloudDraftImageSource` deliberately ignores `client`, so a re-ingest
+    // of the same draft REPLACES its record with one carrying a fresh
+    // requester - and the replacement is usually the point, because the old
+    // requester's host connection is what went away. Keying the tried-set by
+    // ADDRESS skipped it as already-attempted while the requester that failed
+    // was the only one ever asked; keying by the record object dispatches it.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseStale: () => void = () => undefined;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const stale = recordingClient(async (_method, _params) => {
+      await staleGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const fresh = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: stale.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    // The SAME draft is re-ingested on a remounted mirror: identical
+    // `CloudChatIdentity`, brand new requester.
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client: fresh.client,
+      hashes: [hash],
+    });
+    releaseStale();
+
+    expect(await reading).toEqual(bytes);
+    expect(fresh.calls).toHaveLength(1);
+  });
+  it("re-recording an UNCHANGED source does not make an in-flight walk retry it (DRIVE RED)", async () => {
+    // The record object is the attempt identity, so minting a fresh one for an
+    // address that has not changed makes a running walk treat it as untried and
+    // repeat the request it is already waiting on - ahead of the older address
+    // that can actually answer, and against the attempt cap. Two ingest
+    // instances on one host share the coordinator's requester, so this is the
+    // ordinary case.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+
+    let releaseSwept: () => void = () => undefined;
+    const sweptGate = new Promise<void>((resolve) => {
+      releaseSwept = resolve;
+    });
+    const swept = recordingClient(async (_method, _params) => {
+      await sweptGate;
+      return { outcome: { status: "unavailable" as const } };
+    });
+    const good = recordingClient((_method, _params) => ({
+      outcome: {
+        status: "ok" as const,
+        bytesBase64: toBase64(bytes),
+        byteLength: bytes.byteLength,
+      },
+    }));
+
+    // The GOOD address first, then the one that will miss - so the miss is the
+    // head and the good one is the fallback behind it.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-good" },
+      hostId: "host-a",
+      client: good.client,
+      hashes: [hash],
+    });
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-swept" },
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    const reading = readCloudDraftImageBytes(hash);
+
+    // A sibling ingest re-records the SAME head with the SAME requester while
+    // the request is in flight. Nothing about the address changed.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-swept" },
+      hostId: "host-a",
+      client: swept.client,
+      hashes: [hash],
+    });
+    releaseSwept();
+
+    expect(await reading).toEqual(bytes);
+    // Asked ONCE. A re-minted record would have it dispatched a second time
+    // before the good address was reached.
+    expect(swept.calls).toHaveLength(1);
+    expect(good.calls).toHaveLength(1);
+  });
+  it("an identity change DURING the write retires the bytes (DRIVE RED)", async () => {
+    // `putImageBytesAtHash` is itself async - a SHA-256 digest, then IndexedDB -
+    // and it seeds the window-global session cache on the way. A check before
+    // it is not the commit point, so a switch landing inside those awaits put
+    // account A's bytes into the partition account B is now using, and rooted
+    // them there through the session entry.
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: OWNER, username: OWNER },
+    });
+
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    const passthrough = landingImageStoreMocks.actualPutImageBytesAtHash;
+    if (passthrough === null) throw new Error("no passthrough captured");
+    landingImageStoreMocks.putImageBytesAtHash.mockImplementationOnce(
+      async (writtenHash, writtenBytes) => {
+        const stored = await passthrough(writtenHash, writtenBytes);
+        // The switch lands after the bytes are durable and before the caller
+        // is answered - the window the pre-write check cannot see.
+        useAuthStore.setState(useAuthStore.getInitialState(), true);
+        return stored;
+      },
+    );
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    // Nothing is handed back, and the SESSION root - the synchronous half of
+    // the retirement - is gone immediately.
+    expect(result).toBeNull();
+    expect(sessionImageBytes(hash)).toBeNull();
+    // The durable reclaim belongs to the root-aware reconcile, deliberately:
+    // it re-reads the live roots when it runs, so an account that acquired the
+    // same digest in the meantime keeps bytes it now names. Running it here
+    // proves the retirement actually reclaims rather than merely scheduling.
+    await reconcile();
+    expect(await getImageBytes(hash)).toBeUndefined();
+  });
+  it("an account SWITCH during the write retires them too - the other half of the fence", async () => {
+    // The sign-out case above exercises the authorization half. This one
+    // exercises the owner-id half: still signed in, different person. Both
+    // halves are needed and neither implies the other.
+    const bytes = bytesB();
+    const hash = await sha256HexOf(bytes);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: OWNER, username: OWNER },
+    });
+
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    const passthrough = landingImageStoreMocks.actualPutImageBytesAtHash;
+    if (passthrough === null) throw new Error("no passthrough captured");
+    landingImageStoreMocks.putImageBytesAtHash.mockImplementationOnce(
+      async (writtenHash, writtenBytes) => {
+        const stored = await passthrough(writtenHash, writtenBytes);
+        useAuthStore.setState({
+          status: "signed-in",
+          contextMetadata: { userId: "user-other", username: "other" },
+        });
+        return stored;
+      },
+    );
+
+    expect(await readCloudDraftImageBytes(hash)).toBeNull();
+    expect(sessionImageBytes(hash)).toBeNull();
+    await reconcile();
+    expect(await getImageBytes(hash)).toBeUndefined();
+  });
+});

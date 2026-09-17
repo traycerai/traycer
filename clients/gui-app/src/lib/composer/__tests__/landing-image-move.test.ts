@@ -9,7 +9,7 @@ import {
   stageDraftImageHandoff,
 } from "@/lib/composer/landing-image-move";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   getImageBytes,
   putImage,
   releaseSession,
@@ -183,7 +183,7 @@ describe("landing-image-move", () => {
       // partition that never had them; here the local copy is removed).
       await stageDraftImageHandoff(draftId, [hash]);
       releaseSession(hash);
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       expect(await getImageBytes(hash)).toBeUndefined();
 
       // Must RESOLVE - a regression back to a held handoff connection makes

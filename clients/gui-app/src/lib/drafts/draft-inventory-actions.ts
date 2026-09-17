@@ -5,7 +5,10 @@ import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { putDraftBlobsForWrite } from "@/lib/drafts/draft-blob-transport";
+import {
+  currentDraftBlobOwnerId,
+  putDraftBlobsForWrite,
+} from "@/lib/drafts/draft-blob-transport";
 import { isDraftsCapabilityMissing } from "@/lib/drafts/draft-capability";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import {
@@ -358,7 +361,12 @@ async function publishRestoredDraft(
   apply: (document: DraftDocument) => void,
 ): Promise<void> {
   try {
-    await putDraftBlobsForWrite(hostId, client, write);
+    await putDraftBlobsForWrite(
+      hostId,
+      client,
+      write,
+      currentDraftBlobOwnerId(),
+    );
     const response = await client.request("drafts.upsert", { draft: write });
     apply(response.draft);
   } catch (error: unknown) {

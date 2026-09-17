@@ -149,7 +149,7 @@ function ImageAttachmentThumb({
       <img
         src={image.src}
         alt={alt}
-        className="size-full object-cover transition-transform group-hover:scale-[1.02]"
+        className="size-full object-cover transition-transform group-hover:scale-102"
         draggable={false}
       />
     );

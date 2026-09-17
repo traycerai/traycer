@@ -136,6 +136,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
   "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 4,
+  // The guided tour's card answers arrows, Enter and Escape by name; none is
+  // a registered chord.
+  "gui-app/src/components/onboarding/onboarding-coachmark.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-page.tsx": 4,
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,
   "gui-app/src/components/remote-folder-picker-dialog.tsx": 4,

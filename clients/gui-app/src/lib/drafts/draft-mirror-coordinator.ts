@@ -4,10 +4,18 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import {
+  holdPendingIngestImageHash,
+  mintPendingIngestHolderId,
+  releasePendingIngestImageHashes,
+} from "@/lib/composer/pending-ingest-image-roots";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { landingDraftsReady } from "@/lib/composer/landing-image-gc";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
+import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
+  currentDraftBlobOwnerId,
   forgetBlobUnsupportedHost,
   putDraftBlobs,
   putDraftBlobsForWrite,
@@ -19,6 +27,12 @@ import {
   blobHashesOfDocument,
 } from "./draft-write-codec";
 import { draftKindIsHostBound } from "./draft-portability";
+import {
+  forgetCloudDraftPayloadUnsupportedHost,
+  rebindCloudDraftImageClientForHost,
+  recoverCloudDraftImages,
+  resetCloudDraftImageRecoveryForTests,
+} from "./cloud-draft-image-recovery";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
@@ -84,7 +98,10 @@ import {
   requiredChatTarget,
 } from "./draft-write-codec";
 import type { ImageBlob } from "@/lib/attachments/image-bytes";
-import { convertStashEntry } from "./stash-migration";
+import {
+  convertStashEntry,
+  type StashConversionOutcome,
+} from "./stash-migration";
 import {
   setDraftLocalDeleteListener,
   setDraftLocalEditListener,
@@ -229,35 +246,57 @@ export function draftsCloudScopeId(hostId: string): string | null {
  * The blobs are already in this window's landing store (`applyHostDocument`
  * read them through `readDraftBlobsIntoLocalStore` before calling here), so
  * `readBlob` resolves straight from that map.
+ *
+ * `applyOwner` is the account the apply belongs to, captured before its first
+ * await. Re-asked here because the conversion installs a landing draft - this
+ * account's private text, and a set of hashes this account's partition will
+ * root - and every await upstream is a window in which a sign-out or a user
+ * switch could have moved the answer.
  */
 async function convertStashDocument(
   document: DraftDocument,
   images: ReadonlyMap<string, ImageBlob>,
-): Promise<void> {
-  if (document.kind !== "stash-entry") return;
+  applyOwner: string | null,
+): Promise<boolean> {
+  if (document.kind !== "stash-entry") return false;
+  if (currentDraftBlobOwnerId() !== applyOwner) return false;
   // Not while the landing store may still be replaced wholesale: on desktop
   // the per-window projection is authoritative when it lands, so a row
   // installed before it would be dropped while the converted map recorded it
   // as done. The next session lists this row again.
-  if (!landingDraftsReady()) return;
+  if (!landingDraftsReady()) return false;
+  let outcome: StashConversionOutcome;
   try {
-    const draftId = await convertStashEntry({
+    outcome = await convertStashEntry({
       stashId: document.draftId,
       content: document.portable.content,
       blobHashes: document.portable.blobHashes,
       lastTouchedAt: document.portable.createdAt,
       readBlob: (hash) => Promise.resolve(images.get(hash) ?? null),
+      // Threaded, not asked once here. The check above is made before the
+      // conversion's own awaits - the image import and, for an entry with no
+      // images, the async call itself - so on its own it fences nothing that
+      // happens after them.
+      stillCurrent: () => currentDraftBlobOwnerId() === applyOwner,
     });
-    // A row converted in an earlier session still has to be retired, so the
-    // retire is not gated on this conversion having happened now.
-    if (draftId !== null) reserveCloudDraftIngestFence(draftId);
   } catch (error: unknown) {
     appLogger.warn("[draft-mirror] stash conversion failed", {
       error: describeLogError(error),
     });
-    return;
+    return false;
+  }
+  // Nothing was installed and no receipt was written, so the source row is the
+  // only remaining copy: retiring it here would destroy a prompt that no
+  // account now holds. It stays listed for a later session to convert.
+  if (outcome.status === "abandoned") return false;
+  // A row converted in an EARLIER session still has to be retired, so the
+  // retire below is not gated on this call having done the conversion - but
+  // the fence is this session's, and an earlier session reserved its own.
+  if (outcome.status === "converted") {
+    reserveCloudDraftIngestFence(outcome.draftId);
   }
   await retireStashSourceRow(document);
+  return true;
 }
 
 /**
@@ -383,8 +422,12 @@ const sink: DraftMirrorSink = {
     settleLandingDeleteOutcome(draftId, hostId, outcome);
     useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
   },
-  applyUpsert(document) {
-    return applyHostDocument(document);
+  async applyUpsert(document) {
+    // The sink contract is `void`: a stream frame has nobody to report an
+    // abandonment to, and `rememberIncomingSynced` already re-derives what it
+    // needs from `held`. The boolean exists for the CLOUD ingest caller, which
+    // writes bytes on the strength of the apply.
+    await applyHostDocument(document, null);
   },
   applyDelete(draftId) {
     rememberInheritableLandingTab(draftId);
@@ -401,16 +444,35 @@ const sink: DraftMirrorSink = {
   collectDirtyWrites(hostId) {
     return Promise.resolve(collectAllDirtyWrites(hostId));
   },
-  rememberSynced(draftId, hostRevision, collectedGeneration) {
-    landingDraftRememberSynced(draftId, hostRevision, collectedGeneration);
-    composerDraftRememberSynced(draftId, hostRevision, collectedGeneration);
+  rememberSynced(draftId, hostRevision, collectedGeneration, ownerHostId) {
+    // Only the stores that KEY a frontier on the owner are told who owns the
+    // row. Interview keeps no owner and no frontier; new-chat keeps a
+    // frontier but identifies its line by draft id alone, exactly as its own
+    // fence does.
+    landingDraftRememberSynced(
+      draftId,
+      hostRevision,
+      collectedGeneration,
+      ownerHostId,
+    );
+    composerDraftRememberSynced(
+      draftId,
+      hostRevision,
+      collectedGeneration,
+      ownerHostId,
+    );
     interviewDraftRememberSynced(draftId, hostRevision, collectedGeneration);
     newChatDraftRememberSynced(draftId, hostRevision, collectedGeneration);
   },
   async prepareWrite(hostId, write) {
     const client = sessionClients.get(hostId);
     if (client === undefined) return write;
-    const confirmed = await putDraftBlobsForWrite(hostId, client, write);
+    const confirmed = await putDraftBlobsForWrite(
+      hostId,
+      client,
+      write,
+      currentDraftBlobOwnerId(),
+    );
     rememberLandingBlobsOnHost(write.draftId, confirmed);
     return write;
   },
@@ -547,7 +609,123 @@ function inheritLandingTab(
   });
 }
 
-async function applyHostDocument(document: DraftDocument): Promise<void> {
+/**
+ * Is this apply still for the account that started it?
+ *
+ * A draft document is one person's private text and images. Installing one
+ * after the window has moved to another account puts it in that account's
+ * composer and, worse, gives its images a live root there - which is why no
+ * amount of fencing at the byte layer is sufficient on its own.
+ */
+function applyStillOwned(
+  applyOwner: string | null,
+  document: DraftDocument,
+): boolean {
+  if (currentDraftBlobOwnerId() === applyOwner) return true;
+  appLogger.warn("[draft-mirror] dropped an apply after an identity change", {
+    draft: document.draftId,
+  });
+  return false;
+}
+
+/**
+ * Pull this document's blobs into the local partition before it is applied.
+ *
+ * Extracted from `applyHostDocument` to keep it under the complexity ceiling,
+ * and the three outcomes are its whole contract: `"abandoned"` when a newer
+ * apply or an identity change has made this one moot, `"ingested"` when a stash
+ * document was fully handled here, and `"continue"` when the caller should go
+ * on applying.
+ */
+async function prefetchDocumentBlobs(
+  document: DraftDocument,
+  applySeq: number,
+  applyOwner: string | null,
+): Promise<"abandoned" | "ingested" | "continue"> {
+  const client = sessionClients.get(document.ownerHostId);
+  const hashes = blobHashesOfDocument(document);
+  if (client === undefined || hashes.length === 0) return "continue";
+  // ROOTED while this apply runs, and that is not belt and braces.
+  //
+  // A hash this partition already holds is a LOCAL hit: the read answers from
+  // the store and nothing about that hit roots it. The document that will root
+  // it is not installed yet - it is waiting for the slowest hash in the same
+  // batch, which may be a host round trip - so between the two a sweep sees an
+  // unreferenced hash, correctly calls it an orphan, and takes bytes this apply
+  // is about to need. The apply then installs a document naming a digest whose
+  // bytes it never re-writes.
+  //
+  // Held per hash as it resolves rather than per batch, so an early local hit
+  // is covered for as long as its siblings run, and released on EVERY exit
+  // below - after the install, so custody passes to the document's own root
+  // with no gap.
+  //
+  // The id is minted per ACQUISITION and is deliberately not derived from the
+  // document. Keying it by owner/draft/`applySeq` looked unique and was not:
+  // `applySeq` advances only for a landing apply, so two revisions of one
+  // composer row read concurrently under the SAME id, and the first to finish
+  // released the second's holds along with its own. See
+  // `mintPendingIngestHolderId`.
+  const holderId = mintPendingIngestHolderId(
+    `draft-mirror-prefetch:${document.ownerHostId}:${document.draftId}`,
+  );
+  for (const hash of hashes) holdPendingIngestImageHash(holderId, hash);
+  try {
+    const images = await readDraftBlobsIntoLocalStore(
+      document.ownerHostId,
+      client,
+      hashes,
+    );
+    if (
+      document.kind === "landing" &&
+      cloudIngestSeqByDraft.get(document.draftId) !== applySeq
+    ) {
+      return "abandoned";
+    }
+    if (!applyStillOwned(applyOwner, document)) return "abandoned";
+    rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
+    if (document.kind === "stash-entry") {
+      // `"abandoned"` for a conversion that installed nothing: the caller must
+      // not go on to report the document as applied, and a stash row has no
+      // landing/new-chat apply below to fall through to either.
+      return (await convertStashDocument(document, images, applyOwner))
+        ? "ingested"
+        : "abandoned";
+    }
+    return "continue";
+  } finally {
+    releasePendingIngestImageHashes(holderId);
+  }
+}
+
+/**
+ * @returns whether a row actually took this document, and therefore whether
+ * its hashes are now ROOTED. Every abandonment path answers `false`: a retired
+ * draft, a pending submitted delete, a newer apply, an identity change, and -
+ * since the revision fences landed - an older revision the store refuses.
+ *
+ * Callers that write bytes on the strength of this apply need that answer.
+ * `putImageBytesAtHash` seeds a session entry which is itself a GC root, so
+ * recovering images for a document no row took leaves them resident with
+ * nothing to release them.
+ */
+async function applyHostDocument(
+  document: DraftDocument,
+  /**
+   * Bytes for a STASH document's hashes, already fetched, or `null` when the
+   * caller has none to offer.
+   *
+   * Non-null only on the cloud-ingest path, and the ordering is the whole
+   * point: a stash row is CONVERTED into a closed start-page draft, and the
+   * conversion writes its images into the landing partition as part of that
+   * one operation - so bytes fetched AFTER the apply have nowhere to go. The
+   * cloud caller therefore fetches first and hands them in here.
+   *
+   * The mirror path needs nothing: `prefetchDocumentBlobs` reads the owning
+   * host's blobs and converts the row itself, answering `"ingested"` above.
+   */
+  stashImages: ReadonlyMap<string, ImageBlob> | null,
+): Promise<boolean> {
   if (document.kind === "landing") {
     knownLandingDraftIds.add(document.draftId);
     // The absence-sweep fence is reserved here, synchronously at the start
@@ -562,53 +740,59 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
   // its head read), and cloud heads carry revision 0 so nothing later
   // fences an older head by revision: whoever reserved last wins the row.
   const applySeq = cloudIngestSeq;
-  if (rejectRetiredLandingDocument(document)) return;
+  // The ACCOUNT this apply belongs to, captured before any await.
+  //
+  // Every fence below this line is about the DOCUMENT's freshness - a newer
+  // apply, a routed delete, a retired row. None of them is about WHO the
+  // document is for, and the blob read is not cancellable, so a sign-out or a
+  // user switch during it left this continuation to install account A's
+  // private draft under account B: its text in B's composer, and - the part
+  // that defeats the byte-level fences entirely - a row that ROOTS A's images
+  // in B's partition, so the GC keeps them and the retirement upstream is
+  // undone by the very apply that follows it.
+  //
+  // A byte fence cannot answer this; only the apply can. Re-checked before
+  // every side effect below rather than once here, because each of them is
+  // past a different set of awaits.
+  const applyOwner = currentDraftBlobOwnerId();
+  if (rejectRetiredLandingDocument(document)) return false;
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) {
     await retrySubmittedDraftDelete(document.draftId);
-    return;
+    return false;
   }
-  const client = sessionClients.get(document.ownerHostId);
-  const hashes = blobHashesOfDocument(document);
-  if (client !== undefined && hashes.length > 0) {
-    const images = await readDraftBlobsIntoLocalStore(
-      document.ownerHostId,
-      client,
-      hashes,
-    );
-    if (
-      document.kind === "landing" &&
-      cloudIngestSeqByDraft.get(document.draftId) !== applySeq
-    ) {
-      return;
-    }
-    rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
-    if (document.kind === "stash-entry") {
-      await convertStashDocument(document, images);
-      return;
-    }
-  }
+  const prefetched = await prefetchDocumentBlobs(
+    document,
+    applySeq,
+    applyOwner,
+  );
+  if (prefetched === "abandoned") return false;
+  // A stash row WAS converted into a landing draft, so its hashes are rooted.
+  if (prefetched === "ingested") return true;
+  if (!applyStillOwned(applyOwner, document)) return false;
   if (document.kind === "stash-entry") {
-    await convertStashDocument(document, new Map());
-    return;
+    return convertStashDocument(document, stashImages ?? new Map(), applyOwner);
   }
   if (document.kind === "interview") {
     applyInterviewHostDocument(document);
-    return;
+    return true;
   }
   if (document.kind === "landing") {
     // Re-checked after the blob reads: a delete routed meanwhile retired it.
-    if (rejectRetiredLandingDocument(document)) return;
-    if (rekeyLandingTabInPlace(document)) return;
-    if (applyLandingHostDocument(document, document.portable.content)) {
-      inheritLandingTab(document);
+    if (rejectRetiredLandingDocument(document)) return false;
+    if (!applyStillOwned(applyOwner, document)) return false;
+    // A re-key moves the row to this document's id; the row is live and its
+    // hashes are rooted under the new identity.
+    if (rekeyLandingTabInPlace(document)) return true;
+    if (!applyLandingHostDocument(document, document.portable.content)) {
+      return false;
     }
-    return;
+    inheritLandingTab(document);
+    return true;
   }
   if (document.kind === "chat-composer") {
-    applyComposerHostDocument(document);
-    return;
+    return applyComposerHostDocument(document);
   }
-  applyNewChatHostDocument(document);
+  return applyNewChatHostDocument(document);
 }
 
 function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
@@ -933,6 +1117,8 @@ export function acquireDraftMirrorSession(
   // host that upgraded while this renderer stayed up is not stuck
   // blob-less until restart.
   forgetBlobUnsupportedHost(args.hostId);
+  // Same signal, same reason, for the cloud payload read this host pipes.
+  forgetCloudDraftPayloadUnsupportedHost(args.hostId);
   const session = new DraftMirrorSession({
     hostId: args.hostId,
     rpc: {
@@ -955,8 +1141,32 @@ export function acquireDraftMirrorSession(
   // Only a NEW host entry moves the live-host set; a second ref for a host
   // already mounted changes nothing an observer can see.
   notifySessionListeners();
+  // Every cloud address remembered for this host names the requester of the
+  // mirror that ingested it, and that mirror has just been replaced. The
+  // ingest hook will not re-record them - an already-applied head stays in its
+  // `ingested` set - so without this the registry keeps a closed requester
+  // until a new head arrives or the tree remounts.
+  rebindCloudDraftImageClientForHost(args.hostId, args.client);
   session.start();
   return session;
+}
+
+/**
+ * The requester for a host this window currently holds a draft mirror on, or
+ * `null`.
+ *
+ * The same map `applyHostDocument` consults before it fetches a document's
+ * blobs, exposed so a READER can ask the same question. That equivalence is the
+ * point: a host with no mirror session here is a host this window never
+ * uploaded a draft blob to, so there is nothing for `drafts.readBlob` to find -
+ * and a requester built some other way would be addressing a host whose draft
+ * store this window has no relationship with.
+ */
+export function draftMirrorClientForHost(
+  hostId: string | null,
+): HostRequester<HostRpcRegistry> | null {
+  if (hostId === null) return null;
+  return sessionClients.get(hostId) ?? null;
 }
 
 export function releaseDraftMirrorSession(hostId: string): void {
@@ -1021,9 +1231,11 @@ export async function adoptUnadoptedLandingDraftsForHost(
     if (client === undefined) continue;
     const hashes = blobHashesFromContent(draft.content);
     uploads.push(
-      putDraftBlobs(hostId, client, hashes).then((confirmed) => {
-        rememberLandingBlobsOnHost(draft.id, confirmed);
-      }),
+      putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId()).then(
+        (confirmed) => {
+          rememberLandingBlobsOnHost(draft.id, confirmed);
+        },
+      ),
     );
   }
   await Promise.all(uploads);
@@ -1049,6 +1261,7 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   warnedUnboundComposer.clear();
   warnedUnboundInterview.clear();
   resetDraftBlobTransportForTests();
+  resetCloudDraftImageRecoveryForTests();
   notifyCloudScopeListeners();
   notifySessionListeners();
   // Re-bind production listeners. Tests that install their own must not
@@ -1138,13 +1351,18 @@ export function collectDraftMirrorDirtyWrites(
 export async function applyIncomingDraftDocument(
   document: DraftDocument,
 ): Promise<void> {
-  await applyHostDocument(document);
+  await applyHostDocument(document, null);
 }
 
 export async function ingestCloudDraftSummary(input: {
   readonly hostId: string;
   readonly summary: CloudChatSummary;
   readonly document: DraftDocument;
+  /**
+   * The account the head read was ISSUED under. See below: a continuation
+   * cannot ask who it belongs to, it can only be told.
+   */
+  readonly readOwner: string | null;
 }): Promise<void> {
   if (input.summary.ownerHostId === input.hostId) return;
   // A host-bound surface is never a replica here. `applyComposerHostDocument`
@@ -1160,7 +1378,180 @@ export async function ingestCloudDraftSummary(input: {
   // snapshot. Ownership never moves, so there is nothing else to admit: a
   // dirty own row keeps its content (`applyLandingHostDocument`), and a
   // replica head is exactly what the directory is for.
-  await applyHostDocument(input.document);
+  // The ACCOUNT this ingest belongs to. Taken from the CALLER, which captured
+  // it when it issued the head read - reading it here would answer with
+  // whoever holds the window now, which is the whole failure: a read that
+  // started under A and finished under B would install A's text under B with
+  // every check agreeing.
+  const ingestOwner = input.readOwner;
+  if (currentDraftBlobOwnerId() !== ingestOwner) return;
+  // A stash row's bytes have to arrive WITH it. `ingestRemote` is idempotent
+  // by entry id and the images ride the same durable write as the row, so
+  // there is no second chance after the apply - which is why this fetch is
+  // here rather than beside the landing/new-chat recovery below.
+  //
+  // Never fatal to the apply. A stash row that lands without its images is
+  // exactly the status quo and still restores its text; a row that does not
+  // land at all because a blob read failed would be a regression, so the
+  // fetch answers with an empty map on every failure and the apply proceeds.
+  // The KIND is checked here, synchronously, rather than inside the fetch.
+  // `applyHostDocument` reserves the absence-sweep fence at its synchronous
+  // start, so any await between this point and that call hands a concurrent
+  // directory sweep a window in which the row is not yet fenced - and awaiting
+  // an async function that returns immediately still yields a microtask, which
+  // is enough. A landing or new-chat document therefore reaches the apply with
+  // no suspension at all, exactly as before.
+  //
+  // A stash document does suspend, and may: the fence is landing-only, and a
+  // stash row is not swept by the directory pass.
+  const fetchesStashImages = input.document.kind === "stash-entry";
+  const stashImages = fetchesStashImages
+    ? await recoverCloudStashImages(input)
+    : null;
+  // Keyed on whether this SUSPENDED, not on what came back. The fetch answers
+  // `null` for a stash document too - no hashes, no mounted client, a read that
+  // threw - and every one of those still awaited, so every one of them still
+  // needs the account re-asked before this document is applied.
+  if (fetchesStashImages && currentDraftBlobOwnerId() !== ingestOwner) return;
+  const installed = await applyHostDocument(input.document, stashImages);
+  // No row took it, so this document roots nothing and there is nothing for
+  // recovery to fetch FOR - whether it was retired, fenced by a pending
+  // delete, beaten by a newer apply, refused as an older revision, or kept out
+  // by a dirty local row. The owner re-check below covers only the last of
+  // those, which is why it is not enough on its own.
+  if (!installed) return;
+  // An apply that abandoned installed no row, so this document roots nothing
+  // and there is nothing for recovery to fetch FOR. Running it anyway is not
+  // merely wasted: recording its sources spends slots in a shared, per-digest
+  // candidate list and can evict the address of the account that IS being
+  // served. `applyHostDocument` swallows its own abandonment, so the condition
+  // is re-derived here rather than returned from it.
+  if (currentDraftBlobOwnerId() !== ingestOwner) return;
+  await recoverIngestedCloudDraftImages(input);
+}
+
+/**
+ * Pull a cloud-ingested draft's images down from the published
+ * `image-attachment` blobs, for the window that has no other source for them.
+ *
+ * This is the ONLY path where that can be true. A document that arrives on
+ * `drafts.subscribe` came from a host this window holds a mirror on, so
+ * `applyHostDocument` has already read its blobs off that host; a document that
+ * arrives here is owned by a host this window is not mirroring, which is the
+ * second-window and offline-owner case the replica exists for.
+ *
+ * Run AFTER the apply so the row already roots these hashes, and awaited rather
+ * than detached so an ingest is one settled unit - nothing is gated on it, and
+ * each read carries its own timeout, so awaiting costs a bounded wait on a
+ * chain whose caller has already released its ingest guard.
+ *
+ * Landing and new-chat only. Stash entries also reach this function, and their
+ * bytes are deliberately NOT recovered here: a stash row is converted into a
+ * closed start-page draft, and `convertStashEntry` writes its images into the
+ * landing partition as part of that one conversion - so bytes fetched after
+ * the row lands have nowhere to go. Recovering them means handing an images
+ * map to `convertStashDocument` BEFORE it applies, which is custody work of
+ * its own.
+ */
+/**
+ * Fetch a cloud-ingested STASH document's images, for handing to the apply.
+ *
+ * The stash twin of {@link recoverIngestedCloudDraftImages}, and it runs on the
+ * other side of the apply for a reason the sibling's own comment gives: that
+ * one writes into this window's image partition, where the APPLIED row is what
+ * roots the hashes, so it must run after. A stash row is not applied as a row
+ * at all - it is CONVERTED, and the conversion reads these bytes through the
+ * map handed in - so for this kind "after the apply" is not late, it is never.
+ *
+ * The bytes still pass through the partition on the way: the cloud transfer
+ * verifies each digest with `putImageBytesAtHash`, which is what makes a
+ * returned byte string trustworthy, and that write seeds a session entry which
+ * roots them meanwhile. Once the conversion has re-written them under their
+ * landing hashes that first copy is incidental, and the sweep reclaims it on
+ * its own schedule - the same
+ * disposition any unrooted transfer gets.
+ *
+ * Answers an EMPTY map for every failure, including a fetch that raises: the
+ * caller applies the document either way, and a stash entry whose images are
+ * missing is the behaviour this replaces, not a new one.
+ */
+async function recoverCloudStashImages(input: {
+  readonly hostId: string;
+  readonly summary: CloudChatSummary;
+  readonly document: DraftDocument;
+}): Promise<ReadonlyMap<string, ImageBlob> | null> {
+  const { document } = input;
+  if (document.kind !== "stash-entry") return null;
+  const hashes = blobHashesOfDocument(document);
+  if (hashes.length === 0) return null;
+  // The ingesting host's requester, for the reason the sibling states: the
+  // cloud read is a byte pipe through whatever host this device runs.
+  const client = sessionClients.get(input.hostId);
+  if (client === undefined) return null;
+  try {
+    await recoverCloudDraftImages({
+      identity: input.summary.identity,
+      hostId: input.hostId,
+      client,
+      hashes,
+    });
+  } catch (error: unknown) {
+    appLogger.warn("[draft-mirror] cloud stash image recovery failed", {
+      error: describeLogError(error),
+    });
+    return null;
+  }
+  const images = new Map<string, ImageBlob>();
+  for (const hash of hashes) {
+    const bytes = await getImageBytes(hash);
+    if (bytes === undefined) continue;
+    // Sniffed from the BYTES, never from the document's `mimeType` attr, and
+    // with NO fallback. The transport's readers answer `"image/png"` for bytes
+    // that sniff to nothing, which suits the landing partition - it holds bytes,
+    // not records - but the stash reads a blob back through
+    // `isValidStashBlobRecord`, which requires the sniff to equal the stored
+    // MIME and answers `corrupt` when it does not. A label this side cannot
+    // justify is therefore a record that reads as damaged later, so it is not
+    // minted at all.
+    const mimeType = sniffImageMimeType(bytes);
+    if (mimeType === null) continue;
+    images.set(hash, { bytes, mimeType });
+  }
+  return images;
+}
+
+async function recoverIngestedCloudDraftImages(input: {
+  readonly hostId: string;
+  readonly summary: CloudChatSummary;
+  readonly document: DraftDocument;
+}): Promise<void> {
+  const { document } = input;
+  if (document.kind !== "landing" && document.kind !== "new-chat") return;
+  const hashes = blobHashesOfDocument(document);
+  if (hashes.length === 0) return;
+  // The INGESTING host's requester: the cloud read is a byte pipe through
+  // whatever host this device runs, and this is the one we know is mounted -
+  // every site that runs the cloud ingest acquires this mirror alongside it.
+  const client = sessionClients.get(input.hostId);
+  if (client === undefined) return;
+  // Contained at this boundary, not inside the recovery module, and the
+  // asymmetry is deliberate. `useCloudDraftsIngest` calls this from a `void
+  // attemptRead(0)` chain with no catch around the ingest, so ANY rejection
+  // that reaches it is an unhandled rejection. Every failure the recovery can
+  // actually produce is already answered as a miss, so this catches only a
+  // fault nobody predicted - and it belongs here, where the consequence is,
+  // rather than in the module, where swallowing would also hide it from that
+  // module's own tests.
+  await recoverCloudDraftImages({
+    identity: input.summary.identity,
+    hostId: input.hostId,
+    client,
+    hashes,
+  }).catch((error: unknown) => {
+    appLogger.warn("[draft-mirror] cloud draft image recovery failed", {
+      error: describeLogError(error),
+    });
+  });
 }
 
 /**

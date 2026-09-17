@@ -58,7 +58,7 @@ export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
             <LineChart className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-1">
-            <DialogTitle className="truncate text-ui font-semibold leading-snug wrap-anywhere">
+            <DialogTitle className="truncate wrap-anywhere">
               {props.title}
             </DialogTitle>
             <DialogDescription>{props.description}</DialogDescription>
@@ -86,7 +86,7 @@ export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
       {props.footer === null ? null : (
         // The band fill is the primitive's own default - restating it here
         // would just be a second copy to keep in sync.
-        <DialogFooter className="-mx-4 -mb-4 mt-0 border-t px-4 py-3 max-[28rem]:rounded-b-none max-[28rem]:pb-safe-bottom-gutter">
+        <DialogFooter className="-mx-4 -mb-4 mt-0 max-[28rem]:rounded-b-none max-[28rem]:pb-safe-bottom-gutter">
           {props.footer}
         </DialogFooter>
       )}

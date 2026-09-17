@@ -1,3 +1,7 @@
+import {
+  isBrowserSearchEngine,
+  type BrowserSearchEngine,
+} from "@/lib/browser-view/browser-search";
 import { create } from "zustand";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { persist } from "zustand/middleware";
@@ -323,6 +327,7 @@ export interface SettingsState {
   quoteReplyEnabled: boolean;
   /** Where app-rendered http(s) links open: default plus per-kind overrides. */
   linkOpen: LinkOpenSettings;
+  browserSearchEngine: BrowserSearchEngine;
   /** Origins designated from terminal URL output for the host classifier. */
   browserDevOrigins: ReadonlyArray<string>;
   /** Where a tile lands on the canvas: default plus per-category overrides. */
@@ -379,6 +384,23 @@ export interface SettingsState {
   contextIndicatorStyle: ContextIndicatorStyle;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
+  /**
+   * The permission mode a NEW conversation starts under when nothing more
+   * specific applies.
+   *
+   * Deliberately NOT the only input to a new chat: a composer prefers the last
+   * mode that host ran with (`composer-run-settings-store`, bucketed per host),
+   * so this is the install's default - what a fresh host, or a fresh window with
+   * no history, opens on. Session import reads the same ladder
+   * (`newChatPermissionModeFor`) so an imported chat is no stricter and no
+   * looser than one the user creates.
+   *
+   * Unclamped on write: this value is harness-agnostic, and the clamp against a
+   * given harness's `supportedPermissionModes` belongs to the surface that
+   * resolves one (`normalizePermissionMode`). Clamping here would let whichever
+   * provider happened to be selected narrow an install-wide preference.
+   */
+  setDefaultPermission: (mode: PermissionMode) => void;
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setShowGlobalResourceMonitor: (value: boolean) => void;
@@ -414,6 +436,7 @@ export interface SettingsState {
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
   setLinkOpen: (patch: Partial<LinkOpenSettings>) => void;
+  setBrowserSearchEngine: (engine: BrowserSearchEngine) => void;
   addBrowserDevOrigin: (origin: string) => void;
   removeBrowserDevOrigin: (origin: string) => void;
   setTilePlacement: (patch: Partial<TilePlacementSettings>) => void;
@@ -476,6 +499,7 @@ type PersistedSettingsState = Pick<
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
   | "linkOpen"
+  | "browserSearchEngine"
   | "browserDevOrigins"
   | "tilePlacement"
   | "agentTabSurfacing"
@@ -558,6 +582,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
     linkOpen: state.linkOpen,
+    browserSearchEngine: state.browserSearchEngine,
     browserDevOrigins: state.browserDevOrigins,
     tilePlacement: state.tilePlacement,
     agentTabSurfacing: state.agentTabSurfacing,
@@ -611,6 +636,7 @@ export const useSettingsStore = create<SettingsState>()(
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
       linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
+      browserSearchEngine: "google",
       browserDevOrigins: [],
       tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
       agentTabSurfacing: DEFAULT_AGENT_TAB_SURFACING,
@@ -626,6 +652,7 @@ export const useSettingsStore = create<SettingsState>()(
         if (useThemeLibraryStore.getState().clearSelection())
           set({ themePreset });
       },
+      setDefaultPermission: makeSetter(set, "defaultPermission"),
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setShowGlobalResourceMonitor: makeSetter(
@@ -722,6 +749,8 @@ export const useSettingsStore = create<SettingsState>()(
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
+      setBrowserSearchEngine: (browserSearchEngine) =>
+        set({ browserSearchEngine }),
       setLinkOpen: (patch) => {
         set((s) => ({ linkOpen: { ...s.linkOpen, ...patch } }));
       },
@@ -866,6 +895,11 @@ export const useSettingsStore = create<SettingsState>()(
             ),
           agentTabSurfacing: resolvePersistedAgentTabSurfacing(persisted),
           linkOpen: resolvePersistedLinkOpen(persisted),
+          browserSearchEngine: isBrowserSearchEngine(
+            persisted.browserSearchEngine,
+          )
+            ? persisted.browserSearchEngine
+            : "google",
           tilePlacement: resolvePersistedTilePlacement(persisted),
           browserDevOrigins: Array.isArray(merged.browserDevOrigins)
             ? merged.browserDevOrigins.filter(

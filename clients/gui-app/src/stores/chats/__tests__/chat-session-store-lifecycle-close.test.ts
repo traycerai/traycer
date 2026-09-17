@@ -147,6 +147,7 @@ function makeRig(): Rig {
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
+        draftBlobBridgeSupported: () => client.draftBlobBridgeSupported(),
         requestTranscriptRange: (request) => {
           client.requestTranscriptRange(request);
         },

@@ -6,7 +6,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 
 /**
  * Shared status badge for worktree-picker rows. Pending verification renders
@@ -14,6 +13,12 @@ import { cn } from "@/lib/utils";
  * path renders destructive. Row selectability is owned by the picker model,
  * independently from whether status is visible.
  */
+const STATUS_BADGE_VARIANT = {
+  neutral: "outline",
+  warning: "warning",
+  error: "destructive",
+} as const;
+
 export function WorktreeRowStatusBadge(props: {
   readonly label: string;
   readonly pending: boolean;
@@ -22,15 +27,10 @@ export function WorktreeRowStatusBadge(props: {
 }): ReactNode {
   const badge = (
     <Badge
-      variant={props.tone === "error" ? "destructive" : "outline"}
+      variant={STATUS_BADGE_VARIANT[props.tone]}
       data-status-tone={props.tone}
       aria-label={`${props.label}. ${props.detail}`}
-      className={cn(
-        "shrink-0",
-        props.pending && "gap-1",
-        props.tone === "warning" &&
-          "border-warning/30 bg-warning/10 text-warning-foreground",
-      )}
+      className="shrink-0"
     >
       {props.pending ? <MutedAgentSpinner /> : null}
       {props.label}

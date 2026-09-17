@@ -54,6 +54,7 @@ export const ACTION_IDS = [
   "app.rate-limits.open",
   "app.notifications.open",
   "app.history.open",
+  "app.chat-search.open",
   "app.home.open",
   "app.settings.open",
   "app.settings.section.byDigit",
@@ -632,6 +633,22 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     defaultChord: "mod+y",
     secondaryChord: undefined,
     terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.chat-search.open": {
+    id: "app.chat-search.open",
+    label: "Search chats",
+    description:
+      "Search chat titles and messages on the active host, in this task or across every task.",
+    category: "app",
+    kind: "chord",
+    // ⌘⇧F: "find everywhere" in most editors, the wide twin of the in-tile ⌘F
+    // finder. Free across this map and not a native-menu accelerator
+    // (menu-builder.ts binds ⌘F/⌘G/⇧⌘G only).
+    defaultChord: "mod+shift+f",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
   },
