@@ -11,14 +11,7 @@ import { createPortal } from "react-dom";
 import { RemoveScroll } from "react-remove-scroll";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import {
-  autoUpdate,
-  computePosition,
-  flip,
-  offset,
-  shift,
-  type Placement,
-} from "@floating-ui/dom";
+import { autoUpdate, computePosition, type Placement } from "@floating-ui/dom";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -50,6 +43,7 @@ import {
 
 import { MentionMenuItem } from "./mention-menu-item";
 import { MentionPreviewPanel } from "./mention-preview-panel";
+import { composerMenuMiddleware } from "./composer-menu-middleware";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
@@ -62,8 +56,9 @@ const LOAD_FAILED_LABEL = "Couldn't load commands";
 // Open-time preference only: how much room a side needs before it is worth
 // opening into. The rendered menu routinely exceeds this - a full roster of
 // files or terminals grows the list to its `max-h` viewport cap - and that is
-// fine, because `flip()` re-picks the side and `shift()` keeps it on screen
-// once the real height is known. Nothing here bounds the menu.
+// fine, because `flip()` re-picks the side once the real height is known and
+// `shift()` clamps the menu inside the viewport on both axes (see
+// `composerMenuMiddleware`). Nothing here bounds the menu.
 const MENU_HEIGHT_ESTIMATE = 280;
 
 type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
@@ -242,7 +237,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   }, [activeIndex]);
 
   // Floating-ui positioning. The caret rect can be unavailable at open, so
-  // recompute placement on each update and let flip handle viewport overflow.
+  // recompute placement on each update and let the middleware keep the menu
+  // inside the viewport.
   useLayoutEffect(() => {
     const floating = floatingRef.current;
     if (floating === null) return;
@@ -257,11 +253,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     const reposition = (): void => {
       void computePosition(virtualReference, floating, {
         placement: selectInitialPlacement(pickerStore),
-        middleware: [
-          offset(6),
-          flip({ padding: 8 }),
-          shift({ mainAxis: false, crossAxis: true, padding: 8 }),
-        ],
+        middleware: composerMenuMiddleware(),
       }).then(({ x, y }) => {
         floating.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(
           y,
@@ -318,7 +310,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         // Width fits content (w-max) so short menus stay compact and long command
         // names render in full, with a comfortable floor (min-w) and a
         // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
-        // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
+        // shift() clamps the grown menu inside the viewport horizontally and
+        // vertically (CLAUDE.md sizing).
         className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
         <div
