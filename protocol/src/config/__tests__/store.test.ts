@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +40,8 @@ import {
   listEnvOverrides,
   loadEffectiveShellConfig,
   migrateCliConfig,
+  readBrowserConfig,
+  readBrowserConfigSync,
   readCliConfig,
   readFeatureSettings,
   readFeatureSettingsSync,
@@ -49,6 +51,7 @@ import {
   resetShell,
   revertShellArgs,
   setEnvOverride,
+  setAgentBrowserAccess,
   setAgentRolesEnabled,
   setLogLevels,
   setShell,
@@ -95,6 +98,7 @@ describe("cli config store", () => {
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
       features: { agentRoles: false, artifactVersioning: false },
+      browser: { agentAccess: true },
     };
     await writeCliConfig(cfg);
     expect(await readCliConfig()).toEqual(cfg);
@@ -251,6 +255,140 @@ describe("cli config store", () => {
     });
   });
 
+  it("reads agent browser access as on from a pre-feature file", async () => {
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+      }),
+    );
+    expect(await readBrowserConfig()).toEqual({ agentAccess: true });
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+  });
+
+  it("sets agent browser access without changing shell, env, or log settings", async () => {
+    await setShell("/bin/fish", ["-l"]);
+    await setEnvOverride("FOO", "bar");
+    await setLogLevels("debug", "warn");
+
+    await setAgentBrowserAccess(false);
+    expect(await readBrowserConfig()).toEqual({ agentAccess: false });
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: false });
+    expect(await readCliConfig()).toMatchObject({
+      shell: { path: "/bin/fish", args: ["-l"] },
+      envOverrides: { FOO: "bar" },
+      logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
+      browser: { agentAccess: false },
+    });
+
+    await setAgentBrowserAccess(true);
+    expect(await readBrowserConfig()).toEqual({ agentAccess: true });
+  });
+
+  it("surfaces a malformed browser block to the async reader", async () => {
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        browser: { agentAccess: "no" },
+      }),
+    );
+    await expect(readBrowserConfig()).rejects.toThrow(
+      /does not match the expected schema/,
+    );
+  });
+
+  it("fails OPEN for malformed and unreadable browser reads", async () => {
+    // The opposite of the feature-gate reader: agents already have browser
+    // access, so a config we cannot read must not revoke it.
+    await writeRaw("{ not json");
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        browser: { agentAccess: "no" },
+      }),
+    );
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+
+    // A readable block with no `agentAccess` is the pre-switch shape, not a
+    // revocation.
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        browser: {},
+      }),
+    );
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+  });
+
+  it("honours an explicit agentAccess:false the whole document cannot validate", async () => {
+    // Failing open is for a block we cannot read. A `version` this binary
+    // predates - or any unrelated block a newer writer reshaped - fails
+    // `cliConfigSchema` while the `browser` block is perfectly readable, and
+    // re-granting the capability there would undo a deliberate choice.
+    await writeRaw(
+      JSON.stringify({
+        version: 999,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        browser: { agentAccess: false },
+      }),
+    );
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: false });
+
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        logs: { cliLogLevel: "shouty" },
+        browser: { agentAccess: false },
+      }),
+    );
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: false });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "fails open when the browser config is unreadable",
+    async () => {
+      await setAgentBrowserAccess(false);
+      await chmod(cliConfigPath(), 0o000);
+      try {
+        expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+      } finally {
+        await chmod(cliConfigPath(), 0o600);
+      }
+    },
+  );
+
+  it("preserves an unknown top-level block across a read-modify-write", async () => {
+    // `.passthrough()` on the top level: a block written by a newer binary must
+    // survive this one's next write, or two binaries sharing the file would
+    // delete each other's settings.
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        futureBlock: { nested: true },
+      }),
+    );
+    await setAgentBrowserAccess(false);
+    const raw: unknown = JSON.parse(await readFile(cliConfigPath(), "utf8"));
+    expect(raw).toMatchObject({
+      browser: { agentAccess: false },
+      futureBlock: { nested: true },
+    });
+  });
+
   it("stores explicit unsets as null env overrides", async () => {
     await setEnvOverride("OPENAI_API_KEY", null);
     expect(await listEnvOverrides()).toEqual({
@@ -321,6 +459,7 @@ describe("cli config store", () => {
       envOverrides: {},
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
       features: { agentRoles: false, artifactVersioning: false },
+      browser: { agentAccess: true },
     });
   });
 

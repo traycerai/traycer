@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
+import { useEpicNodeHostIds } from "@/hooks/epic/use-epic-node-host-ids";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
@@ -7,6 +8,7 @@ import {
   gitDiffPanelSurfaceKey,
   isSurfacePinDeposed,
   isSurfacePinFleetKnown,
+  isTaskPanelSurfaceKey,
   resolvedSurfaceHostId,
   tabSurfaceKey,
   useSurfaceHostSelectionStore,
@@ -36,9 +38,9 @@ export interface SurfaceHostPin {
   readonly honoredSelection: SurfaceHostSelection;
   readonly setSelection: (selection: SurfaceHostSelection) => void;
   /**
-   * Where this surface acts: the pin while it can serve, `effective` while it
-   * cannot. ALWAYS what the surface's chip renders - a create surface must
-   * never be silent about which machine it is about to create on.
+   * Where this surface acts: the pin while it can serve, then its defaults,
+   * then `effective`. ALWAYS what the surface's chip renders - a create
+   * surface must never be silent about which machine it is about to create on.
    */
   readonly resolvedHostId: string | null;
   /**
@@ -72,9 +74,11 @@ export interface SurfaceHostPinWithDefault extends SurfaceHostPin {
 }
 
 /**
- * This surface's host pin, resolved.
+ * This surface's host pin, resolved. Task panels default to the sole host
+ * named by their task's agents, when one exists and can serve. Empty or
+ * multi-host tasks keep the existing fallback. This never persists a pin.
  *
- * A pinned surface whose host dies AUTO-FOLLOWS to `effective` and returns to
+ * A pinned surface whose host dies follows its defaults and returns to
  * its pin when the host's lease is usable again - the same shape, one tier
  * down, as the app-wide preferred/effective pair, and deliberately as silent
  * as the app-wide failover is. The pin survives the death; only the resolution
@@ -93,6 +97,7 @@ export function useSurfaceHostPin(surfaceKey: string): SurfaceHostPin {
  * three tiers cannot disagree about what "cannot serve" means, and the
  * default is never written anywhere - it is a fallback the caller derives
  * (the in-Epic modal passes the Epic session's host), not a second pin.
+ * For task panels, a usable sole agent host precedes this caller fallback.
  *
  * `resolvedFrom` names the tier that answered. Only the `effective` tier
  * follows a move of the effective host; a surface on its pin or its default
@@ -118,6 +123,11 @@ function useSurfaceHostPinResolved(
   surfaceKey: string,
   defaultHostId: string | null,
 ): SurfaceHostPinWithDefault {
+  const nodeHostIds = useEpicNodeHostIds();
+  const taskHostId =
+    isTaskPanelSurfaceKey(surfaceKey) && nodeHostIds.size === 1
+      ? (nodeHostIds.values().next().value ?? null)
+      : null;
   const stored = useSurfaceHostSelectionStore(
     (state) => state.selections[surfaceKey],
   );
@@ -142,12 +152,13 @@ function useSurfaceHostPinResolved(
     selection !== null && isSurfacePinDeposed(selection, fleet)
       ? null
       : selection;
-  // The default tier is honored on the pin's own rule, so "cannot serve"
-  // means one thing across all three tiers.
+  // A task's sole agent host precedes the caller's existing fallback (the
+  // canvas host for PRs). Apply the pin's lease rule to both, so a dead task
+  // host falls through while an expected restart holds its selection.
   const honoredDefaultHostId =
-    defaultHostId !== null && !isSurfacePinDeposed(defaultHostId, fleet)
-      ? defaultHostId
-      : null;
+    [taskHostId, defaultHostId].find(
+      (hostId) => hostId !== null && !isSurfacePinDeposed(hostId, fleet),
+    ) ?? null;
   // ONE local, deliberately: `resolvedHostId` falls back to this exact value,
   // and consumers compare the two to ask "would unpinning move me?"
   // (`resolvedHostId !== followingHostId`). That question is only answerable

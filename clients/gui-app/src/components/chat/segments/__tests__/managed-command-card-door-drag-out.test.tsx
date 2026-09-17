@@ -16,7 +16,9 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AutonomousResumeSegment } from "@/components/chat/segments/autonomous-resume-segment";
 
 /**
  * Dragging a shell's transcript door - the start card's and every restart
@@ -326,6 +328,19 @@ function dragOntoPane(node: HTMLElement): void {
   dropOnPane();
 }
 
+/** The host the open output window for `commandId` is pinned to. */
+function openWindowHostFor(commandId: string): string | null {
+  const found = findOpenArtifactInTab(TAB_ID, commandId);
+  if (found === null) return null;
+  const ref =
+    useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId[
+      found.instanceId
+    ];
+  return ref === undefined || ref.type !== "managed-command-output"
+    ? null
+    : ref.hostId;
+}
+
 beforeEach(() => {
   stubPaneGeometry();
   __resetTabNavigationControllerForTesting();
@@ -437,5 +452,38 @@ describe("dragging a shell's transcript door onto the canvas", () => {
     fireEvent.click(door);
 
     expect(findOpenArtifactInTab(TAB_ID, COMMAND_ID)).not.toBeNull();
+  });
+
+  it("lands a remote shell's divider door on the shell's own host, not the tab's", async () => {
+    const paneId = seedCanvasPane();
+    const trigger = autonomousResumeTriggerSchema.parse({
+      kind: "monitor",
+      status: "completed",
+      title: "deploy watcher",
+      summary: "",
+      blockId: "blk-far",
+      managedCommand: {
+        commandId: "cmd-far",
+        monitoring: true,
+        hostId: "host-far",
+      },
+    });
+    await renderHarness(paneId, {
+      withViewTab: true,
+      card: <AutonomousResumeSegment triggers={[trigger]} />,
+    });
+    // A remote shell is never in this host's chat-session set, so the door
+    // stays enabled without any command ever reaching this chat.
+
+    const door = screen.getByTestId("resume-managed-command-door-blk-far");
+    expect(door.getAttribute("data-draggable")).toBe("true");
+
+    dragOntoPane(door);
+
+    const found = findOpenArtifactInTab(TAB_ID, "cmd-far");
+    expect(found).not.toBeNull();
+    // A click already opened on the shell's host; the DRAG must land the
+    // tile there too, not on the tab's host A where no such shell exists.
+    expect(openWindowHostFor("cmd-far")).toBe("host-far");
   });
 });

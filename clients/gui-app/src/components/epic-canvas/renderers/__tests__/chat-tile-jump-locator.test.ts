@@ -271,6 +271,8 @@ describe("isComposerPendingApproval", () => {
       kind: "tool" as const,
       planId: null,
       actions: [],
+      reason: null,
+      reviewing: null,
     };
     const plan = {
       approvalId: "plan-1",
@@ -281,6 +283,8 @@ describe("isComposerPendingApproval", () => {
       kind: "plan" as const,
       planId: "p1",
       actions: [],
+      reason: null,
+      reviewing: null,
     };
     expect(isComposerPendingApproval([tool, plan], [], "tool-1")).toBe(true);
     expect(isComposerPendingApproval([tool, plan], [], "plan-1")).toBe(false);
@@ -347,6 +351,8 @@ describe("resolveApprovalJumpLanding", () => {
     kind: "tool" as const,
     planId: null,
     actions: [],
+    reason: null,
+    reviewing: null,
   };
   const fileEdit = {
     approvalId: "file-1",
@@ -418,6 +424,8 @@ describe("resolveApprovalJumpLanding", () => {
             kind: "plan",
             planId: "p1",
             actions: [],
+            reason: null,
+            reviewing: null,
           },
         ],
         pendingFileEditApprovals: [],
@@ -573,6 +581,8 @@ describe("an `approval` jump target", () => {
             kind: "tool",
             planId: null,
             actions: [],
+            reason: null,
+            reviewing: null,
           },
         ],
       }),

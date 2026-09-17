@@ -92,6 +92,14 @@ describe("AgentHoverTooltip", () => {
     expect(screen.getByTestId("worktree-supplemental").textContent).toContain(
       "Edge owner",
     );
+    // The name is the owner card's own title, not part of the roles section -
+    // the supplemental content must not duplicate it.
+    expect(
+      screen.getByTestId("worktree-supplemental").textContent,
+    ).not.toContain("Reviewer");
+    expect(worktreeTooltipSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Reviewer" }),
+    );
     expect(screen.getByRole("button", { name: "Reviewer" })).toBeDefined();
   });
 
@@ -116,6 +124,14 @@ describe("AgentHoverTooltip", () => {
 
     const content = await screen.findByTestId("agent-role-hover-content");
     expect(content.textContent).toContain("Edge owner");
+    // The roles card no longer duplicates the name - it is shown once, above
+    // this section, by the fallback tooltip itself.
+    expect(content.textContent).not.toContain("Reviewer");
+
+    await screen.findByRole("tooltip");
+    // One "Reviewer" is the trigger button's own label; the other is the
+    // name shown once above the roles section in the fallback tooltip.
+    expect(screen.getAllByText("Reviewer")).toHaveLength(2);
   });
 
   it("still shows the NAME on hover for an unreachable owner with no roles", async () => {
@@ -153,6 +169,14 @@ describe("AgentHoverTooltip", () => {
     expect(content.closest('[data-side="top"]')).not.toBeNull();
     expect(content.textContent).toContain("Edge owner");
     expect(content.textContent).toContain("comm-graph edges");
+    // The roles card no longer duplicates the name - it is shown once, above
+    // this section, by the fallback tooltip itself.
+    expect(content.textContent).not.toContain("Reviewer");
+
+    await screen.findByRole("tooltip");
+    // One "Reviewer" is the trigger button's own label; the other is the
+    // name shown once above the roles section in the fallback tooltip.
+    expect(screen.getAllByText("Reviewer")).toHaveLength(2);
   });
 
   /**

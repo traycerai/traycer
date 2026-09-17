@@ -54,8 +54,13 @@ import type { OfficeSeatWant } from "@/lib/comm-graph/office/office-seat-book";
 import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { officeArchivedByHost } from "@/lib/comm-graph/office/office-population";
 import {
+  officeTruncateLabel,
+  OFFICE_MAX_LABEL_CHARS,
+} from "@/lib/comm-graph/office/office-label-text";
+import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_CHARACTER_WIDTH,
+  OFFICE_LABEL_GAP,
   OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
@@ -218,8 +223,8 @@ const MAX_LIVE_ENVELOPES = 24;
 /** Even with motion off an arrival has to be on screen long enough to see. */
 const REDUCED_MOTION_ARRIVAL_MS = 300;
 const BUBBLE_GAP = 2;
-const LABEL_GAP = 8;
-const MAX_LABEL_CHARS = 14;
+/** The one offset; a painter's `reserve` lettering lines up on it too. */
+const LABEL_GAP = OFFICE_LABEL_GAP;
 /**
  * A lit screen is never still: two frames alternate while an agent is in a
  * turn, and far more slowly while it is only working in the background.
@@ -1085,11 +1090,6 @@ function facingFor(dCol: number, dRow: number): OfficeFacing | null {
   }
   if (dRow !== 0) return dRow > 0 ? "down" : "up";
   return null;
-}
-
-function truncate(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars - 1)}…`;
 }
 
 function sameTile(
@@ -6201,7 +6201,7 @@ export class OfficeScene {
       actors.push({
         drawable: {
           kind: "label",
-          text: truncate(agent.name, MAX_LABEL_CHARS),
+          text: officeTruncateLabel(agent.name, OFFICE_MAX_LABEL_CHARS),
           x: x + OFFICE_CHARACTER_WIDTH / 2,
           y: y + OFFICE_CHARACTER_HEIGHT + LABEL_GAP,
           tone: archived ? "muted" : "default",

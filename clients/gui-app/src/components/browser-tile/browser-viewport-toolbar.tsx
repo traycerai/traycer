@@ -182,7 +182,7 @@ function ExpandedViewportToolbar({
               aria-invalid={message !== null}
               value={values[axis]}
               disabled={controller.disabled}
-              className="h-7 w-[7ch] min-w-0 rounded-md border-transparent bg-foreground/5 px-1 text-center text-ui-xs tabular-nums shadow-none hover:bg-foreground/8 focus-visible:border-ring"
+              className="h-7 w-[7ch] min-w-0 border-transparent bg-foreground/5 text-center tabular-nums hover:bg-foreground/8"
               onFocus={() => {
                 inputFocused.current = true;
                 cancelled.current = false;
@@ -210,6 +210,7 @@ function ExpandedViewportToolbar({
                 else setDraft(null);
                 cancelled.current = false;
               }}
+              size="xs"
             />
           </span>
         ))}
@@ -268,11 +269,11 @@ function ExpandedViewportToolbar({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
-                variant="ghost"
+                variant="muted"
                 size="sm"
                 data-viewport-action
                 aria-label="Preview scale"
-                className="gap-1 text-muted-foreground tabular-nums"
+                className="tabular-nums"
               >
                 {Math.round(controller.previewScale * 100)}%
                 <ChevronDown className="size-3" />
@@ -287,9 +288,10 @@ function ExpandedViewportToolbar({
         <ViewportAgentIndicator controller={controller} />
         {controller.pending ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId="browser-viewport-pending"
             variant={undefined}
+            tone="muted"
           />
         ) : null}
         <TooltipWrapper
@@ -356,7 +358,7 @@ function ViewportPresetMenu({
           size="sm"
           data-viewport-action
           aria-label="Viewport dimensions"
-          className="min-w-0 shrink gap-2 px-1.5 @[26rem]/viewport:w-[22ch] @[26rem]/viewport:justify-between @[26rem]/viewport:bg-foreground/5 @[26rem]/viewport:px-2"
+          className="min-w-0 shrink @[26rem]/viewport:w-[22ch] @[26rem]/viewport:justify-between @[26rem]/viewport:bg-foreground/5"
         >
           <span className="hidden truncate @[26rem]/viewport:inline">
             {controller.state.intent.mode === "fit"

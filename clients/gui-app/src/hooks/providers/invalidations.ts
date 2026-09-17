@@ -3,9 +3,9 @@ import type { HostRpcRegistry } from "@/lib/host";
 // Any provider override change can flip a provider's availability (enabled
 // toggle, selecting a binary that can't launch, or setting/clearing an API key
 // like Cursor's), so every provider mutation refreshes the Settings panel,
-// both harness selectors, and the generated agent-selection-guide default. The
-// guide invalidation recomputes only the generated default; it does not write
-// the user's global guide file.
+// both harness selectors, the generated agent-selection-guide default, and the
+// auto-mode judge's blocker verdict. The guide invalidation recomputes only the
+// generated default; it does not write the user's global guide file.
 //
 // This list is BOTH mechanisms' source of truth, which is why the harness
 // catalogs live here and nowhere else. Mutations that go through
@@ -24,6 +24,16 @@ export const PROVIDER_INVALIDATIONS: ReadonlyArray<
   "agent.tui.listHarnesses",
   "agent.selectionGuide.getGlobal",
   "agent.selectionGuide.getGlobalOnboardingDraft",
+  // `autoJudge.get` answers a `blocked` verdict whose first reason is literally
+  // `provider-disabled`, so the judge's blockers are a FUNCTION of the
+  // configuration these mutations change. Without this entry the response was
+  // cached indefinitely while mounted: enabling the judge's provider left the
+  // Auto row saying no judge would run, and disabling it left the billing copy
+  // promising that provider's account. The other two reads it could reach are
+  // deliberately absent - `autoJudge.set` is a write, and `autoPolicy.get`
+  // proxies an ACCOUNT record (body, stamp, read state, the host's bundled
+  // defaults) that no provider override touches.
+  "autoJudge.get",
 ];
 
 /**

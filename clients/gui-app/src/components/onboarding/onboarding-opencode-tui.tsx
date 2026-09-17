@@ -26,7 +26,7 @@ export function OnboardingOpencodeTui(props: OnboardingOpencodeTuiProps) {
         <p className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
           <span
             aria-hidden="true"
-            className="size-2.5 shrink-0 rounded-[2px] bg-[var(--term-ansi-blue)]"
+            className="size-2.5 shrink-0 rounded-xs bg-[var(--term-ansi-blue)]"
           />
           <span className="font-medium text-foreground">Build</span>
           <span className="truncate">· 3.5s</span>

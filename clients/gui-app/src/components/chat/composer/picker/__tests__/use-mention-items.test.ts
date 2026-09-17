@@ -855,6 +855,9 @@ function browserSessionsState(
     errorMessage: null,
     retry: () => {},
     openTab: () => Promise.reject(new Error("not implemented")),
+    prepareOpenTab: () => {
+      throw new Error("not implemented");
+    },
     closeTab: () => Promise.reject(new Error("not implemented")),
     attachTab: () => Promise.reject(new Error("not implemented")),
     moveTab: () => Promise.reject(new Error("not implemented")),

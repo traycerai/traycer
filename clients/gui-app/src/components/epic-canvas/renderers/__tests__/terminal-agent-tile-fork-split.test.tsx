@@ -302,12 +302,15 @@ describe("<TuiAgentTile /> fork split button", () => {
     expect(group.children).toHaveLength(2);
     expect(group.children[0].contains(fork)).toBe(true);
     expect(group.children[1]).toBe(more);
-    expect(fork.getAttribute("data-variant")).toBe("outline");
-    expect(more.getAttribute("data-variant")).toBe("outline");
+    // `muted-outline`, not `outline`: ticket 04 split the border and the label
+    // colour into independent axes, and this group is the outline BOX with a
+    // muted label. The joined-group contract above is what this test is for.
+    expect(fork.getAttribute("data-variant")).toBe("muted-outline");
+    expect(more.getAttribute("data-variant")).toBe("muted-outline");
     expect(tooltipTextFor(more)).toBe("More fork options");
   });
 
-  it("renders the conditional Agents toolbar action as outline", () => {
+  it("renders the conditional Agents toolbar action as muted-outline", () => {
     tileMocks.showAgentsAction = true;
     renderTile();
 
@@ -315,7 +318,7 @@ describe("<TuiAgentTile /> fork split button", () => {
       screen
         .getByTestId("tui-agent-subagents-trigger")
         .getAttribute("data-variant"),
-    ).toBe("outline");
+    ).toBe("muted-outline");
   });
 
   it("opens the fork dialog with intent fork from the main Fork button", () => {

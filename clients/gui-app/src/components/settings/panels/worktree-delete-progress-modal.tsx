@@ -100,7 +100,7 @@ export function WorktreeDeleteProgressModal(
               source: "Worktrees",
             })}
             presentation="icon"
-            className="-my-1 shrink-0 text-current"
+            className="-my-1 shrink-0"
           />
         </div>
       ) : null}

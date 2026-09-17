@@ -79,13 +79,12 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
       ref={dragRef}
       {...listeners}
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label={`Open ${gitBundleGroupLabel(props.group)}`}
       disabled={props.disabled}
       onClick={openBundle}
       onAuxClick={onMiddleClick(openBundle)}
-      className="text-muted-foreground hover:text-foreground"
     >
       <FileDiff className="size-4" />
     </Button>

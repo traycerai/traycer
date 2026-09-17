@@ -8,8 +8,8 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 import { basePersistOptions, surfaceHostSelectionKey } from "@/lib/persist";
 
 /**
- * Per-surface host pin. `null` means follow `effective` (selection model §2).
- * The store's public shape is final; P1.2 swaps only the `effective` backing.
+ * Per-surface host pin. `null` follows the surface's derived default, falling
+ * back to `effective` when it has no usable default.
  */
 export type SurfaceHostSelection = string | null;
 
@@ -56,6 +56,18 @@ export function tabSurfaceKey(
   tabId: string,
 ): string {
   return surfaceHostKey(kind, tabId);
+}
+
+/** Only task panels inherit the hosts of the task's agents, never composers. */
+export function isTaskPanelSurfaceKey(surfaceKey: string): boolean {
+  const kind = surfaceKey.split(SURFACE_KEY_SEP, 1)[0];
+  return (
+    kind === "git-diff" ||
+    kind === "pull-requests" ||
+    kind === "file-tree" ||
+    kind === "new-terminal" ||
+    kind === "browsers"
+  );
 }
 
 /** Git-diff sidebar panel instance. `tileRef` is the view tab id. */

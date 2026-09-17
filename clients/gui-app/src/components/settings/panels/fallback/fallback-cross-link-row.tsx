@@ -35,9 +35,10 @@ export function FallbackCrossLinkRow(): ReactNode {
         account or an equivalent model instead of ending it.
       </p>
       <Button
+        size="inline"
         type="button"
         variant="link"
-        className="mt-1 h-auto p-0 text-ui-sm"
+        className="mt-1"
         onClick={() => {
           navigateToSettingsSection(FALLBACK_SETTINGS_SECTION_ID);
         }}

@@ -4,6 +4,7 @@ export * from "./asset-stream-schemas";
 export * from "./browser";
 export * from "./chat-fallback";
 export * from "./chat-fork";
+export * from "./chat-search";
 export * from "./comments";
 export * from "./config";
 export * from "./diagnostics";
@@ -59,6 +60,8 @@ export {
   worktreeDeleteUpgradeV10ToV11,
   worktreeDeleteUpgradeV11ToV12,
   worktreeListHoldersV10,
+  worktreeListHoldersV11,
+  worktreeListHoldersUpgradeV10ToV11,
   worktreeListAllForHostV10,
   worktreeListAllForHostV12,
   worktreeListAllForHostV11,
@@ -117,6 +120,7 @@ export {
   workspaceScriptsSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeHoldersChangedErrorDetailsSchema,
+  worktreeBusyChatTierSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
   worktreeBusyHolderSchema,
@@ -143,6 +147,8 @@ export {
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
+  worktreeListHoldersRequestSchemaV11,
+  worktreeListHoldersResponseSchemaV11,
   worktreeHostEntrySchema,
   worktreeHostEntryOwnerSchema,
   worktreeBranchStatusSchema,
@@ -224,6 +230,7 @@ export {
   type WorkspaceScripts,
   type WorktreeBusyErrorDetails,
   type WorktreeHoldersChangedErrorDetails,
+  type WorktreeBusyChatTier,
   type WorktreeBusyHoldKind,
   type WorktreeBusyHolder,
   type WorktreeBusyHolderActivity,
@@ -247,6 +254,8 @@ export {
   type WorktreeDeleteResponse,
   type WorktreeListHoldersRequest,
   type WorktreeListHoldersResponse,
+  type WorktreeListHoldersRequestV11,
+  type WorktreeListHoldersResponseV11,
   type WorktreeHostEntry,
   type WorktreeHostEntryOwner,
   type WorktreeBranchStatus,

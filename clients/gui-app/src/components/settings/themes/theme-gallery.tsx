@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { lazy, Suspense, useId, useRef, useState } from "react";
 import {
@@ -166,10 +167,9 @@ export function ThemeGallery() {
           </Button>
           <Button
             ref={manageTrigger}
-            variant="ghost"
+            variant="muted"
             size="sm"
             onClick={() => setManageOpen(true)}
-            className="text-muted-foreground"
           >
             Manage themes
           </Button>
@@ -340,11 +340,12 @@ function ThemePicker({
         </button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         ref={contentRef}
         align="end"
         collisionBoundary={dialogContainer ?? undefined}
         onOpenAutoFocus={onOpenAutoFocus}
-        className="w-[min(85vw,var(--container-sm))] max-h-(--radix-popover-content-available-height) overflow-hidden p-0"
+        className="w-[min(85vw,var(--container-sm))] max-h-(--radix-popover-content-available-height) overflow-hidden"
       >
         <Command
           label={`Search ${appearance} themes`}
@@ -353,7 +354,7 @@ function ThemePicker({
               ? `saved:${id}`
               : `builtin:${id}`
           }
-          className="min-h-0 rounded-lg"
+          className="min-h-0"
         >
           <CommandInput
             aria-label={`Search ${appearance} themes`}
@@ -427,8 +428,8 @@ function PaletteSwatch({
       {paletteTokens.map((token) => (
         <span
           key={token}
-          className="size-3.5 rounded-full border border-foreground/15"
-          style={{ background: colors[token] }}
+          className="size-3.5 rounded-full border border-foreground/15 bg-[var(--swatch)]"
+          style={{ "--swatch": colors[token] } as CSSProperties}
         />
       ))}
     </span>
@@ -468,7 +469,7 @@ function ThemeManager({
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[min(80svh,var(--spacing-safe-svh))] flex-col gap-4 sm:max-w-xl"
+        className="flex max-h-[min(80svh,var(--spacing-safe-svh))] flex-col sm:max-w-xl"
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           if (!editing.current) onReturnFocus();

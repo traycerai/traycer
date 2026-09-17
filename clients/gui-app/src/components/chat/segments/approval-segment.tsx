@@ -107,7 +107,7 @@ function ResolvedApprovalHeader(props: {
       <VerdictIcon
         className={cn(
           "size-3.5 shrink-0",
-          decision.approved ? "text-emerald-500" : "text-destructive",
+          decision.approved ? "text-success-foreground" : "text-destructive",
         )}
         aria-hidden
       />

@@ -5,6 +5,7 @@ import {
   worktreeDeleteBatchByPathOpenRequestSchemaV11,
   worktreeDeleteBatchByPathServerFrameSchema,
   worktreeDeleteBatchByPathServerFrameSchemaV11,
+  worktreeDeleteBatchByPathServerFrameSchemaV12,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 
 const commandId = "2f1d0a2c-0000-4000-8000-000000000000";
@@ -20,10 +21,15 @@ const holder = {
   label: "Chat is mid-turn",
 };
 
+const holderWithChatTier = {
+  ...holder,
+  chatTier: "turn" as const,
+};
+
 describe("worktree.deleteBatchByPath@1.1", () => {
   it("is registered alongside the frozen 1.0 contract", () => {
     const registry = hostStreamRpcRegistry["worktree.deleteBatchByPath"];
-    expect(registry[1].latestMinor).toBe(1);
+    expect(registry[1].latestMinor).toBe(2);
     expect(registry[1].versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
@@ -140,6 +146,56 @@ describe("worktree.deleteBatchByPath@1.1", () => {
     if (parsed.kind === "target.failed") {
       expect(parsed).not.toHaveProperty("holders");
       expect(parsed).not.toHaveProperty("code");
+    }
+  });
+
+  it("frozen 1.1 target.failed strips chatTier (old-client degrade)", () => {
+    const parsed = worktreeDeleteBatchByPathServerFrameSchemaV11.parse({
+      kind: "target.failed",
+      worktreePath: "/wt",
+      reason: "in use",
+      holders: [holderWithChatTier],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("target.failed");
+    if (parsed.kind === "target.failed") {
+      expect(parsed.holders).toHaveLength(1);
+      expect(parsed.holders?.[0]).not.toHaveProperty("chatTier");
+    }
+  });
+});
+
+describe("worktree.deleteBatchByPath@1.2 chatTier", () => {
+  it("1.2 target.failed keeps chatTier on chat-turn holders", () => {
+    const parsed = worktreeDeleteBatchByPathServerFrameSchemaV12.parse({
+      kind: "target.failed",
+      worktreePath: "/wt",
+      reason: "in use",
+      holders: [holderWithChatTier],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("target.failed");
+    if (parsed.kind === "target.failed") {
+      expect(parsed.holders).toEqual([holderWithChatTier]);
+      expect(parsed.holders?.[0]?.chatTier).toBe("turn");
+    }
+  });
+
+  it("1.2 target.failed sanitizes an unknown chatTier by dropping holders, keeping reason", () => {
+    const parsed = worktreeDeleteBatchByPathServerFrameSchemaV12.safeParse({
+      kind: "target.failed",
+      worktreePath: "/wt",
+      reason: "in use",
+      holders: [{ ...holder, chatTier: "bogus" }],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.kind).toBe("target.failed");
+      if (parsed.data.kind === "target.failed") {
+        expect(parsed.data.reason).toBe("in use");
+        expect(parsed.data.holders).toBeUndefined();
+      }
     }
   });
 });

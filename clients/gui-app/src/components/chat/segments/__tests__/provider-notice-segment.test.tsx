@@ -44,6 +44,42 @@ describe("<ProviderNoticeSegment />", () => {
     expect(screen.getByLabelText("Provider notice active")).toBeDefined();
   });
 
+  it("renders the compact retry presentation with attributed expandable details", () => {
+    const { container } = render(
+      <ProviderNoticeSegment
+        status="streaming"
+        noticeKind="harness_message"
+        presentation="retry"
+        tone="info"
+        title="Reconnecting 4/5"
+        message={null}
+        details={[{ label: "Reported by Codex", value: "Reconnecting… 4/5" }]}
+        findUnitId={null}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Provider notice active")).toBeNull();
+    expect(container.querySelectorAll("span.h-px")).toHaveLength(0);
+    expect(container.querySelectorAll("svg")).toHaveLength(1);
+    expect(container.querySelector("svg.lucide-wifi")).not.toBeNull();
+    expect(screen.queryByText("Reconnecting… 4/5")).toBeNull();
+    expect(
+      container.querySelector("[data-find-include]")?.textContent,
+    ).toContain("Reconnecting 4/5");
+    expect(container.querySelector("[data-find-skip]")).toBeNull();
+
+    const toggle = screen.getByRole("button", {
+      name: "Reconnecting 4/5. Reported by Codex. Show details.",
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Reconnecting… 4/5")).toBeDefined();
+    expect(container.querySelector("[data-find-skip]")?.textContent).toContain(
+      "Reconnecting… 4/5",
+    );
+  });
+
   it("does not render an expand toggle when there are no details", () => {
     render(
       <ProviderNoticeSegment

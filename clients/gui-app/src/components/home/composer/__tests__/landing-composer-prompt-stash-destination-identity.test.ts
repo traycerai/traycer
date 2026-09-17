@@ -2,6 +2,9 @@
  * Landing prompt-stash destination - identity/acceptance.
  */
 import { cleanup } from "@testing-library/react";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { createStore } from "zustand/vanilla";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,6 +39,41 @@ import {
   stashBlobs,
   textDoc,
 } from "./landing-composer-prompt-stash-destination-test-helpers";
+
+/**
+ * A minimal entry for `importAndInsert`, which now takes the entry being
+ * restored so a destination can carry what does not live inside `content`
+ * (today: the annotation sidecar). These cases are about identity and
+ * acceptance, so the sidecar is empty.
+ */
+function annotationFixture(): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId: "ann-1",
+    tabId: "t-1",
+    sessionId: "s-1",
+    origin: "https://example.test",
+    pageUrl: "https://example.test/checkout",
+    pageTitle: "Checkout",
+    capturedAt: 1,
+    comment: "the button is misaligned",
+    counts: { elements: 1, regions: 0, strokes: 0 },
+    elements: [],
+    imageFileName: "crop.png",
+    imageHash: "a".repeat(64),
+    droppedElementCount: 0,
+  };
+}
+
+function stashEntryOf(content: JsonContent): PromptStashEntry {
+  return {
+    id: "stash-entry-fixture",
+    createdAt: 1,
+    content,
+    blobHashes: [],
+    annotations: [],
+  };
+}
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
@@ -138,6 +176,36 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     });
     expect(dest.current.captureIdentity()).toBeNull();
   });
+  it("refuses an entry carrying annotations rather than consuming them (DRIVE RED)", async () => {
+    // This surface has no annotation sidecar and no card to render one, and an
+    // accepted restore is consumed - so taking only the content would destroy
+    // the records AND the last copy of their crops. Refusing leaves the entry
+    // where a chat composer can still take it.
+    const runtimeStore = createStore<DraftRuntimeState>(() => emptyRuntime());
+    const editor = makeEditorHandle({ content: emptyDoc() });
+    const { result } = renderLandingDestination({
+      stashIdentity: "draft-annotated",
+      draftId: "draft-annotated",
+      runtimeStore,
+      editorRef: editor.editorRef,
+    });
+    const captured = requireDefined(
+      result.current.captureIdentity(),
+      "capture",
+    );
+
+    const insertResult = await result.current.importAndInsert({
+      identity: captured,
+      content: textDoc("restored"),
+      entry: {
+        ...stashEntryOf(textDoc("restored")),
+        annotations: [annotationFixture()],
+      },
+    });
+
+    expect(insertResult.status).toBe("unsupported");
+    expect(editor.setContents).toEqual([]);
+  });
   it("accepts React Compiler handle-facade churn for the same editor incarnation", async () => {
     const runtimeStore = createStore<DraftRuntimeState>(() => emptyRuntime());
     const editor = makeEditorHandle({ content: emptyDoc() });
@@ -159,6 +227,7 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     const insertResult = await result.current.importAndInsert({
       identity: captured,
       content: textDoc("restored after facade churn"),
+      entry: stashEntryOf(textDoc("restored after facade churn")),
     });
 
     expect(insertResult).toEqual({ status: "accepted" });
@@ -220,6 +289,7 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     const result = await destAfterSwitch.importAndInsert({
       identity: captured,
       content: mat.content,
+      entry: stashEntryOf(mat.content),
     });
     mat.release?.();
 
@@ -280,6 +350,7 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     const result = await dest.importAndInsert({
       identity: captured,
       content: mat.content,
+      entry: stashEntryOf(mat.content),
     });
     mat.release?.();
 
@@ -333,6 +404,7 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     const result = await dest.importAndInsert({
       identity: captured,
       content: mat.content,
+      entry: stashEntryOf(mat.content),
     });
     mat.release?.();
 
@@ -393,6 +465,7 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
     const result = await dest.importAndInsert({
       identity: captured,
       content: mat.content,
+      entry: stashEntryOf(mat.content),
     });
     mat.release?.();
 

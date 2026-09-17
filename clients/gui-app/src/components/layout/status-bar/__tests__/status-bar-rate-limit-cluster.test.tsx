@@ -739,7 +739,8 @@ describe("<StatusBarRateLimitCluster /> usage ladder", () => {
     function accountDotColor(segment: HTMLElement): string | undefined {
       return segment
         .querySelector('[data-testid="status-bar-provider-account-dot"]')
-        ?.querySelector<HTMLElement>("span[style]")?.style.backgroundColor;
+        ?.querySelector<HTMLElement>("span[style]")
+        ?.style.getPropertyValue("--swatch");
     }
 
     it("draws one segment per account, each with its own accent dot and reading", () => {
@@ -770,8 +771,8 @@ describe("<StatusBarRateLimitCluster /> usage ladder", () => {
       // The dot is the account's identity mark, and a provider with one
       // account (claude here) draws none.
       expect(codexSegments.map(accountDotColor)).toEqual([
-        "rgb(255, 0, 0)",
-        "rgb(0, 255, 0)",
+        "#ff0000",
+        "#00ff00",
       ]);
       expect(
         accountDotColor(
@@ -824,8 +825,8 @@ describe("<StatusBarRateLimitCluster /> usage ladder", () => {
       );
       expect(codexSegments).toHaveLength(2);
       expect(codexSegments.map(accountDotColor)).toEqual([
-        "rgb(255, 0, 0)",
-        "rgb(0, 255, 0)",
+        "#ff0000",
+        "#00ff00",
       ]);
       expect(screen.queryByTestId("status-bar-provider-account")).toBeNull();
     });

@@ -22,9 +22,10 @@ export function RoutePendingScreen() {
       className="flex min-h-0 flex-1 items-center justify-center bg-background"
     >
       <AgentSpinningDots
-        className="text-muted-foreground"
+        className={undefined}
         testId="route-pending-spinner"
         variant="dots2"
+        tone="muted"
       />
     </div>
   );

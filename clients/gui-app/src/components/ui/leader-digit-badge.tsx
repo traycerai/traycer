@@ -28,8 +28,13 @@ interface LeaderDigitBadgeProps {
  * the leader + digit shortcut. Shared by the epic tab strip and the
  * settings section sidebar.
  */
-export function LeaderDigitBadge(props: LeaderDigitBadgeProps) {
-  const { digit, modifier, ariaLabel, testId, className } = props;
+export function LeaderDigitBadge({
+  digit,
+  modifier,
+  ariaLabel,
+  testId,
+  className,
+}: LeaderDigitBadgeProps) {
   return (
     <m.span
       initial={false}
@@ -41,7 +46,8 @@ export function LeaderDigitBadge(props: LeaderDigitBadgeProps) {
       <Kbd
         aria-label={ariaLabel}
         data-testid={testId}
-        className={cn("text-overline font-semibold tabular-nums", className)}
+        size="xs"
+        className={cn("tabular-nums", className)}
       >
         {formatModifierChordForDisplay(modifier, digit)}
       </Kbd>

@@ -141,9 +141,10 @@ export function ScreencastSurface(props: {
             <div>
               <div className="flex items-center justify-center gap-2 text-ui-base font-medium">
                 <AgentSpinningDots
-                  className="text-muted-foreground"
+                  className={undefined}
                   testId="screencast-connecting"
                   variant={undefined}
+                  tone="muted"
                 />
                 Connecting
               </div>

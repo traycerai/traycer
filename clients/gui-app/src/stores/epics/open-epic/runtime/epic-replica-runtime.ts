@@ -922,13 +922,10 @@ export function createEpicReplicaRuntime(
           },
           getWorkspaceContext: () =>
             laneSelection.unaries.getWorkspaceContext(),
-          // The SAME two writes the `@1` arm performs for its `earlyMeta`
-          // frame, in the same one store write - `snapshotMeta` on the records
-          // plane, the DISPLAY role on the control plane. Routed through
-          // `control.apply` rather than a direct publish so the early role
-          // keeps its documented distinction from the snapshot-derived one: it
-          // moves the display and clears `accessLost`, and deliberately does
-          // NOT touch the write gate.
+          // The status lane owns permissions. Workspace context can come
+          // from a cached mirror with no role, or finish after a revocation;
+          // it updates record metadata only. Unlike @1's earlyMeta bootstrap,
+          // it must never overwrite the status lane's displayed role.
           //
           // This used to be the ONE lane callback that deliberately skipped
           // `noteInboundFrameApplied`, so that a unary answer a replacement
@@ -940,7 +937,6 @@ export function createEpicReplicaRuntime(
           onWorkspaceContext: (context) => {
             delivery.batch(() => {
               records.applyEarlyMeta(context);
-              control.apply({ kind: "early-meta", meta: context });
             });
           },
           onReplacementRequested: (reason, transition) => {

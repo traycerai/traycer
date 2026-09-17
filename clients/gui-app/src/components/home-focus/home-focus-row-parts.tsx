@@ -36,7 +36,7 @@ import { cn } from "@/lib/utils";
  * `@max-[30rem]:flex-1` is the folded row's whole point: once the badges and
  * the status have moved to their own line, the only things left beside the name
  * are the twisty and one icon, and the name should take everything they do not.
- * At wide width it keeps `shrink-[2]`, where the chip row is the item that
+ * At wide width it keeps `shrink-2`, where the chip row is the item that
  * grows.
  *
  * `min-w-3/5` is not belt-and-braces - without it the variant above inverts the
@@ -56,7 +56,7 @@ export function RowItemName(props: {
 }): ReactNode {
   return (
     <span
-      className="min-w-0 shrink-[2] truncate text-foreground @max-[30rem]:min-w-3/5 @max-[30rem]:flex-1"
+      className="min-w-0 shrink-2 truncate text-foreground @max-[30rem]:min-w-3/5 @max-[30rem]:flex-1"
       data-testid={props.testId}
     >
       {props.children}

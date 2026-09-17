@@ -105,10 +105,39 @@ const LOT_ROWS = 2;
 const LOTS_PER_GROUP = 2;
 const GROUP_COLS = 3;
 
-/** `1 + min(6, floor(activity / 4))`: one storey, then one per four messages. */
+/**
+ * `3 + min(11, floor(activity / 4))`: three storeys, then one per four
+ * messages, to fourteen.
+ *
+ * IT USED TO BE `1 + min(6, …)`, and that is the whole of why feedback round 1
+ * asked "does it represent high rises? but people are too large in front of
+ * the buildings". A storey is {@link ISO_STOREY_HEIGHT} = 8 sprite pixels and
+ * a character is {@link OFFICE_CHARACTER_HEIGHT} = 20, so the FLOOR of that
+ * range was a building 8 px tall standing next to a person two and a half
+ * times its height, and the CEILING was 56 px - under three people. A city of
+ * buildings nobody could enter without stooping does not read as a city at any
+ * zoom, and no amount of window art fixes a silhouette.
+ *
+ * Three storeys is 24 px, just over a person: a shopfront, which is what an
+ * agent that has said almost nothing should be. Fourteen is 112 px, five and a
+ * half people: a high rise. The HQ takes the ceiling and a spire on top of it
+ * ({@link ISO_SPIRE_LIFT}), so the corner office still towers over the tallest
+ * thing anybody else can build.
+ *
+ * The ceiling is a deliberate stop well short of "as tall as the data allows".
+ * These are isometric buildings drawn in FRONT of whatever is behind them, so
+ * every storey added is more street hidden from the reader - and a tower that
+ * buries the agents walking past it has traded a readable office for a
+ * skyline. Fourteen clears the low-rise problem with the streets still visible
+ * between the blocks.
+ *
+ * The pitch is untouched, and that is load-bearing: `block-left` /
+ * `block-right` are authored to stack at exactly 8 px, so height comes from
+ * the NUMBER of slabs and never from the spacing between them.
+ */
 const STOREYS_PER_ACTIVITY = 4;
-const CITY_MAX_STOREYS = 7;
-const CITY_MIN_STOREYS = 1;
+const CITY_MAX_STOREYS = 14;
+const CITY_MIN_STOREYS = 3;
 
 /**
  * Spare lots a block is built with. One per team, because a team block is

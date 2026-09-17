@@ -4,7 +4,7 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
-  worktreeDeleteByPathServerFrameSchemaV12,
+  worktreeDeleteByPathServerFrameSchemaV13,
   type WorktreeDeleteOutputChannel,
 } from "@traycer/protocol/host/worktree-delete-stream";
 import type { WorktreeBusyHolders } from "@traycer/protocol/framework/worktree-busy-holders";
@@ -327,13 +327,14 @@ async function runLegacyDeleteStream(
       act();
     };
     session.onServerFrame((envelope) => {
-      // The CANONICAL v1.2 frame, not a frozen earlier schema. v1.1 added
+      // The CANONICAL v1.3 frame, not a frozen earlier schema. v1.1 added
       // `holders` to the `failed` arm; v1.2 added optional `code` and
-      // `holdersRevision`. Those fields are optional-with-catch so an older
-      // envelope still parses, and a stale v1.1 decode would silently drop
-      // the 1.2 fields instead of failing.
+      // `holdersRevision`; v1.3 lets a chat-turn holder carry `chatTier`.
+      // Those fields are optional-with-catch so an older envelope still
+      // parses, and a stale earlier decode would silently drop the newer
+      // fields instead of failing.
       const parsed =
-        worktreeDeleteByPathServerFrameSchemaV12.safeParse(envelope);
+        worktreeDeleteByPathServerFrameSchemaV13.safeParse(envelope);
       if (!parsed.success) return;
       const frame = parsed.data;
       switch (frame.kind) {

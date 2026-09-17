@@ -52,7 +52,7 @@ import { SIDEBAR_REVEAL_HIGHLIGHT_CLASS } from "@/components/epic-canvas/sidebar
  * glyph is coloured, so three badges side by side read as three facts rather
  * than three alarms.
  */
-const BADGE_CLASS = "gap-1 rounded-full px-2 font-medium";
+const BADGE_CLASS = "rounded-full";
 
 const CHECKS_TONE: Record<
   PrChecksDotTone,
