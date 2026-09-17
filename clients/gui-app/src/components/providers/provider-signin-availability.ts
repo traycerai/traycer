@@ -132,11 +132,18 @@ export function providerLoginIsRemoteSafe(
   if (loginCapability === null || loginCapability === undefined) return false;
   if (loginCapability.codePaste !== null) return true;
   // Compare against PRESENCE, not against `null` - see `ReceivedLoginCapability`
-  // for why absence is reachable. `remoteSafe !== null` answered `true` for a
-  // capability that never carried the key, advertising a remote sign-in for a
-  // provider whose callback lives on the machine the user is not sitting at.
-  // Refusing a sign-in that would have worked costs a click; offering one that
-  // cannot complete strands the user - so absence resolves to `false`.
+  // for why absence is reachable on a wire this key is not guaranteed on. The
+  // tempting spelling is `remoteSafe !== null`, and it is wrong in the one
+  // direction that costs something: a capability that never carried the key at
+  // all satisfies it, advertising a remote sign-in for a provider whose
+  // callback lives on the machine the user is not sitting at. Refusing a
+  // sign-in that would have worked costs a click; offering one that cannot
+  // complete strands the user - so absence resolves to `false`.
+  //
+  // This reads the marker and nothing else. The `--device-auth` inference this
+  // replaced now lives in the v8->v9 upgrade bridge (`registry.ts`), which is
+  // where a fact about OLD hosts belongs; a host that models the key answers
+  // for itself.
   return Boolean(loginCapability.remoteSafe);
 }
 
