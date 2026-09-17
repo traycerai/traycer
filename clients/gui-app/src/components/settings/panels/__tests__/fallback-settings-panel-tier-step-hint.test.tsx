@@ -35,9 +35,17 @@ const LAST_RUN: ChatRunSettings = {
 
 const harnessesData = vi.hoisted(() => ({
   value: {
-    harnesses: [{ id: "claude", available: true }],
+    // `enabled` alongside `available`: the hook gates model requests on BOTH,
+    // so a row missing this field reads `undefined` and is filtered out -
+    // which would make the host-owned case below pass for the wrong reason
+    // (no request because no harness, not because of ownership).
+    harnesses: [{ id: "claude", available: true, enabled: true }],
   } as {
-    readonly harnesses: ReadonlyArray<{ id: string; available: boolean }>;
+    readonly harnesses: ReadonlyArray<{
+      id: string;
+      available: boolean;
+      enabled: boolean;
+    }>;
   },
 }));
 

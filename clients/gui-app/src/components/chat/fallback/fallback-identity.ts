@@ -432,8 +432,24 @@ export function useFallbackModelCatalogues(
 
   const harnessIds = useMemo<readonly GuiHarnessId[]>(() => {
     if (available === undefined || wantedKey === "") return NO_MODEL_HARNESSES;
+    // `available && enabled`, not `available` alone. The two are separate wire
+    // fields and a DISABLED harness can still report itself available, so the
+    // bare check let one into `requests` and issued `listModels` against a
+    // provider the user had switched off. That is not merely a wasted call:
+    // `useGuiHarnessModelsWarmup`'s contract spells out the consequence - an
+    // errored query refetches on the next enabled mount, so the failure retries
+    // for as long as the surface keeps mounting. `available && enabled` is also
+    // exactly how the catalog itself defines a settled-usable row
+    // (`lastSettledAvailable`), so this agrees with its own source.
+    //
+    // The cost is accepted and documented in that same contract: a tuple
+    // persisted by a historical chat can name a harness that is now disabled,
+    // and its model then shows as the raw slug. A slug for a provider the user
+    // turned off is the honest answer; a retrying request for it is not.
     const availableIds = new Set(
-      available.flatMap((harness) => (harness.available ? [harness.id] : [])),
+      available.flatMap((harness) =>
+        harness.available && harness.enabled ? [harness.id] : [],
+      ),
     );
     return wantedKey.split(" ").flatMap((harnessId) => {
       // `safeParse` rather than trusting the id: a tuple's harness is typed as

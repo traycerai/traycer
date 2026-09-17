@@ -31,6 +31,11 @@ import {
 interface HarnessSettledRow {
   readonly id: string;
   readonly available: boolean;
+  // `enabled` is a SEPARATE wire field from `available`, and the hook consults
+  // both - a harness the user switched off can still report itself available.
+  // Absent from this double it would read `undefined`, and the rows would be
+  // filtered out for a reason no test asked for.
+  readonly enabled: boolean;
   readonly availabilityPending: boolean;
   readonly error: string | null;
   readonly lastSettledAvailable: boolean | null;
@@ -130,6 +135,7 @@ function settledRow(
   id: string,
   available: boolean,
   overrides: {
+    readonly enabled: boolean;
     readonly availabilityPending: boolean;
     readonly error: string | null;
     readonly lastSettledAvailable: boolean | null;
@@ -138,6 +144,7 @@ function settledRow(
   return {
     id,
     available,
+    enabled: overrides.enabled,
     availabilityPending: overrides.availabilityPending,
     error: overrides.error,
     lastSettledAvailable: overrides.lastSettledAvailable,
@@ -145,6 +152,7 @@ function settledRow(
 }
 
 const SETTLED_TRUE = {
+  enabled: true,
   availabilityPending: false,
   error: null,
   lastSettledAvailable: true,
@@ -158,6 +166,7 @@ describe("useFallbackModelLabels", () => {
       harnesses: [
         settledRow("claude", true, SETTLED_TRUE),
         settledRow("codex", false, {
+          enabled: true,
           availabilityPending: false,
           error: null,
           lastSettledAvailable: false,
@@ -208,6 +217,59 @@ describe("useFallbackModelLabels", () => {
     // "codex" is unavailable, so its slug renders as typed - never blank,
     // never an invented name.
     expect(result.current("codex", "gpt-5")).toBe("gpt-5");
+  });
+
+  it("issues no model query for a harness that is available but DISABLED, and degrades to the slug", () => {
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", true, SETTLED_TRUE),
+        // The shape the bare `available` check let through: the provider is
+        // reachable, the user has switched the harness off. `available` and
+        // `enabled` are separate wire fields, so this row is not hypothetical.
+        settledRow("codex", true, {
+          enabled: false,
+          availabilityPending: false,
+          error: null,
+          lastSettledAvailable: false,
+        }),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useFallbackModelLabels(null, ["claude", "codex"], true),
+    );
+
+    // Falsification: relax `harnessIds`'s filter back to `harness.available`
+    // alone and this goes red - "codex" is requested again, and an error on
+    // that query would refetch on every later mount.
+    expect(hostQueriesCalls.requests.map((r) => r.params.harnessId)).toEqual([
+      "claude",
+    ]);
+    expect(result.current("codex", "gpt-5")).toBe("gpt-5");
+    // The enabled sibling is unaffected: this is a per-row gate, not a bail.
+    expect(result.current("claude", "claude-fable-5-1[1m]")).toBe(
+      "Claude Fable",
+    );
+  });
+
+  it("reports a disabled harness as SETTLED rather than waiting on a catalogue that will never be fetched", () => {
+    harnessesData.value = {
+      harnesses: [
+        settledRow("codex", true, {
+          enabled: false,
+          availabilityPending: true,
+          error: null,
+          lastSettledAvailable: false,
+        }),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["codex"], true),
+    );
+    // No request is issued for it, so a caller that waited would wait forever
+    // and the manual-switch announcement would never be spoken at all.
+    expect(result.current.settledFor("codex")).toBe(true);
   });
 
   it("issues no query and degrades to the slug for every tuple while the resolver is disabled", () => {
@@ -282,6 +344,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesData.value = {
       harnesses: [
         settledRow("claude", false, {
+          enabled: true,
           availabilityPending: true,
           error: null,
           lastSettledAvailable: null,
@@ -300,6 +363,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesData.value = {
       harnesses: [
         settledRow("claude", false, {
+          enabled: true,
           availabilityPending: false,
           error: null,
           lastSettledAvailable: false,
@@ -316,6 +380,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesData.value = {
       harnesses: [
         settledRow("claude", false, {
+          enabled: true,
           availabilityPending: true,
           error: null,
           lastSettledAvailable: false,
