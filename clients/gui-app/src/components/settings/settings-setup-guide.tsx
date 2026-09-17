@@ -16,12 +16,12 @@ export function SettingsSetupGuide(props: {
   readonly rootRef: RefObject<HTMLElement | null>;
 }) {
   const active = useOnboardingStore((state) => state.activeSetup);
-  const pause = useOnboardingStore((state) => state.pauseSetup);
-  // No pause on unmount: development roots render under StrictMode, whose
-  // mount probe runs every effect's cleanup once, which would clear the guide
-  // the moment it started. `activeSetup` is session-local presence, so a
-  // closed Settings simply resumes the same step when it reopens; Escape and
-  // the card's close button are the deliberate pauses.
+  const complete = useOnboardingStore((state) => state.completeSetup);
+  // Nothing on unmount: development roots render under StrictMode, whose mount
+  // probe runs every effect's cleanup once, which would clear the guide the
+  // moment it started. `activeSetup` is session-local presence, so a closed
+  // Settings simply resumes the same step when it reopens - and closing the
+  // surface is not a user skip, so it must not finish the card either.
   if (active === null) return null;
   const guide = setupGuide(active.id);
   const step = guide.steps[active.step];
@@ -44,7 +44,11 @@ export function SettingsSetupGuide(props: {
         }}
         rootRef={props.rootRef}
         selector={step.selector}
-        onClose={pause}
+        // Escape and the card's X are a skip, and a skipped card is done:
+        // the person has been shown the guide and declined it, so leaving it
+        // half-finished on the checklist would nag them for a decision they
+        // have already made.
+        onClose={() => complete(active.id)}
         onTarget={revealSetting}
         back={
           active.step > 0
