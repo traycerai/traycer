@@ -126,11 +126,12 @@ export function FontPicker(props: FontPickerProps) {
           </button>
         </PopoverTrigger>
         <PopoverContent
+          layout="bare"
           align="end"
           container={dialogContainer ?? undefined}
           collisionBoundary={dialogContainer ?? undefined}
           collisionPadding={8}
-          className="w-[min(85vw,18rem)] overflow-hidden p-0"
+          className="w-[min(85vw,18rem)] overflow-hidden"
           ref={contentRef}
           onOpenAutoFocus={coarseOpenAutoFocus}
         >

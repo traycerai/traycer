@@ -176,7 +176,7 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
     // outer surface never competes with the inner scroll surfaces below: the
     // hidden-scrollbar tree viewport (browse mode) and the results list (search
     // mode) are each the single active scroller for their mode.
-    <SidebarContent className="gap-0 overflow-hidden">
+    <SidebarContent className="overflow-hidden">
       {searchOpen ? (
         <ArtifactSearchBox
           epicId={props.epicId}
@@ -490,9 +490,10 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
         data-testid="epic-artifact-search-loading"
       >
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
       </div>
     );

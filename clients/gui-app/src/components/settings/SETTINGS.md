@@ -288,7 +288,9 @@ different answers:
   stream and a negotiated import capability; host Diagnostics' Log detail and
   both Shell cards, Terminal shell · New terminals and Host environment ·
   After restart, which a host too old for the config RPC replaces with a
-  notice; and the Overview's Installation and Danger zone cards themselves,
+  notice; Permissions' Auto mode group, which a host advertising
+  neither `autoJudge.get` nor `autoPolicy.get` has no notion of at all; and
+  the Overview's Installation and Danger zone cards themselves,
   which the page drops for an unresolved or vanished host) — not indexed. A
   shell-level context cannot decide selected-host identity or a capability
   negotiated over host RPC, and a predicate that pretended to would be a
@@ -297,8 +299,8 @@ different answers:
   every definition on it `contributesTo: "page"` — its label folds into the
   page entry's keywords beside the page's own vocabulary — so
   "uninstall", "snapshots", "import", "installation", "log level", "startup
-  flags" and "wsl" still land on the right page. The invariant that follows:
-  **no host-scoped section indexes an anchor.**
+  flags", "wsl" and "auto mode policy" still land on the right page. The
+  invariant that follows: **no host-scoped section indexes an anchor.**
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
   host runtime and a successful first read of the browser bridge; host
   Notifications' two groups, which the page's scope gate conceals while the
@@ -911,6 +913,28 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     for rebinding). `Pin context usage breakdown` used to sit here and now
     lives in **Layout › Chat** - it places a panel rather than changing what
     the composer does.
+    - **Default permission mode** is the only writer of
+      `settingsStore.defaultPermission`, which until this row existed was
+      initialized and never written. It renders the composer's own
+      `PermissionsPicker` with `supportedPermissionModes={null}` and
+      `harnessLabel={null}` (no harness scope, so every mode stays enabled -
+      that null case was documented on the picker for this row before the row
+      existed) and `closeFocus="trigger"`. That last prop is new and exists for
+      this caller: the picker's composer-focus return is app-global and its
+      inactive fallback can name an editor on a canvas BEHIND Settings, so
+      closing the menu here would pull focus, and the tab it lives in, out from
+      under the panel.
+      It is APPLICATION scope, not host scope, which is why it is here rather
+      than beside the Auto-mode judge it pairs with (see "Scope: the
+      organising idea"): it is one preference for this app. It is also not the
+      only input to a new chat - a composer prefers the last mode that HOST ran
+      with (`composer-run-settings-store`, bucketed per host) - so the copy
+      says "what a fresh one opens on". Session import reads the same ladder
+      (`newChatPermissionModeFor`), which is what makes this row the thing that
+      can put `auto` into an import; see `session-import-wizard.tsx`'s note on
+      why the gate now reads `sessionImport.run`'s own negotiated line rather
+      than a catalog row, so an import no longer silently demotes on a remote
+      host.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions") is the only row left. The two
@@ -1542,11 +1566,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     limits shows three independent gauges, which is what `Show mini bar`
     promises. A single bar in front of several readings was one severity
     colour with nothing on the row saying which limit it belonged to. The
-    SWITCH and the ladder's `bar` rung still govern them as ONE decision
-    (`showBar && parts.bar` in `status-bar-provider-segment.tsx`): a strip
-    that runs out of room drops every bar at once rather than thinning them
-    one at a time, and `percent-only` has already narrowed to the tightest
-    reading two rungs after the bars went. Each bar carries
+    switch governs them as ONE decision (`parts.bar` in
+    `status-bar-provider-segment.tsx`): off takes every bar away at once
+    rather than thinning them one at a time. Each bar carries
     `data-window-key`, since order is otherwise the only thing pairing a
     gauge with its number, and every one stays `aria-hidden` - the accessible
     content is the percentages and the provider tooltip, unchanged. The gauge
@@ -1636,27 +1658,39 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     are its alternatives - `Tightest limit (automatic)` beside `5h` reads as
     two kinds of thing on one line - which is why a provider's limits are a
     checkbox column instead.
-  - **Every rate-limit row that hides something is also a rung of the strip's
-    collapse ladder**, and the two meet rather than fight. A provider draws
-    its selected limits (the tightest alone by default). When the cluster runs
-    out of room it drops the mode word, then the bars, then the timers, then
-    everything but the coloured percentage - at which point it also narrows
-    to the tightest of the selection however many are checked, since several
-    bare numbers under one icon say which limits exist but not which is
-    which - then everything but the icon, and finally folds whole providers
-    into a `+N` chip - skipping any rung whose setting is already off, since
-    taking away something invisible would free no width. The percentage is
-    severity-coloured at every rung, bar or no bar.
+  - **The strip draws everything that is switched on, at every width, and
+    SCROLLS what does not fit.** A provider draws its selected limits (the
+    tightest alone by default) with every part the Display rows ask for -
+    mode word, mini bar, countdown - and the width of the window never
+    shortens a reading or hides a provider: every account and every display
+    switch is a choice the user made, and a strip that quietly dropped one to
+    fit would be overriding a choice it was asked to show. When the usage
+    cluster outgrows the room the resource readout leaves it, the cluster
+    scrolls horizontally (`status-bar-usage-scroller.tsx`: a wrapper around
+    the trigger, since a `<button>` is not a reliable scroll container; no
+    scrollbar; a mouse wheel turned sideways by `useHorizontalWheelScroll`,
+    touch and trackpad native) and a mask fades ONLY the edge that hides
+    something (`useHorizontalScrollEdges` + `horizontalScrollFadeClass`) - the
+    fade is the affordance. The scroll position resets to the start when the
+    SET of segments changes (host switch, provider hidden or shown, account
+    checked or unchecked) or the WATCHED HOST changes
+    (`statusBarUsageScrollKey` - two hosts can draw identical segment ids and
+    the strip keeps its subtree across a switch) and never when a reading
+    inside one moves, so a countdown tick does not throw away where the user
+    scrolled to. The refresh `↻` sits after the scroller, outside it, so it
+    never scrolls away with the numbers it refreshes; the resource segment
+    stays `shrink-0`, pinned right, printing every metric with its label at
+    every width. The percentage is severity-coloured always, bar or no bar.
   - **Which ACCOUNTS a provider's segments describe is chosen in the usage
     panel, not on this page** (`layout/header/rate-limit-popover.tsx`). Every
     profile card - managed and ambient, Overview and detail tab alike -
-    carries a `Status bar` switch right of its enable toggle, and the strip
+    carries an eye toggle immediately left of its accent dot (`Eye` checked,
+    `EyeOff` not; `aria-pressed`), and the strip
     draws **one segment per checked account** for the host it is watching:
-    provider icon, the profile's inline `AccentDot`, its name on the rungs
-    that still print words, and its own limits, mini bars and countdowns
-    resolved through the provider's limit selection above. The ladder folds
-    segments, so `+N` counts accounts and its tooltip names each
-    (`Codex · Work 57%`). Store:
+    provider icon, the profile's inline `AccentDot`, its name before the
+    reading, and its own limits, mini bars and countdowns resolved through the
+    provider's limit selection above - every one drawn in full, scrolled to
+    when the strip is short of room. Store:
     `rateLimits.shownProfiles[hostId][providerId] = [profileId | null, …]`
     (`stores/settings/layout-store.ts`; `null` is the ambient login), keyed by
     host because a profile id names a credential on ONE machine - the panel
@@ -1670,7 +1704,18 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     preference: no density preset carries it (`applyLayoutPreset` carries it
     over like `placement`), only `Reset to defaults` clears it, and Layout
     draws no control for it because Layout is app-level and the accounts are
-    not. Analytics: `layout.statusBar.shownProfiles`, from the switch.
+    not. Analytics: `layout.statusBar.shownProfiles`, from the eye.
+    - **The eye exists only while the strip is on screen.** Whether it is
+      is ONE predicate, `selectStatusBarShown` / `useStatusBarShown`
+      (`stores/settings/layout-store.ts`): `placement === "status-bar"` on a
+      desktop viewport, `mobileFooter` on a mobile one - the same read
+      `AppShell` mounts the strip on. Under the header placement, or on a
+      phone with the footer off, every card drops its eye and its "drawn"
+      highlight alike, since there is no segment for either to point at. A
+      hidden provider (`hiddenProviders`) hides the eye only - there is no
+      segment for it to govern - and leaves the highlight alone. The checks
+      stay in the store untouched and take effect again when the strip
+      returns.
     - **Nothing checked draws ONE account**, resolved by
       `resolveStatusBarProfileIds` (`hooks/rate-limits/use-rate-limit-profile-selection.ts`):
       the profile last picked in a composer on THAT host if the provider still
@@ -1679,11 +1724,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       chat on ANY host, so a tile bound to another machine made the segment
       jump to an account this host does not have and fall to ambient. The
       card for the fallback account is highlighted (`aria-current`) with its
-      switch off and a tooltip saying it is shown by default; checked cards
-      are highlighted with the switch on. The old `Active` badge is gone with
-      the rule it described. The switch is hidden while the provider itself is
-      off the strip (`hiddenProviders`), since there is no segment for it to
-      govern.
+      eye off and a tooltip saying it is shown by default; checked cards
+      are highlighted with the eye on. The old `Active` badge is gone with
+      the rule it described.
     - **A segment is a deep link.** Clicking one arms
       `rate-limit-popover-store.revealProfile` (session-only, never persisted)
       and selects the provider's tab; the card scrolls itself into view and
@@ -1691,8 +1734,11 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       bubble to the cluster's `PopoverTrigger`, which is what opens the panel.
     - The header glyph has two slots and no room to name an account, so it
       draws the FIRST of the accounts the strip would draw per provider
-      (`resolveRateLimitProfileId`); Layout's limits list reads the same one,
-      since the limit selection is per provider.
+      (`resolveRateLimitProfileId`) - while the strip is on screen. While it
+      is not, the checks have no control, so the glyph resolves without them
+      (last-used → first profile → ambient). Layout's limits list keeps
+      reading the checked account regardless, since it previews the strip and
+      the limit selection is per provider.
     - The dot and the name are drawn only for a provider with two or more
       profiles - the composer rail's rule, and for the same reason: one
       account needs telling apart from nothing.
@@ -1706,8 +1752,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     name that carries identity (`Fable`, `Opus wk`, `Cursor models`, a named
     Codex limit) is kept and the countdown appended, since several of those
     share one reset instant and would otherwise print as one string. The count
-    is the provider's LIVE limits, not the ones the rung draws - a provider
-    drawing its tightest alone still has to say which of several it is.
+    is the provider's LIVE limits, not the ones the selection draws - a
+    provider drawing its tightest alone still has to say which of several it
+    is.
     Settings' checkbox list is not a caller: it lists every limit so each can
     be checked, so a name is the point even when there is one.
   - **Grok's period label never parses the wire token.** `periodType` is
@@ -1743,10 +1790,10 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
 settings…`.
   - **The preview is the strip, not a picture of it**
     (`panels/layout/status-bar-preview.tsx`). It renders the same
-    `StatusBarUsageReadings` box, the same `StatusBarProviderSegment`, the same
-    `+N` chip and the same `StatusBarResourceSegment` the footer does, off the
-    same store and the same cache entries, so it cannot show a shape the strip
-    cannot produce. What it does NOT do is make a reading happen:
+    `StatusBarUsageScroller`, the same `StatusBarUsageReadings` box, the same
+    `StatusBarProviderSegment` and the same `StatusBarResourceSegment` the
+    footer does, off the same store and the same cache entries, so it cannot
+    show a shape the strip cannot produce. What it does NOT do is make a reading happen:
     `useStatusBarRateLimitSegments` takes a required `mode`, and `passive`
     disables every observer in all three batches - the http lane included, since
     that is the one that would otherwise fetch - and hands back no mount
@@ -1754,9 +1801,12 @@ settings…`.
     "renders no refresh button" would be a promise about markup, while an empty
     `httpRefetches` is a promise about behaviour, and `refetch` on a disabled
     query still fetches. It also mounts no popover, no resource stream and no
-    dynamic action handler. The whole frame is `inert` + `aria-hidden`: every
-    control in it is a real one that would be a dead end there, and the rows
-    below are where each is actually configured.
+    dynamic action handler. The readings and the resource control inside the
+    frame are `inert` + `aria-hidden`: every control in the picture is a real
+    one that would be a dead end there, and the rows below are where each is
+    actually configured. The frame and the scroller around the readings stay
+    LIVE, so the picture scrolls under a wheel or a swipe exactly as the strip
+    does - an inert ancestor would swallow both.
   - **So the preview is honest rather than idealised.** An account with no
     provider draws the strip's "connect a provider" line, a cold provider
     beside a live one draws its cold track, and with no global resource stream
@@ -1772,18 +1822,16 @@ settings…`.
     and where a live number comes from. Everything else in the cluster is
     passed through untouched - providers past the second keep their cold
     track, and the substitution walks the CLUSTER rather than the two
-    readings, so the provider count, the icon set, the strip order, the
-    per-provider switches and the `+N` fold's arithmetic are the ones the
-    strip would have. An `unavailable` provider is never sampled: it has
+    readings, so the provider count, the icon set, the strip order and the
+    per-provider switches are the ones the strip would have. An
+    `unavailable` provider is never sampled: it has
     ANSWERED that it cannot report usage, so a percentage over it is a
     stronger invention than the cold case and the caption's own sentence
     would be false for it - it keeps its dash and its note, and a cluster
     with nothing cold in it gets no sample at all. The per-provider
     "no reading yet" lines for the SAMPLED providers are dropped while the
     caption speaks for them (the two would otherwise contradict each other
-    under one frame), and a `Folded:` line carrying an invented number is
-    marked `(sample)`, since a fold takes that reading off the strip the
-    caption sits above. The reset instants are taken from the same 60s clock
+    under one frame). The reset instants are taken from the same 60s clock
     the countdowns read, so the sample never ticks; the passive reader is
     unchanged, so it never fetches; and one live or degraded reading anywhere
     in the cluster puts the host's own readings back, cold tracks included -
@@ -1794,26 +1842,20 @@ settings…`.
 placement is Status bar.` in `header` placement, and `Shown at this window
 width when Footer status bar is on.` below `md`, where the placement sentence
     would be a false promise and the switch is what actually answers. The
-    width control also STARTS at `normal` below `md` rather than `wide`,
-    because the strip forces the `compact` rung on a mobile viewport and 880 is
-    the nominal width inside that band - a phone opening the group sees the
-    rung its own footer draws.
+    width control also STARTS at `narrow` below `md` rather than `wide`: a
+    phone's footer is narrower than any option, so the closest picture of it
+    is the one whose readings scroll.
   - **`inert` is why the frame's own tooltips are not the explanation.** It
-    removes the subtree from hit testing, so no `TooltipWrapper` inside it can
+    removes the readings from hit testing, so no `TooltipWrapper` inside them can
     open - and the states those tooltips exist for (three bare dashes, a dimmed
     reading behind a ⚠) are exactly the ones a preview reads as broken without
     one. A `status-bar-preview-notes` list under the frame carries them
     instead: one line per non-live provider segment and ONE line for the
     resource segment, both from the same builders the tooltips use
     (`statusBarSegmentTooltip`, `statusBarResourceMetricViews`), so the caption
-    and the strip can never word one state two ways. The `+N` chip's tooltip is
-    lifted the same way, as a `Folded: <provider> <reading>, …` line built from
-    the chip's own `providerReadingText` - at the Narrow width, the one a reader
-    picks precisely to find out what folds, `+2` with no way to see which two is
-    the worst of the three. It is also why the LADDER is stepped by the preview
-    itself and handed to both halves: which providers folded is a property of
-    the measurement, and only one box can be the measured one. They are two
-    SIBLINGS
+    and the strip can never word one state two ways. Nothing is said about a
+    reading being out of view: a segment past the frame's edge is a scroll
+    away, not a state. They are two SIBLINGS
     rather than one list, because reading the resource reason costs a
     `useDesktopAppResourceUsage` SUBSCRIPTION and subscribing is what starts
     the 1 Hz IPC poll - so that half is its own component mounted under `Show
@@ -1821,55 +1863,45 @@ resource monitor`, never a gated result. Both dim whenever the frame does,
     and both are absent when there is nothing to explain.
   - **The width control names a NOMINAL width, and the frame is drawn at
     exactly that width** - `w-[480px]` / `w-[880px]` / `w-[920px]` on the
-    `inert` frame, one per density band (`< 500` icon-only, `< 900` compact,
-    else full) - under a `max-w-full` that is the honest half of it: every
+    frame - under a `max-w-full` that is the honest half of it: every
     Settings surface caps at `max-w-5xl`, so this box is at most ~944px wide
     however large the window is, and a frame drawn past that would push the
-    resource cluster off the right edge with nothing on screen saying so -
-    the reported bug moved one cluster over, and reproducing at 100% rather
-    than under ~1560px. Wide is **920** for the same reason: a nominal no
-    pane can draw is not a width, and 920 is still `≥ 900`, so the `full`
-    ceiling and every Display switch survive. Density comes from that nominal
-    width through `statusBarDensityForWidth`, NEVER from a measured box:
-    inside the Settings modal that box is `min(pane, 1024) − chrome`, which is
-    `compact` on any window under ~1560px, and at the `compact` ceiling the
-    ladder drops the mode word, the mini bar and the countdown whatever the
-    store says. A preview that measured itself answered "this switch does
-    nothing" to the first three Display switches a user tried - in the modal
-    only, since the promoted tab has less padding and reached `full`, so the
-    same switches worked in one Settings surface and not the other. What is
-    still MEASURED is the ladder's own `roomRef` on the usage slot inside the
-    frame, which the frame's width is what sizes, so the rungs and the `+N`
-    fold answer "does this fit the strip in front of me" exactly as they do in
-    the footer - and on a pane narrower than the nominal they answer it about
+    resource cluster off the right edge with nothing on screen saying so.
+    Wide is **920** for the same reason: a nominal no pane can draw is not a
+    width. What the width changes is how much of the usage cluster is in view
+    before the fade - the readings themselves are the same at every width,
+    since the strip scrolls rather than shortening them - and Narrow is the
+    option that shows the fade at all, on a strip that would need it. The
+    scroller inside the frame measures the room the frame's width leaves it,
+    so it answers "does this fit the strip in front of me" exactly as it does
+    in the footer - and on a pane narrower than the nominal it answers about
     the narrower strip actually drawn, which is the honest reading. It
-    defaults to **Wide**, so the first thing a reader sees is every switch
-    doing something. It is component state, never persisted: a way of LOOKING
-    at the strip rather than a preference about it. The three fixed-px widths
-    are the one sanctioned exception to the fluid-sizing rule, recorded in
+    defaults to **Wide**, the most room the strip can have - the readings
+    still scroll there when there are more than fit. It is component state,
+    never persisted: a way of LOOKING at the
+    strip rather than a preference about it. The three fixed-px widths are
+    the one sanctioned exception to the fluid-sizing rule, recorded in
     `gui-app/AGENTS.md`: the box IS a simulated viewport, and a control that
     names a pixel width has to draw one.
-  - **The preview's ladder measures a stretching box**, the same two-box shape
-    the strip uses: the usage slot is `min-w-0 flex-1` and carries `roomRef`,
-    the readings inside stay `shrink-0` under `contentRef`, and there is no
-    separate spacer. A content-sized container would report its own content the
-    moment that content fits, which is a ladder that can only ever go down -
-    Wide → Narrow → Wide would stay collapsed until Settings was reopened. It
-    also carries an invisible `reservedRef` placeholder composed of the strip's
-    own two numbers (`pl-1` plus the refresh button's `size-5`): the ladder
-    subtracts whatever shares the room with the readings, and a preview that
-    reserved nothing would collapse ~24px later than the strip - at the one
-    width whose whole job is to say what collapses first. The real
-    `RefreshIconButton` would close the gap too, but it renders disabled for a
-    passive reader, which misrepresents a live control.
+  - **The preview's scroller has the room the strip's has**: the usage slot is
+    `min-w-0 flex-1`, the scroller inside it takes that room, the readings
+    stay `shrink-0` at their natural width, and there is no separate spacer.
+    It also carries an invisible placeholder composed of the strip's own two
+    numbers (`pl-1` plus the refresh button's `size-5`): the strip's scroller
+    has only the room that control leaves, and a preview that reserved nothing
+    would give its readings ~24px more than the strip has and show no fade at
+    a width where the strip already scrolls - at Narrow, whose whole job is to
+    show that. The real `RefreshIconButton` would close the gap too, but it
+    renders disabled for a passive reader, which misrepresents a live
+    control.
   - **The preview is STICKY inside its group, from `md` up** (`md:sticky
 md:top-0`): positioned against the nearest scrollport - the settings
     `overflow-y-auto` box, padding-less in both the modal and the tab, hence
     `top-0` - and confined to its containing block, `SettingsGroup`'s card, so
     it releases when the Status bar group scrolls past. The breakpoint is the
     one `AppShell` mounts the strip on, and the reason is the same as the
-    caption's: below `md` this block is a dimmed `inert` picture of a surface
-    the shell does not draw, it is several hundred pixels tall once its
+    caption's: below `md` this block is a dimmed picture of a surface the
+    shell does not draw, it is several hundred pixels tall once its
     description and captions wrap, and a sticky box taller than its scrollport
     pins its TOP - so its own last caption would be unreachable, scrolling
     being what the pin cancels. Two things make it work: `SettingsGroup`'s card
@@ -2745,6 +2777,66 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
+  - **Who reviews &lt;provider&gt;'s commands**
+    (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
+    tab. The tab is client-derived like `account` (`provider-settings-tabs.ts`:
+    never on the wire enum), sits right after Env, and is drawn for EVERY
+    provider once the selected host's negotiated
+    `agent.gui.listHarnesses` line can spell `auto` (`catalogLineKnowsAutoMode`)
+    - a host that predates auto mode has no judge to name, so it shows no tab.
+      Two earlier gates were retired here: `autoJudge.get`, which names the
+      HOST-WIDE judge rather than this tab's per-provider classifier, and the
+      catalog's mode UNION, which an unconstrained row contributes nothing to. After Env
+      rather than after CLI & Args so it cannot become a provider's default tab:
+      amp and cursor advertise `env` without `general`, and a tab every provider
+      gets must not displace the one the provider asked for. Inside, a provider
+      whose GUI harness catalog row
+      reports `nativeAutoJudge` gets the two-option select; every other provider
+      gets a read-only line naming Traycer's judge and pointing at Settings ▸
+      Permissions - "nothing to choose" is still the answer to the question the
+      tab is named for. Nothing renders until the catalog has answered, so the
+      line never flashes at a provider about to get the select. It used to be a
+      section at the bottom of CLI & Args, drawn for Claude Code alone, where
+      nobody looking for "permissions" would open. Labelled by provider rather
+      than "Auto mode judge" because the row
+      under Permissions carries that name too and THIS is the one that wins
+      (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
+      so both rows now name whose judge they are about; the provider name is
+      interpolated, which renders "Who reviews Claude Code's commands" today and
+      does not lie if a second provider ever reports `nativeAutoJudge`. Its
+      description ends with the precedence sentence - choosing the provider's
+      classifier means chats on this provider skip Traycer's judge AND the Auto
+      mode policy entirely - because this control is where that is decided and
+      a user who has written a policy under Permissions has no other way to
+      learn it.
+      A two-option `Select` - Traycer's judge, or this
+      provider's own classifier - written through `providers.setAutoJudge` and
+      persisted as `autoJudge` in `provider-overrides.json`, beside
+      `terminalAgentArgs`, so it takes that neighbour's scoping and invalidation
+      (`providers.list` only; a judge choice cannot change availability).
+      Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
+      `nativeAutoJudge: true` - a switch with one option is not a switch, and
+      every other provider runs Traycer's judge with nothing to choose. **Claude
+      Code is the only provider that reports it**, so it is the only select
+      drawn; the flag also stands in for a method gate, because it rides the
+      same catalog minor as the setter, so a host too old to accept the write
+      reports it `false`. Drawing the select is not the same as the provider judging: the
+      host's own store answers `traycer` for a provider nobody has switched, and
+      `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
+      to Traycer's judge.
+      The stored value is read back through `ProviderCliState.autoJudge`, which is
+      `.optional()` on the wire rather than defaulted (a host that predates auto
+      mode omits the key, and absent must stay distinguishable at the protocol
+      boundary), so `providerAutoJudgeFor`
+      (`lib/providers/provider-auto-judge.ts`) is the one place that spells the
+      `?? "traycer"` fallback - "never chosen" and "host too old to say" landing
+      on Traycer's judge alike, the same direction every failure mode in the
+      host's own reader takes. The section also holds a local echo of a fresh pick
+      so the control does not snap back for the width of the `providers.list`
+      round-trip (nor permanently, on a host that never reports the field); the
+      echo clears itself the moment the read agrees, which is what lets another
+      window's edit through, and the row is keyed by `providerId` so switching
+      providers discards it.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
     than a CLI login, so it renders an `ApiKeySection` (masked input +
     Save/Clear) when `state.apiKey.supported` — **as the whole body of the
@@ -3564,6 +3656,181 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     tested row, but the Test button on every OTHER row is also disabled while
     any one test is in flight (the mutation is global, not per-row) - worth
     knowing if this ever reads as a bug report.
+- `Permissions` (section id `permissions`, route `/settings/permissions`,
+  `panels/permissions-settings-panel.tsx`) Who reviews what an agent does on
+  the selected host under the `auto` permission mode. Its own page, not rows
+  on Agent selection: that page is about which agent gets CHOSEN for a task,
+  and permissions are a different question, asked at a different time (a user
+  decision, 2026-09-12, after the rows first shipped above the guide). The
+  mode's app-wide DEFAULT is not here; it is a General row (see "Scope: the
+  organising idea"). The per-provider switch between Traycer's judge and a
+  provider's own classifier is not here either - it is a fact about one
+  provider's CLI and lives on that provider's own Permissions tab under
+  Providers, which is the switch that wins.
+  One `SettingsGroup`, **Auto mode** (`auto-mode-settings-section.tsx`): the
+  judge row, the policy row and, under it, a read-only view of the rules that
+  apply before either - all host RPCs, all scoped by the sidebar picker. The
+  group and its rows are defined in `permissions-settings.definitions.ts`,
+  every one `contributesTo: "page"`, because the group is dropped whole on a
+  host that has no notion of auto mode (see § Search, "Gated on the SELECTED
+  HOST").
+  - **The section is the whole page, so it never renders nothing.** Two
+    states replace the rows with one sentence: the scope is
+    connecting/unreachable/vanished (`isHostScopeUsable` - checked so the rows
+    are not MOUNTED, since a hidden query still fires against the ambient
+    host), or the host does not advertise `autoJudge.get` / `autoPolicy.get`
+    (optional capabilities with an `unsupported` degrade - so this is every
+    host until it updates, and `useHostSupportsMethod` fails closed, hiding on
+    "not yet known" too), in which case the sentence says the host predates
+    Auto mode and asks for an update. A sentence rather than a hidden
+    `<Activity>` keeping the rows mounted: the cost is that a transient
+    same-host disconnect closes an open policy dialog and drops its draft;
+    accepted, because the judge row holds no draft and the policy dialog is an
+    explicit, explicitly-saved editing session rather than the always-open
+    editor Activity was introduced for.
+  - **Traycer's auto mode judge** reuses the composer's `HarnessModelPicker`
+    (`auto-judge-picker.tsx`) with BOTH footers off - `withServiceTier={false}`
+    and the new `withReasoning={false}` - because the stored record is
+    `(harnessId, model, profileId)` and the judge request carries no effort or
+    tier, so either footer would take a choice and silently drop it. It is
+    wired to its own `createComposerToolbarStore` rather than through
+    `useComposerToolbarStore`, deliberately: that hook records every commit
+    into `composer-harness-memory-store`, and pinning a cheap judge model
+    would then quietly become the model the next chat on that provider offers.
+    (One memory write survives from inside the picker's own `commitSelection` -
+    the last profile browsed for a provider - which is a fact about which
+    credential the user pointed at.) Backed by `autoJudge.get` / `autoJudge.set`
+    over `~/.traycer/host/config/auto-judge.json`; the read is updated in place
+    from the write's response, since the picker commits on every click.
+    `selection: null` means unset. Both responses optionally report `effective`
+    (`harnessId`, `model`, `source`) and `blocked` from the host's shared judge
+    selection rule and provider enablement read, without probing availability.
+    The row says "Using Traycer's default judge · <model>" from that effective
+    slug, using its catalog label when available and the slug otherwise. The
+    picker also seeds its selected mark from `effective` when nothing is stored;
+    it never substitutes the catalog's ordinary chat default for the host's
+    reported judge. A disabled provider gets an amber explanation and a
+    Providers action; no default model or unsupported harness asks the user to
+    pick another judge. Returning from Providers refreshes this read even when
+    cached. Hosts that omit both fields retain the existing default-judge copy.
+    These are optional additions to unreleased 1.0, matching `autoPolicy.get`'s
+    `readState` precedent. A stored `harnessId` this build has no
+    adapter for (a newer host, an older app - the protocol keeps that field a
+    checked string precisely so it decodes) is named in an amber line instead of
+    being presented as some other provider.
+  - **The self-billing warning** sits beside those amber lines, on one rule:
+    `harnessId !== "traycer"`. `traycer` is the only harness metered against
+    Traycer credits; every other one routes through that vendor's CLI on the
+    user's own credential, so no catalog field and no protocol minor are
+    needed - `autoJudgeSelfBillingWarning` (`lib/auto-mode/auto-judge-billing.ts`)
+    is the one place that decides. What VARIES is the severity: Copilot gets a
+    number, because it is the only harness whose billing unit is a fixed
+    monthly allotment of premium requests, and the sentence quotes TRAYCER'S
+    OWN allowance ("an hour of Auto mode can use
+    60-350 of your monthly allowance") rather than GitHub's allotment - the
+    rate is a fact about our behaviour that we control and that cannot go stale
+    when GitHub reprices. Every other non-`traycer` harness gets the generic
+    line, whose "on top of your chat replies" clause is the load-bearing half:
+    the sharpest case is a user picking the SAME harness for chat and judge,
+    which is the natural thing to reach for and doubles the spend on one
+    account. It reads the STORED selection, not the presented one - the host
+    bills what it has stored, and the composer's own meta line reads the same
+    record, so the two surfaces cannot disagree about which pocket is spent.
+  - **Auto mode policy** is a summary plus a button that opens
+    `auto-policy-editor-dialog.tsx`, over `autoPolicy.get` / `autoPolicy.set`.
+    A dialog rather than an inline editor because the panel's height is already
+    spent, and a policy is a document. An empty policy prefills the four
+    headings the judge's prompt builder reads (`Environment`, `Allow`, `Soft
+deny`, `Hard deny`) and nothing else - the guidance about what belongs under
+    each is the dialog's copy, because every byte of the document is prose the
+    judge will read. Save is explicit (no debounced auto-save like the guide's):
+    the record is ACCOUNT-wide and last-write-wins, so every keystroke
+    auto-saved is a keystroke racing another device. Two subtleties:
+    `updatedAt: null` means "cannot tell" - the protocol sends it both for a
+    policy never saved AND for one the host is serving from a cache it could
+    not refresh - so the stale-edit banner fires on a
+    null-to-real transition as well as on two different non-null stamps (a
+    policy CREATED elsewhere while the editor was open is the case the
+    symmetric check swallowed), and the summary says "Set" rather than
+    inventing a date - except on a `stale` read with an empty body, where it
+    says it could not check rather than claiming "Not set" about an absence the
+    host merely had cached; and the
+    64 KiB cap is checked in UTF-8 BYTES as a courtesy pre-flight only, the
+    server being the enforcement (the authoritative constant lives in the
+    closed-source service and reaches no client contract).
+  - **The row reads `readState`, not `body`, first.** `autoPolicy.get` answers
+    `readState: "fresh" | "stale" | "unreadable"` alongside the body, because
+    `body: null` was doing two jobs: "never saved" and "the host could not
+    read it". On `unreadable` the summary says "Couldn't read your policy",
+    the button stays "Edit policy" and is DISABLED, and the editor - the only
+    route to Save - is therefore unreachable; Save is additionally disabled
+    inside the dialog for the case where the read fails while the dialog is
+    already open, with a banner saying why. The clobber this closes is narrow
+    and real: a read that fails while the WRITE path is healthy (an expired
+    lease on the GET, a 5xx from a read replica), where "Not set / Write a
+    policy" invited the user to overwrite a policy they could not see. The
+    property is `.optional()` on the wire and rode into `1.0` in place, so a
+    host that predates the resolver half sends nothing and
+    `autoPolicyReadStateFor` (`auto-policy-document.ts`) resolves that to
+    `fresh` - the behaviour this row had before the field existed - in the one
+    place the fallback is spelled.
+  - **Opening the editor asks the server again, and Save waits for the
+    answer.** The stale-edit banner compares the stamp the editor opened on
+    against the live one, and both used to be read off the same cache entry -
+    equal by construction, so the banner could never fire. Opening now fires a
+    refetch; the dialog still appears on the click, but Save is disabled with
+    the usual inline spinner until that read settles, and stays disabled with
+    its own banner if it FAILS. The cost is one round trip at a moment when
+    Save is unreachable anyway (it needs a typed edit), and what it buys is
+    that "nobody else has saved since you opened this" is an answer rather than
+    an assumption. A close-and-reopen is generation-guarded so the first read's
+    late answer cannot unlock Save while the second is in flight.
+  - **The policy cache is partitioned by SIGNED-IN USER.** The record is
+    account-owned while the query is host-shaped, and an auth transition marks
+    host queries stale WITHOUT dropping their data - so a host-only key served
+    the previous user's policy, synchronously, to whoever signed in next, with
+    Edit live. `useAutoPolicyQuery` puts the viewer id in `cacheKeyIdentity`
+    and the save's write-through addresses that one partition
+    (`hostQueryKeys.autoPolicyForViewer`) rather than the method-scope prefix,
+    which would land the new body in every viewer's entry and re-open the same
+    leak from the write side. `autoJudge.get` deliberately takes neither: it
+    answers from a file only this GUI writes on that machine, so the host key
+    already names its owner.
+  - **What the judge already blocks** (`auto-policy-shipped-dialog.tsx`) is a
+    read-only view of the rules the judge applies before any policy of the
+    user's, rendered from `shippedDefaults` - the host's whole bundled
+    `auto-judge/defaults.md`, also `.optional()` on the same response. The row
+    is drawn only when that document arrives AND this build can find a tier in
+    it (`auto-policy-shipped-document.ts`), which is what keeps the view
+    invisible on a host that does not send it rather than showing a card with
+    three empty headings. The bullets are the host's document verbatim, so the
+    view can never describe rules that host is not running; only the HEADINGS
+    are replaced, because the document's own are prompt text addressed to the
+    judge and "non-overridable" over-promises to a person, who can always
+    approve the action on the card. The out-of-scope note is the one piece of
+    prose written here rather than taken from the document.
+  - **What the card says when the judge does not decide** is the other end of
+    this page, and lives in the chat rather than in Settings
+    (`chat/segments/approval-card-disclosure.ts`, rendered by
+    `composer-slot-approval-queue.tsx`). The host's `auto: …` reason is printed
+    verbatim and in mono - a screenshot of one is a diagnosis - with a human
+    sentence BESIDE it, never in its place. There are three sentences, because
+    the constants describe three situations and one sentence is false for two
+    of them: **did not run** (`auto: no judge configured`, `auto: judge
+unavailable (…)`, `auto: judge failed`) says "Traycer couldn't run the
+    judge, so it's asking you instead."; **ran without deciding** (`auto: judge
+returned no verdict`, `auto: unparseable verdict`) says "The judge reviewed
+    this but didn't reach a verdict, so it's asking you instead."; **ran out of
+    time** (`auto: judge timed out`, `auto: judge exceeded <n> min`) says "The
+    judge didn't finish in time, so it's asking you instead." The second family
+    is the one the single sentence got wrong: the judge's own reasoning about
+    the action sits directly above that line. The wire carries `{ rule, text }`
+    and no outcome, so the family is read off the STRING; an `auto: ` constant
+    this build does not know - including the four the host emits outside the
+    three families (`turn stopped`, `judge preflight timed out`, `judge tools
+unavailable`, `account policy could not be read`, all of which the first
+    sentence describes truthfully) - falls back to the "couldn't run" line.
+
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read

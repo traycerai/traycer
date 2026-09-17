@@ -339,7 +339,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
               <AgentSpinningDots
                 testId={undefined}
                 variant={undefined}
-                className="text-muted-foreground/60"
+                className={undefined}
+                tone="muted"
               />
             ) : null}
           </div>
@@ -507,7 +508,8 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
       <AgentSpinningDots
         testId={undefined}
         variant="orbit"
-        className="text-muted-foreground/80"
+        className={undefined}
+        tone="muted"
       />
       Loading…
     </div>
@@ -522,9 +524,9 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
         <span className="min-w-0 truncate">{LOAD_FAILED_LABEL}</span>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="xs"
-          className="-my-1 shrink-0 text-muted-foreground/70 hover:text-foreground"
+          className="-my-1 shrink-0 opacity-70"
           onMouseDown={(event) => {
             event.preventDefault();
           }}

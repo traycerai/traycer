@@ -23,11 +23,12 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import {
   imageHashKeys,
-  deleteImage,
+  deleteImageBytesUnchecked,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
 import { queryClient } from "@/lib/query-client";
 import { prepareSavedDraft } from "@/lib/tab-recovery/saved-draft";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { ClosedHeaderTab } from "@/lib/tab-recovery/history";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import {
@@ -278,8 +279,17 @@ let originalCreateObjectURLDescriptor: PropertyDescriptor | undefined;
 
 describe("prepareSavedDraft", () => {
   beforeEach(async () => {
+    // Signed in, as production is whenever a saved draft can reach a host:
+    // `resolveNamedHostClient` answers only for an established account, and
+    // the blob transport's write-back fence requires an auth state allowed to
+    // serve the read. Without this the fixture modelled a recovery no signed
+    // -out window could perform.
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "owner-1", username: "owner-1" },
+    });
     for (const hash of await imageHashKeys()) {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }
     idbData.clear();
@@ -486,6 +496,59 @@ describe("prepareSavedDraft", () => {
       expect(idbData.size).toBe(0);
       expect(useLandingDraftStore.getState().drafts).toEqual([]);
       expect(useTabRecoveryHistory.getState().entries).toEqual(historyBefore);
+    } finally {
+      outstandingReservation.release();
+    }
+  });
+
+  it("admits a recovered image through residency, not the ordinary rooted skip (DRIVE RED)", async () => {
+    // The hash is a live ROOT while this partition does not hold its bytes -
+    // an ordinary state, since a landing row naming a hash roots it whether
+    // or not the bytes were ever fetched here. Ordinary admission charges
+    // nothing for a rooted candidate, which is right for a root whose bytes
+    // are present and wrong for one that is rooted while absent: the
+    // recovery below then wrote its bytes for free and the partition
+    // finished over its budget.
+    const hash = await sha256Hex(IMAGE_BYTES);
+    useLandingDraftStore.setState({
+      drafts: [localDraft("rooting-row", imageDocumentWithSize(hash, 0))],
+      activeDraftId: null,
+    });
+    expect(await imageHashKeys()).toEqual([]);
+
+    // One byte of headroom: an honest charge for these bytes does not fit, a
+    // skipped one does. That single byte is the whole difference between the
+    // two admission paths.
+    const outstandingReservation = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - 1 },
+    ]);
+    if (outstandingReservation === null)
+      throw new Error("expected the capacity reservation to succeed");
+    const draftId = "host-rooted-but-absent";
+    const document = landingDocumentWithClosed(
+      draftId,
+      imageDocumentWithSize(hash, 0),
+      [hash],
+      false,
+    );
+    const fixture = createHostFixture({
+      list: () => Promise.resolve(listResponse([document], [])),
+      readBlob: () =>
+        Promise.resolve({
+          ok: true,
+          bytesBase64: bytesToBase64(IMAGE_BYTES),
+        }),
+    });
+    mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
+
+    try {
+      await expect(
+        prepareSavedDraft(recoveryItem(draftId, HOST_ID), () => true),
+      ).rejects.toThrow("not enough image capacity");
+      expect(idbData.size).toBe(0);
+      expect(
+        useLandingDraftStore.getState().drafts.map((draft) => draft.id),
+      ).toEqual(["rooting-row"]);
     } finally {
       outstandingReservation.release();
     }

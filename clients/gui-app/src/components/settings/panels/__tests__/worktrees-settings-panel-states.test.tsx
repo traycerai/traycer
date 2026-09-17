@@ -93,6 +93,7 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 }));
 
 vi.mock("@/components/settings/panels/worktrees-enrichment", () => ({
+  useRevalidateStaleWorktreeActivity: () => {},
   useWorktreeActivityEnrichment: () => state.enrichment,
 }));
 

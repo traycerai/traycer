@@ -3030,7 +3030,7 @@ function registerAgentCommands(
       )
       .option(
         "--response-id <id>",
-        "Close an open thread - one reply answers every message received on it",
+        "Answer a request received from this recipient; omit on your own follow-ups",
       ),
     (opts) =>
       buildAgentSendCommand({

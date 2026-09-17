@@ -8,6 +8,7 @@ import {
   type OfficeTestEpic,
 } from "@/lib/comm-graph/office/office-test-epic";
 import {
+  OFFICE_CIVIC_GROUND_ALPHA,
   OFFICE_TILE,
   type OfficeCivicRoom,
   type OfficeDrawable,
@@ -342,5 +343,138 @@ describe("floorPainter.floor: civic ring follows enclosure, not size alone", () 
     const tiles: OfficeTileRect = { col: 0, row: 0, cols: 24, rows: 24 };
     const drawables = floorPainter.floor(layout, tiles, 2);
     expect(ringSpritesOn(drawables, WALLED_ROOM_BOUNDS)).toBeGreaterThan(0);
+  });
+});
+
+// ---- pushCivicGround: the tinted ground every civic room stands on --- //
+
+/**
+ * Two rooms, one OPEN and one WALLED, both clear of the fixture floor's own
+ * outer wall and of each other - `pushCivicGround` tints every civic room
+ * regardless of enclosure, which is the opposite of the ring above, so the
+ * fixture below deliberately covers both kinds.
+ */
+const GROUND_OPEN_BOUNDS: OfficeTileRect = { col: 8, row: 8, cols: 4, rows: 4 };
+const GROUND_WALLED_BOUNDS: OfficeTileRect = {
+  col: 15,
+  row: 8,
+  cols: 5,
+  rows: 3,
+};
+
+type CivicBlock = Extract<OfficeDrawable, { kind: "block" }>;
+
+function civicBlocksIn(
+  drawables: ReadonlyArray<OfficeDrawable>,
+): ReadonlyArray<CivicBlock> {
+  return drawables.filter(
+    (drawable): drawable is CivicBlock =>
+      drawable.kind === "block" && drawable.fill === "civic",
+  );
+}
+
+const GROUND_LAYOUT = layoutWithCivic([
+  civicRoom({
+    civicRoomId: "h/civic/help-desk",
+    kind: "help-desk",
+    enclosure: "open",
+    bounds: GROUND_OPEN_BOUNDS,
+  }),
+  civicRoom({
+    civicRoomId: "h/civic/infirmary",
+    kind: "infirmary",
+    enclosure: "walled",
+    bounds: GROUND_WALLED_BOUNDS,
+  }),
+]);
+const GROUND_TILES: OfficeTileRect = { col: 0, row: 0, cols: 24, rows: 24 };
+
+/**
+ * How many ground sprites `pushGroundTiles` emits for this chunk - derived
+ * from the painter's OWN clamp (the requested rect intersected with the
+ * layout) rather than from the rect the caller asked for, which can hang off
+ * the floor.
+ */
+function groundTileCount(layout: OfficeLayout, tiles: OfficeTileRect): number {
+  const rows =
+    Math.min(layout.rows - 1, tiles.row + tiles.rows - 1) -
+    Math.max(0, tiles.row) +
+    1;
+  const cols =
+    Math.min(layout.cols - 1, tiles.col + tiles.cols - 1) -
+    Math.max(0, tiles.col) +
+    1;
+  return Math.max(0, rows) * Math.max(0, cols);
+}
+
+describe("floorPainter.floor: pushCivicGround tints every civic room (K2/K3 ground bake)", () => {
+  it.each([1, 2] as const)(
+    "gives both the open and the walled room exactly one tinted block at lod %i, at the room's own bounds * OFFICE_TILE",
+    (lod) => {
+      const drawables = floorPainter.floor(GROUND_LAYOUT, GROUND_TILES, lod);
+      const blocks = civicBlocksIn(drawables);
+
+      // Not vacuous: both rooms produced a block, open and walled alike.
+      expect(blocks.length).toBe(2);
+      for (const bounds of [GROUND_OPEN_BOUNDS, GROUND_WALLED_BOUNDS]) {
+        const match = blocks.find(
+          (block) =>
+            block.x === bounds.col * OFFICE_TILE &&
+            block.y === bounds.row * OFFICE_TILE &&
+            block.width === bounds.cols * OFFICE_TILE &&
+            block.height === bounds.rows * OFFICE_TILE,
+        );
+        expect(
+          match,
+          `no tinted block for ${JSON.stringify(bounds)}`,
+        ).toBeDefined();
+        expect(match?.alpha).toBe(OFFICE_CIVIC_GROUND_ALPHA);
+        // Bakes with the sprites - see `pushCivicGround`'s own comment and
+        // `officeBakesIntoStaticFloor` (office-static-layer.ts).
+        expect(match?.ground).toBe(true);
+      }
+    },
+  );
+
+  it.each([1, 2] as const)(
+    "splices the tint between the ground tiles and the fixtures at lod %i - not before both and not after both",
+    (lod) => {
+      const drawables = floorPainter.floor(GROUND_LAYOUT, GROUND_TILES, lod);
+      const groundCount = groundTileCount(GROUND_LAYOUT, GROUND_TILES);
+
+      const before = drawables.slice(0, groundCount);
+      const seam = drawables.slice(groundCount, groundCount + 2);
+      const after = drawables.slice(groundCount + 2);
+
+      // Not vacuous: `floorChunk` really does run a ground pass and a fixture
+      // pass here, so "between them" names a position that exists.
+      expect(groundCount).toBeGreaterThan(0);
+      expect(after.length).toBeGreaterThan(0);
+
+      // The ground pass is opaque `floor-a`/`floor-b` sprites. A tint emitted
+      // among THEM is painted over.
+      expect(civicBlocksIn(before).length).toBe(0);
+      // The fixture passes stand ON the floor. A tint emitted among them
+      // recolours the furniture instead of the ground.
+      expect(civicBlocksIn(after).length).toBe(0);
+      expect(civicBlocksIn(seam).length).toBe(2);
+    },
+  );
+
+  it("uses the lod-0 block map instead, whose civic blocks carry neither the tint's alpha nor its ground marker", () => {
+    const blocks = civicBlocksIn(
+      floorPainter.floor(GROUND_LAYOUT, GROUND_TILES, 0),
+    );
+
+    // Not vacuous: the block map really does draw a civic block for each room.
+    expect(blocks.length).toBe(2);
+    // The discriminator: `blockMap`'s own `push` sets neither `alpha` nor
+    // `ground` for any fill, civic included - only `pushCivicGround`'s lod
+    // >= 1 path does, which is what scopes the bake to the tint rather than
+    // to the whole overview.
+    for (const block of blocks) {
+      expect(block.alpha).toBeUndefined();
+      expect(block.ground).toBeUndefined();
+    }
   });
 });

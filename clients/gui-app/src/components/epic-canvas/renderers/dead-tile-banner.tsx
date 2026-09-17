@@ -724,7 +724,8 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
           source: "Agent",
         })}
         presentation="icon"
-        className="shrink-0 text-warning-foreground"
+        variant="warning-ghost"
+        className="shrink-0"
       />
     </div>
   );

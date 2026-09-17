@@ -76,7 +76,12 @@ export function executeTileOpen(
   if (plan.kind === "noop") return null;
 
   if (plan.kind === "pip") {
-    if (epicId === null || !isBrowserSessionTileRef(node)) return null;
+    if (
+      epicId === null ||
+      !isBrowserSessionTileRef(node) ||
+      node.pending !== undefined
+    )
+      return null;
     convertBrowserTabToPip({
       epicId,
       hostId: node.hostId,

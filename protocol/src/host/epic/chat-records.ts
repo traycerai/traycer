@@ -20,7 +20,7 @@ import {
   agentModeSchema,
   chatRunSettingsSchema,
   guiHarnessIdSchema,
-  permissionModeSchema,
+  permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
 
 const textFrameFields = {
@@ -658,11 +658,18 @@ export const chatRunSettingsHarnessIdSchemaV10 = guiHarnessIdSchema.extract([
  * Keeps the persisted variant's `.default(...)` backstops verbatim (see the
  * import comment at the top of this file): this is a READ of a record that may
  * predate `serviceTier` / `profileId`, and the strict schema would fail it.
+ *
+ * `permissionMode` is pinned for the same half-freeze reason the id is: a v1.0
+ * caller decodes this response against a three-mode enum, so an `auto` chat
+ * read on that line would fail the whole response rather than one field. 2.0
+ * below is RELEASED and carries the identical pin for the identical reason;
+ * major 3 (the head) binds the live tuple and is the only line that may spell
+ * `auto`.
  */
 export const chatRunSettingsSchemaV10 = z.object({
   harnessId: chatRunSettingsHarnessIdSchemaV10,
   model: z.string().min(1),
-  permissionMode: permissionModeSchema,
+  permissionMode: permissionModeSchemaPreAuto,
   reasoningEffort: z.string().nullable(),
   serviceTier: z.string().nullable().default(null),
   agentMode: agentModeSchema,
@@ -723,7 +730,11 @@ const chatRunSettingsHarnessIdSchemaV20 = guiHarnessIdSchema.extract([
 export const chatRunSettingsSchemaV20 = z.object({
   harnessId: chatRunSettingsHarnessIdSchemaV20,
   model: z.string().min(1),
-  permissionMode: permissionModeSchema,
+  // Pinned pre-`auto` for the same half-freeze reason the id is: 2.0 is
+  // RELEASED, so an `auto` chat read on that line would fail the whole
+  // response rather than one field. Major 3 (the head) binds the live tuple
+  // and is the only line that may spell `auto`.
+  permissionMode: permissionModeSchemaPreAuto,
   reasoningEffort: z.string().nullable(),
   serviceTier: z.string().nullable().default(null),
   agentMode: agentModeSchema,

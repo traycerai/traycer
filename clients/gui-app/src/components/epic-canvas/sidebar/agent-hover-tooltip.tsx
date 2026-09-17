@@ -90,11 +90,10 @@ export interface AgentHoverTooltipProps {
 
 /** `null` when there are no claims - an empty roles card is worse than none. */
 function agentRoleHoverContent(
-  agentName: string,
   roleClaims: readonly RoleClaim[],
 ): ReactNode | null {
   if (roleClaims.length === 0) return null;
-  return <AgentRoleHoverContent agentName={agentName} claims={roleClaims} />;
+  return <AgentRoleHoverContent claims={roleClaims} />;
 }
 
 /**
@@ -104,26 +103,19 @@ function agentRoleHoverContent(
  * The name must survive whatever else is shown: the office's line under it is
  * "Working · large model", which names nothing, and the floor's own tag is
  * truncated - so a card that dropped the title for the posture line would take
- * away the only place the full name was readable. The role content already
- * carries the name, so it is only added when nothing else does.
+ * away the only place the full name was readable. The fallback supplies its
+ * own header because the role content only carries roles and scopes.
  */
 function fallbackTooltipLabel(
   nodeName: string,
   roleContent: ReactNode | null,
   extraContent: ReactElement | null,
 ): ReactNode {
-  if (roleContent !== null) {
-    return (
-      <>
-        {roleContent}
-        {extraContent}
-      </>
-    );
-  }
-  if (extraContent !== null) {
+  if (roleContent !== null || extraContent !== null) {
     return (
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="break-words">{nodeName}</span>
+        {roleContent}
         {extraContent}
       </div>
     );
@@ -143,7 +135,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     roleClaims,
     side,
   } = props;
-  const roleContent = agentRoleHoverContent(nodeName, roleClaims);
+  const roleContent = agentRoleHoverContent(roleClaims);
   // `null` is the ONLY way to say "nothing to add", which is why the prop is
   // an element and not a `ReactNode`. `ReactNode` admits `undefined`, `false`
   // and `""`, all of which are absent to a reader and present to a `!== null`

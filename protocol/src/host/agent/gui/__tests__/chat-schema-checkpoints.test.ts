@@ -17,6 +17,8 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
   chatSubscribeV110,
+  chatSubscribeV111,
+  chatSubscribeV112,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -47,6 +49,24 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.10 was captured from main commit 320fc0bac, the line as the staging
 // builds shipped it, when the shell host on a resume trigger and on the
 // queued managed-command item took 1.11 above it.
+//
+// 1.11 and 1.12 are captured LATE, and differently: the rule above says
+// capture a line when the next minor opens over it, and that did not happen
+// for either - main minted 1.12 over 1.11 without capturing, and this branch
+// minted 1.13 over 1.12 without capturing. Both are recorded here from OUR
+// render, not from the commit that shipped them.
+//
+// So read these two for less than the ones above. A digest taken from our own
+// tree cannot prove the line still matches the bytes main shipped; it only
+// freezes it from here on. That is worth having anyway, and more here than
+// anywhere above, because 1.11 and 1.12 are the only two lines in this table
+// that are RECONSTRUCTIONS - assembled out of `...PreAuto` pieces by a merge
+// rather than inherited intact - so they are the entries most able to drift
+// under an edit nobody meant to be a wire change. If a faithfulness check
+// against main's bytes is ever wanted, take main's own digest and expect a
+// benign difference: `chatQueuedItemSchemaPreAuto`'s comment records that
+// `z.union` and `z.discriminatedUnion` render `anyOf` versus `oneOf` and move
+// every field path beneath them.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -92,6 +112,14 @@ const SERVER_FRAME_DIGESTS = {
     "6ece105c4aa97932c5c9d9b3fc5ae079ac4935dd330405a1fc7554ed8bacc502",
     "6e6ccab1ec5ed64063b61acdd6179657c672894083fcb2aa0da6ff533ff1c775",
   ],
+  11: [
+    "ce00f20988c52559e42d106beb08eb1b67383ccfa9f5d9efcf737882164bee1e",
+    "8230c4887d34ecd2d1eb8c73a03b7e94d3e8afc5fcc8c1f92b2cabf35f173099",
+  ],
+  12: [
+    "1ec10f676481441ce71ed56103b4128077c6bbcc51a2c541f151643bbe6ae5b4",
+    "a17b8dbe7272b923796462c80c932481f4b2b87d28658d3e25999da32774b746",
+  ],
 } as const;
 
 const contracts = [
@@ -106,10 +134,12 @@ const contracts = [
   chatSubscribeV18,
   chatSubscribeV19,
   chatSubscribeV110,
+  chatSubscribeV111,
+  chatSubscribeV112,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.10 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.12 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

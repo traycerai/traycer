@@ -202,7 +202,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // picker's leader-digit shortcuts fire while it's open (see
       // `isAnyDialogOpen` in keybinding-provider.tsx).
       data-leader-scope={LEADER_SCOPE_MODEL_PICKER}
-      className="h-[min(var(--radix-popover-content-available-height),23rem)] w-[min(86vw,30rem)] gap-0 overflow-hidden rounded-xl p-0"
+      layout="panel"
+      className="h-[min(var(--radix-popover-content-available-height),23rem)] w-[min(86vw,30rem)]"
       // Return focus to the composer editor (not the trigger pill) on close so
       // the user can keep typing after picking a model. No-op on surfaces with
       // no registered composer (e.g. the terminal launcher), where Radix's

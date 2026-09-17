@@ -112,7 +112,7 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
                       </span>
                     </span>
                     <span
-                      className="size-2.5 shrink-0 rounded-full bg-emerald-500 ring-4 ring-emerald-500/10"
+                      className="size-2.5 shrink-0 rounded-full bg-success ring-4 ring-success/10"
                       aria-hidden
                     />
                   </button>

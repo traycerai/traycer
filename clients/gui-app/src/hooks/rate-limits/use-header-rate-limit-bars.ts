@@ -25,6 +25,10 @@ import {
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { type RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
+import {
+  useStatusBarShown,
+  type StatusBarHostShownProfiles,
+} from "@/stores/settings/layout-store";
 
 /**
  * The two windows a glyph bar can stand for, in fixed draw order: a provider's
@@ -50,6 +54,9 @@ export interface HeaderRateLimitBar {
  * `useHostQueriesWithResponseMap` call and no `httpFetch` plumbing at all.
  */
 const GLYPH_PROVIDER_IDS = ["codex", "claude-code"] as const;
+
+/** The checks as the glyph reads them while the strip is off screen: none. */
+const NO_HOST_SHOWN_PROFILES: StatusBarHostShownProfiles = {};
 
 type GlyphProviderId = (typeof GLYPH_PROVIDER_IDS)[number];
 
@@ -204,6 +211,11 @@ function selectGlyphBars(
  * would draw (`resolveRateLimitProfileId`): the glyph has two slots and no
  * room to say whose numbers they are, so a provider with several accounts
  * checked contributes the first of them here and all of them to the strip.
+ * That holds only while the strip is on screen. Under the header placement
+ * the checks have no control - the usage panel draws its per-account eye only
+ * while the strip is live - so the glyph resolves without them: last-used,
+ * else the provider's first profile, else ambient. The checks stay in the
+ * store and take over again when the strip returns.
  *
  * Mounting `useHostQueriesWithResponseMap` here drives the initial
  * fetch-on-mount for the two glyph providers (both `ephemeralProcess`); the
@@ -230,6 +242,13 @@ export function useHeaderRateLimitBars(
 ): ReadonlyArray<HeaderRateLimitBar> {
   const client = useHostClient();
   const displayProviders = useVisibleRateLimitProviders();
+  const stripShown = useStatusBarShown();
+  const glyphSelection: RateLimitProfileSelection = stripShown
+    ? profileSelection
+    : {
+        shownProfiles: NO_HOST_SHOWN_PROFILES,
+        lastProfileByHarness: profileSelection.lastProfileByHarness,
+      };
   const glyphProviders: ReadonlyArray<GlyphProviderTarget> =
     GLYPH_PROVIDER_IDS.flatMap((providerId) => {
       const provider = displayProviders.find(
@@ -237,7 +256,7 @@ export function useHeaderRateLimitBars(
       );
       if (provider === undefined) return [];
       const profileId = resolveRateLimitProfileId(
-        profileSelection,
+        glyphSelection,
         providerId,
         provider.profiles,
       );

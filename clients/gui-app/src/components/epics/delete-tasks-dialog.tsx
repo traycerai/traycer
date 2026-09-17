@@ -56,8 +56,9 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex max-h-[min(90dvh,40rem)] w-[min(92vw,32rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
+        className="flex max-h-[min(90dvh,40rem)] w-[min(92vw,32rem)] min-w-0 flex-col overflow-hidden sm:max-w-lg"
         data-testid="delete-tasks-dialog"
       >
         <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 pt-5 pb-4">
@@ -65,10 +66,8 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
             <AlertTriangle className="size-4" aria-hidden />
           </div>
           <div className="max-h-[min(32dvh,14rem)] min-h-0 min-w-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
-            <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-              {title}
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+            <DialogTitle className="wrap-anywhere">{title}</DialogTitle>
+            <DialogDescription className="wrap-anywhere">
               {description}
             </DialogDescription>
           </div>
@@ -159,7 +158,7 @@ function WorktreeCleanupRow(props: {
   let hint: ReactNode = null;
   if (candidate.uncommittedCount > 0) {
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         {candidate.uncommittedCount} uncommitted change
         {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
@@ -170,7 +169,7 @@ function WorktreeCleanupRow(props: {
     // surface this before any branchStatus hint, which a detached row can
     // still carry (e.g. probed against the workspace's default branch).
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         Detached HEAD — commits could be orphaned by removal
       </span>
@@ -182,7 +181,7 @@ function WorktreeCleanupRow(props: {
     !status.mergedIntoDefault
   ) {
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         {status.ahead} commit{status.ahead === 1 ? "" : "s"} not on the default
         branch
@@ -197,7 +196,7 @@ function WorktreeCleanupRow(props: {
     // exist but the count is unknown (no upstream). The branch ref survives
     // removal, so this names the state without claiming unrecoverable loss.
     hint = (
-      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />
         Local-only commits not on the default branch — never pushed
       </span>

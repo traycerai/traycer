@@ -41,8 +41,8 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
       role="alert"
       className="flex min-h-safe-svh w-full items-center justify-center bg-background p-6 text-foreground"
     >
-      <Card className="w-full max-w-md">
-        <CardContent className="flex flex-col items-center gap-4 py-8 text-center">
+      <Card size="lg" className="w-full max-w-md">
+        <CardContent className="flex flex-col items-center gap-4 text-center">
           <div className="flex size-11 items-center justify-center rounded-full bg-destructive/10 text-destructive">
             <AlertTriangle className="size-5" aria-hidden />
           </div>

@@ -1,70 +1,47 @@
 import type { ReactNode } from "react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
 import {
-  providerReadingText,
-  statusBarClusterSegments,
   statusBarSegmentKey,
+  statusBarUsageParts,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
-import type { StatusBarUsageStop } from "@/components/layout/status-bar/status-bar-usage-ladder";
-import type {
-  StatusBarProviderSegmentModel,
-  StatusBarRateLimitCluster,
-} from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
-import type { PercentMode } from "@/stores/settings/layout-store";
+import type { StatusBarRateLimitCluster } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 
 /**
- * The readings themselves: every provider the cluster is showing, plus the
- * `+N` chip for the ones it ran out of room for.
+ * The readings themselves: every segment the cluster holds, each in full.
+ *
+ * Every one, because the box this renders into scrolls: a segment past the
+ * strip's edge is a swipe away. What a segment prints is the preferences'
+ * business alone (`statusBarUsageParts`), and it is the same at every width.
  *
  * Separate from the strip's trigger because the trigger is the part that is not
  * shared - it is a `PopoverTrigger`, and Radix throws for one outside a
  * `Popover`. What IS shared is everything a reader looks at, so the Settings
- * preview renders this exact component at the same rung and can therefore never
- * show a shape the strip cannot produce.
- *
- * The measured box stays at the CALL SITE rather than being handed a ref: the
- * ladder observes two boxes, the container and the content, and a component
- * that took one of them would leave the pair split across two files for no
- * gain.
+ * preview renders this exact component from the same display value and can
+ * therefore never show a shape the strip cannot produce.
  */
 export function StatusBarUsageReadings(props: {
   readonly cluster: StatusBarRateLimitCluster;
-  readonly stop: StatusBarUsageStop;
   readonly display: StatusBarUsageDisplay;
 }): ReactNode {
-  const { cluster, stop, display } = props;
-  const segments = statusBarClusterSegments(cluster);
-  const shownCount = segments.length - stop.foldedCount;
+  const { cluster, display } = props;
+  const parts = statusBarUsageParts(display);
   return (
     <>
       {cluster.kind === "segments" ? (
-        <>
-          {segments.slice(0, shownCount).map((segment) => (
-            <StatusBarProviderSegment
-              key={statusBarSegmentKey(segment)}
-              segment={segment}
-              detail={stop.detail}
-              percentMode={display.percentMode}
-              showModeWord={display.showModeWord}
-              showTimer={display.showTimer}
-              showBar={display.showBar}
-            />
-          ))}
-          {stop.foldedCount === 0 ? null : (
-            <FoldedProvidersChip
-              segments={segments.slice(shownCount)}
-              percentMode={display.percentMode}
-            />
-          )}
-        </>
+        cluster.segments.map((segment) => (
+          <StatusBarProviderSegment
+            key={statusBarSegmentKey(segment)}
+            segment={segment}
+            parts={parts}
+            percentMode={display.percentMode}
+          />
+        ))
       ) : (
-        <span className="truncate">
+        // One line, never wrapped: the box it sits in scrolls sideways, so a
+        // sentence too long for a narrow strip scrolls like the segments do,
+        // on the one row the strip has.
+        <span className="whitespace-nowrap">
           {cluster.kind === "no-providers"
             ? // The popover's own zero state says this at length; the strip
               // says it once and opens that panel.
@@ -73,48 +50,5 @@ export function StatusBarUsageReadings(props: {
         </span>
       )}
     </>
-  );
-}
-
-/**
- * The segments the strip ran out of room for, as one chip.
- *
- * Folding from the right rather than dropping: the last thing a strip should do
- * with a limit it cannot fit is pretend the provider is not configured. The
- * chip sits inside the trigger, so clicking it opens the panel that lists every
- * one of them in full — the tooltip is the glance, the panel is the answer.
- *
- * It counts SEGMENTS, which is to say accounts: two checked accounts of one
- * provider that both fell off the strip are `+2`, and the tooltip names each
- * (`Codex · Work 57%`). A provider folded as `+1` while two of its readings
- * went missing would be the chip under-promising the way it must not
- * over-promise - a segment with no reading yet is named without one, since
- * `+2` promising two numbers and delivering one would be a worse chip than one
- * that says which accounts are behind it.
- */
-function FoldedProvidersChip(props: {
-  readonly segments: ReadonlyArray<StatusBarProviderSegmentModel>;
-  readonly percentMode: PercentMode;
-}): ReactNode {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          data-testid="status-bar-folded-providers"
-          className="shrink-0 rounded-[3px] border border-border/70 px-1 leading-none"
-        >
-          {`+${props.segments.length}`}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={6}>
-        <span className="flex flex-col">
-          {props.segments.map((segment) => (
-            <span key={statusBarSegmentKey(segment)}>
-              {providerReadingText(segment, props.percentMode)}
-            </span>
-          ))}
-        </span>
-      </TooltipContent>
-    </Tooltip>
   );
 }

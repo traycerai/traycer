@@ -1355,11 +1355,7 @@ function ActionButton(props: {
     <Button
       type="button"
       size="icon-sm"
-      variant="ghost"
-      className={cn(
-        props.destructive === true &&
-          "text-destructive hover:bg-destructive/10 hover:text-destructive",
-      )}
+      variant={props.destructive === true ? "destructive-ghost" : "ghost"}
       disabled={props.disabled}
       data-testid={props.testId}
       aria-label={accessibleName}

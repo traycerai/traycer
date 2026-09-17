@@ -188,6 +188,20 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => pinTestState.activeHostId,
 }));
 
+/**
+ * The task-default boundary `useSurfaceHostPin` reads before `effective`
+ * (the same node-host-ids seam `use-surface-host-pin.test.tsx` mocks). Empty
+ * by default so every pre-existing test in this file keeps resolving through
+ * `effective` exactly as before; the task-default regressions below drive
+ * this directly.
+ */
+const nodeHostIdsState = vi.hoisted<{ current: ReadonlySet<string> }>(() => ({
+  current: new Set(),
+}));
+vi.mock("@/hooks/epic/use-epic-node-host-ids", () => ({
+  useEpicNodeHostIds: () => nodeHostIdsState.current,
+}));
+
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => pinTestState.reachability,
 }));
@@ -491,6 +505,49 @@ function renderPanel(selected: GitPanelSelectedRepo): QueryClient {
   return queryClient;
 }
 
+/**
+ * Same as {@link renderPanel}, but exposes `rerender` so a test can mutate a
+ * hoisted mock ref and force a fresh render off it.
+ */
+function renderPanelWithControls(selected: GitPanelSelectedRepo): {
+  readonly queryClient: QueryClient;
+  readonly rerender: () => void;
+} {
+  useGitPanelStore.setState({
+    stateByEpicId: {
+      [EPIC_ID]: {
+        ...defaultEpicState,
+        selectedRepo: selected,
+      },
+    },
+  });
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  testState.rows.forEach((binding) => {
+    const snapshot =
+      testState.snapshots.get(binding.runningDir) ??
+      response({ runningDir: binding.runningDir });
+    queryClient.setQueryData(
+      gitQueryKeys.listChangedFiles(binding.hostId, binding.runningDir, false),
+      snapshot,
+    );
+  });
+
+  function makeElement(): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider delayDuration={0}>
+          <GitDiffPanelBodyLive epicId={EPIC_ID} tabId={TAB_ID} />
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+  const view = render(makeElement());
+  return { queryClient, rerender: () => view.rerender(makeElement()) };
+}
+
 function openSwitcher(): void {
   fireEvent.click(screen.getByTestId("git-diff-repo-switcher-trigger"));
 }
@@ -538,6 +595,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       unavailability: null,
     };
     pinTestState.directory = [{ hostId: "host-1", label: "Host One" }];
+    nodeHostIdsState.current = new Set();
   });
 
   afterEach(() => {
@@ -1132,14 +1190,17 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(within(resolvedOption).getByText("not git")).toBeDefined();
   });
 
-  it("latches the resolved host when the default root is already selected", () => {
+  // Automatic root selection must never latch - bindings can arrive before
+  // the task's agent records reveal its default host. Resolution still
+  // happens; only the write is gone.
+  it("resolves the current host without latching when the default root is already selected", () => {
     renderPanel(rootSelected);
 
     expect(
       useSurfaceHostSelectionStore.getState().selections[
         gitDiffPanelSurfaceKey(TAB_ID)
       ],
-    ).toBe("host-1");
+    ).toBeUndefined();
     expect(pinTestState.lastClientHostId).toBe("host-1");
   });
 
@@ -1159,6 +1220,184 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
         gitDiffPanelSurfaceKey(TAB_ID)
       ],
     ).toBe("host-1");
+  });
+
+  /**
+   * Automatic root selection must never write a pin off the task-default
+   * boundary (`useEpicNodeHostIds`, mocked via `nodeHostIdsState`) - not on
+   * the first resolve, and not when a late-arriving sole task host moves the
+   * resolution again. An explicit pin still wins over the task default, and
+   * an explicit workspace pick still latches.
+   */
+  describe("task-default resolution never auto-latches", () => {
+    function hostRow(hostId: string, runningDir: string) {
+      return row({
+        hostId,
+        runningDir,
+        workspacePath: runningDir,
+        repoIdentifier: { owner: "acme", repo: hostId },
+      });
+    }
+
+    it("resolves an initial usable A binding with no task hosts yet, then a late sole B with no pin either time, and still lets an explicit pick latch", async () => {
+      // No task hosts yet, so this resolves through `effective` (host-a).
+      nodeHostIdsState.current = new Set();
+      pinTestState.activeHostId = "host-a";
+      pinTestState.directory = [{ hostId: "host-a", label: "Host A" }];
+      testState.rows = [hostRow("host-a", "/repo-a")];
+      // No row matches the selected repo, so the auto-pick branch resolves it.
+      const { rerender } = renderPanelWithControls({
+        hostId: "unresolved",
+        rootRunningDir: "/none",
+        repoRoot: "/none",
+      });
+
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-a");
+      });
+      expect(
+        useGitPanelStore.getState().stateByEpicId[EPIC_ID]?.selectedRepo,
+      ).toEqual({
+        hostId: "host-a",
+        rootRunningDir: "/repo-a",
+        repoRoot: "/repo-a",
+      });
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBeUndefined();
+
+      // The task now names exactly one host, different from `effective`.
+      nodeHostIdsState.current = new Set(["host-b"]);
+      pinTestState.directory = [
+        { hostId: "host-a", label: "Host A" },
+        { hostId: "host-b", label: "Host B" },
+      ];
+      testState.rows = [hostRow("host-b", "/repo-b")];
+      rerender();
+
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-b");
+      });
+      expect(
+        useGitPanelStore.getState().stateByEpicId[EPIC_ID]?.selectedRepo,
+      ).toEqual({
+        hostId: "host-b",
+        rootRunningDir: "/repo-b",
+        repoRoot: "/repo-b",
+      });
+      // Two resolutions, neither one a write.
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBeUndefined();
+
+      // The surviving path: picking a workspace explicitly still latches
+      // whatever host it just resolved to (host-b).
+      openSwitcher();
+      fireEvent.click(screen.getByTestId("git-diff-repo-switcher-root-host-b"));
+
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBe("host-b");
+    });
+
+    it("keeps an explicit/saved pin on its own host when a sole task host later names a different one", async () => {
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(gitDiffPanelSurfaceKey(TAB_ID), "host-a");
+      pinTestState.directory = [
+        { hostId: "host-a", label: "Host A" },
+        { hostId: "host-b", label: "Host B" },
+      ];
+      testState.rows = [hostRow("host-a", "/repo-a")];
+      const { rerender } = renderPanelWithControls({
+        hostId: "host-a",
+        rootRunningDir: "/repo-a",
+        repoRoot: "/repo-a",
+      });
+
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-a");
+      });
+
+      // A sole task host now names host-b, but the pin still outranks it.
+      nodeHostIdsState.current = new Set(["host-b"]);
+      rerender();
+
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBe("host-a");
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-a");
+      });
+    });
+
+    it("recovers via retry without latching, so a late sole task host can still redirect it", async () => {
+      nodeHostIdsState.current = new Set();
+      pinTestState.activeHostId = "host-a";
+      pinTestState.directory = [{ hostId: "host-a", label: "Host A" }];
+      testState.rows = [hostRow("host-a", "/repo-a")];
+      testState.capabilities.set("/repo-a", {
+        available: false,
+        gitVersion: null,
+        reason: "git unavailable",
+      });
+      const { rerender } = renderPanelWithControls({
+        hostId: "unresolved",
+        rootRunningDir: "/none",
+        repoRoot: "/none",
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("git-roots-unavailable")).toBeDefined(),
+      );
+
+      // The worktree recovers; retry re-picks host-a without latching it.
+      testState.capabilities.set("/repo-a", testState.availableCapability);
+      fireEvent.click(screen.getByTestId("git-roots-unavailable-retry"));
+
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-a");
+      });
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBeUndefined();
+
+      // A sole task host now names host-b - nothing the retry left behind
+      // blocks the redirect.
+      nodeHostIdsState.current = new Set(["host-b"]);
+      pinTestState.directory = [
+        { hostId: "host-a", label: "Host A" },
+        { hostId: "host-b", label: "Host B" },
+      ];
+      testState.rows = [hostRow("host-b", "/repo-b")];
+      rerender();
+
+      await waitFor(() => {
+        expect(pinTestState.lastClientHostId).toBe("host-b");
+      });
+      expect(
+        useGitPanelStore.getState().stateByEpicId[EPIC_ID]?.selectedRepo,
+      ).toEqual({
+        hostId: "host-b",
+        rootRunningDir: "/repo-b",
+        repoRoot: "/repo-b",
+      });
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          gitDiffPanelSurfaceKey(TAB_ID)
+        ],
+      ).toBeUndefined();
+    });
   });
 
   it("auto-follows to the effective host and renders normal content when the pinned host is dead (D6 sticky return, no dead-state screen)", async () => {

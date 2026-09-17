@@ -934,8 +934,9 @@ describe("WorkspaceFolderRows", () => {
     expect(screen.getByTestId("folder-row")).toBeTruthy();
     const addButton = screen.getByTestId("folder-add");
     expect(addButton.textContent).toContain("Add folder");
-    expect(addButton.getAttribute("data-variant")).toBe("ghost");
-    expect(addButton.className).toContain("text-muted-foreground");
+    // The quiet tone is the `muted` variant's now, not a class on the call
+    // site, so the variant IS the assertion.
+    expect(addButton.getAttribute("data-variant")).toBe("muted");
   });
 
   it("lets the container own all text-track widths so long values cannot overflow a modal", () => {
@@ -1041,9 +1042,9 @@ describe("WorkspaceFolderRows", () => {
       </TooltipProvider>,
     );
     const chooseButton = screen.getByTestId("folder-add");
-    expect(chooseButton.getAttribute("data-variant")).toBe("ghost");
-    expect(chooseButton.className).toContain("rounded-lg");
-    expect(chooseButton.className).toContain("text-muted-foreground");
+    // The quiet row-action tone and the corner radius are the `muted` variant's
+    // and the size's now, not classes this call site spells out.
+    expect(chooseButton.getAttribute("data-variant")).toBe("muted");
     expect(chooseButton.textContent).toContain("Add folder");
     fireEvent.click(chooseButton);
     expect(added).toBe(1);

@@ -13,7 +13,9 @@ import {
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import {
   ALL_PERMISSION_MODES,
+  ALL_PERMISSION_MODES_PRE_AUTO,
   permissionModeSchema,
+  permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   planSourceSchema,
@@ -61,6 +63,17 @@ export const guiHarnessOptionSchema = z.object({
   supportedPermissionModes: z
     .array(permissionModeSchema)
     .default([...ALL_PERMISSION_MODES]),
+  // Whether this harness has a provider-native auto-mode classifier Traycer can
+  // delegate to instead of running its own judge. Drives the visibility of the
+  // per-provider "Auto mode judge" row in Providers › General - a switch with
+  // one option is not a switch, so the row exists only for a `true` row.
+  //
+  // `.default(false)` rather than `.optional()`: an old host omits the key and
+  // "this host told me nothing" and "this harness has no native judge" want the
+  // same treatment here (hide the row), unlike `authStatus`, whose absent and
+  // no-verdict cases genuinely differ. Rides the same minor as `auto` itself,
+  // so a peer that can see this field can also spell the mode it describes.
+  nativeAutoJudge: z.boolean().default(false),
   // True while the host's availability probe for this harness is still running
   // in the background (e.g. the cold interactive-shell PATH probe). The client
   // re-fetches until it flips false.
@@ -229,8 +242,8 @@ export const guiHarnessOptionSchemaV10 = z.object({
   modes: z.array(harnessSurfaceSchema),
   requiresApiKey: z.boolean(),
   supportedPermissionModes: z
-    .array(permissionModeSchema)
-    .default([...ALL_PERMISSION_MODES]),
+    .array(permissionModeSchemaPreAuto)
+    .default([...ALL_PERMISSION_MODES_PRE_AUTO]),
 });
 export const listGuiHarnessesResponseSchemaV10 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV10),
@@ -267,7 +280,15 @@ export const listGuiHarnessesResponseSchemaV20 = z.object({
 // Byte-identical to the live body at the freeze cut, so the committed
 // `frozen-catalog-lines` snapshots for 2.1-6.0 are unchanged by the freeze.
 // Do NOT add fields here; add them to `guiHarnessOptionSchema` above, which
-// only v7.1 (the head line) binds.
+// only the head line binds.
+//
+// `supportedPermissionModes` is pinned to the pre-`auto` enum for exactly the
+// reason the id enums on these lines are pinned: this array is a RESPONSE slot,
+// and a within-major re-parse rejects an unknown enum member rather than
+// stripping it, so one `auto` entry would fail the entire `listHarnesses`
+// response and empty a shipped peer's picker. Its `.default(...)` is pinned
+// with it - a default is filled without re-validation, so a live default would
+// smuggle the value past the frozen enum.
 const guiHarnessOptionBaseShapeV70 = {
   label: z.string(),
   enabled: z.boolean().default(true),
@@ -276,8 +297,8 @@ const guiHarnessOptionBaseShapeV70 = {
   modes: z.array(harnessSurfaceSchema),
   requiresApiKey: z.boolean(),
   supportedPermissionModes: z
-    .array(permissionModeSchema)
-    .default([...ALL_PERMISSION_MODES]),
+    .array(permissionModeSchemaPreAuto)
+    .default([...ALL_PERMISSION_MODES_PRE_AUTO]),
   availabilityPending: z.boolean().catch(false),
 };
 
@@ -435,6 +456,38 @@ export const listGuiHarnessesResponseSchemaV80 = z.object({
 });
 export type ListGuiHarnessesResponseV80 = z.infer<
   typeof listGuiHarnessesResponseSchemaV80
+>;
+
+// ── Frozen protocol-v9.0 catalog row + response (pre-`auto`) ───────────────
+// 9.0 is the Antigravity line: the live id enum over the hand-frozen 7.1 body.
+// It stopped being the head line when 9.1 opened for the `auto` permission mode
+// and the `nativeAutoJudge` row field, and is frozen here the way 8.0 was
+// frozen when 9.0 opened - same response, same reason. (This freeze was
+// authored against 8.0 and moved up one major on the merge to main, which had
+// opened 9.0 for Antigravity in the meantime.)
+//
+// The delta 9.1 carries is of BOTH kinds, and they degrade differently for a
+// 9.0 peer, which is why the freeze has to be explicit rather than implied:
+// `nativeAutoJudge` is a new KEY, and a within-major re-parse strips it for
+// free; `auto` in `supportedPermissionModes` is a new ENUM MEMBER, and the same
+// re-parse REJECTS it - the whole response, not the field. So 9.1 declares
+// `responseGrowthProjectionGated` in the registry and the host filters the mode
+// out of what it serves a 9.0 peer. Nothing here degrades that automatically.
+//
+// The id enum stays LIVE here, unlike 8.0's pin: 9.0 is the line Antigravity
+// rides, so narrowing it would undo the very addition that opened this major.
+//
+// Do NOT add fields or modes here; add them to `guiHarnessOptionSchema` above,
+// which only 9.1 (the head line) binds.
+export const guiHarnessOptionSchemaV90 = z.object({
+  id: guiHarnessIdSchema,
+  ...guiHarnessOptionBaseShapeV71,
+});
+export const listGuiHarnessesResponseSchemaV90 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV90),
+});
+export type ListGuiHarnessesResponseV90 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV90
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

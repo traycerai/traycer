@@ -79,9 +79,9 @@ export function FallbackOverridesMatrix(
             can&apos;t help with that failure, whatever you prefer.
           </p>
           <Button
+            size="inline"
             type="button"
             variant="link"
-            className="h-auto p-0 text-ui-sm"
             disabled={!policyHasOverrides(policy)}
             onClick={() => {
               onChange(clearPolicyOverrides(policy));

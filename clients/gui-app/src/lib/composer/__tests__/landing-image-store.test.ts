@@ -4,11 +4,12 @@ import {
   createStore,
   del as idbDel,
   get as idbGet,
+  keys as idbKeys,
   set as idbSet,
 } from "idb-keyval";
 
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   getImageBytes,
   hasLandingImageBytes,
   imageHashKeys,
@@ -21,11 +22,41 @@ import {
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
 
-// In-memory stand-in for idb-keyval. The store argument is ignored - the module
-// only ever keys by string hash, and each test drains the map via the module's
-// own API between cases. `createStore` is a real spy so the DB-name shape
-// (`traycer-gui-app:<partition>:landing-images`) can be asserted.
-const idbData = vi.hoisted(() => new Map<string, unknown>());
+// In-memory stand-in for idb-keyval, ONE MAP PER DATABASE. The store argument is
+// not decoration here: this module keeps image bytes and their measured sizes in
+// two different databases under the SAME string hash, so a stand-in that folds
+// every store into one map lets a size silently overwrite an image.
+const idb = vi.hoisted(() => {
+  const byDb = new Map<string, Map<string, unknown>>();
+  const dbNameOf = new Map<unknown, string>();
+  function dataFor(store: unknown): Map<string, unknown> {
+    const dbName = dbNameOf.get(store) ?? "unregistered";
+    const existing = byDb.get(dbName);
+    if (existing !== undefined) return existing;
+    const created = new Map<string, unknown>();
+    byDb.set(dbName, created);
+    return created;
+  }
+  function dataForDb(suffix: string): Map<string, unknown> {
+    for (const [dbName, data] of byDb) {
+      if (dbName.endsWith(suffix)) return data;
+    }
+    const created = new Map<string, unknown>();
+    byDb.set(`pending:${suffix}`, created);
+    return created;
+  }
+  return {
+    byDb,
+    dbNameOf,
+    dataFor,
+    dataForDb,
+    /** The image BYTES database - what the tests below assert about. */
+    images: (): Map<string, unknown> => dataForDb(":landing-images"),
+    clear: (): void => {
+      byDb.clear();
+    },
+  };
+});
 
 function idbStringKey(key: IDBValidKey): string {
   if (typeof key !== "string") {
@@ -34,42 +65,70 @@ function idbStringKey(key: IDBValidKey): string {
   return key;
 }
 
-function installIdbWorking(): void {
-  vi.mocked(idbSet).mockImplementation((key, value) => {
-    idbData.set(idbStringKey(key), value);
+vi.mock("idb-keyval", () => ({
+  createStore: vi.fn((dbName: string, _storeName: string) => {
+    const handle = (): Promise<never> =>
+      Promise.reject(new Error("unused in tests"));
+    idb.dbNameOf.set(handle, dbName);
+    return handle;
+  }),
+  get: vi.fn((key: IDBValidKey, store: unknown) =>
+    Promise.resolve(idb.dataFor(store).get(idbStringKey(key))),
+  ),
+  set: vi.fn((key: IDBValidKey, value: unknown, store: unknown) => {
+    idb.dataFor(store).set(idbStringKey(key), value);
     return Promise.resolve();
-  });
-  vi.mocked(idbDel).mockImplementation((key) => {
-    idbData.delete(idbStringKey(key));
+  }),
+  del: vi.fn((key: IDBValidKey, store: unknown) => {
+    idb.dataFor(store).delete(idbStringKey(key));
     return Promise.resolve();
-  });
-  vi.mocked(idbGet).mockImplementation((key) =>
-    Promise.resolve(idbData.get(idbStringKey(key))),
-  );
-}
-
-vi.mock("idb-keyval", () => {
-  const dummyStore = () => Promise.reject(new Error("unused"));
-  return {
-    createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
-    set: vi.fn((key: string, value: unknown) => {
-      idbData.set(key, value);
-      return Promise.resolve();
-    }),
-    del: vi.fn((key: string) => {
-      idbData.delete(key);
-      return Promise.resolve();
-    }),
-    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
-  };
-});
+  }),
+  keys: vi.fn((store: unknown) =>
+    Promise.resolve(Array.from(idb.dataFor(store).keys())),
+  ),
+  entries: vi.fn((store: unknown) =>
+    Promise.resolve(Array.from(idb.dataFor(store).entries())),
+  ),
+}));
 
 let urlCounter = 0;
 const createObjectURL = vi.fn(
   (_obj: Blob | MediaSource) => `blob:mock/${++urlCounter}`,
 );
 const revokeObjectURL = vi.fn((_url: string) => undefined);
+
+/**
+ * Re-apply the stand-in implementations. One case installs a one-shot rejecting
+ * `get`/`set`, and `vi.clearAllMocks()` between cases drops implementations, so
+ * every case starts from this.
+ */
+function installIdbWorking(): void {
+  vi.mocked(idbGet).mockImplementation((key, store) =>
+    Promise.resolve(idb.dataFor(store).get(idbStringKey(key))),
+  );
+  vi.mocked(idbSet).mockImplementation((key, value, store) => {
+    idb.dataFor(store).set(idbStringKey(key), value);
+    return Promise.resolve();
+  });
+  vi.mocked(idbDel).mockImplementation((key, store) => {
+    idb.dataFor(store).delete(idbStringKey(key));
+    return Promise.resolve();
+  });
+  vi.mocked(idbKeys).mockImplementation((store) =>
+    Promise.resolve(Array.from(idb.dataFor(store).keys())),
+  );
+}
+
+/**
+ * Durable writes of IMAGE BYTES. A put also records the measured byte length in
+ * the sizes database, so a bare call count on `set` no longer answers "how many
+ * times were the bytes written".
+ */
+function byteWriteCount(): number {
+  return vi
+    .mocked(idbSet)
+    .mock.calls.filter(([, value]) => value instanceof Uint8Array).length;
+}
 
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
@@ -83,7 +142,7 @@ describe("landing-image-store", () => {
     // Drain the in-memory IndexedDB stand-in through the public API so each case
     // starts empty, then zero the spy call counts.
     for (const hash of await imageHashKeys()) {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }
     vi.clearAllMocks();
@@ -103,10 +162,10 @@ describe("landing-image-store", () => {
     expect(first).toBe(second);
     // SHA-256 hex is 64 chars.
     expect(first).toMatch(/^[0-9a-f]{64}$/);
-    expect(idbSet).toHaveBeenCalledTimes(1);
+    expect(byteWriteCount()).toBe(1);
     // Different content → different hash → a second write.
     await putImage(bytesOf([9, 9, 9]));
-    expect(idbSet).toHaveBeenCalledTimes(2);
+    expect(byteWriteCount()).toBe(2);
     expect(bytes).toEqual(bytesOf([1, 2, 3, 4]));
   });
 
@@ -116,7 +175,7 @@ describe("landing-image-store", () => {
     expect(await getImageBytes(hash)).toEqual(bytesOf([10, 20, 30]));
     expect(await imageHashKeys()).toContain(hash);
 
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
 
     expect(await imageHashKeys()).not.toContain(hash);
@@ -209,7 +268,7 @@ describe("landing-image-store", () => {
     expect(await getImageBytes(restoredHash)).toEqual(bytes);
     expect(hasLandingImageBytes(restoredHash)).toBe(true);
 
-    await deleteImage(restoredHash);
+    await deleteImageBytesUnchecked(restoredHash);
     expect(hasLandingImageBytes(restoredHash)).toBe(false);
     expect(await getImageBytes(restoredHash)).toBeUndefined();
   });
@@ -289,7 +348,7 @@ describe("landing-image-store", () => {
     // Prevent unhandled-rejection noise if handlers attach after reject.
     void gatedSet.catch(() => undefined);
     vi.mocked(idbGet).mockImplementation((key) =>
-      Promise.resolve(idbData.get(idbStringKey(key))),
+      Promise.resolve(idb.images().get(idbStringKey(key))),
     );
     vi.mocked(idbSet).mockImplementation(() => gatedSet);
 
@@ -324,25 +383,27 @@ describe("landing-image-store", () => {
     expect(sessionObjectUrl(failedHash)).toBeNull();
     expect(sessionImageBytes(failedHash)).toBeNull();
     expect(await imageHashKeys()).not.toContain(failedHash);
-    expect(idbData.has(failedHash)).toBe(false);
+    expect(idb.images().has(failedHash)).toBe(false);
     expect(revokeObjectURL).toHaveBeenCalled();
 
     installIdbWorking();
   });
 
   // Finding 6: prune knownHashes only AFTER del resolves.
-  it("deleteImage keeps hasLandingImageBytes true when del rejects (bytes still present)", async () => {
+  it("deleteImageBytesUnchecked keeps hasLandingImageBytes true when del rejects (bytes still present)", async () => {
     const hash = await putImage(bytesOf([6, 6, 6]));
     expect(hasLandingImageBytes(hash)).toBe(true);
-    expect(idbData.has(hash)).toBe(true);
+    expect(idb.images().has(hash)).toBe(true);
 
     vi.mocked(idbDel).mockRejectedValueOnce(new Error("idb del failed"));
 
-    await expect(deleteImage(hash)).rejects.toThrow("idb del failed");
+    await expect(deleteImageBytesUnchecked(hash)).rejects.toThrow(
+      "idb del failed",
+    );
 
     // Presence must remain true: durable bytes are still there.
     expect(hasLandingImageBytes(hash)).toBe(true);
-    expect(idbData.has(hash)).toBe(true);
+    expect(idb.images().has(hash)).toBe(true);
     expect(await getImageBytes(hash)).toEqual(bytesOf([6, 6, 6]));
 
     installIdbWorking();

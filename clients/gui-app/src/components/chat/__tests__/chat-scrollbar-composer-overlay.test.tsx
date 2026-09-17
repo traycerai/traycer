@@ -48,6 +48,9 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
   useAgentStop: () => ({ mutate: () => undefined }),
 }));
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
 // The background panel reaches for the managed half's RPCs whether or not any
 // managed command is on screen; this suite is about paint and pointer regions,
 // so the host boundary behind them is faked away.
@@ -514,6 +517,8 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onStopTurn: () => null,
     steerCapable: false,
     steerProtocolSupported: true,
+    autoPermissionModeProtocolSupported: null,
+    getDraftBlobBridgeSupported: () => false,
     getActiveTurnForSteer: () => null,
   };
   const interview: ChatLowerInterviewState = {

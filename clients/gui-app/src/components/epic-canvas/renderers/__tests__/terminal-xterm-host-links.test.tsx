@@ -237,6 +237,9 @@ function renderHostWithBrowserRouting(): void {
     errorMessage: null,
     retry: () => undefined,
     openTab: xtermMocks.openTab,
+    prepareOpenTab: () => {
+      throw new Error("not used in this test");
+    },
     closeTab: () => Promise.resolve(),
     attachTab: () => Promise.reject(new Error("not used")),
     moveTab: () => Promise.reject(new Error("not used")),

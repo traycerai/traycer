@@ -186,9 +186,10 @@ function WorktreeCleanupHistoryBody(props: {
           >
             {runs.isLoadingMore ? (
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId="worktree-cleanup-history-loading-more"
                 variant={undefined}
+                tone="muted"
               />
             ) : null}
             <span>Load more</span>

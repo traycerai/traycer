@@ -55,8 +55,10 @@ import { cn } from "@/lib/utils";
  * The `!` modifiers are not decoration - the `InputGroup` primitive sets its own
  * height and shadow, and a bare utility would tie rather than win.
  */
-const MOBILE_FIELD_CLASS =
-  "h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!";
+// The `!` is not decoration - `InputGroup` sets its own height, and a bare
+// utility would tie rather than win. The rest of the treatment is
+// `variant="search"` at the call site.
+const MOBILE_FIELD_CLASS = "h-8!";
 
 /**
  * Hit area without paint: the input keeps a touch-sized box while the FIELDSET
@@ -79,7 +81,10 @@ export interface PanelSearchFieldCombobox {
   readonly activeOptionId: string | undefined;
 }
 
-export function PanelSearchField(props: {
+export function PanelSearchField({
+  className,
+  ...props
+}: {
   readonly value: string;
   readonly onValueChange: (value: string) => void;
   /**
@@ -109,6 +114,14 @@ export function PanelSearchField(props: {
    * search renders the one shared box.
    */
   readonly className: string;
+  /**
+   * Which `InputGroup` surface this field is. `search` is the resting box a
+   * panel puts in its own body; `filter` is the borderless one inside a panel
+   * HEADER, which the two git-diff views used to pass as four classes through
+   * `className` - invisible to the restyle rule until `className` moved to
+   * this parameter list.
+   */
+  readonly variant?: "search" | "filter";
 }) {
   const {
     value,
@@ -123,11 +136,12 @@ export function PanelSearchField(props: {
     clearLabel,
     closeLabel,
     testIdPrefix,
-    className,
+    variant = "search",
   } = props;
   const isMobileViewport = useIsMobileViewport();
   return (
     <InputGroup
+      variant={variant}
       className={cn(
         "w-full",
         isMobileViewport ? MOBILE_FIELD_CLASS : className,
@@ -159,7 +173,7 @@ export function PanelSearchField(props: {
         }
         autoComplete="off"
         spellCheck={false}
-        className={cn("text-ui-sm", isMobileViewport && MOBILE_INPUT_HIT_CLASS)}
+        className={cn(isMobileViewport && MOBILE_INPUT_HIT_CLASS)}
         data-testid={`${testIdPrefix}-input`}
       />
       <InputGroupAddon align="inline-end">

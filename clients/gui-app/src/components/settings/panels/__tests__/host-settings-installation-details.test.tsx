@@ -72,8 +72,8 @@ describe("<InstallationDetailsDisclosure /> Verification caption", () => {
       }),
     );
     expect(field.textContent).toBe("Unsigned local build");
-    expect(field.classList.contains("text-amber-500")).toBe(true);
-    expect(field.classList.contains("text-emerald-500")).toBe(false);
+    expect(field.classList.contains("text-warning-foreground")).toBe(true);
+    expect(field.classList.contains("text-success-foreground")).toBe(false);
   });
 
   it("reads 'Verified <date>' in emerald when a real key verified the archive", () => {
@@ -84,8 +84,8 @@ describe("<InstallationDetailsDisclosure /> Verification caption", () => {
       }),
     );
     expect(field.textContent).toMatch(/^Verified /);
-    expect(field.classList.contains("text-emerald-500")).toBe(true);
-    expect(field.classList.contains("text-amber-500")).toBe(false);
+    expect(field.classList.contains("text-success-foreground")).toBe(true);
+    expect(field.classList.contains("text-warning-foreground")).toBe(false);
   });
 
   it("reads 'Unverified' when signatureVerifiedAt is null and the key isn't the unsigned sentinel", () => {
@@ -96,7 +96,7 @@ describe("<InstallationDetailsDisclosure /> Verification caption", () => {
       }),
     );
     expect(field.textContent).toBe("Unverified");
-    expect(field.classList.contains("text-amber-500")).toBe(true);
-    expect(field.classList.contains("text-emerald-500")).toBe(false);
+    expect(field.classList.contains("text-warning-foreground")).toBe(true);
+    expect(field.classList.contains("text-success-foreground")).toBe(false);
   });
 });

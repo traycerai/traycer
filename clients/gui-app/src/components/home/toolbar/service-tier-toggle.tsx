@@ -65,7 +65,10 @@ export function ServiceTierToggle(props: ServiceTierToggleProps) {
         onClick={() => onChange(isActive ? "" : upgrade.id)}
       >
         <Zap
-          className={cn("size-4", isActive && "fill-current text-amber-500")}
+          className={cn(
+            "size-4",
+            isActive && "fill-current text-warning-foreground",
+          )}
           strokeWidth={2}
         />
       </ToolbarIconButton>

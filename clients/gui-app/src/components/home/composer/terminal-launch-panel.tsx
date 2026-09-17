@@ -193,6 +193,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           labelDisplay="responsive"
           store={store}
           withServiceTier={false}
+          withReasoning
           tuiOnly
           lockedHarnessId={null}
           disabled={pending}
@@ -207,7 +208,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
         />
         <Input
           aria-label="Terminal interface CLI arguments"
-          className="h-8 min-w-0 flex-1 font-mono text-ui-xs"
+          className="h-8 min-w-0 flex-1"
           placeholder="CLI arguments (optional)"
           value={argsDraft}
           onChange={(event) =>
@@ -222,6 +223,8 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
             event.preventDefault();
             start();
           }}
+          font="mono"
+          size="xs"
         />
       </div>
       <div className="flex items-center justify-between gap-2 px-0.5 pb-2.5 pt-1">

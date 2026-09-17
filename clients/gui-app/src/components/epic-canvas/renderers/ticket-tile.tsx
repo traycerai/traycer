@@ -27,7 +27,7 @@ interface TicketTileProps {
 }
 
 const STATUS_OPTIONS = [
-  { value: 0, label: "Todo", dotClass: "bg-slate-400" },
+  { value: 0, label: "Todo", dotClass: "bg-muted-foreground" },
   { value: 1, label: "In Progress", dotClass: "bg-amber-500" },
   { value: 2, label: "Done", dotClass: "bg-emerald-500" },
 ] as const;

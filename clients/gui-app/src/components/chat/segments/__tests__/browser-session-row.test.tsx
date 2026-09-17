@@ -83,6 +83,9 @@ function sessionsState(
     errorMessage: null,
     retry: () => {},
     openTab: () => Promise.reject(new Error("unused in this suite")),
+    prepareOpenTab: () => {
+      throw new Error("unused in this suite");
+    },
     closeTab: async () => {},
     attachTab: async () => {},
     moveTab: async () => {},

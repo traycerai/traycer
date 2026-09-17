@@ -5,7 +5,8 @@ import {
   type BrowserStorageCookie,
 } from "@traycer/protocol/host/browser/contracts";
 import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
-import { log, sanitizeLogFields } from "../../app/logger";
+import { isDevBuild } from "../../../config";
+import { isDebugEnabled, log, sanitizeLogFields } from "../../app/logger";
 import {
   browserJarCookies,
   cookieKeyId,
@@ -36,6 +37,7 @@ import {
 /** Every reason one observed frame's fate is traced under. */
 export type BrowserObservedProfileReason =
   | "applied"
+  | "debug-dropped"
   | "domain-mismatch"
   | "expired-cookie"
   | "over-bound"
@@ -364,89 +366,183 @@ export async function applyBrowserObservedProfile(
   observed: BrowserObservedProfile,
   dependencies: BrowserObservedProfileDependencies,
 ): Promise<BrowserObservedProfileResult> {
-  // The governor prices the host's UNSOLICITED writes - the observed replay,
-  // which arrives in a burst of whatever size the host chose. A seed is neither
-  // unsolicited nor host-paced: it is one tab being born, already bounded by
-  // the tab-create rate and by the per-frame cookie bound below. Charged to the
-  // same bucket, an attach replay landing within a second of a `createElectronTab`
-  // rate-limited the seed instead, and the tab simply opened signed out with
-  // nothing on screen to say why.
-  if (
-    observed.source !== "seed" &&
-    !dependencies.governor.admit(observed.connectionId)
-  ) {
-    return dropped(observed.domain, "rate-limited");
-  }
-  const scope = registrableDomain(observed.domain);
-  if (scope === null) return dropped(observed.domain, "domain-mismatch");
-  if (observed.cookies.length > BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES) {
-    return dropped(scope, "over-bound");
-  }
-  return await dependencies.serializeOnDomain(scope, async () => {
+  const debugEnabled = isDebugEnabled();
+  const decisions = debugEnabled
+    ? observed.cookies.slice(0, 64).map((cookie) => ({
+        domain: cookie.domain,
+        name: cookie.name,
+        path: cookie.path,
+        outcome: "refused:apply-failed",
+        valueChanged: null as boolean | null,
+        expiryChanged: null as boolean | null,
+        attributesChanged: null as boolean | null,
+      }))
+    : [];
+  const refuseFrame = (
+    domain: string,
+    outcome: BrowserObservedProfileOutcome,
+  ): BrowserObservedProfileResult => {
+    for (const decision of decisions) decision.outcome = `refused:${outcome}`;
+    return dropped(domain, outcome);
+  };
+  try {
+    const debugScope = registrableDomain(observed.domain);
     if (
-      dependencies.isForgottenPendingAck({
-        connectionId: observed.connectionId,
-        domain: scope,
-      })
+      isDevBuild &&
+      observed.source === "observed" &&
+      debugScope !== null &&
+      (process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS ?? "")
+        .split(",")
+        .some((domain) => registrableDomain(domain.trim()) === debugScope)
+    )
+      return refuseFrame(debugScope, "debug-dropped");
+    // The governor prices the host's UNSOLICITED writes - the observed replay,
+    // which arrives in a burst of whatever size the host chose. A seed is neither
+    // unsolicited nor host-paced: it is one tab being born, already bounded by
+    // the tab-create rate and by the per-frame cookie bound below. Charged to the
+    // same bucket, an attach replay landing within a second of a `createElectronTab`
+    // rate-limited the seed instead, and the tab simply opened signed out with
+    // nothing on screen to say why.
+    if (
+      observed.source !== "seed" &&
+      !dependencies.governor.admit(observed.connectionId)
     ) {
-      return dropped(scope, "ledger-unacked");
+      return refuseFrame(observed.domain, "rate-limited");
     }
-    const target = dependencies.getTargetJar();
-    // Read inside the serialized section for both ownership and comparison.
-    const jarCookies = await browserJarCookies(scope, target.session);
-    const classified = classifyObservedCookies({
-      scope,
-      cookies: observed.cookies,
-      now: dependencies.now(),
-      jarKeys: jarCookies.map(({ domain, name, path }) => ({
-        domain,
-        name,
-        path,
-      })),
-      isHeadlessOriginKey: dependencies.isHeadlessOriginKey,
-    });
-    let merged: BrowserObservedCookieMergeResult = { applied: 0, refused: [] };
-    if (classified.survivors.length > 0) {
-      if (target.durableJar) {
-        await dependencies.claimHeadlessOriginKeys(
-          classified.survivors.map((cookie) => ({
-            domain: cookie.domain,
-            name: cookie.name,
-            path: cookie.path,
-          })),
+    const scope = registrableDomain(observed.domain);
+    if (scope === null) return refuseFrame(observed.domain, "domain-mismatch");
+    if (
+      observed.cookies.length > BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES
+    ) {
+      return refuseFrame(scope, "over-bound");
+    }
+    return await dependencies.serializeOnDomain(scope, async () => {
+      if (
+        dependencies.isForgottenPendingAck({
+          connectionId: observed.connectionId,
+          domain: scope,
+        })
+      ) {
+        return refuseFrame(scope, "ledger-unacked");
+      }
+      const target = dependencies.getTargetJar();
+      // Read inside the serialized section for both ownership and comparison.
+      const jarCookies = await browserJarCookies(scope, target.session);
+      if (debugEnabled) {
+        const current = new Map(
+          jarCookies.map((cookie) => [cookieKeyId(cookie), cookie]),
         );
+        for (const [index, decision] of decisions.entries()) {
+          const incoming = observed.cookies[index];
+          if (incoming === undefined) continue;
+          const previous = current.get(cookieKeyId(incoming));
+          decision.valueChanged =
+            previous === undefined || previous.value !== incoming.value;
+          decision.expiryChanged =
+            previous === undefined ||
+            (previous.expires < 0 ? -1 : previous.expires) !==
+              (incoming.expires < 0 ? -1 : incoming.expires);
+          decision.attributesChanged =
+            previous === undefined ||
+            previous.httpOnly !== incoming.httpOnly ||
+            previous.secure !== incoming.secure ||
+            previous.sameSite !== incoming.sameSite;
+        }
       }
-      merged = await mergeObservedProfileCookies(
-        classified.survivors,
-        target.session,
-        jarCookies,
-        (key) => {
-          if (target.durableJar) dependencies.noteAppliedKeys([key]);
+      const classified = classifyObservedCookies({
+        scope,
+        cookies: observed.cookies,
+        now: dependencies.now(),
+        jarKeys: jarCookies.map(({ domain, name, path }) => ({
+          domain,
+          name,
+          path,
+        })),
+        isHeadlessOriginKey: dependencies.isHeadlessOriginKey,
+        onDecision: (index, reason) => {
+          const decision = decisions[index];
+          if (decision !== undefined && reason !== null)
+            decision.outcome = `refused:${reason}`;
         },
-      );
-      // Still inside the serialized section: the claim was taken over what
-      // this applier was ABOUT to write, and a cookie the jar refused makes
-      // that claim a standing right over a key nobody wrote - which the user's
-      // own later sign-in would then spend instead of revoking.
-      if (target.durableJar && merged.refused.length > 0) {
-        await dependencies.releaseHeadlessOriginKeys(merged.refused);
+      });
+      const attempted = debugEnabled ? new Set<string>() : null;
+      let merged: BrowserObservedCookieMergeResult = {
+        applied: 0,
+        refused: [],
+      };
+      if (classified.survivors.length > 0) {
+        if (target.durableJar) {
+          await dependencies.claimHeadlessOriginKeys(
+            classified.survivors.map((cookie) => ({
+              domain: cookie.domain,
+              name: cookie.name,
+              path: cookie.path,
+            })),
+          );
+        }
+        merged = await mergeObservedProfileCookies(
+          classified.survivors,
+          target.session,
+          jarCookies,
+          (key) => {
+            if (attempted !== null) attempted.add(cookieKeyId(key));
+            if (target.durableJar) dependencies.noteAppliedKeys([key]);
+          },
+        );
+        // Still inside the serialized section: the claim was taken over what
+        // this applier was ABOUT to write, and a cookie the jar refused makes
+        // that claim a standing right over a key nobody wrote - which the user's
+        // own later sign-in would then spend instead of revoking.
+        if (target.durableJar && merged.refused.length > 0) {
+          await dependencies.releaseHeadlessOriginKeys(merged.refused);
+        }
       }
+      if (attempted !== null) {
+        const survivors = new Set(classified.survivors);
+        const refused = new Set(merged.refused.map(cookieKeyId));
+        for (const [index, decision] of decisions.entries()) {
+          const cookie = observed.cookies[index];
+          if (cookie === undefined || !survivors.has(cookie)) continue;
+          const id = cookieKeyId(cookie);
+          decision.outcome = refused.has(id)
+            ? "refused:jar-rejected"
+            : attempted.has(id)
+              ? "applied"
+              : "identical";
+        }
+      }
+      return {
+        domain: scope,
+        outcome: "applied",
+        appliedCookies: merged.applied,
+        domainMismatchCookies: classified.domainMismatch,
+        expiredCookies: classified.expired,
+        ownedByDesktopCookies: classified.ownedByDesktop,
+        rejectedCookies: merged.refused.length,
+      };
+    });
+  } finally {
+    if (debugEnabled) {
+      // Sanitize each entry before JSON encoding: the generic log array cap is 20.
+      log.debug(
+        "[browser-view] observed cookie decisions",
+        JSON.stringify({
+          ...sanitizeLogFields({
+            source: observed.source,
+            hostId: observed.hostId,
+            domain: observed.domain,
+          }),
+          decisions: decisions.map((decision) => sanitizeLogFields(decision)),
+          omitted: Math.max(0, observed.cookies.length - decisions.length),
+        }),
+      );
     }
-    return {
-      domain: scope,
-      outcome: "applied",
-      appliedCookies: merged.applied,
-      domainMismatchCookies: classified.domainMismatch,
-      expiredCookies: classified.expired,
-      ownedByDesktopCookies: classified.ownedByDesktop,
-      rejectedCookies: merged.refused.length,
-    };
-  });
+  }
 }
 
 /**
  * The trace for one applied or refused observation, and the only place this
- * path writes a log line.
+ * path writes aggregate INFO/WARN lines.
  *
  * Every field goes through {@link sanitizeLogFields}: `domain` can be the raw
  * string a sender chose - the frame whose domain does not derive is exactly the
@@ -457,6 +553,7 @@ export function traceBrowserObservedProfile(
   result: BrowserObservedProfileResult,
   context: BrowserObservedProfileTraceContext,
 ): void {
+  if (result.outcome === "debug-dropped") return;
   if (result.outcome !== "applied") {
     traceRejection(result.domain, result.outcome, 0, context);
     return;
@@ -473,8 +570,7 @@ export function traceBrowserObservedProfile(
     }),
   );
   // Counts rather than a line per cookie: a frame may carry hundreds, and the
-  // forensic question is which reason claimed how many of them. No cookie name
-  // and no value is ever logged.
+  // forensic question is which reason claimed how many of them. Cookie names appear only in the separate DEBUG decision batch.
   if (result.domainMismatchCookies > 0) {
     traceRejection(
       result.domain,
@@ -565,6 +661,10 @@ function classifyObservedCookies(args: {
   readonly now: number;
   readonly jarKeys: readonly BrowserCookieKey[];
   readonly isHeadlessOriginKey: (keyId: string) => boolean;
+  readonly onDecision: (
+    index: number,
+    reason: BrowserObservedProfileReason | null,
+  ) => void;
 }): ClassifiedObservedCookies {
   const nowSeconds = args.now / 1_000;
   // Names in this scope that no observation contributed. A name with one
@@ -580,19 +680,23 @@ function classifyObservedCookies(args: {
   let domainMismatch = 0;
   let expired = 0;
   let ownedByDesktop = 0;
-  for (const cookie of args.cookies) {
+  for (const [index, cookie] of args.cookies.entries()) {
     if (registrableDomain(cookie.domain) !== args.scope) {
       domainMismatch += 1;
+      args.onDecision(index, "domain-mismatch");
       continue;
     }
     if (cookie.expires >= 0 && cookie.expires <= nowSeconds) {
       expired += 1;
+      args.onDecision(index, "expired-cookie");
       continue;
     }
     if (desktopOwnedNames.has(cookie.name)) {
       ownedByDesktop += 1;
+      args.onDecision(index, "owned-by-desktop");
       continue;
     }
+    args.onDecision(index, null);
     survivors.push(cookie);
   }
   return { survivors, domainMismatch, expired, ownedByDesktop };

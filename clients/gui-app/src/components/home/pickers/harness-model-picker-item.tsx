@@ -65,7 +65,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
           // Hover/keyboard active: subtle, transient feedback.
           active && "bg-accent/30",
           // Selected: the prominent persistent state (matches the primary Check).
-          // Listed last so tailwind-merge lets it win when you hover the selected
+          // Listed last so `cn` lets it win when you hover the selected
           // row - the selection stays loud, hover just adds nothing extra.
           selected && "bg-accent/70",
         )}

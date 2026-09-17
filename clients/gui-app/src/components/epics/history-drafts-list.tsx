@@ -129,9 +129,9 @@ export function HistoryDraftsList(props: {
           {canExpand ? (
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-ui-xs text-muted-foreground"
+              variant="muted"
+              size="xs"
+              className="h-7"
               aria-expanded={expanded}
               onClick={() => {
                 setExpanded((current) => !current);
@@ -202,7 +202,8 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
                 <Badge
                   variant="secondary"
                   data-testid={`history-drafts-open-${item.id}`}
-                  className="h-4 px-1 text-overline"
+                  className="h-4"
+                  size="sm"
                 >
                   Open
                 </Badge>
@@ -220,12 +221,12 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
         </div>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted-destructive"
           size="icon-sm"
           aria-label={`Delete ${item.title}`}
           aria-haspopup="dialog"
           data-testid="history-drafts-row-delete"
-          className="pointer-events-auto absolute right-2 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          className="pointer-events-auto absolute right-2 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -254,15 +255,14 @@ function HistoryDraftsDeleteDialog(props: {
   return (
     <Dialog open={open} onOpenChange={props.onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex w-[min(92vw,28rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="flex w-[min(92vw,28rem)] min-w-0 flex-col overflow-hidden sm:max-w-md"
         data-testid="history-drafts-delete-dialog"
       >
         <div className="flex min-w-0 flex-col gap-1.5 px-5 pt-5 pb-4">
-          <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-            {title}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+          <DialogTitle className="wrap-anywhere">{title}</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
             {description}
           </DialogDescription>
         </div>

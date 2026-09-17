@@ -17,6 +17,16 @@ import {
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import {
+  getImageBytes,
+  putImage,
+  releaseSession,
+} from "@/lib/composer/landing-image-store";
+import {
+  markLandingDraftsReady,
+  markLandingEditorMounted,
+  reconcile,
+} from "@/lib/composer/landing-image-gc";
+import {
   completeLandingDraftDelete,
   landingDraftIsRetired,
   pendingLandingDraftDeleteHostId,
@@ -24,6 +34,15 @@ import {
   resetLandingDraftRetirementsForTests,
   retireLandingDraft,
 } from "@/lib/drafts/landing-draft-retirement";
+import {
+  composerDraftRememberSynced,
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import {
+  newChatDraftRememberSynced,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 import { notifyDraftLocalDelete } from "@/lib/drafts/draft-local-edits";
 import { scopedPersistKey, STORE_KEYS } from "@/lib/persist";
 import {
@@ -688,7 +707,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       { from: 1, to: 6 },
     );
     adoptLandingDraft(id, "host-a");
-    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY);
+    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY, "host-a");
     expect(useLandingDraftStore.getState().activeDraftId).toBe(id);
 
     const incoming: Extract<DraftDocument, { readonly kind: "landing" }> = {
@@ -837,6 +856,419 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(landingDraftIsRetired(id)).toBe(true);
   });
 
+  it("roots a locally-held image while the apply waits for a sibling blob (DRIVE RED)", async () => {
+    // A document names two images. One is already in this partition - a LOCAL
+    // hit, answered from the store, with nothing rooting it - and the other
+    // needs a host round trip. Between the hit and the install there is no
+    // root, so one ordinary sweep correctly calls the local one an orphan and
+    // takes it; the apply then installs a document naming bytes that are gone,
+    // and the local-hit path never re-writes them.
+    const hostId = "host-prefetch-roots";
+    const stream = controlledStream();
+    const localBytes = new Uint8Array([4, 4, 2, 2]).fill(7);
+    const localHash = await putImage(localBytes);
+    // Not session-cached: that entry is a root of its own, and this is about
+    // the bytes that have nothing holding them.
+    releaseSession(localHash);
+    const remoteHash = "ab".repeat(32);
+
+    let releaseRemote: (() => void) | undefined;
+    const remoteRead = new Promise<{
+      readonly ok: false;
+      readonly reason: "missing";
+    }>((resolve) => {
+      releaseRemote = () => resolve({ ok: false, reason: "missing" });
+    });
+    let remoteStarted = false;
+    const client = {
+      request: (method: string, _params: unknown) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.readBlob") {
+          remoteStarted = true;
+          return remoteRead;
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+    };
+    acquireDraftMirrorSession({
+      hostId,
+      client: client as never,
+      streamClient: stream.client,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.started.value).toBe(true);
+    });
+
+    const applying = applyIncomingDraftDocument({
+      draftId: "draft-prefetch-roots",
+      kind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      revision: 1,
+      lastTouchedAt: 1,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: EMPTY_LANDING_DRAFT_CONTENT,
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [localHash, remoteHash],
+        closed: false,
+      },
+    });
+    await vi.waitFor(() => {
+      expect(remoteStarted).toBe(true);
+    });
+
+    // One ordinary sweep, mid-apply. Nothing else references the local hash.
+    markLandingEditorMounted();
+    markLandingDraftsReady();
+    await reconcile();
+
+    // Compared as plain numbers: a value round-tripped through the fake
+    // IndexedDB is a typed array from another realm, which `toEqual` refuses
+    // even when every byte matches.
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      7, 7, 7, 7,
+    ]);
+    releaseRemote?.();
+    await applying;
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      7, 7, 7, 7,
+    ]);
+  });
+
+  it("gives each overlapping apply its own hold, so an older one's finally cannot release a newer one's local hit (DRIVE RED)", async () => {
+    // The sibling test above roots a local hit for the length of ONE apply.
+    // This is what that hold was keyed by. `applySeq` advances only on a
+    // landing apply, so two chat-composer revisions of the same draft read
+    // concurrently under one holder id - and the first to finish released
+    // the second's hashes along with its own. The second's hash is a LOCAL
+    // hit, so no request was ever made for it and nothing re-writes it: the
+    // apply installs a document naming bytes a sweep has already taken.
+    const hostId = "host-prefetch-holder";
+    const draftId = "draft-shared-holder";
+    const stream = controlledStream();
+    const missingX = "cd".repeat(32);
+    const missingY = "ef".repeat(32);
+    const localBytes = new Uint8Array(4).fill(9);
+    const localHash = await putImage(localBytes);
+    // Not session-cached: that entry is a root of its own, and this is about
+    // bytes with nothing but the prefetch hold behind them.
+    releaseSession(localHash);
+
+    const gate = (): {
+      readonly wait: Promise<{
+        readonly ok: false;
+        readonly reason: "missing";
+      }>;
+      readonly open: () => void;
+      readonly started: { value: boolean };
+    } => {
+      const started = { value: false };
+      let open: (() => void) | undefined;
+      const wait = new Promise<{
+        readonly ok: false;
+        readonly reason: "missing";
+      }>((resolve) => {
+        open = () => resolve({ ok: false, reason: "missing" });
+      });
+      return { wait, open: () => open?.(), started };
+    };
+    const x = gate();
+    const y = gate();
+    const client = {
+      request: (method: string, params: unknown) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.readBlob") {
+          const { sha256 } = params as { readonly sha256: string };
+          if (sha256 === missingX) {
+            x.started.value = true;
+            return x.wait;
+          }
+          if (sha256 === missingY) {
+            y.started.value = true;
+            return y.wait;
+          }
+          // A local hit must never be requested - that is the whole reason
+          // nothing re-writes it.
+          return Promise.reject(new Error(`unexpected readBlob ${sha256}`));
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+    };
+    acquireDraftMirrorSession({
+      hostId,
+      client: client as never,
+      streamClient: stream.client,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.started.value).toBe(true);
+    });
+
+    const composerDocument = (
+      revision: number,
+      blobHashes: readonly string[],
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-1", chatId: "chat-1", blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: EMPTY_LANDING_DRAFT_CONTENT,
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [...blobHashes],
+        closed: false,
+      },
+    });
+
+    // Revision 1 waits on a hash only the host has.
+    const applyingFirst = applyIncomingDraftDocument(
+      composerDocument(1, [missingX]),
+    );
+    await vi.waitFor(() => {
+      expect(x.started.value).toBe(true);
+    });
+    // Revision 2 arrives while it waits: a local hit, then its own host read.
+    const applyingSecond = applyIncomingDraftDocument(
+      composerDocument(2, [localHash, missingY]),
+    );
+    await vi.waitFor(() => {
+      expect(y.started.value).toBe(true);
+    });
+
+    // Revision 1 finishes and runs its `finally`.
+    x.open();
+    await applyingFirst;
+
+    // One ordinary sweep, with revision 2 still reading its sibling.
+    markLandingEditorMounted();
+    markLandingDraftsReady();
+    await reconcile();
+
+    // Compared as plain numbers: a value round-tripped through the fake
+    // IndexedDB is a typed array from another realm, which `toEqual` refuses
+    // even when every byte matches.
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      9, 9, 9, 9,
+    ]);
+    y.open();
+    await applyingSecond;
+    expect(Array.from((await getImageBytes(localHash)) ?? [])).toEqual([
+      9, 9, 9, 9,
+    ]);
+
+    // And the hold is a hold, not a pin. Both applies have finished and the
+    // installed content names no image, so nothing roots this hash any more -
+    // if a per-acquisition token leaked its holder, these bytes would now be
+    // unreclaimable for the life of the renderer.
+    await reconcile();
+    expect(await getImageBytes(localHash)).toBeUndefined();
+  });
+
+  it("refuses an older composer revision whose blob read finished last (DRIVE RED)", async () => {
+    // The landing store has kept a revision frontier for exactly this -
+    // "image reads can finish out of order after subscribe-frame admission".
+    // The composer store had none. The stream admits a frame against the
+    // revision it holds and records the new one SYNCHRONOUSLY, then awaits
+    // the blob prefetch, so two upserts for one row are both admitted; if
+    // the older one's read is the slower, its continuation installs last and
+    // the newer text is gone with nothing able to restore it.
+    const hostId = "host-composer-order";
+    const draftId = "draft-composer-order";
+    const chatId = "chat-composer-order";
+    const stream = controlledStream();
+    const slowHash = "ab".repeat(32);
+
+    let openSlow: (() => void) | undefined;
+    let pendingReadBlob = new Promise<{
+      readonly ok: false;
+      readonly reason: "missing";
+    }>((resolve) => {
+      openSlow = () => resolve({ ok: false, reason: "missing" });
+    });
+    let slowStarted = false;
+    const client = {
+      request: (method: string) => {
+        if (method === "drafts.list") {
+          return Promise.resolve({
+            drafts: [],
+            tombstones: [],
+            snapshotSeq: 0,
+            scopeId: null,
+          });
+        }
+        if (method === "drafts.readBlob") {
+          slowStarted = true;
+          return pendingReadBlob;
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+    };
+    acquireDraftMirrorSession({
+      hostId,
+      client: client as never,
+      streamClient: stream.client,
+      timing: undefined,
+    });
+    await vi.waitFor(() => {
+      expect(stream.started.value).toBe(true);
+    });
+
+    const typed = (text: string) => ({
+      type: "doc" as const,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    const composerDocument = (
+      revision: number,
+      text: string,
+      blobHashes: readonly string[],
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-order", chatId, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [...blobHashes],
+        closed: false,
+      },
+    });
+
+    // Revision 1 is admitted first and waits on its image.
+    const applyingOld = applyIncomingDraftDocument(
+      composerDocument(1, "older", [slowHash]),
+    );
+    await vi.waitFor(() => {
+      expect(slowStarted).toBe(true);
+    });
+    // Revision 2 carries no image, so it installs immediately.
+    await applyIncomingDraftDocument(composerDocument(2, "newer", []));
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("newer"));
+
+    // Now revision 1's read finishes. It must not land.
+    openSlow?.();
+    await applyingOld;
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("newer"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(2);
+
+    // The new-conversation modal is the third store on this path and had the
+    // same gap. Same schedule, same row.
+    const epicId = "epic-order-modal";
+    const modalDraftId = "draft-modal-order";
+    let openModalSlow: (() => void) | undefined;
+    const modalSlowRead = new Promise<{
+      readonly ok: false;
+      readonly reason: "missing";
+    }>((resolve) => {
+      openModalSlow = () => resolve({ ok: false, reason: "missing" });
+    });
+    slowStarted = false;
+    pendingReadBlob = modalSlowRead;
+    const newChatDocument = (
+      revision: number,
+      text: string,
+      blobHashes: readonly string[],
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId: modalDraftId,
+      kind: "new-chat",
+      target: { epicId, chatId: null, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [...blobHashes],
+        closed: false,
+      },
+    });
+    const applyingOldModal = applyIncomingDraftDocument(
+      newChatDocument(1, "older", [slowHash]),
+    );
+    await vi.waitFor(() => {
+      expect(slowStarted).toBe(true);
+    });
+    await applyIncomingDraftDocument(newChatDocument(2, "newer", []));
+    const patchOf = (): { content: unknown; hostRevision: number } => {
+      const patch =
+        useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+      if (patch === undefined) throw new Error("expected a modal patch");
+      return { content: patch.content, hostRevision: patch.hostRevision };
+    };
+    expect(patchOf().content).toEqual(typed("newer"));
+    openModalSlow?.();
+    await applyingOldModal;
+    expect(patchOf().content).toEqual(typed("newer"));
+    expect(patchOf().hostRevision).toBe(2);
+  });
+
   it("keeps the host revision frontier for direct host-document application", () => {
     const id = "landing-revision-frontier";
     const base = {
@@ -892,6 +1324,239 @@ describe("landing draft host-mirror bookkeeping", () => {
       .drafts.find((entry) => entry.id === id);
     expect(draft?.hostRevision).toBe(13);
     expect(draft?.content).toEqual(newest.portable.content);
+  });
+
+  it("fences a stale composer document on a draft whose owner only an ACK ever set (DRIVE RED)", async () => {
+    // The most ordinary composer draft there is: typed locally, published,
+    // ACKed - and never sent a host document. `composerDraftRememberSynced`
+    // is the only thing that has ever moved its revision, and it records no
+    // owner, so the row sits at `hostRevision > 0` with `ownerHostId: null`.
+    // An owner-EQUALITY fence then reads `null !== hostId` and waves every
+    // stale document straight through, on exactly the drafts users have.
+    const hostId = "host-ack-owner";
+    const chatId = "chat-ack-owner";
+    const typed = (text: string) => ({
+      type: "doc" as const,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    useComposerDraftStore.getState().setSnapshot(chatId, typed("local"), null);
+    const draftId = readComposerDraftSnapshot(chatId).draftId;
+    if (draftId === null) throw new Error("expected a minted draft id");
+    // The ACK for the flush that published it. Nothing else touches the row,
+    // so this is the only thing that has ever named a host.
+    composerDraftRememberSynced(draftId, 3, Number.POSITIVE_INFINITY, hostId);
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+
+    await applyIncomingDraftDocument({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-ack-owner", chatId, blockId: null },
+      revision: 2,
+      lastTouchedAt: 2,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed("remote older"),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("local"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+  });
+
+  it("does not let an older ACK lower the composer or new-chat frontier (DRIVE RED)", async () => {
+    // `landingDraftRememberSynced` clamps with `Math.max`; these two stores
+    // assigned the incoming revision outright. The frontier fence reads that
+    // field, so anything lowering it re-opens the exact door the fence
+    // closes: the next stale document is compared against the lowered number
+    // and installs over newer text. The store cannot check the ordering of
+    // what reaches it - the session's held revision is not monotonic across
+    // a reconnect, where a stale `drafts.list` resets it below what is
+    // already installed - so the invariant is enforced here, on the value
+    // the fence actually reads, rather than at each caller.
+    const hostId = "host-late-ack";
+    const typed = (text: string) => ({
+      type: "doc" as const,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    const composerDoc = (
+      draftId: string,
+      chatId: string,
+      revision: number,
+      text: string,
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: "epic-late-ack", chatId, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+
+    const chatId = "chat-late-ack";
+    const draftId = "draft-late-ack";
+    await applyIncomingDraftDocument(composerDoc(draftId, chatId, 3, "newest"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+    // The in-flight write's ACK finally lands, naming its own older commit.
+    composerDraftRememberSynced(draftId, 1, Number.POSITIVE_INFINITY, hostId);
+    await applyIncomingDraftDocument(
+      composerDoc(draftId, chatId, 2, "remote older"),
+    );
+    expect(readComposerDraftSnapshot(chatId).content).toEqual(typed("newest"));
+    expect(readComposerDraftSnapshot(chatId).hostRevision).toBe(3);
+
+    // New-chat keeps its own copy of the same field, and the same ACK path
+    // reaches it through the shared sink.
+    const epicId = "epic-late-ack-modal";
+    const modalDraftId = "draft-late-ack-modal";
+    const newChatDoc = (
+      revision: number,
+      text: string,
+    ): Parameters<typeof applyIncomingDraftDocument>[0] => ({
+      draftId: modalDraftId,
+      kind: "new-chat",
+      target: { epicId, chatId: null, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId: hostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed(text),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+    await applyIncomingDraftDocument(newChatDoc(3, "newest"));
+    newChatDraftRememberSynced(modalDraftId, 1, Number.POSITIVE_INFINITY);
+    await applyIncomingDraftDocument(newChatDoc(2, "remote older"));
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+    expect(patch?.content).toEqual(typed("newest"));
+    expect(patch?.hostRevision).toBe(3);
+  });
+
+  it("takes a different host's ACK as a new revision line instead of clamping to the old owner's", () => {
+    // The clamp must not outlive the numbering it belongs to. A landing draft
+    // re-adopted to another host keeps its `hostRevision` (`adoptLandingDraft`
+    // does not reset it) while the new host numbers from scratch, so clamping
+    // the new owner's ACK against the old owner's high-water mark would refuse
+    // the new owner's real documents indefinitely. Same-line clamping only.
+    const id = "landing-owner-switch";
+    const hostA = "host-a-owner-switch";
+    const hostB = "host-b-owner-switch";
+    const doc = (
+      revision: number,
+      ownerHostId: string,
+      text: string,
+    ): Extract<DraftDocument, { readonly kind: "landing" }> => ({
+      draftId: id,
+      kind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      revision,
+      lastTouchedAt: revision,
+      workspace: null,
+      supersedes: null,
+      ownerHostId,
+      origin: "own",
+      adoption: { state: "adopted", hostId: ownerHostId },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: {
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+        },
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+
+    const onA = doc(5, hostA, "on host a");
+    applyLandingHostDocument(onA, onA.portable.content);
+    const afterA = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterA?.hostRevision).toBe(5);
+    expect(afterA?.ownerHostId).toBe(hostA);
+
+    // Re-adopted, then published to B, whose numbering starts over.
+    adoptLandingDraft(id, hostB);
+    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY, hostB);
+    const afterAck = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterAck?.hostRevision).toBe(1);
+    expect(afterAck?.ownerHostId).toBe(hostB);
+
+    // B's next document must land, not be refused by A's old high-water mark.
+    const onB = doc(2, hostB, "on host b");
+    expect(applyLandingHostDocument(onB, onB.portable.content)).toBe(true);
+    const afterB = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterB?.hostRevision).toBe(2);
+    expect(afterB?.content).toEqual(onB.portable.content);
+
+    // An acknowledgement that carries no document - a tombstone - knows no
+    // owner. It must not overwrite the one already recorded, and with the
+    // line unknown it clamps rather than assuming a fresh numbering.
+    landingDraftRememberSynced(id, 1, Number.POSITIVE_INFINITY, null);
+    const afterUnknown = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    expect(afterUnknown?.ownerHostId).toBe(hostB);
+    expect(afterUnknown?.hostRevision).toBe(2);
   });
 
   it("keeps the latest landing row when real subscribe applies finish images out of order", async () => {
@@ -1383,6 +2048,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     // the id is retired.
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary,
       document,
     });
@@ -1397,6 +2063,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(pendingLandingDraftDeletesForHost("host-a")).toEqual([]);
     await ingestCloudDraftSummary({
       hostId: "host-a",
+      readOwner: null,
       summary,
       document,
     });

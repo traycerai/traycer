@@ -252,7 +252,7 @@ function ProviderProfileReauthState({
             setEmailRevealed={setEmailRevealed}
           />
           {identityChanged ? (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-ui-xs text-amber-900 dark:text-amber-200">
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-ui-xs text-warning-foreground">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
               <span>
                 {entryProfile.label} is now signed in as{" "}
@@ -277,7 +277,7 @@ function ProviderProfileReauthState({
               source: "Provider reauth",
             })}
             presentation="link"
-            className="h-auto p-0 text-current"
+            className={undefined}
           />
         </div>
       ) : null}

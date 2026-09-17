@@ -34,7 +34,7 @@ export const SKILL_SOURCE_ORDER: readonly ProviderSkillSourceBadge[] = [
 export const SKILL_CONFLICT_LABEL = "Conflict";
 
 export const SKILL_CONFLICT_TONE =
-  "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200";
+  "border-warning/40 bg-warning/10 text-warning-foreground";
 
 export const SKILL_CONFLICT_TOOLTIP =
   "A folder already occupies this provider's link for this skill. Traycer did not adopt or overwrite it.";

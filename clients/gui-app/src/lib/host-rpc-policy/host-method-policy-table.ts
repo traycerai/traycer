@@ -587,6 +587,9 @@ export const HOST_METHOD_POLL_TABLE = {
   // supersedes an older one - and never polled: the answer is a position in a
   // transcript the live subscription is already reporting changes to.
   "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
+  // Search as you type: a newer query supersedes an older one, and never
+  // polled - the caller asks again when the query changes.
+  "chat.search": { ...LATEST_SCHEDULING, poll: null },
   // The external fallback actions. All `fifo`, and none polled.
   //
   // `fifo` because each carries the traversal revision it expects, so two rapid
@@ -1719,6 +1722,22 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Choosing a provider's auto-mode judge changes persisted provider
+  // configuration - it lands in `provider-overrides.json` beside
+  // `terminalAgentArgs`, so it takes that neighbour's policy exactly.
+  //
+  // `fifo` buys LANDING and not order here either: two picks on the same row
+  // carry different `autoJudge` values, so they are two queue keys and race,
+  // and the loser is the HOST's stored choice rather than a cache (this write
+  // invalidates `providers.list` instead of folding its response in, so the UI
+  // then faithfully reports the older selection). The ordering comes from
+  // `providerAutoJudgeWriteScope`, keyed by host AND harness, on
+  // `useProvidersSetAutoJudge`.
+  "providers.setAutoJudge": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an environment override changes persisted provider configuration.
   "providers.setEnvOverride": {
     mode: "fifo",
@@ -2006,6 +2025,39 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
   "config.browser.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Auto mode's two host-scoped settings. Both are get/set pairs over a host
+  // config file, so they take the `config.logLevels.*` shape above: a bounded
+  // read that may coalesce, and a write that may not.
+  //
+  // Neither read polls. `autoJudge.get` answers from a file only this GUI
+  // writes, and `autoPolicy.get` proxies an account record whose staleness the
+  // panel handles with the `updatedAt` it returns rather than by refetching on
+  // a timer - a cadence here would have every open settings tab waking the
+  // host, and through it the cloud, for a record that changes when a person
+  // edits it.
+  "autoJudge.get": { ...LATEST_SCHEDULING, poll: null },
+  // The write may not coalesce, and it also may not RACE: `useAutoJudgeSetMutation`
+  // folds each response into the `autoJudge.get` cache with `setQueriesData`, so
+  // an unordered pair leaves the cache holding whichever response landed last.
+  // `fifo` cannot supply that ordering - the queue key carries the params, so
+  // two clicks naming two different judges are two queues - and a scheduling
+  // policy answers `modeFor`, never the queue key. `autoJudgeWriteScope` is
+  // where the order comes from, exactly as for `providers.fallbackPolicy.set`.
+  "autoJudge.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, so ordering is the client's job: rapid
+  // saves must reach the host in the order the user made them. `fifo` is not
+  // what delivers that (see `autoJudge.set` above - two bodies are two queue
+  // keys); `autoPolicyWriteScope` on `useAutoPolicySetMutation` is.
+  "autoPolicy.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

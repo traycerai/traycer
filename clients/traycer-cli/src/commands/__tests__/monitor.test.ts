@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAgentSendCommand } from "../agent-send";
 import { runMonitor } from "../monitor";
+import { buildProgramWithAgentRoles } from "../../index";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { callHostRpc } from "../../internal/host-rpc";
+import { createOutput } from "../../runner/output";
+import type { CommandContext } from "../../runner/runner";
+import { resolveRuntimeContext } from "../../runner/runtime";
+import {
+  neuterActions,
+  parseCommand,
+  resolveCommandPath,
+} from "./command-parse-harness";
 
 // Drive the monitor's recovery state machine with a mocked WsStreamClient and a
 // mocked revalidator: each `subscribe()` returns a fake session whose
@@ -74,6 +84,10 @@ const loggerMock = vi.hoisted(() => ({
 // Stub the CLI logger so this state-machine test never appends to ~/.traycer.
 vi.mock("../../logger", () => ({
   createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
+  describeErrorOrigin: (error: Error) => error.name,
 }));
 
 vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
@@ -123,6 +137,24 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
 const resolveAuthMock = vi.mocked(resolveHostAuth);
 const pidMock = vi.mocked(readHostPidMetadata);
 const callHostRpcMock = vi.mocked(callHostRpc);
+
+function makeCommandContext(): CommandContext {
+  const runtime = resolveRuntimeContext(
+    {
+      json: false,
+      quiet: false,
+      noProgress: false,
+      noBootstrap: false,
+    },
+    {},
+  );
+  const output = createOutput(runtime);
+  return {
+    runtime,
+    output,
+    progress: (info) => output.progress(info),
+  };
+}
 
 function unauthorizedFatal() {
   return {
@@ -431,9 +463,242 @@ describe("stop initiator notices (negotiated @1.3)", () => {
 
     const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("was stopped by the user");
+    expect(output).not.toContain("traycer agent send --to");
 
     stdoutSpy.mockRestore();
     void result;
+  });
+});
+
+describe("follow-up inactivity notices (negotiated @1.3)", () => {
+  const nonCancellationReasons = [
+    { reason: "turn-ended", detail: null },
+    { reason: "exited", detail: null },
+    { reason: "quiet", detail: null },
+    { reason: "user-stopped", detail: null },
+    { reason: "errored", detail: "rate limited" },
+  ] as const;
+  const commandProgram = buildProgramWithAgentRoles(false);
+  neuterActions(commandProgram);
+  commandProgram.exitOverride();
+  commandProgram.configureOutput({
+    writeErr: () => undefined,
+    writeOut: () => undefined,
+  });
+
+  it.each(nonCancellationReasons)(
+    "emits a runnable expected-reply command for $reason",
+    async ({ reason, detail }) => {
+      const stdoutSpy = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation(() => true);
+      const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+        (e) => e,
+      );
+      try {
+        await flush(0);
+
+        sessions[0].serverFrame?.({
+          kind: "notice",
+          hasBinaryPayload: false,
+          notice: {
+            kind: "inactivity",
+            senderAgentId: "a1",
+            responseId: "response-1",
+            receiverAgentId: "receiver-1",
+            receiverTitle: "Worker",
+            receiverHarnessId: "codex",
+            epicId: "e1",
+            reason,
+            detail,
+            droppedReceivers: null,
+            stopInitiator: null,
+            noticedAt: 123,
+          },
+        });
+
+        const output = stdoutSpy.mock.calls
+          .map((call) => String(call[0]))
+          .join("");
+        const sendLine = output
+          .split("\n")
+          .find((line) => line.includes("traycer agent send --to"));
+        expect(sendLine).toBeDefined();
+        if (sendLine === undefined) {
+          throw new Error("expected inactivity notice follow-up command");
+        }
+        const commandMatch =
+          /^\[traycer inbox\] the request is still open; a follow-up can be sent with: traycer agent send --to ([^\s]+)( --expect-reply)? --message "([^"]+)"(?: --response-id ([^\s]+))?$/.exec(
+            sendLine,
+          );
+        expect(commandMatch).not.toBeNull();
+        if (commandMatch === null) {
+          throw new Error("expected parseable inactivity follow-up command");
+        }
+        const receiverId = commandMatch[1];
+        const expectReply = commandMatch[2] === " --expect-reply";
+        const prompt = commandMatch[3];
+        const responseId = commandMatch[4] ?? null;
+        if (receiverId === undefined || prompt === undefined) {
+          throw new Error(
+            "inactivity follow-up command was missing an argument",
+          );
+        }
+        expect(receiverId).toBe("receiver-1");
+        expect(expectReply).toBe(true);
+        expect(responseId).toBeNull();
+        expect(sendLine).not.toContain("--response-id");
+
+        const commandStart = sendLine.indexOf("traycer agent send ");
+        expect(commandStart).toBeGreaterThanOrEqual(0);
+        const emittedCommand = sendLine.slice(commandStart);
+        const commandArgv = (emittedCommand.match(/"[^"]*"|\S+/g) ?? []).map(
+          (token) =>
+            token.startsWith('"') && token.endsWith('"')
+              ? token.slice(1, -1)
+              : token,
+        );
+        const commandTokens = commandArgv.slice(1);
+        const commandPath = resolveCommandPath(commandProgram, commandTokens);
+        expect(commandPath.map((command) => command.name())).toEqual([
+          "traycer",
+          "agent",
+          "send",
+        ]);
+        const send = commandPath[commandPath.length - 1];
+        if (send === undefined) {
+          throw new Error("agent send command was not registered");
+        }
+        const parsed = await parseCommand(commandProgram, commandTokens, {
+          strict: true,
+        });
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) {
+          throw new Error("emitted inactivity follow-up command did not parse");
+        }
+        const selected = send.opts<Record<string, unknown>>();
+        expect({
+          args: send.args,
+          to: selected.to,
+          message: selected.message,
+          expectReply: selected.expectReply,
+          responseId: selected.responseId,
+        }).toEqual({
+          args: [],
+          to: "receiver-1",
+          message: "<follow-up>",
+          expectReply: true,
+          responseId: undefined,
+        });
+
+        const selectedTo = selected.to;
+        const selectedMessage = selected.message;
+        const selectedExpectReply = selected.expectReply;
+        const selectedResponseId = selected.responseId;
+        if (
+          typeof selectedTo !== "string" ||
+          typeof selectedMessage !== "string" ||
+          typeof selectedExpectReply !== "boolean" ||
+          (selectedResponseId !== undefined &&
+            typeof selectedResponseId !== "string")
+        ) {
+          throw new Error("parsed agent send options had unexpected types");
+        }
+        const returnedResponseId = "response-follow-up";
+        callHostRpcMock.mockResolvedValue({
+          responseId: returnedResponseId,
+        });
+        const command = buildAgentSendCommand({
+          epicId: "e1",
+          senderAgentId: "a1",
+          to: selectedTo,
+          message: selectedMessage,
+          expectReply: selectedExpectReply,
+          responseId: selectedResponseId ?? null,
+        });
+        const commandResult = await command(makeCommandContext());
+
+        expect(commandResult.data).toEqual({
+          responseId: returnedResponseId,
+        });
+        expect(commandResult.human).toContain(
+          `responseId: ${returnedResponseId}`,
+        );
+        expect(callHostRpcMock).toHaveBeenCalledWith(
+          "agent.sendMessage",
+          expect.objectContaining({
+            senderAgentId: "a1",
+            epicId: "e1",
+            receiverAgentId: "receiver-1",
+            prompt: "<follow-up>",
+            expectReply: true,
+            responseId: null,
+          }),
+        );
+        expect(output).toContain("omit --response-id for this follow-up");
+        expect(output).toContain(
+          "Repeated --expect-reply sends from you to the same recipient reuse its still-open thread",
+        );
+      } finally {
+        stdoutSpy.mockRestore();
+        void result;
+      }
+    },
+  );
+
+  it("keeps awaiting-input informational while the human gate is active", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    try {
+      await flush(0);
+
+      sessions[0].serverFrame?.({
+        kind: "notice",
+        hasBinaryPayload: false,
+        notice: {
+          kind: "inactivity",
+          senderAgentId: "a1",
+          responseId: "response-1",
+          receiverAgentId: "receiver-1",
+          receiverTitle: "Worker",
+          receiverHarnessId: "codex",
+          epicId: "e1",
+          reason: "awaiting-input",
+          detail: "needs approval",
+          droppedReceivers: null,
+          stopInitiator: null,
+          noticedAt: 123,
+        },
+      });
+
+      const output = stdoutSpy.mock.calls
+        .map((call) => String(call[0]))
+        .join("");
+      expect(output).toContain(
+        "is blocked waiting on a human — it needs approval — and will not reply until someone responds",
+      );
+      expect(output).toContain(
+        "Sending a follow-up now would queue behind the user's input and re-trigger this notice",
+      );
+      expect(output).toContain(
+        "Wait for the receiver's reply or the user's answer to wake you",
+      );
+      expect(output).toContain(
+        "If you are working for another agent, tell it you're blocked",
+      );
+      expect(output).toContain(
+        "Omit --response-id for your own follow-ups; the displayed responseId is not an incoming reply ID",
+      );
+      expect(output).toContain(
+        "traycer agent transcript --agent-id receiver-1",
+      );
+      expect(output).not.toContain("traycer agent send");
+    } finally {
+      stdoutSpy.mockRestore();
+      void result;
+    }
   });
 });
 

@@ -368,7 +368,7 @@ export function SetupCardSegment(props: {
           align="end"
           side="bottom"
           data-testid="setup-card"
-          className="w-[min(90vw,36rem)] p-3"
+          className="w-[min(90vw,36rem)]"
         >
           {workspaceDetail}
         </PopoverContent>
@@ -604,11 +604,10 @@ function OpenTerminalButton(props: {
           <span className="inline-flex">
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="xs"
               disabled
               data-testid="setup-card-open-terminal-ended"
-              className="text-muted-foreground"
             >
               Open terminal
               <ArrowRight aria-hidden />
@@ -643,17 +642,16 @@ function RetryButton(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="destructive-ghost"
       size="xs"
       disabled={props.pending}
       onClick={props.onRetry}
       data-testid="setup-card-retry"
-      className="text-destructive hover:text-destructive"
     >
       {props.label}
       {props.pending ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant={undefined}
         />
@@ -736,7 +734,7 @@ function StatusIcon(props: {
     return (
       <Check
         aria-hidden
-        className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+        className="size-3.5 shrink-0 text-success-foreground"
       />
     );
   }
@@ -759,10 +757,12 @@ function StatusIcon(props: {
     );
   }
   return (
-    <AgentSpinningDots
-      className="shrink-0 text-primary"
-      testId={undefined}
-      variant={undefined}
-    />
+    <span className="inline-flex shrink-0 text-primary">
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </span>
   );
 }

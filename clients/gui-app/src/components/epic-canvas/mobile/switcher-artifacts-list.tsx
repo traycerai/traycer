@@ -363,9 +363,10 @@ function SwitcherArtifactSearchBody(props: {
         className="flex min-h-24 flex-1 items-center justify-center py-8"
       >
         <AgentSpinningDots
-          className="size-4 text-muted-foreground"
+          className="size-4"
           testId="switcher-artifacts-search-loading"
           variant="dots2"
+          tone="muted"
         />
       </div>
     );

@@ -75,6 +75,9 @@ function coordinatorState(args: {
     errorMessage: null,
     retry: () => undefined,
     openTab: unusedAction("openTab"),
+    prepareOpenTab: () => {
+      throw new Error("prepareOpenTab is not callable from Home");
+    },
     closeTab: unusedAction("closeTab"),
     attachTab: unusedAction("attachTab"),
     moveTab: unusedAction("moveTab"),

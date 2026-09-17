@@ -1,3 +1,4 @@
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import { useEffect, useRef } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { TimerHandle } from "@traycer-clients/shared/host-transport/timer-handle";
@@ -175,6 +176,12 @@ export function useCloudDraftsIngest(
         // snapshot settling during the read must not sweep the mirror this
         // head is about to refresh (and clear its active surface with it).
         reserveCloudDraftIngestFence(summary.identity.chatId);
+        // And the ACCOUNT this read is for, captured at the same point and for
+        // the same reason. A head read that finishes after a switch carries the
+        // previous account's draft; capturing the owner where the apply STARTS
+        // reads the new one and installs that text under it. The request knows
+        // whose it is; its continuation does not.
+        const readOwner = currentDraftBlobOwnerId();
         let outcome: CloudDraftReadOutcome;
         try {
           outcome = await readCloudDraft({
@@ -221,7 +228,12 @@ export function useCloudDraftsIngest(
         // The key stays unsettled through the apply, so a teardown that
         // interrupts it still releases the guard.
         try {
-          await ingestCloudDraftSummary({ hostId, summary, document });
+          await ingestCloudDraftSummary({
+            hostId,
+            summary,
+            document,
+            readOwner,
+          });
           settle();
         } catch (error: unknown) {
           // Re-read through the scope: the earlier check narrowed the

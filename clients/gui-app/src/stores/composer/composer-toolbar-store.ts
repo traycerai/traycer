@@ -6,9 +6,11 @@ import {
   resolveModelBySlug,
 } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   findDefaultModel,
   findSelectedModel,
+  autoModeOfferableHere,
   normalizePermissionMode,
   normalizeReasoningForModel,
   normalizeServiceTierForModel,
@@ -65,6 +67,19 @@ export interface ComposerToolbarCatalog {
    * are dropped rather than attributed to the wrong host.
    */
   readonly hostId: string | null;
+  /**
+   * Whether the chat this composer sends on has negotiated a `chat.subscribe`
+   * line that can CARRY `permissionMode: "auto"` (`@1.13`), or `null` when no
+   * chat session is in scope - the landing composer, and Settings' judge
+   * picker, neither of which has one.
+   *
+   * A HOST fact pushed in like the rest of this record, but it is NOT readable
+   * from the negotiated-manifest registry the way `hostId`'s catalog line is:
+   * `chat.subscribe` is a stream method and that registry only ever holds
+   * unary ones. It has to arrive from a live session. See
+   * `autoModeOfferableHere`.
+   */
+  readonly chatLineCarriesAutoMode: boolean | null;
   /** `undefined` while the harness list is loading / the surface is inactive. */
   readonly harnesses: ReadonlyArray<HarnessOption> | undefined;
   /**
@@ -195,6 +210,8 @@ export interface CreateComposerToolbarStoreInput {
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /** Seeds `catalog.tuiOnly`; kept in sync at runtime via `setCatalog`. */
   readonly tuiOnly: boolean;
+  /** Seeds `catalog.chatLineCarriesAutoMode`; kept in sync via `setCatalog`. */
+  readonly chatLineCarriesAutoMode: boolean | null;
   /** Seeds `catalog.hostId`; kept in sync at runtime via `setCatalog`. */
   readonly hostId: string | null;
 }
@@ -204,6 +221,7 @@ export function createComposerToolbarStore(
 ): ComposerToolbarStore {
   const initialCatalog: ComposerToolbarCatalog = {
     hostId: input.hostId,
+    chatLineCarriesAutoMode: input.chatLineCarriesAutoMode,
     harnesses: undefined,
     modelsHarnessId: input.values.selection.harnessId,
     models: EMPTY_MODELS,
@@ -397,12 +415,41 @@ function deriveToolbarState(
     null;
   const supportedPermissionModes =
     selectedHarness?.supportedPermissionModes ?? null;
+  // The HOST's own line, which no row in the catalog can answer. A pre-`auto`
+  // host serves unconstrained rows like any other, so without this a sticky
+  // `auto` survives the clamp on a machine whose `chat.subscribe` line cannot
+  // carry the enum.
+  //
+  // Read straight off the negotiated-manifest registry rather than through a
+  // hook, because this is a store: `getNegotiatedHostMethodVersion` is a plain
+  // module function and `stores/epics/open-epic/doc-record-arms.ts` reads it
+  // the same way. An unrecorded handshake answers `null`, which
+  // `catalogLineKnowsAutoMode` reads as "cannot spell it" - the safe direction,
+  // and the same hold every other gate on this line takes.
+  const hostKnowsAutoMode =
+    catalog.hostId === null
+      ? // No host in scope yet - not a host that cannot spell `auto`. The
+        // clamp passes the mode through and re-runs when a catalog arrives.
+        null
+      : autoModeOfferableHere(
+          getNegotiatedHostMethodVersion(
+            catalog.hostId,
+            "agent.gui.listHarnesses",
+          ),
+          // The second proof, which the registry above cannot supply: that
+          // line says the host can OFFER `auto`, and a different method
+          // CARRIES it. This is the clamp, so it is what actually decides the
+          // value the composer SENDS - the picker's own gate only decides what
+          // it shows.
+          catalog.chatLineCarriesAutoMode,
+        );
   const derived: ComposerToolbarDerived = {
     selection,
     selectedModel,
     permission: normalizePermissionMode(
       values.permission,
       supportedPermissionModes,
+      hostKnowsAutoMode,
     ),
     reasoning: normalizeReasoningForModel(values.reasoning, selectedModel),
     // Clamp the sticky tier to the selected model (single site for display AND
@@ -518,7 +565,17 @@ function sameCatalog(
     // catalog that loads empty, where `models` stays the same `[]`) would
     // otherwise be skipped here, stranding a deferred emit that never flushes.
     a.modelsLoaded === b.modelsLoaded &&
-    a.tuiOnly === b.tuiOnly
+    a.tuiOnly === b.tuiOnly &&
+    // The third field to belong here for the same reason as the two above, and
+    // the costliest to omit: `deriveToolbarState` reads this one as the CLAMP
+    // that decides the permission mode the composer actually sends. Left out,
+    // a catalog whose only change is `true` -> `false` returned early, the
+    // toolbar kept `permission: "auto"`, and the ordinary composer's submit
+    // path copied it into `ChatRunSettings` with no further live-session
+    // clamp - so `projectChatClientFrameForVersion` refused the send outright.
+    // The tile-owned next-step, compact and inline-edit paths clamp
+    // separately and do not cover this one.
+    a.chatLineCarriesAutoMode === b.chatLineCarriesAutoMode
   );
 }
 

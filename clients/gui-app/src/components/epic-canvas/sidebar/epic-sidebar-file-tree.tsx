@@ -826,9 +826,10 @@ function FileTreeBodyForResolvedHost(
               className="pointer-events-none absolute inset-0 flex items-center justify-center"
             >
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
+                tone="muted"
               />
             </output>
           ) : null}
