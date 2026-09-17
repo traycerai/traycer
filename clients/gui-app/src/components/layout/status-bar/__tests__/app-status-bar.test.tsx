@@ -790,9 +790,9 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
 
 /**
  * The strip on a phone, where it is opt-in and the mobile header keeps its own
- * gauge beside it. Both facts below follow from that second half: the strip is
- * no longer the only surface on screen, so it neither draws at its measured
- * width nor claims a chord the header is still holding.
+ * gauge beside it. It draws exactly what a desktop strip draws - the readings
+ * scroll under a finger rather than being cut down for the width - and it
+ * does not claim a chord the header is still holding.
  */
 describe("<AppStatusBar /> on a mobile viewport", () => {
   const DESKTOP_VIEWPORT_WIDTH = 1280;
@@ -822,29 +822,96 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
     resourceProjection.value = null;
   });
 
-  it("draws at the compact rung whatever it measures", () => {
-    // Measured, a phone is `icon-only` - its bar IS the viewport, and every
-    // phone is under 500px - which would leave the opt-in footer drawing the
-    // same provider icons the mobile header already shows and no readings at
-    // all. `compact` caps the ladder at `no-timers` instead: percentages and
-    // their labels, no mode word, no mini bars, no countdowns.
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+  it("draws the same full readings on a phone as on a desktop window", () => {
+    // Nothing about the viewport decides what the strip draws: every drawn
+    // account's segment is in the DOM at every width, each printing every
+    // part the display switches ask for, and what does not fit scrolls.
+    windowedProviders = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+    ];
+    const codexWindow = {
+      windowKey: "codex:primary",
+      label: "5h",
+      labelIsDuration: true,
+      kind: "session",
+      usedPercent: 34,
+      resetsAt: null,
+      severity: "healthy",
+    } as const;
+    const claudeWindow = {
+      ...codexWindow,
+      windowKey: "claude-code:fiveHour",
+      usedPercent: 57,
+    };
+    rateLimitCluster = {
+      kind: "segments",
+      segments: [
+        {
+          providerId: "codex",
+          profileId: null,
+          account: null,
+          state: "live",
+          reason: null,
+          windows: [codexWindow],
+          shown: [codexWindow],
+          tightest: codexWindow,
+        },
+        {
+          providerId: "claude-code",
+          profileId: null,
+          account: null,
+          state: "live",
+          reason: null,
+          windows: [claudeWindow],
+          shown: [claudeWindow],
+          tightest: claudeWindow,
+        },
+      ],
+    };
 
-    render(<AppStatusBar />);
+    // The same readings, part by part, on both viewports: the percentage,
+    // the mode word and the window's label in the text, and one mini bar per
+    // reading - with every account drawn and none folded away.
+    function expectFullReadings(): void {
+      expect(
+        screen
+          .getAllByTestId(/^status-bar-provider-segment-/)
+          .map((segment) => segment.getAttribute("data-provider-id")),
+      ).toEqual(["codex", "claude-code"]);
+      expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
+      expect(
+        screen.getByTestId("status-bar-window-codex:primary").textContent,
+      ).toBe("34% used 5h");
+      expect(
+        screen.getByTestId("status-bar-window-claude-code:fiveHour")
+          .textContent,
+      ).toBe("57% used 5h");
+      expect(
+        screen
+          .getAllByTestId("status-bar-provider-mini-bar")
+          .map((bar) => bar.getAttribute("data-window-key")),
+      ).toEqual(["codex:primary", "claude-code:fiveHour"]);
+    }
 
-    expect(
-      screen.getByTestId("app-status-bar").getAttribute("data-density"),
-    ).toBe("compact");
-  });
-
-  it("keeps the measured rung on a desktop window", () => {
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    const desktop = render(<AppStatusBar />);
+    expectFullReadings();
+    desktop.unmount();
 
+    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
     render(<AppStatusBar />);
-
-    expect(
-      screen.getByTestId("app-status-bar").getAttribute("data-density"),
-    ).toBe("full");
+    expectFullReadings();
   });
 
   it("leaves app.rate-limits.open to the header it is sharing the screen with", () => {
