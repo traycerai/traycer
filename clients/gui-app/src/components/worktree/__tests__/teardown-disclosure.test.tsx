@@ -53,7 +53,7 @@ describe("TeardownDisclosure", () => {
     );
     expect(
       screen.getByTestId("teardown-disclosure-working").textContent,
-    ).toContain("Agent “Planner” is working on a turn — will be stopped");
+    ).toContain("Agent “Planner” has work in progress — will be stopped");
     expect(
       screen.getByTestId("teardown-disclosure-working").textContent,
     ).toContain("1 agent is still working");

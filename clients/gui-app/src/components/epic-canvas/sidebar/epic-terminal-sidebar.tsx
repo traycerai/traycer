@@ -150,7 +150,7 @@ function TerminalsPanelBodyLive(props: {
 
   return (
     <SidebarContent className="min-h-0">
-      <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+      <SidebarGroup className="min-h-0 flex-1">
         <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
           <TerminalSidebarBody
             panel={panel}
@@ -441,7 +441,8 @@ function TerminalRow(props: TerminalRowProps) {
                   onChange={(event) => setRenameValue(event.target.value)}
                   onBlur={commitRename}
                   onKeyDown={handleRenameKeyDown}
-                  className="h-7 flex-1 min-w-0 px-1 text-ui-sm"
+                  className="h-7 flex-1 min-w-0 px-1"
+                  size="sm"
                 />
               </div>
             ) : (

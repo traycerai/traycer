@@ -242,6 +242,7 @@ function baseCloneArgs(
     })),
     explicitTargetProfileId: null,
     onProfileFallbackToAmbient: vi.fn(),
+    onPermissionModeUnsupported: () => undefined,
     onProfileSelectionRequired: vi.fn(),
     onHistoryUnavailable: vi.fn(),
     onCloneFailed: vi.fn(),

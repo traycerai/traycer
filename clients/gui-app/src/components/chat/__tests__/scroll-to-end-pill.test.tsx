@@ -65,7 +65,7 @@ describe("ScrollToEndPill", () => {
     expect(pill.classList.contains("h-8")).toBe(true);
     expect(pill.classList.contains("text-ui-sm")).toBe(true);
     expect(pill.classList.contains("min-w-36")).toBe(false);
-    expect(pill.classList.contains("active:scale-[0.96]")).toBe(true);
+    expect(pill.classList.contains("active:scale-96")).toBe(true);
   });
 
   it("hides interaction when hidden (tabIndex -1, opacity-0, pointer-events-none)", () => {

@@ -14,6 +14,7 @@
  * the same persisted view state, so callers compose these rather than
  * re-declaring them.
  */
+import type { CSSProperties } from "react";
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
@@ -162,7 +163,7 @@ export function ViewMenuBadge(props: { readonly filterCount: number }) {
   return (
     <span
       aria-hidden
-      className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-0.5 text-[9px] leading-none font-semibold text-background ring-1 ring-background"
+      className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-0.5 text-micro leading-none font-semibold text-background ring-1 ring-background"
     >
       {props.filterCount > 9 ? "9+" : String(props.filterCount)}
     </span>
@@ -405,7 +406,7 @@ function ArtifactTypeDetail(props: {
     const TypeIcon = EPIC_NODE_ICONS[kind];
     const iconStyle =
       artifactIconColorMode === "byType"
-        ? { color: artifactIconColors[kind] }
+        ? ({ "--swatch": artifactIconColors[kind] } as CSSProperties)
         : undefined;
     return (
       <DropdownMenuCheckboxItem
@@ -417,6 +418,7 @@ function ArtifactTypeDetail(props: {
         <TypeIcon
           className={cn(
             "size-3.5",
+            artifactIconColorMode === "byType" && "text-[var(--swatch)]",
             artifactIconColorMode === "none" && "text-muted-foreground",
           )}
           style={iconStyle}

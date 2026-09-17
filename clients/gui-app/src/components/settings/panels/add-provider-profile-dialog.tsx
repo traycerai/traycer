@@ -306,7 +306,8 @@ export function AddProviderProfileDialog({
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent
-        className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+        layout="banded"
+        className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
         showCloseButton={!linking}
         onEscapeKeyDown={(event) => {
           if (dismissalLocked) event.preventDefault();
@@ -315,11 +316,11 @@ export function AddProviderProfileDialog({
           if (dismissalLocked) event.preventDefault();
         }}
       >
-        <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
-          <DialogTitle className="text-ui font-semibold leading-snug">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle>
             Add new {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
           </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
+          <DialogDescription>
             Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
             its color, then link the account it should use.
           </DialogDescription>
@@ -370,7 +371,7 @@ export function AddProviderProfileDialog({
         </div>
 
         {flow.state.kind === "start" ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -382,7 +383,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {naming !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -396,7 +397,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {duplicateProfile !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -567,7 +568,7 @@ function DuplicateAccountNotice({
   readonly profile: ProviderProfile;
 }): ReactNode {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-200">
+    <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning-foreground">
       <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0">
         <div className="text-ui-sm font-medium">Account already linked</div>
@@ -897,14 +898,14 @@ export function AddProfileIdentityStep({
             </button>
           ) : null}
           {tier !== null && tier.length > 0 ? (
-            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+            <Badge variant="outline" className="h-5" size="xs">
               {tier}
             </Badge>
           ) : null}
         </div>
       </div>
       {duplicateLabel !== null ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-ui-xs text-amber-900 dark:text-amber-200">
+        <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-ui-xs text-warning-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>This is the same account as {duplicateLabel}.</span>
         </div>
@@ -943,7 +944,7 @@ function AddProfileFailureStep({
             source: "Add profile",
           })}
           presentation="link"
-          className="h-auto p-0 text-current"
+          className={undefined}
         />
       </div>
     </div>

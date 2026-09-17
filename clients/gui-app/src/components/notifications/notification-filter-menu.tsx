@@ -10,7 +10,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { cn } from "@/lib/utils";
 import {
   ALL_NOTIFICATION_CATEGORIES,
   type NotificationCategory,
@@ -74,14 +73,11 @@ export function NotificationFilterMenu(
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             data-testid="notifications-filter-trigger"
             aria-label="Filter notifications"
-            className={cn(
-              "relative text-muted-foreground hover:text-foreground",
-              !isDefault && "text-foreground",
-            )}
+            className="relative"
           >
             <ListFilter className="size-3.5" aria-hidden />
             {!isDefault && (

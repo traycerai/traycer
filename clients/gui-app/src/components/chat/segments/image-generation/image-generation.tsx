@@ -73,7 +73,7 @@ function DitherMark(props: {
   if (props.status !== "generating") return null;
   return (
     <AgentSpinningDots
-      className="text-current"
+      className={undefined}
       testId={undefined}
       variant={props.reduce ? "static" : undefined}
     />
@@ -316,7 +316,7 @@ function ImageGenerationMedia(props: {
         ) : null}
       </AnimatePresence>
       {props.props.resolution ? (
-        <span className="pointer-events-none absolute left-2 top-2 z-10 whitespace-nowrap rounded-full bg-background/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground @max-[8rem]:left-1 @max-[8rem]:top-1 @max-[8rem]:px-1.5">
+        <span className="pointer-events-none absolute left-2 top-2 z-10 whitespace-nowrap rounded-full bg-background/75 px-2 py-0.5 font-mono text-micro tabular-nums text-muted-foreground @max-[8rem]:left-1 @max-[8rem]:top-1 @max-[8rem]:px-1.5">
           {props.props.resolution}
         </span>
       ) : null}
@@ -354,7 +354,8 @@ function ImageGenerationDetails(props: {
         <Collapsible
           open={expanded}
           onOpenChange={setExpanded}
-          className="w-full min-w-0 overflow-hidden rounded-md border border-border/60 bg-muted/20"
+          className="w-full min-w-0 overflow-hidden"
+          variant="card"
         >
           <CollapsibleTrigger asChild>
             <button

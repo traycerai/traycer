@@ -101,6 +101,7 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
+  rebindPendingBrowserTile,
   updateBrowserTileViewportPreset,
   updateCommGraphTileCamera,
   updateCommGraphTileOfficeCamera,
@@ -575,6 +576,10 @@ export interface EpicCanvasStore {
     tileId: string,
     diff: SnapshotDiffTilePayload,
   ) => void;
+  rebindPendingBrowserTile: (
+    requestId: string,
+    opened: { readonly sessionId: string; readonly tabId: string },
+  ) => boolean;
   updateBrowserTileViewportPresetInTab: (
     tabId: string,
     tileInstanceId: string,
@@ -1093,7 +1098,11 @@ function captureClosedTilePayloads(
   after: TilesByInstanceId,
 ): EpicCanvasStore["closedTilePayloadsByTabId"] {
   const removed = Object.entries(before).flatMap(([instanceId, ref]) =>
-    ref !== undefined && after[instanceId] === undefined ? [ref] : [],
+    ref !== undefined &&
+    after[instanceId] === undefined &&
+    !(ref.type === "browser-session" && ref.pending !== undefined)
+      ? [ref]
+      : [],
   );
   if (removed.length === 0) return state.closedTilePayloadsByTabId;
   const nextForTab = removed.reduce(
@@ -2185,6 +2194,22 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               updateSnapshotDiffTilePayload(canvas, tileId, diff),
             ),
           );
+        },
+
+        rebindPendingBrowserTile: (requestId, opened) => {
+          let rebound = false;
+          set((state) => {
+            const canvasByTabId = { ...state.canvasByTabId };
+            for (const [tabId, canvas] of Object.entries(canvasByTabId)) {
+              if (canvas === undefined) continue;
+              const next = rebindPendingBrowserTile(canvas, requestId, opened);
+              if (next === canvas) continue;
+              canvasByTabId[tabId] = next;
+              rebound = true;
+            }
+            return rebound ? { canvasByTabId } : state;
+          });
+          return rebound;
         },
 
         updateBrowserTileViewportPresetInTab: (

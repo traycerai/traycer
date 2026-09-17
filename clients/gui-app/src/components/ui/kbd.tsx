@@ -1,15 +1,52 @@
+import { cva, type VariantProps } from "class-variance-authority";
+
 import { cn } from "@/lib/utils";
 
 // A key-cap glyph, and nothing more - it is equally the keybinding settings'
 // rendering of a chord being edited. A `Kbd` that ADVERTISES a shortcut on
 // some other control belongs inside `<ShortcutHint>`, which owns whether such
 // a hint is worth showing at all.
-function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
+//
+//   - `variant="mono"` — the cap's label is a LITERAL key name typed by the
+//     user or read back from a config (`Ctrl`, `F2`, a chord being captured),
+//     so it wants the code face. 16 call sites wrote `font-mono` by hand.
+//   - `variant="inherit"` — the cap rides the surrounding control's own
+//     foreground instead of the ambient one. See the long note below for why
+//     this is not "the variant sets a text colour"; the `in-[…]` rules do it
+//     automatically inside a Button, and this variant is the same treatment
+//     for a cap rendered somewhere a Button is not.
+//   - `size="xs"` — a cap inside dense chrome (the prompt-stash rows, the
+//     leader-key digit on a tab).
+const kbdVariants = cva(
+  "pointer-events-none inline-flex w-fit items-center justify-center gap-1 border border-border/60 bg-foreground/8 px-1 font-sans font-medium text-muted-foreground select-none in-data-[slot=tooltip-content]:border-background/20 in-data-[slot=tooltip-content]:bg-background/20 in-data-[slot=tooltip-content]:text-background dark:in-data-[slot=tooltip-content]:bg-background/10 [&_svg:not([class*='size-'])]:size-3",
+  {
+    variants: {
+      variant: {
+        default: "",
+        mono: "font-mono",
+        inherit: "border-current bg-transparent text-current",
+      },
+      size: {
+        default: "h-5 min-w-5 rounded-md text-xs",
+        xs: "h-4 min-w-4 rounded text-micro",
+      },
+    },
+    defaultVariants: { variant: "default", size: "default" },
+  },
+);
+
+function Kbd({
+  className,
+  variant,
+  size,
+  ...props
+}: Omit<React.ComponentProps<"kbd">, "size"> &
+  VariantProps<typeof kbdVariants>) {
   return (
     <kbd
       data-slot="kbd"
       className={cn(
-        "pointer-events-none inline-flex h-5 w-fit min-w-5 items-center justify-center gap-1 rounded-md border border-border/60 bg-foreground/8 px-1 font-sans text-xs font-medium text-muted-foreground select-none in-data-[slot=tooltip-content]:border-background/20 in-data-[slot=tooltip-content]:bg-background/20 in-data-[slot=tooltip-content]:text-background dark:in-data-[slot=tooltip-content]:bg-background/10 [&_svg:not([class*='size-'])]:size-3",
+        kbdVariants({ variant, size }),
         // A keycap's default fill and label are calibrated for the AMBIENT
         // surface: `bg-foreground/8` sits one step off the page/card behind
         // it, and `--muted-foreground` is that surface's own quiet text token.

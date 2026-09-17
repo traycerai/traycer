@@ -691,6 +691,7 @@ const CODEX_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -703,6 +704,7 @@ const CLAUDE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -715,6 +717,7 @@ const OPENCODE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -727,6 +730,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -739,6 +743,7 @@ const DROID_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -751,6 +756,7 @@ const CURSOR_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -980,6 +986,7 @@ interface RenderPickerInput {
    */
   readonly storeModels?: ReadonlyArray<ModelOption>;
   readonly withServiceTier?: boolean;
+  readonly withReasoning?: boolean;
   readonly tuiOnly?: boolean;
   readonly lockedHarnessId?: ProviderId | null;
   readonly disabled?: boolean;
@@ -1015,6 +1022,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
+    chatLineCarriesAutoMode: null,
     hostId: TEST_HOST_ID,
   });
   if (resolvedInput.storeModels !== undefined) {
@@ -1025,6 +1033,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       models: resolvedInput.storeModels,
       modelsLoaded: true,
       tuiOnly: resolvedInput.tuiOnly ?? false,
+      chatLineCarriesAutoMode: null,
     });
   }
   const selections: HarnessModelSelection[] = [];
@@ -1053,6 +1062,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
+          withReasoning={resolvedInput.withReasoning ?? true}
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}
@@ -1369,6 +1379,7 @@ describe("<HarnessModelPicker />", () => {
         models,
         modelsLoaded: true,
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       });
     });
   }
@@ -2704,14 +2715,18 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("button", { name: "Codex profile: Personal" }),
     ).toBeDefined();
+    // `--swatch`, not `background-color`: the profile dot carries its colour as
+    // a custom property and paints with `bg-[var(--swatch)]` (ticket 02's
+    // inline-style migration), so a `background-color` selector matches nothing
+    // and this assertion passed on an empty list.
     const swatchStyles = Array.from(
-      container.querySelectorAll<HTMLElement>(
-        'span[style*="background-color"]',
-      ),
+      container.querySelectorAll<HTMLElement>('span[style*="--swatch"]'),
     ).map((element) => element.getAttribute("style") ?? "");
-    expect(swatchStyles.some((style) => style.includes("16, 185, 129"))).toBe(
-      true,
-    );
+    // The hex as written, not jsdom's `rgb(16, 185, 129)`: a custom property
+    // is serialized verbatim, unlike the `background-color` this used to read.
+    expect(
+      swatchStyles.some((style) => style.toLowerCase().includes("#10b981")),
+    ).toBe(true);
   });
 
   it("closes the picker and opens the global add-profile flow from the dropdown's create-new-profile row", async () => {

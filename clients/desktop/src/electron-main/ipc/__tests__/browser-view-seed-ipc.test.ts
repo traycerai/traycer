@@ -26,8 +26,8 @@ interface SeededCookie {
 
 const fixture = vi.hoisted(() => ({
   durablePartition: "persist:traycer-browser",
-  /** Keys the jar already holds for the scope under test. */
-  jarKeys: [] as { domain: string; name: string; path: string }[],
+  /** Cookies the jar already holds for the scope under test. */
+  jarCookies: [] as { domain: string; name: string; path: string }[],
   /** Cookies that survived classification and reached the jar. */
   merged: [] as SeededCookie[],
   /** Origins the capture memory was told to keep localStorage for. */
@@ -64,6 +64,10 @@ vi.mock("electron", () => {
 });
 
 vi.mock("../../app/logger", () => ({
+  // `log` here has no `debug` - unlike the storage-layer suites, nothing in
+  // this file exercises the DEBUG decision log itself. Off (INFO) is the only
+  // safe default: `true` would call the undefined `log.debug`.
+  isDebugEnabled: () => false,
   log: { info: vi.fn(), warn: vi.fn() },
   describeLogError: (error: unknown) => String(error),
   sanitizeLogFields: (fields: unknown) => fields,
@@ -159,7 +163,7 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
     }),
   ),
   clearBrowserSite: vi.fn(() => Promise.resolve()),
-  browserJarCookieKeys: vi.fn(() => Promise.resolve(fixture.jarKeys)),
+  browserJarCookies: vi.fn(() => Promise.resolve(fixture.jarCookies)),
   mergeObservedProfileCookies: vi.fn((cookies: readonly SeededCookie[]) => {
     for (const cookie of cookies) {
       fixture.merged.push({ name: cookie.name, domain: cookie.domain });
@@ -264,7 +268,7 @@ let seedRun = 0;
 
 describe("createElectronTab storage seed", () => {
   beforeEach(() => {
-    fixture.jarKeys = [];
+    fixture.jarCookies = [];
     fixture.merged = [];
     fixture.retained = [];
     fixture.connectionId = "connection-1";
@@ -279,7 +283,7 @@ describe("createElectronTab storage seed", () => {
   });
 
   it("drops an already-expired seed cookie instead of deleting the jar's", async () => {
-    fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
+    fixture.jarCookies = [{ domain: "example.test", name: "sid", path: "/" }];
 
     await seed(
       [seedCookie("sid", { expires: Math.floor(Date.now() / 1_000) - 60 })],
@@ -293,7 +297,7 @@ describe("createElectronTab storage seed", () => {
   });
 
   it("refuses a name the desktop's own browsing owns and still adds a new one", async () => {
-    fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
+    fixture.jarCookies = [{ domain: "example.test", name: "sid", path: "/" }];
 
     await seed(
       [
@@ -380,7 +384,7 @@ describe("createElectronTab storage seed", () => {
   // watch. The applier's own outcome is still "applied", so the count is what
   // decides.
   it("installs no localStorage when every seeded cookie is one the desktop owns", async () => {
-    fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
+    fixture.jarCookies = [{ domain: "example.test", name: "sid", path: "/" }];
 
     const seeded = await seed(
       [seedCookie("sid", { path: "/app", value: "attacker" })],
@@ -397,7 +401,7 @@ describe("createElectronTab storage seed", () => {
   // here, so its localStorage is the desktop's too and `clear()` would take
   // the very login the cookie rule just protected.
   it("installs no localStorage when any seeded cookie is one the desktop owns", async () => {
-    fixture.jarKeys = [{ domain: "example.test", name: "sid", path: "/" }];
+    fixture.jarCookies = [{ domain: "example.test", name: "sid", path: "/" }];
 
     const seeded = await seed(
       [

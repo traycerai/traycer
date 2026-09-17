@@ -40,12 +40,8 @@ export interface FocusStopAgentInput {
  * `agent.stop`, aimed at the AGENT's host rather than at whichever host the
  * window happens to be addressing.
  *
- * `useAgentStop` is the app's ordinary stop and rides `useHostScopedMutation`,
- * which resolves one client for the whole hook. That is right for a surface
- * inside a task - everything on it belongs to one host - and wrong here: Home
- * lists every task on the account, so two rows on the same page can name
- * different machines, and a hook-level client would send one of them to a host
- * that has never heard of that agent.
+ * `useAgentStop` takes one caller-supplied client for a fixed host. Home lists
+ * tasks across hosts, so each stop request must name its own destination.
  *
  * So the client is resolved per call from the host directory, the same shape
  * `useManagedCommandStop` uses for exactly the same reason. `null` follows the

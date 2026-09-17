@@ -128,9 +128,10 @@ function SessionImportRow(props: {
           >
             {active !== null ? (
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId="settings-import-sessions-spinner"
                 variant={undefined}
+                tone="muted"
               />
             ) : null}
             Import
@@ -179,9 +180,10 @@ function DataMigrationRow(props: {
         >
           {running ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="settings-reattempt-migration-spinner"
               variant={undefined}
+              tone="muted"
             />
           ) : null}
           Re-attempt migration

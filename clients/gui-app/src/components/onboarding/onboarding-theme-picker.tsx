@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { THEME_PRESETS } from "@/lib/theme-presets";
 import { cn } from "@/lib/utils";
 import {
@@ -85,17 +86,17 @@ export function OnboardingThemePicker() {
                 setThemePreset(preset.id);
               }}
               className={cn(
-                "relative size-7 shrink-0 overflow-hidden rounded-full border transition-transform duration-200",
+                "relative size-7 shrink-0 overflow-hidden rounded-full border bg-[var(--swatch)] transition-transform duration-200",
                 themePreset === preset.id
                   ? "scale-110 border-white"
                   : "border-white/25 hover:scale-105 hover:border-white/60",
               )}
-              style={{ backgroundColor: preset.swatch }}
+              style={{ "--swatch": preset.swatch } as CSSProperties}
             >
               <span
                 aria-hidden="true"
-                className="absolute inset-x-0 bottom-0 h-1/3"
-                style={{ backgroundColor: preset.accent }}
+                className="absolute inset-x-0 bottom-0 h-1/3 bg-[var(--swatch)]"
+                style={{ "--swatch": preset.accent } as CSSProperties}
               />
             </button>
           </TooltipWrapper>

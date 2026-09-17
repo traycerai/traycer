@@ -67,7 +67,7 @@ export function ProviderProfileCard({
           onSelectColor={onSelectColor}
         />
         {duplicateColorProfile !== undefined ? (
-          <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2.5 text-ui-xs text-amber-900 dark:text-amber-200">
+          <div className="flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2.5 text-ui-xs text-warning-foreground">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
             <span>
               {profileDisplayLabel(duplicateColorProfile)} already uses this

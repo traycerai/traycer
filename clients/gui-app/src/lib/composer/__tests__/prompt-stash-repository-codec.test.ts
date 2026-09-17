@@ -32,6 +32,7 @@ describe("prompt-stash-repository codec", () => {
 
     const older = textEntry("old", 100, "old");
     const newer: PromptStashEntry = {
+      annotations: [],
       id: "new",
       createdAt: 200,
       content: textDoc("new"),
@@ -114,6 +115,7 @@ describe("prompt-stash-repository codec", () => {
       readonly createdAt: number;
       readonly content: unknown;
       readonly blobHashes: unknown;
+      readonly annotations: unknown;
       readonly seedBlob: boolean;
     }): Promise<void> {
       const db = await openDb(DB_NAME, undefined, undefined);
@@ -128,6 +130,7 @@ describe("prompt-stash-repository codec", () => {
             createdAt: record.createdAt,
             content: record.content,
             blobHashes: record.blobHashes,
+            annotations: record.annotations,
           }),
         );
         if (record.seedBlob) {
@@ -144,6 +147,25 @@ describe("prompt-stash-repository codec", () => {
       } finally {
         db.close();
       }
+    }
+
+    function annotationRecordFor(imageHash: string): unknown {
+      return {
+        kind: "browser-annotation",
+        annotationId: `ann-${imageHash.slice(0, 6)}`,
+        tabId: "tab-1",
+        sessionId: "session-1",
+        origin: "https://example.test",
+        pageUrl: "https://example.test/checkout",
+        pageTitle: "Checkout",
+        capturedAt: 1,
+        comment: "the button is misaligned",
+        counts: { elements: 1, regions: 0, strokes: 2 },
+        elements: [],
+        imageFileName: "crop.png",
+        imageHash,
+        droppedElementCount: 0,
+      };
     }
 
     it("surfaces unknown node type as unavailable with best-effort content", async () => {
@@ -163,6 +185,7 @@ describe("prompt-stash-repository codec", () => {
         createdAt: 1,
         content,
         blobHashes: [],
+        annotations: undefined,
         seedBlob: false,
       });
       const loaded = await repo.loadPromptStashSnapshot();
@@ -199,6 +222,7 @@ describe("prompt-stash-repository codec", () => {
         createdAt: 1,
         content,
         blobHashes: [],
+        annotations: undefined,
         seedBlob: false,
       });
       const loaded = await repo.loadPromptStashSnapshot();
@@ -285,6 +309,7 @@ describe("prompt-stash-repository codec", () => {
           createdAt: 1,
           content,
           blobHashes: [HASH_A],
+          annotations: undefined,
           seedBlob: true,
         });
         const loaded = await repo.loadPromptStashSnapshot();
@@ -306,6 +331,7 @@ describe("prompt-stash-repository codec", () => {
         createdAt: 1,
         content,
         blobHashes: [HASH_A, HASH_A],
+        annotations: undefined,
         seedBlob: true,
       });
       const loaded = await repo.loadPromptStashSnapshot();
@@ -321,6 +347,7 @@ describe("prompt-stash-repository codec", () => {
         createdAt: 1,
         content,
         blobHashes: ["not-canonical"],
+        annotations: undefined,
         seedBlob: false,
       });
       const loaded = await repo.loadPromptStashSnapshot();
@@ -336,6 +363,7 @@ describe("prompt-stash-repository codec", () => {
         createdAt: 1,
         content,
         blobHashes: [HASH_A, HASH_B],
+        annotations: undefined,
         seedBlob: true,
       });
       const loaded = await repo.loadPromptStashSnapshot();
@@ -355,10 +383,68 @@ describe("prompt-stash-repository codec", () => {
         createdAt: 1,
         content,
         blobHashes: [],
+        annotations: undefined,
         seedBlob: true,
       });
       const loaded = await repo.loadPromptStashSnapshot();
       expect(loaded.rows[0]?.kind).toBe("unavailable");
+    });
+
+    it("loads an entry whose ONLY reference to a declared blob is an annotation record", async () => {
+      // A crop the content no longer shows, still owned by the record that
+      // describes it. Judged by content alone this looks like an entry hoarding
+      // an unreferenced blob - the case the test above rejects - so the
+      // annotations have to count as references or every sidecar-only crop
+      // makes its entry unrestorable.
+      const repo = await loadRepo();
+      await repo.loadPromptStashSnapshot();
+      await seedRawEntry({
+        id: "sidecar-only",
+        createdAt: 1,
+        content: textDoc("the button is misaligned"),
+        blobHashes: [HASH_A],
+        annotations: [annotationRecordFor(HASH_A)],
+        seedBlob: true,
+      });
+      const loaded = await repo.loadPromptStashSnapshot();
+      expect(loaded.rows[0]?.kind).toBe("entry");
+      if (loaded.rows[0]?.kind === "entry") {
+        expect(loaded.rows[0].entry.annotations).toHaveLength(1);
+        expect(loaded.rows[0].entry.annotations[0]?.imageHash).toBe(HASH_A);
+      }
+    });
+
+    it("surfaces an annotation naming a blob the entry never declared as unavailable", async () => {
+      const repo = await loadRepo();
+      await repo.loadPromptStashSnapshot();
+      await seedRawEntry({
+        id: "undeclared-annotation",
+        createdAt: 1,
+        content: docWithImage(validImageAttrs({ hash: HASH_A })),
+        blobHashes: [HASH_A],
+        annotations: [annotationRecordFor(HASH_B)],
+        seedBlob: true,
+      });
+      const loaded = await repo.loadPromptStashSnapshot();
+      expect(loaded.rows[0]?.kind).toBe("unavailable");
+    });
+
+    it("reads a legacy record with no annotations field as an entry with none", async () => {
+      const repo = await loadRepo();
+      await repo.loadPromptStashSnapshot();
+      await seedRawEntry({
+        id: "legacy-no-annotations",
+        createdAt: 1,
+        content: docWithImage(validImageAttrs({ hash: HASH_A })),
+        blobHashes: [HASH_A],
+        annotations: undefined,
+        seedBlob: true,
+      });
+      const loaded = await repo.loadPromptStashSnapshot();
+      expect(loaded.rows[0]?.kind).toBe("entry");
+      if (loaded.rows[0]?.kind === "entry") {
+        expect(loaded.rows[0].entry.annotations).toEqual([]);
+      }
     });
 
     it("loads a fully valid mention/slash/list/marks/image document as entry", async () => {
@@ -452,6 +538,7 @@ describe("prompt-stash-repository codec", () => {
         ],
       };
       const entry: PromptStashEntry = {
+        annotations: [],
         id: "rich-valid",
         createdAt: 10,
         content,
@@ -462,6 +549,7 @@ describe("prompt-stash-repository codec", () => {
         createdAt: entry.createdAt,
         content: entry.content,
         blobHashes: entry.blobHashes,
+        annotations: entry.annotations,
         seedBlob: true,
       });
       const loaded = await repo.loadPromptStashSnapshot();

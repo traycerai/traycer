@@ -60,12 +60,11 @@ export function SwitcherNewChatAction(props: SwitcherCreateProps) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label="New chat"
       data-testid="switcher-new-chat"
       onClick={handleSelect}
-      className="text-muted-foreground hover:text-foreground"
     >
       <Plus className="size-4" />
     </Button>
@@ -123,12 +122,11 @@ export function SwitcherNewArtifactMenu(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="New artifact"
           data-testid="switcher-new-artifact"
           disabled={isPending}
-          className="text-muted-foreground hover:text-foreground"
         >
           {isPending ? (
             <AgentSpinningDots

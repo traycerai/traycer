@@ -1548,7 +1548,7 @@ export function HostOverviewPanel(props: {
           !rename.isEditing ? null : (
             <input
               {...rename.inputProps}
-              className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 font-semibold text-foreground text-title-sm outline-hidden focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 font-semibold text-foreground text-title-sm outline-hidden focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               aria-label="Host name"
               data-testid="host-overview-name-input"
             />

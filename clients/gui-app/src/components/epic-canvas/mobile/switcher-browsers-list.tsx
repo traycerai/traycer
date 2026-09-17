@@ -110,10 +110,8 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
     () => filterBrowserTabRows(tabs, searchQuery),
     [searchQuery, tabs],
   );
-  // Dismissing on the tile rather than on the tap: a refusal reports itself
-  // with a toast and opens nothing, and a sheet that left anyway would take the
-  // unavailable state's Retry with it. Same rule the Terminals row follows,
-  // which closes on `onLaunched`.
+  // Leave when a tile opens, including request-only chrome. Preflight
+  // refusals keep the sheet's Retry available; PiP waits for the result.
   const { add: handleAdd, isAdding } = useAddBrowserAction(tabId, onClose);
 
   return (
@@ -132,11 +130,10 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
         action={
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="Add browser"
             data-testid="switcher-new-browser"
-            className="text-muted-foreground hover:text-foreground"
             disabled={isAdding}
             onClick={handleAdd}
           >
@@ -398,19 +395,20 @@ function SwitcherBrowserRowActions(props: {
       />
       <Button
         type="button"
-        variant="ghost"
+        variant="muted-destructive"
         size="icon-sm"
         disabled={isClosing}
         aria-label={closeLabel}
         data-testid={`switcher-browser-close-${tab.tabId}`}
-        className="shrink-0 text-muted-foreground hover:text-destructive"
+        className="shrink-0"
         onClick={close}
       >
         {isClosing ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
             variant={undefined}
+            tone="muted"
           />
         ) : (
           <X className="size-4" aria-hidden />
@@ -467,11 +465,11 @@ function SwitcherBrowserDriverButton(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="info-ghost"
       size="icon-sm"
       aria-label={`Open driving chat: ${names.join(", ")}`}
       data-testid={`switcher-browser-driver-${row.tab.tabId}`}
-      className="shrink-0 text-blue-500 hover:text-blue-500"
+      className="shrink-0"
       onClick={onSelect}
     >
       <Bot className="size-4" aria-hidden />
@@ -496,17 +494,17 @@ function SwitcherBrowserHostFilterMenu(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={label}
           data-testid={`switcher-${BROWSERS_PANEL_ID}-filter`}
-          className="relative text-muted-foreground hover:text-foreground"
+          className="relative"
         >
           <ListFilter className="size-4" />
           {props.isPinned ? (
             <span
               aria-hidden
-              className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[9px] leading-none font-semibold text-background ring-1 ring-background"
+              className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
             >
               1
             </span>

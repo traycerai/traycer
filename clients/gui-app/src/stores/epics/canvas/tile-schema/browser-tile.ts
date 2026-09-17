@@ -1,3 +1,4 @@
+import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { v4 as uuidv4 } from "uuid";
 import {
   BROWSER_VIEW_VIEWPORT_PRESET_IDS,
@@ -6,7 +7,11 @@ import {
 import { DEFAULT_BROWSER_VIEWPORT_PRESET } from "@/lib/browser-view/browser-tile-defaults";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { TILE_KIND_BROWSER_SESSION } from "../tile-kinds";
-import type { BrowserSessionTileRef } from "../types";
+import type {
+  BrowserSessionTileRef,
+  ResolvedBrowserSessionTileRef,
+  PendingBrowserSessionTileRef,
+} from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
@@ -50,7 +55,7 @@ export function makeBrowserSessionTileRef(args: {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
-}): BrowserSessionTileRef {
+}): ResolvedBrowserSessionTileRef {
   return {
     id: browserSessionTileId(args),
     instanceId: uuidv4(),
@@ -60,6 +65,28 @@ export function makeBrowserSessionTileRef(args: {
     sessionId: args.sessionId,
     tabId: args.tabId,
     viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
+  };
+}
+
+export function makePendingBrowserSessionTileRef(
+  pending: PendingBrowserTabRequest,
+): PendingBrowserSessionTileRef {
+  return {
+    id: `${TILE_KIND_BROWSER_SESSION}:pending:${pending.requestId}`,
+    instanceId: uuidv4(),
+    type: TILE_KIND_BROWSER_SESSION,
+    name: BROWSER_TILE_NAME,
+    hostId: pending.hostId,
+    sessionId: null,
+    tabId: null,
+    viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
+    pending: {
+      requestId: pending.requestId,
+      hostId: pending.hostId,
+      scope: pending.scope,
+      requestedUrl: pending.requestedUrl,
+      clickedAt: pending.clickedAt,
+    },
   };
 }
 
@@ -92,6 +119,7 @@ function parseBrowserSessionTileRef(
 function serializeBrowserSessionTileRef(
   ref: BrowserSessionTileRef,
 ): DesktopJsonValue {
+  if (ref.pending !== undefined) return null;
   return {
     id: ref.id,
     instanceId: ref.instanceId,

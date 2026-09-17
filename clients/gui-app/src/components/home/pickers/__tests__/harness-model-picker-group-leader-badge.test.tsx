@@ -49,6 +49,7 @@ function harness(id: "codex" | "claude"): HarnessOption {
     requiresApiKey: false,
     supportedPermissionModes: ["supervised", "full_access"],
     availabilityPending: false,
+    nativeAutoJudge: false,
   };
 }
 

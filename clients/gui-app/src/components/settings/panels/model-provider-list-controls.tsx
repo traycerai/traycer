@@ -74,10 +74,10 @@ function ModelProviderFilterMenu(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={label}
-            className="relative shrink-0 text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="relative shrink-0"
             data-testid="model-provider-filter-trigger"
           >
             <ListFilter className="size-4" />
@@ -94,9 +94,7 @@ function ModelProviderFilterMenu(props: {
         </DropdownMenuTrigger>
       </TooltipWrapper>
       <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuLabel className="text-overline tracking-wide uppercase">
-          Sign-in method
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Sign-in method</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={props.filter}
           onValueChange={(next) => {

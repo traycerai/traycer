@@ -1003,9 +1003,9 @@ function ModelProviderListShell(props: {
           <li className="w-full">
             <Button
               type="button"
-              size="sm"
-              variant="ghost"
-              className="w-full justify-start gap-2 px-0 text-muted-foreground hover:text-foreground"
+              size="inline"
+              variant="muted"
+              className="h-7 w-full justify-start"
               // Closed while a config write is in flight: declaring through
               // this would open a form whose Save the guard drops, and an older
               // completion would land on the newer dialog's state.
@@ -1123,7 +1123,7 @@ function ModelProviderRow(props: {
           {entry.connected ? (
             <span
               aria-hidden
-              className="size-1.5 shrink-0 rounded-full bg-emerald-500 dark:bg-emerald-400"
+              className="size-1.5 shrink-0 rounded-full bg-success"
             />
           ) : null}
           <span className="truncate text-ui-sm text-foreground">
@@ -1145,10 +1145,7 @@ function ModelProviderRow(props: {
               sideOffset={undefined}
               align={undefined}
             >
-              <Badge
-                variant="outline"
-                className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
-              >
+              <Badge variant="muted" className="h-4" size="xs">
                 {sourceBadgeLabel(entry.source, entry.configDeclaredCustom)}
               </Badge>
             </TooltipWrapper>
@@ -1207,11 +1204,7 @@ function ModelProviderRow(props: {
             <Button
               type="button"
               size="sm"
-              variant="ghost"
-              className={cn(
-                "text-muted-foreground",
-                "hover:bg-destructive/10 hover:text-destructive",
-              )}
+              variant="muted-destructive"
               // A CONFIG-sourced row's Disconnect is a config write (it appends
               // to `disabled_providers`), so it closes with the rest while one
               // is in flight - declared custom or not, since both reach the file

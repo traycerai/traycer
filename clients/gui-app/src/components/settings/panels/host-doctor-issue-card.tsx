@@ -57,7 +57,10 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
               <Button
                 variant="default"
                 size="sm"
-                disabled={recurrenceLocked || fixPendingCode !== null}
+                disabled={
+                  (recurrenceLocked && issue.fixAction !== "host-logs") ||
+                  fixPendingCode !== null
+                }
                 onClick={() => onFix(issue)}
               >
                 {issueFixPending ? (

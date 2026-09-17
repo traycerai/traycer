@@ -49,13 +49,14 @@ export function TeardownCommitDialog(props: {
       }}
     >
       <DialogContent
-        className="w-full min-w-0 gap-0 overflow-hidden p-0"
+        layout="banded"
+        className="w-full min-w-0 overflow-hidden"
         style={{ maxWidth: "min(92vw, 34rem)" }}
         showCloseButton={false}
         data-testid="teardown-commit-dialog"
       >
-        <DialogHeader className="space-y-1 px-6 pt-6 pb-2">
-          <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
+        <DialogHeader className="space-y-1">
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
           {props.refusalReason === undefined ||
           props.refusalReason.length === 0 ? null : (
@@ -74,7 +75,7 @@ export function TeardownCommitDialog(props: {
             agentNames={agentNames}
           />
         </div>
-        <DialogFooter className="mx-0 mb-0 mt-2 w-full min-w-0 flex-wrap gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
+        <DialogFooter className="mt-2 w-full min-w-0 flex-wrap">
           <Button
             type="button"
             variant="ghost"

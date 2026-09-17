@@ -27,6 +27,15 @@ const MAX_LOG_DEPTH = 4;
 const MAX_LOG_ARRAY_ITEMS = 20;
 const MAX_LOG_OBJECT_KEYS = 40;
 
+export function isDebugEnabled(): boolean {
+  return (
+    log.transports.file.level === "debug" ||
+    log.transports.file.level === "silly" ||
+    log.transports.console.level === "debug" ||
+    log.transports.console.level === "silly"
+  );
+}
+
 /**
  * Configures `electron-log` so the desktop shell, the renderer, and any
  * spawned host-lifecycle diagnostics flow through a single sink.
