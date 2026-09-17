@@ -107,6 +107,9 @@ function tileHostSessionsState(): BrowserSessionsState {
     errorMessage: null,
     retry: vi.fn(),
     openTab: vi.fn(() => Promise.reject(new Error("not used"))),
+    prepareOpenTab: vi.fn(() => {
+      throw new Error("not used");
+    }),
     closeTab: vi.fn(() => Promise.resolve()),
     attachTab: vi.fn(() => Promise.reject(new Error("not used"))),
     moveTab: vi.fn(() => Promise.reject(new Error("not used"))),

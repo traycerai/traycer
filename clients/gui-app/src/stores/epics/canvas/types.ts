@@ -1,3 +1,4 @@
+import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import type {
@@ -171,16 +172,30 @@ interface EpicTerminalRefBase {
 }
 
 /** Renderer-local view pointer to one host-owned epic browser tab. */
-export interface BrowserSessionTileRef {
+interface BrowserSessionTileRefBase {
   readonly id: string;
   readonly instanceId: string;
   readonly type: typeof TILE_KIND_BROWSER_SESSION;
   readonly name: string;
   readonly hostId: string;
-  readonly sessionId: string;
-  readonly tabId: string;
   readonly viewportPreset: BrowserViewViewportPresetId;
 }
+
+export interface ResolvedBrowserSessionTileRef extends BrowserSessionTileRefBase {
+  readonly sessionId: string;
+  readonly tabId: string;
+  readonly pending?: undefined;
+}
+
+export interface PendingBrowserSessionTileRef extends BrowserSessionTileRefBase {
+  readonly sessionId: null;
+  readonly tabId: null;
+  readonly pending: PendingBrowserTabRequest;
+}
+
+export type BrowserSessionTileRef =
+  | ResolvedBrowserSessionTileRef
+  | PendingBrowserSessionTileRef;
 
 /** Pre-migration ref. These semantic fields are import/old-host evidence only. */
 export interface LegacyEpicTerminalRef extends EpicTerminalRefBase {

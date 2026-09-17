@@ -600,6 +600,10 @@ function commandSegmentSearchText(
 function providerNoticeSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "provider_notice" }>,
 ): ReadonlyArray<string> {
+  // Retry diagnostics are optional disclosure content, outside the Find unit.
+  if (segment.presentation === "retry") {
+    return [normalizeSearchableText(segment.title)];
+  }
   return [
     normalizeSearchableText(
       [

@@ -602,6 +602,7 @@ function SubagentChildProviderNotices(props: {
           key={notice.id}
           status={notice.status}
           noticeKind={notice.noticeKind}
+          presentation={notice.presentation}
           tone={notice.tone}
           title={notice.title}
           message={notice.message}

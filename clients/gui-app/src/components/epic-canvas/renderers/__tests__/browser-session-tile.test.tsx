@@ -8,7 +8,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ReactElement } from "react";
 import type {
   BrowserOpenedTab,
@@ -33,6 +41,7 @@ import {
   acquireBrowserSessionsCoordinator,
   browserSessionsCoordinatorKey,
   browserSessionsCoordinatorState,
+  type PendingBrowserTabRequest,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { BROWSER_SESSIONS_V1_NO_WINDOW_BINDING_REASON } from "@traycer-clients/shared/host-transport/browser-contracts-v1-bridge";
@@ -66,12 +75,17 @@ const harness = vi.hoisted(() => ({
       handoffToken: null,
     }),
   ),
+  prepareOpenTab: vi.fn(() => {
+    throw new Error("not used in this test");
+  }),
   closeTab: vi.fn(),
   attachTab: vi.fn(() => {
     harness.frameOrder.push("attachTab");
     return Promise.resolve();
   }),
   moveTab: vi.fn(() => Promise.resolve()),
+  setViewport: vi.fn(() => Promise.reject(new Error("not used"))),
+  reportViewport: vi.fn(() => undefined),
   /**
    * Which frame each seam issued, in issue order, across the sessions stream
    * (`attachTab`) and the screencast stream (the peek tile's subscribe). The
@@ -166,11 +180,12 @@ function sessionsContextValue() {
     connectionGeneration: harness.connectionGeneration,
     items: harness.items,
     viewports: {},
-    setViewport: () => Promise.reject(new Error("not used")),
-    reportViewport: () => undefined,
+    setViewport: harness.setViewport,
+    reportViewport: harness.reportViewport,
     errorMessage: null,
     retry: vi.fn(),
     openTab: harness.openTab,
+    prepareOpenTab: harness.prepareOpenTab,
     closeTab: harness.closeTab,
     // This literal is untyped (no `BrowserSessionsState` annotation), so a
     // missing `attachTab` member is invisible to the type-check - only a
@@ -1982,5 +1997,116 @@ describe("BrowserSessionTile adapter props", () => {
     expect(placement?.kind === "canvas" ? placement.paneId : null).toBe(
       "pane-2",
     );
+  });
+});
+
+describe("BrowserSessionTile pending presentation", () => {
+  const PENDING_REQUEST: PendingBrowserTabRequest = {
+    requestId: "req-pending-1",
+    hostId: "host-test",
+    scope: { kind: "epic", epicId: "epic-1" },
+    requestedUrl: "https://example.com/",
+    clickedAt: 0,
+  };
+
+  const PENDING_NODE: BrowserSessionTileRef = {
+    id: "browser-session:pending:req-pending-1",
+    instanceId: "pending-instance-1",
+    type: "browser-session",
+    name: "Browser",
+    hostId: "host-test",
+    sessionId: null,
+    tabId: null,
+    viewportPreset: "responsive",
+    pending: PENDING_REQUEST,
+  };
+
+  function pendingTileElement(): ReactElement {
+    return (
+      <BrowserSessionTile
+        node={PENDING_NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />
+    );
+  }
+
+  beforeEach(() => {
+    harness.closeCanvasTile.mockClear();
+    harness.openTab.mockClear();
+    harness.prepareOpenTab.mockClear();
+    harness.closeTab.mockClear();
+    harness.attachTab.mockClear();
+    harness.moveTab.mockClear();
+    harness.setViewport.mockClear();
+    harness.reportViewport.mockClear();
+    harness.frameOrder.length = 0;
+    window.localStorage.removeItem("traycer:perf:telemetry");
+  });
+
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem("traycer:perf:telemetry");
+  });
+
+  it("renders the request's chrome and URL, bypassing the unavailable branch and native surface entirely", () => {
+    render(pendingTileElement());
+
+    expect(screen.getByText("https://example.com/")).toBeTruthy();
+    expect(screen.getByText("Opening browser tab…")).toBeTruthy();
+    expect(
+      screen.queryByText("Browser tab is no longer available."),
+    ).toBeNull();
+  });
+
+  it("is inert to the session: no attach, screencast subscribe, viewport, open or close call reaches it", () => {
+    render(pendingTileElement());
+
+    // The native surface (`ElectronTabSurface`, "managed-electron-tab") and
+    // the headless peek surface (`BrowserPeekTile`, "headless-browser-tab")
+    // are the ONLY things in this tree that ever call attach/screencast/
+    // viewport - so proving neither mounted is what proves this variant is
+    // inert, not merely that it forgot to call them itself.
+    expect(screen.queryByTestId("managed-electron-tab")).toBeNull();
+    expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+    expect(harness.frameOrder).not.toContain("screencastSubscribe");
+    expect(harness.attachTab).not.toHaveBeenCalled();
+    expect(harness.moveTab).not.toHaveBeenCalled();
+    expect(harness.openTab).not.toHaveBeenCalled();
+    expect(harness.prepareOpenTab).not.toHaveBeenCalled();
+    expect(harness.closeTab).not.toHaveBeenCalled();
+    expect(harness.setViewport).not.toHaveBeenCalled();
+    expect(harness.reportViewport).not.toHaveBeenCalled();
+  });
+
+  it("closes through the same nested-focus close path as a resolved tile", () => {
+    render(pendingTileElement());
+
+    fireEvent.click(screen.getByRole("button", { name: "Close browser tab" }));
+
+    expect(harness.closeCanvasTile).toHaveBeenCalledOnce();
+  });
+
+  it("logs the click-to-placeholder perf span exactly once, after the first paint", async () => {
+    window.localStorage.setItem("traycer:perf:telemetry", "1");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => {
+      warn.mockRestore();
+    });
+
+    render(pendingTileElement());
+
+    await waitFor(() => {
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+    const line = String(warn.mock.calls[0]?.[0]);
+    expect(line.startsWith("[traycer-perf] ")).toBe(true);
+    const payload = JSON.parse(line.slice("[traycer-perf] ".length)) as {
+      readonly name: string;
+      readonly fields: { readonly requestId: string };
+    };
+    expect(payload.name).toBe("click-to-placeholder");
+    expect(payload.fields.requestId).toBe("req-pending-1");
   });
 });
