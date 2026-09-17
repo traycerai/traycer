@@ -202,17 +202,54 @@ describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
     expect(capability).not.toBeNull();
     expect(capability).toHaveProperty("remoteSafe");
     expect(capability).toHaveProperty("selfOpensBrowser");
-    // `null`, never `{}`, for both - and they are null for OPPOSITE safety
-    // reasons, which is why each is asserted rather than the pair being
-    // spot-checked. A `{}` `remoteSafe` would declare every pre-9.0 provider
-    // remote-safe and offer sign-ins that cannot complete; a `{}`
-    // `selfOpensBrowser` would suppress the GUI's own browser open and strand
-    // the user at a waiting step with nothing opened.
+    // Kimi's legacy args are `["auth", "login"]` - no `--device-auth` - so
+    // this row is the fail-closed half of the fill. An UNCONDITIONAL `{}`
+    // `remoteSafe` would declare every pre-9.0 provider remote-safe and offer
+    // sign-ins that cannot complete; the device-auth case is pinned separately
+    // below. `selfOpensBrowser` is null for the opposite safety reason and has
+    // no legacy proxy at all, which is why each is asserted rather than the
+    // pair being spot-checked: a `{}` there would suppress the GUI's own
+    // browser open and strand the user at a waiting step with nothing opened.
     expect(capability?.remoteSafe).toBeNull();
     expect(capability?.selfOpensBrowser).toBeNull();
     // The fill leaves the rest of the capability alone.
     expect(capability?.oauthArgs).toEqual(["auth", "login"]);
     expect(capability?.terminalLogin).toBeNull();
+  });
+
+  it("projects remoteSafe from a legacy --device-auth flow instead of dropping it", () => {
+    // The regression this projection exists to prevent. Before `remoteSafe`
+    // existed, the GUI decided remote-safety by evaluating exactly this
+    // predicate itself (`oauthArgs.includes("--device-auth")` in
+    // `provider-signin-availability.ts`). A v8.0 host still answers with those
+    // args and no marker, so filling `null` unconditionally would tell a
+    // signed-out user on a REMOTE v8.0 host that Codex sign-in needs a local
+    // host - withdrawing a recovery path that has always worked there, on a
+    // flow that prints a device code and never binds a loopback callback.
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 8, minor: 0 },
+      { major: 9, minor: 1 },
+      providersListResponseSchemaV80.parse({
+        providers: [
+          {
+            ...providerState("codex"),
+            loginCapability: {
+              ...OLD_HOST_CAPABILITY,
+              oauthArgs: ["login", "--device-auth"],
+            },
+          },
+        ],
+        native: null,
+      }),
+    );
+    const capability = upgraded.providers[0].loginCapability;
+    expect(capability?.remoteSafe).toEqual({});
+    // Bounded by the legacy signal, and by that signal only: `--device-auth`
+    // says the flow needs no loopback, and says nothing at all about whether
+    // the child opens a browser. Projecting it onto BOTH keys would suppress
+    // the GUI's own open and strand this same user at a waiting step.
+    expect(capability?.selfOpensBrowser).toBeNull();
   });
 
   it("survives the chain all the way to the head line", () => {

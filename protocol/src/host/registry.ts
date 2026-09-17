@@ -1949,13 +1949,28 @@ function upgradeLoginCapabilityFromV40(
 // browser itself". Kimi is the only provider that is both, which is the
 // concrete reason they are two keys.
 //
-// `null` is the honest projection for each, and for each it is also the
-// SAFE one - which is worth stating because the two keys fail in opposite
-// directions. A null `remoteSafe` makes the GUI refuse a remote sign-in it
-// cannot prove will work; a null `selfOpensBrowser` makes the GUI open the
-// browser itself, which costs a duplicate tab at worst and never strands a
-// user at a waiting step with nothing opened. An old host reported neither
-// fact, so neither may be asserted.
+// The two keys are NOT filled the same way, because the old line carries a
+// sound proxy for one of them and none for the other.
+//
+// `remoteSafe` gets that proxy: `--device-auth` in the legacy `oauthArgs`
+// means the flow prints a device code instead of listening on a loopback
+// callback, which is exactly what remote-safety asks about. It is also the
+// literal predicate the GUI used to evaluate itself before this marker
+// existed, so projecting it here reproduces an old host's previous behaviour
+// key for key. Dropping it to `null` instead would REGRESS those hosts: a
+// signed-out user on a remote v8.0 host would lose in-app Codex recovery and
+// be told to use a local host, for a flow that has always worked. A
+// compatibility bridge exists to carry old behaviour forward, not to withhold
+// it - and the honest projection of "this old host ran a device-auth flow" is
+// `remoteSafe`, not silence. Anything without that flag stays `null` and
+// fail-closed, so the widening is bounded by the legacy signal.
+//
+// `selfOpensBrowser` has no such proxy - `--device-auth` says nothing about
+// whether the child opens a browser, which is the whole reason these are two
+// keys rather than one - so it stays `null`. That is also its safe direction:
+// a null `selfOpensBrowser` makes the GUI open the browser itself, which costs
+// a duplicate tab at worst and never strands a user at a waiting step with
+// nothing opened.
 //
 // Filling them MATTERS on the client, not just for type completeness - the same
 // argument `upgradeLoginCapabilityFromV40` spells out one function up. A client
@@ -1966,9 +1981,15 @@ function upgradeLoginCapabilityFromV40(
 function upgradeLoginCapabilityFromV70(
   loginCapability: ProviderLoginCapabilityV70 | null,
 ): ProviderLoginCapability | null {
-  return loginCapability === null
-    ? null
-    : { ...loginCapability, remoteSafe: null, selfOpensBrowser: null };
+  if (loginCapability === null) return null;
+  const legacyDeviceAuth =
+    loginCapability.oauthArgs !== null &&
+    loginCapability.oauthArgs.includes("--device-auth");
+  return {
+    ...loginCapability,
+    remoteSafe: legacyDeviceAuth ? {} : null,
+    selfOpensBrowser: null,
+  };
 }
 function downgradeProviderRequestForV10<T>(
   schema: {
