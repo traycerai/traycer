@@ -11,6 +11,8 @@ import {
 
 export interface ConfirmDestructiveDialogProps {
   children?: ReactNode;
+  /** Let navigation closes retain destination focus instead of restoring the opener. */
+  onCloseAutoFocus?: (event: Event) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -92,6 +94,8 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
         onCloseAutoFocus={(event) => {
           const opener = openerRef.current;
           openerRef.current = null;
+          props.onCloseAutoFocus?.(event);
+          if (event.defaultPrevented) return;
           // `isConnected` is not defensiveness - it is what lets this compose
           // with the callers that already handle their own post-confirm focus.
           //

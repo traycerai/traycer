@@ -50,15 +50,16 @@ export function HostRestartSessions(props: HostRestartSessionsProps) {
     [navigate, hostId, onNavigate],
   );
   const seen = new Set<string>();
-  const hostTerminals = terminals.filter((handle) => {
+  const hostTerminals = terminals.flatMap((handle) => {
     if (
       getTerminalSessionHandleHostId(handle) !== props.hostId ||
-      handle.scope.kind !== "epic" ||
-      seen.has(handle.sessionId)
+      handle.scope.kind !== "epic"
     )
-      return false;
-    seen.add(handle.sessionId);
-    return true;
+      return [];
+    const key = JSON.stringify([handle.scope.epicId, handle.sessionId]);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ handle, key }];
   });
   return (
     <section
@@ -81,9 +82,9 @@ export function HostRestartSessions(props: HostRestartSessionsProps) {
             </Button>
           </li>
         ))}
-        {hostTerminals.map((handle) => (
+        {hostTerminals.map(({ handle, key }) => (
           <RunningTerminal
-            key={handle.sessionId}
+            key={key}
             handle={handle}
             disabled={props.disabled}
             hostId={props.hostId}

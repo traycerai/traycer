@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
@@ -11,11 +12,17 @@ interface RestartHostConfirmDialogProps {
 }
 
 export function RestartHostConfirmDialog(props: RestartHostConfirmDialogProps) {
+  const navigationCloseRef = useRef(false);
   return (
     <ConfirmDestructiveDialog
       blockedReason={null}
       open={props.open}
       onOpenChange={props.onOpenChange}
+      onCloseAutoFocus={(event) => {
+        if (!navigationCloseRef.current) return;
+        navigationCloseRef.current = false;
+        event.preventDefault();
+      }}
       title="Restart host?"
       description="Restarting will stop in-progress agents, end any running terminal sessions, and cancel in-flight requests against this host."
       cascadeSummary={null}
@@ -27,7 +34,10 @@ export function RestartHostConfirmDialog(props: RestartHostConfirmDialogProps) {
         <HostRestartSessions
           hostId={props.hostId}
           disabled={props.isPending}
-          onNavigate={() => props.onOpenChange(false)}
+          onNavigate={() => {
+            navigationCloseRef.current = true;
+            props.onOpenChange(false);
+          }}
         />
       ) : null}
     </ConfirmDestructiveDialog>
