@@ -1,0 +1,353 @@
+/* The onboarding stage: the header, the copy block, the persistent glass panel,
+   the footer and the atmosphere behind them. Each act's own rules live beside
+   the component that owns it - onboarding-diorama.css, onboarding-agents.css,
+   onboarding-import.css. */
+
+.onboarding-shell {
+  --onboarding-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --onboarding-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --onboarding-gutter: clamp(1.25rem, 4vw, 3rem);
+}
+
+/* ---------------------------------------------------------------- atmosphere */
+
+/* The live dithered field (onboarding-field.tsx) owns the depth behind the
+   welcome mark. It concentrates there and fades out inside its own shader, so
+   the element itself is plain. What CSS drives is how far the field recedes
+   once the glass panel takes over - the panel's backdrop blur softens whatever
+   ends up behind it, so the tour can afford more of the field than the welcome
+   screen's bare copy can. */
+.onboarding-field {
+  transition: opacity 320ms var(--onboarding-ease);
+}
+.onboarding-field[data-welcoming="false"] {
+  opacity: 0.5;
+}
+
+/* Only reached when WebGL is unavailable - the field renders this instead. */
+.onboarding-dot-grid {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--foreground) 9%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse at 50% 42%, #000, transparent 55%);
+}
+
+/* A static feTurbulence tile. Never animated: regenerating the noise per frame
+   is a filter pass over the whole viewport. */
+.onboarding-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 256px 256px;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+}
+
+/* ------------------------------------------------------ welcome → tour handoff */
+
+/* The mark itself is a motion shared element and must NOT fade - it travels to
+   the header's logo slot. Only the copy and the skip affordance leave. The
+   pieces carry `brand-mark-arrive` with `both`, and a filled animation outranks
+   a transition, so the exit is a keyframe that replaces it. */
+.onboarding-welcome[data-leaving="true"] {
+  pointer-events: none;
+}
+.onboarding-welcome[data-leaving="true"]
+  :is(.brand-entrance-copy, .onboarding-button) {
+  animation: onboarding-welcome-leave 160ms var(--onboarding-ease) both;
+}
+@keyframes onboarding-welcome-leave {
+  from {
+    opacity: 1;
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    filter: blur(4px);
+  }
+}
+
+/* The stage and the header's controls materialise 120ms after the mark starts
+   moving, so the eye follows the mark and finds the page already there. The
+   header's brand slot is deliberately excluded: an opacity ramp on the mark's
+   new parent would fade the very element that is travelling into it. */
+.onboarding-stage,
+.onboarding-header-aside,
+.onboarding-wordmark {
+  transition:
+    opacity 320ms var(--onboarding-ease) 120ms,
+    transform 320ms var(--onboarding-ease) 120ms,
+    filter 320ms var(--onboarding-ease) 120ms;
+}
+.onboarding-tour-layer[data-welcoming="true"]
+  :is(.onboarding-stage, .onboarding-header-aside, .onboarding-wordmark) {
+  opacity: 0;
+  transition-duration: 0ms;
+}
+.onboarding-tour-layer[data-welcoming="true"] .onboarding-stage {
+  transform: scale(0.97);
+  filter: blur(8px);
+}
+
+/* -------------------------------------------------------------------- header */
+
+/* The inline padding is on the element, not here: it has to lose to the
+   `wco:` utilities that clear the window controls. */
+.onboarding-header {
+  min-height: 3.5rem;
+  padding-block: 0.75rem;
+}
+
+.onboarding-progress-segment {
+  position: relative;
+  width: 1.75rem;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 15%, transparent);
+  transition: background-color 220ms ease;
+}
+.onboarding-progress-segment[data-state="done"] {
+  background: color-mix(in srgb, var(--foreground) 45%, transparent);
+}
+/* The active segment fills by wiping its clip open, and a completed one keeps
+   wiping in the same direction as it hands over to the next. */
+.onboarding-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 400ms var(--onboarding-ease-in-out);
+}
+.onboarding-progress-segment[data-state="active"] .onboarding-progress-fill {
+  clip-path: inset(0 0 0 0);
+}
+.onboarding-progress-segment[data-state="done"] .onboarding-progress-fill {
+  clip-path: inset(0 0 0 100%);
+}
+.onboarding-progress-label {
+  min-width: 10ch;
+  animation: onboarding-fade-in 160ms ease both;
+}
+@keyframes onboarding-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --------------------------------------------------------------------- stage */
+
+.onboarding-stage {
+  gap: clamp(0.875rem, 2.2vh, 1.5rem);
+  padding: clamp(0.5rem, 2vh, 1.5rem) var(--onboarding-gutter) 0;
+}
+
+.onboarding-copy {
+  text-align: center;
+}
+.onboarding-eyebrow {
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+.onboarding-title {
+  margin-top: 0.5rem;
+  font-size: clamp(2rem, 2.6vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.onboarding-title-word {
+  display: inline-block;
+  animation: onboarding-word-in 260ms var(--onboarding-ease) both;
+}
+@keyframes onboarding-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+.onboarding-subtitle {
+  max-width: 60ch;
+  margin: 0.5rem auto 0;
+  font-size: clamp(0.9375rem, 1.05vw, 1.0625rem);
+  line-height: 1.5;
+  text-wrap: balance;
+}
+
+/* One panel for every act: the shell never re-mounts, only its contents swap,
+   so the surface the eye is resting on is the one fixed thing on the page. */
+.onboarding-panel {
+  position: relative;
+  width: min(100%, 88rem);
+  flex: 1;
+  margin-inline: auto;
+  overflow: hidden;
+  padding: 1.25rem;
+  border-radius: 1.25rem;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent),
+    0 24px 64px -32px #000a;
+  backdrop-filter: blur(24px);
+}
+/* The diorama is its own composition and wants the room. */
+.onboarding-panel[data-step="task-tabs"] {
+  padding: 0.75rem;
+}
+
+/* -------------------------------------------------------------------- footer */
+
+.onboarding-actions {
+  padding: clamp(0.75rem, 1.6vh, 1rem) 0 clamp(0.75rem, 2vh, 1.25rem);
+}
+.onboarding-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0 0.875rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    transform 120ms var(--onboarding-ease),
+    opacity 150ms ease,
+    color 150ms ease,
+    background-color 150ms ease;
+}
+.onboarding-button--primary {
+  background: var(--foreground);
+  color: var(--background);
+}
+.onboarding-button--quiet {
+  color: var(--muted-foreground);
+}
+.onboarding-button > svg {
+  transition: transform 180ms var(--onboarding-ease);
+}
+.onboarding-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+.onboarding-button:active:not(:focus-visible) {
+  transform: scale(0.97);
+}
+.onboarding-button:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+/* A thumb needs 44px. `pointer: coarse` is how this app scopes touch targets
+   everywhere else (`pointer-coarse:min-h-11` on the menu items,
+   `settings-touch-targets.css`), and it covers the installed mobile app
+   without a build flag - the tour renders the same buttons on both. */
+@media (pointer: coarse) {
+  .onboarding-button {
+    min-height: 2.75rem;
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  .onboarding-button--primary:hover {
+    opacity: 0.9;
+  }
+  .onboarding-button--primary:hover > svg {
+    transform: translateX(2px);
+  }
+  .onboarding-button--quiet:hover {
+    color: var(--foreground);
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  }
+}
+
+/* The focus ring lands without the button's own transitions chasing it. */
+.onboarding-button:focus-visible,
+.onboarding-button:focus-visible > svg {
+  transition: none;
+}
+
+@media (max-width: 767px) {
+  .onboarding-shell {
+    --onboarding-gutter: 1rem;
+  }
+  .onboarding-header {
+    padding-block: 0.5rem;
+  }
+  .onboarding-progress-label {
+    display: none;
+  }
+  .onboarding-copy {
+    text-align: left;
+  }
+  .onboarding-title {
+    font-size: clamp(1.75rem, 6vw, 2.25rem);
+  }
+  .onboarding-subtitle {
+    margin-inline: 0;
+  }
+  .onboarding-panel {
+    padding: 0.75rem;
+    border-radius: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-progress-label {
+    animation: none;
+  }
+  .onboarding-title-word {
+    animation-name: onboarding-fade-in;
+  }
+  .onboarding-welcome[data-leaving="true"]
+    :is(.brand-entrance-copy, .onboarding-button) {
+    animation-name: onboarding-fade-out;
+  }
+  .onboarding-progress-fill,
+  .onboarding-button > svg {
+    transition: none;
+  }
+  .onboarding-button--primary:hover > svg {
+    transform: none;
+  }
+  .onboarding-tour-layer[data-welcoming="true"] .onboarding-stage {
+    transform: none;
+    filter: none;
+  }
+  .onboarding-stage,
+  .onboarding-header-aside,
+  .onboarding-wordmark {
+    transition: opacity 200ms ease 120ms;
+  }
+  .onboarding-button {
+    transition:
+      opacity 150ms ease,
+      color 150ms ease,
+      background-color 150ms ease;
+  }
+  .onboarding-button:active:not(:focus-visible) {
+    transform: none;
+  }
+}
+@keyframes onboarding-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
