@@ -111,6 +111,41 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module - see
+ * `fallback-model-labels.test.tsx` for the resolver's own resolution rules,
+ * which are not this file's concern. It is doubled at all for two reasons: the
+ * real hook mounts TanStack queries this suite has no `QueryClientProvider`
+ * for, and a catalogue fixture per case would make every literal model string
+ * below depend on one.
+ *
+ * Two modes, chosen by `modelLabelOverride`:
+ *
+ *   - `null` (every case that predates the resolver): passes the slug straight
+ *     through, exactly what the resolver degrades to with no catalogue - so
+ *     every model string already pinned below stays correct unchanged.
+ *   - a `Map` keyed `harnessId:model`: the cases that care whether this menu
+ *     actually reads the resolver's answer rather than the raw wire string.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: actionHarness.openSettings,
@@ -272,6 +307,10 @@ describe("FallbackDestinationMenu", () => {
     leaseHarness.hold.mockReset();
     leaseHarness.release.mockReset();
     leaseHarness.lease = null;
+    // Pass-through by default: a case that does not opt in reads back the wire
+    // strings it wrote, which is what the resolver degrades to with no
+    // catalogue.
+    modelLabelOverride.value = null;
   });
 
   afterEach(() => {
@@ -409,10 +448,74 @@ describe("FallbackDestinationMenu", () => {
     expect(screen.queryByText(/^Codex · gpt ·/)).toBeNull();
   });
 
+  /**
+   * The resolved arm again, one layer up: the row must print the CATALOGUE
+   * LABEL for the slug the host resolved, not the slug.
+   *
+   * This is the inconsistency the whole model-label pass exists to remove. The
+   * cards already resolve (`fallbackTupleIdentity`), so a grace card reading
+   * "Switching to Claude Fable" sat directly above a menu offering
+   * "claude-fable-5-1[1m]" - one product naming one model two ways inside one
+   * popover-and-card pair.
+   *
+   * The fixture deliberately makes the label and the slug UNRELATED strings so
+   * "the row resolved" and "the row echoed the wire" cannot both be satisfied
+   * by one assertion.
+   */
+  it("titles a resolved model row by the catalogue label for its slug, not the raw slug", () => {
+    modelLabelOverride.value = new Map([["codex:gpt-6-astra", "GPT-6 Astra"]]);
+    renderMenu({
+      data: listed({
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        profileTargets: [],
+        modelTargets: [
+          modelRow({
+            harnessId: "codex",
+            modelFamily: "gpt",
+            model: "gpt-6-astra",
+            reasoningEffort: "high",
+            severity: "ok",
+            usedPercent: null,
+            target: chatRunSettings({
+              harnessId: "codex",
+              model: "gpt-6-astra",
+              profileId: null,
+            }),
+            selectable: true,
+            skip: null,
+          }),
+        ],
+        modelTargetsSkip: null,
+      }),
+      open: true,
+      preparing: false,
+      picking: false,
+      refusal: null,
+      header: null,
+      emptyStateActions: null,
+      onPick: () => undefined,
+      onOpenChange: () => undefined,
+    });
+    // Falsification: drop `modelLabelFor` from the `ModelRow` call to
+    // `fallbackDestinationOfModelTarget` (or stop mounting
+    // `useFallbackModelLabels` in the menu) and this goes red - the row reads
+    // "Codex · gpt-6-astra · high" again.
+    expect(screen.getByText("Codex · GPT-6 Astra · high")).toBeDefined();
+    // The raw slug must be gone entirely, not merely joined by the label: the
+    // defect was a user reading a provider's internal identifier.
+    expect(screen.queryByText(/gpt-6-astra/)).toBeNull();
+  });
+
   // The fallback branch `fallbackDestinationOfModelTarget` takes when the host
   // could not resolve a slug for the group - unpinned by the case above, which
   // only exercises the resolved arm.
   it("falls back to the equivalence-group family when the host resolved no model", () => {
+    // A family that is ALSO a resolvable catalogue key, which is the shape that
+    // makes this case load-bearing rather than decorative: `gpt-5`'s family is
+    // `gpt-5`, so a resolver applied to the family arm would silently relabel
+    // an UNRESOLVED row with a real model's name - the row claiming to name a
+    // model the host explicitly could not resolve.
+    modelLabelOverride.value = new Map([["codex:gpt", "GPT-5"]]);
     renderMenu({
       data: listed({
         failedTuple: FAILED_CLAUDE_TUPLE,
@@ -444,10 +547,15 @@ describe("FallbackDestinationMenu", () => {
       onPick: () => undefined,
       onOpenChange: () => undefined,
     });
-    // Falsification: change `modelLabel: model ?? target.modelFamily` in
-    // `fallbackDestinationOfModelTarget` to always use `model` and this must
-    // go red (nothing to render at all, since `model` is `null`).
+    // Falsification: collapse `fallbackDestinationOfModelTarget`'s ternary to
+    // always use `model` and this must go red (nothing to render at all, since
+    // `model` is `null`).
     expect(screen.getByText("Codex · gpt")).toBeDefined();
+    // Falsification: widen that ternary to
+    // `modelLabelFor(target.harnessId, model ?? target.modelFamily)` - a
+    // one-character-looking change that reads as a simplification - and this
+    // goes red on "Codex · GPT-5".
+    expect(screen.queryByText(/GPT-5/)).toBeNull();
   });
 
   it("renders no meter when usedPercent is null", () => {
@@ -2347,6 +2455,54 @@ describe("FallbackWaitingMenu", () => {
       // replaces them rather than joining them.
       expect(screen.queryByText(NO_DESTINATIONS_LABEL)).toBeNull();
       expect(screen.queryByText(NO_SELECTABLE_DESTINATIONS_LABEL)).toBeNull();
+    });
+
+    /**
+     * The same sentence, with a SLUG-shaped model - the case
+     * `DEFAULT_SHAPED_TUPLE` above cannot show, because "default" is already
+     * the word a user would read.
+     *
+     * The menu's own rows resolve their models; this line names the chat that
+     * failed, and before this it did not - so one popover printed "Claude Code
+     * · claude-fable-5-1[1m]" in its explanation and a catalogue label in every
+     * row underneath it.
+     */
+    it("names the chat by its catalogue model label, not the raw slug", () => {
+      modelLabelOverride.value = new Map([
+        ["claude:claude-fable-5-1[1m]", "Claude Fable"],
+      ]);
+      renderMenu({
+        data: listed({
+          failedTuple: chatRunSettings({
+            harnessId: "claude",
+            model: "claude-fable-5-1[1m]",
+            profileId: null,
+          }),
+          profileTargets: [],
+          modelTargets: [],
+          modelTargetsSkip: {
+            reason: "no-group",
+            label: "No other model is set up as equivalent to this one.",
+          },
+        }),
+        open: true,
+        preparing: false,
+        picking: false,
+        refusal: null,
+        header: null,
+        emptyStateActions: null,
+        onPick: vi.fn(),
+        onOpenChange: () => undefined,
+      });
+      // Falsification: drop `modelLabelFor` from `emptyStateText`'s
+      // `fallbackProviderModelLabel` call and this goes red - the sentence
+      // reads "…for Claude Code · claude-fable-5-1[1m]".
+      expect(
+        screen.getByText(
+          "No other model is set up for Claude Code · Claude Fable",
+        ),
+      ).toBeDefined();
+      expect(screen.queryByText(/claude-fable-5-1/)).toBeNull();
     });
 
     it("renders the host's label verbatim for every other reason", () => {

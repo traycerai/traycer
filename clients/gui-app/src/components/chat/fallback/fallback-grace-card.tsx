@@ -30,6 +30,7 @@ import {
 import {
   fallbackResolvedIdentitySentence,
   fallbackTupleIdentity,
+  pendingFallbackHarnessSubjects,
   pendingFallbackResumesFailedTuple,
   useFallbackModelLabels,
   useFallbackProfileLabels,
@@ -38,7 +39,10 @@ import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-sco
 import { useOpenFallbackSettings } from "./open-fallback-settings";
 import type { FallbackActionOutcome } from "@traycer/protocol/host/chat-fallback";
 import { useFallbackCancel } from "./use-fallback-actions";
-import { useDismissRoutingCard } from "./use-dismissed-routing-cards";
+import {
+  routingCardActionKey,
+  useDismissRoutingCard,
+} from "./use-dismissed-routing-cards";
 
 /**
  * The moment-of-failure card: what is about to happen, and how to stop it.
@@ -85,11 +89,20 @@ export function FallbackGraceCard({
   readonly menu: ReactNode | null;
 }) {
   const labelFor = useFallbackProfileLabels(client, true);
-  // Both tuples this card names: the account that failed and where it is
-  // going. A cross-provider hop means two harnesses, so both are listed.
+  // Every tuple this card can NAME, which is three and not two. The account
+  // that failed, where it has been moved (`targetTuple`), and where it is
+  // still only PLANNED to move (`impendingAction.target`).
+  //
+  // That third one is the whole cancellation window. The protocol writes
+  // `targetTuple` only once a destination is committed, so throughout the
+  // grace hold - exactly while the user is deciding - the destination comes
+  // from `impendingAction.target` alone. Listing only the first two left that
+  // harness's catalogue unsubscribed, so the card named the planned model by
+  // its raw slug for the entire window it was asking the user to approve,
+  // even with a warm cache for that provider.
   const modelLabelFor = useFallbackModelLabels(
     client,
-    [pending.failedTuple.harnessId, pending.targetTuple?.harnessId ?? null],
+    pendingFallbackHarnessSubjects(pending),
     true,
   );
   // The sign-in navigation, armed by the click and run by the host's answer -
@@ -114,8 +127,17 @@ export function FallbackGraceCard({
   const { openSettings } = useSystemTabModalActions();
   const dismissCard = useDismissRoutingCard();
   const onDismiss = useCallback(() => {
-    dismissCard(chatId, pending.traversalId, "countdown");
-  }, [chatId, dismissCard, pending.traversalId]);
+    dismissCard(
+      chatId,
+      pending.traversalId,
+      "countdown",
+      routingCardActionKey(pending),
+    );
+    // `pending` whole, not `pending.traversalId`. The action key is derived
+    // from this frame, and a re-plan keeps the traversal id while changing the
+    // plan - so a narrower dependency would capture the OLD plan and write the
+    // dismissal under a key the gate is no longer reading, leaving the × inert.
+  }, [chatId, dismissCard, pending]);
 
   const failed = fallbackTupleIdentity(
     pending.failedTuple,

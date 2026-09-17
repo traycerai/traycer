@@ -162,6 +162,36 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s copy of
+ * this double for the argument, and `fallback-model-labels.test.tsx` for the
+ * resolver's own rules. The real hook mounts TanStack queries this suite has no
+ * `QueryClientProvider` for, and every model string pinned below would
+ * otherwise depend on a catalogue fixture.
+ *
+ * `null` (the default) passes the slug through, which is what the resolver
+ * degrades to with no catalogue; a `Map` keyed `harnessId:model` is the one
+ * case that cares whether this card reads the resolver's answer.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   useExistingChatSessionHandle: () => ({ store: harness.store }),
 }));
@@ -404,6 +434,9 @@ describe("FallbackManualRungActions", () => {
     // the wrong diagnosis entirely.
     seedActCapability({ canAct: true, connectionStatus: "open" });
     seedAttempt(undefined);
+    // Pass-through by default, so every model string pinned below reads back
+    // the tuple it was seeded with.
+    modelLabelOverride.value = null;
   });
 
   afterEach(() => {
@@ -1508,6 +1541,42 @@ describe("FallbackManualRungActions", () => {
       // Engine words, "group" included - the reason this sentence could not be
       // the host's own `no-group` label.
       expect(text).not.toMatch(BANNED_VOCABULARY);
+    });
+
+    /**
+     * The same sentence with a SLUG-shaped model, which `DEFAULT_SHAPED_TUPLE`
+     * cannot show: "default" is already a word a user reads.
+     *
+     * This card's own destination menu resolves its rows, and the grace card
+     * one state earlier resolves its tuples - so an unresolved subject here was
+     * the one surface in the chat still printing a provider's internal
+     * identifier at a user being asked to decide something.
+     */
+    it("names the chat by its catalogue model label, not the raw slug", () => {
+      modelLabelOverride.value = new Map([
+        ["claude:claude-fable-5-1[1m]", "Claude Fable"],
+      ]);
+      seedAttempt(
+        withheldSwitchAttempt(
+          chatRunSettings({
+            harnessId: "claude",
+            model: "claude-fable-5-1[1m]",
+            profileId: null,
+          }),
+        ),
+      );
+      renderActions(TURN_ID);
+
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
+      const text = root?.textContent ?? "";
+      // Falsification: drop `modelLabelFor` from this card's
+      // `fallbackProviderModelLabel` call and this goes red - the sentence
+      // reads "…for Claude Code · claude-fable-5-1[1m]".
+      expect(text).toContain(
+        "No other model is set up for Claude Code · Claude Fable",
+      );
+      expect(text).not.toContain("claude-fable-5-1[1m]");
     });
 
     it("still offers Switch… when the host named a destination", () => {

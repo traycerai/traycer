@@ -35,7 +35,11 @@ import {
   useHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
+import {
+  HostRuntimeContext,
+  useHostBinding,
+  useOptionalHostClient,
+} from "@/lib/host/runtime";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -56,7 +60,10 @@ import {
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
-import { fallbackProviderModelLabel } from "@/components/chat/fallback/fallback-identity";
+import {
+  fallbackProviderModelLabel,
+  useFallbackModelLabels,
+} from "@/components/chat/fallback/fallback-identity";
 import { noSwitchDestinationText } from "@/components/chat/fallback/fallback-copy";
 import { providerSupportsManagedProfiles } from "@/components/settings/panels/provider-settings-tabs";
 import { FallbackLadderEditor } from "@/components/settings/panels/fallback/fallback-ladder-editor";
@@ -840,8 +847,8 @@ function FallbackPolicyEditor(props: {
           tier groups never saw it. */}
         {state.draft.enabled ? null : (
           <p className="px-5 pb-4 text-ui-sm text-muted-foreground">
-            Off - these settings take effect when you turn on automatic
-            fallback.
+            Off - these settings take effect when you turn on Route
+            automatically.
           </p>
         )}
       </SettingsGroup>
@@ -1493,6 +1500,24 @@ function ProfileStepHint(): ReactNode {
  * while the engine would have found them a destination. It moved into the
  * protocol FOR this call site: the question is asked about a draft that has
  * never been saved, which no RPC can answer.
+ *
+ * ## Why the model label is its own read
+ *
+ * The sentence names a MODEL, and it must name it the way every other surface
+ * does - "Claude Fable", never `claude-fable-5-1[1m]`. The editor above already
+ * holds a catalog read (`useFallbackCatalogOptions`), and resolving from that
+ * one was the first shape here, but its harness set is *the harnesses the DRAFT
+ * names* and this component's subject is the LAST-RUN tuple. Those coincide
+ * often and not always - a user whose groups are all Codex and whose last chat
+ * ran Claude would have been shown the raw slug - and "your groups happen not
+ * to name your last-run harness" is not a condition a reader can see or act on.
+ *
+ * So this takes `useFallbackModelLabels` for its own subject, the same hook the
+ * chat surfaces use. It costs nothing where the two sets overlap: the hook
+ * rides the shared `agent.gui.listModels` cache slot with the same cache-only
+ * contract (`staleTime`/`gcTime: Infinity`) the editor's read fills, so a
+ * harness already in the draft is a cache hit and only a harness outside it is
+ * a request - one, gated on availability, for the one sentence that needs it.
  */
 function TierStepHint({
   policy,
@@ -1500,8 +1525,27 @@ function TierStepHint({
   readonly policy: FallbackPolicy;
 }): ReactNode {
   const hostId = useAddressableHostId();
+  // `useOptionalHostClient()`, not `useHostClient()`, and the reason is this
+  // panel's own shape rather than a test convenience. The body renders
+  // UNWRAPPED whenever the scope has not resolved a client (see
+  // `FallbackSettingsPanel`'s governed narrow), and `useHostClient()` throws
+  // with no runtime above it - so one sentence's catalogue read would decide
+  // whether the whole editor may mount. `null` degrades this line to the slug,
+  // which is the resolver's documented answer when nothing can say otherwise.
+  // Under the re-provided binding this IS the scoped client, the same host
+  // `useAddressableHostId()` names above, so the tuple and the catalog it is
+  // resolved against come from one machine.
+  const client = useOptionalHostClient();
   const lastRun = useComposerRunSettingsStore((state) =>
     selectGlobalLastRunSettings(state, hostId),
+  );
+  // Hooks run before the state gate, as they must - and the read is enabled
+  // only while there IS a subject, so a fresh install or a host nothing has run
+  // on issues no query at all.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    [lastRun === null ? null : lastRun.harnessId],
+    lastRun !== null,
   );
   if (lastRun === null) return null;
   if (
@@ -1521,8 +1565,10 @@ function TierStepHint({
           once. What is added here is only the subject clause - Settings is
           speaking about a model the user is not currently looking at, and a
           bare claim would read as a claim about all of them. */}
-      {noSwitchDestinationText(fallbackProviderModelLabel(lastRun))} — the model
-      you last started a chat with on this host.
+      {noSwitchDestinationText(
+        fallbackProviderModelLabel(lastRun, modelLabelFor),
+      )}{" "}
+      — the model you last started a chat with on this host.
     </p>
   );
 }

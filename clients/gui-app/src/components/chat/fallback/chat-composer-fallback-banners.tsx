@@ -16,6 +16,7 @@ import {
   type ChatProviderFallbackState,
 } from "./fallback-state";
 import {
+  routingCardActionKey,
   useRoutingCardDismissed,
   type RoutingCardKind,
 } from "./use-dismissed-routing-cards";
@@ -151,6 +152,10 @@ function FallbackPendingBanner({
     chatId,
     pending?.traversalId ?? "",
     dismissibleCardKind(pending),
+    // Same frame, same derivation as the × handlers on the cards themselves,
+    // so a re-planned destination inside one traversal is a card the user has
+    // not dismissed rather than one silently inheriting the last plan's answer.
+    routingCardActionKey(pending),
   );
   // BY VALUE, never by key presence: on a live `chat.subscribe@1.10` frame the
   // host sets the key unconditionally and `undefined` is what CLEARS the card,

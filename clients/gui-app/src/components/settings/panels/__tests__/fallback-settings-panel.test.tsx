@@ -297,7 +297,44 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module.
+ *
+ * `TierStepHint` resolves its last-run tuple's model SLUG to a catalogue label
+ * through this hook. The real one composes `useGuiHarnessesQueryForClient` and
+ * `useHostQueries` against a client this suite has no runtime for, so it
+ * answers the slug here whatever the catalogue holds - which cannot tell a
+ * hint that resolves from one that never asked.
+ *
+ * `modelLabelOverride` supplies the catalogue's answer instead, keyed
+ * `harnessId:model`. `null` (every case but the tier-step one below) passes the
+ * slug through, which is what the real resolver degrades to with no catalogue.
+ *
+ * `importOriginal` keeps `fallbackProviderModelLabel` and the profile-label
+ * helpers, which this panel and `fallback-profile-labels.ts` import directly
+ * from the same module.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   openFallbackTab,
   renderWithFallbackQueryClient,
@@ -381,6 +418,7 @@ function chooseOption(name: string): void {
 }
 
 beforeEach(() => {
+  modelLabelOverride.value = null;
   fallbackMocks.queryData = respond(policy({}));
   fallbackMocks.queryIsError = false;
   fallbackMocks.setMutateAsync.mockReset();
@@ -4650,5 +4688,88 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
     expect(screen.getByTestId("fallback-host-error").textContent).toContain(
       REFUSAL,
     );
+  });
+});
+
+/**
+ * The "Equivalent models" step hint, and the one thing about it a panel test
+ * can decide: whether the sentence names its model the way every other routing
+ * surface does.
+ *
+ * `TierStepHint` takes its OWN `useFallbackModelLabels` read rather than
+ * borrowing the editor's catalog options, because those two have different
+ * harness sets - the editor reads what the DRAFT names, and this sentence is
+ * about the LAST-RUN tuple, which a user's groups need not mention. The wiring
+ * is what can regress (a resolver dropped at the `fallbackProviderModelLabel`
+ * call site), so that is what this pins; the resolver's own rules are
+ * `fallback-model-labels.test.tsx`'s subject.
+ */
+describe("FallbackSettingsPanel - the equivalent-models step hint", () => {
+  /**
+   * A slug-shaped last-run model, which is the whole point of the fixture.
+   *
+   * `claude/default` is the tuple this hint exists for, and it is exactly the
+   * one that CANNOT show a resolution: "default" is already the word a user
+   * reads, so a hint that never resolved would look identical. A provider's
+   * real identifier can only be read one way.
+   */
+  const LAST_RUN = {
+    harnessId: "claude",
+    model: "claude-fable-5-1[1m]",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+  } as const;
+
+  beforeEach(() => {
+    // The LEGACY (unbucketed) slot, deliberately: `useAddressableHostId()`
+    // answers `null` with no host runtime above the panel, and
+    // `selectGlobalLastRunSettings` falls back to this tier for exactly that
+    // case. Seeding a per-host bucket would be seeding a key nothing reads.
+    useComposerRunSettingsStore.setState({
+      legacyGlobalLastRunSettings: LAST_RUN,
+    });
+    // No equivalence group names anything, so the step is inert for every
+    // tuple and the hint is unconditionally on screen.
+    fallbackMocks.queryData = respond(policy({ tierGroups: [] }));
+  });
+
+  afterEach(() => {
+    useComposerRunSettingsStore.setState({
+      legacyGlobalLastRunSettings: null,
+    });
+  });
+
+  it("names the last-run model by its catalogue label, not its raw slug", () => {
+    modelLabelOverride.value = new Map([
+      ["claude:claude-fable-5-1[1m]", "Claude Fable"],
+    ]);
+    renderPanel();
+
+    // Falsification: drop `modelLabelFor` from `TierStepHint`'s
+    // `fallbackProviderModelLabel` call (or stop mounting
+    // `useFallbackModelLabels` there) and this goes red - the sentence reads
+    // "…for Claude Code · claude-fable-5-1[1m]".
+    expect(
+      screen.getByText(
+        /No other model is set up for Claude Code · Claude Fable/,
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/claude-fable-5-1/)).toBeNull();
+  });
+
+  it("degrades to the slug when the catalogue cannot name the model", () => {
+    // The honest no-answer state - a harness the user has since disabled, a
+    // cold catalog slot - and the boundary that keeps the case above from
+    // passing on a hard-coded string.
+    renderPanel();
+
+    expect(
+      screen.getByText(
+        /No other model is set up for Claude Code · claude-fable-5-1\[1m\]/,
+      ),
+    ).toBeDefined();
   });
 });

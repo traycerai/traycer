@@ -765,10 +765,25 @@ vi.mock(
       await importOriginal<
         typeof import("@/components/chat/fallback/fallback-identity")
       >();
+    const labelFor = (harnessId: string, model: string): string =>
+      modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model;
     return {
       ...actual,
-      useFallbackModelLabels: () => (harnessId: string, model: string) =>
-        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+      // BOTH exports, deliberately. `useFallbackModelLabels` is a thin wrapper
+      // over `useFallbackModelCatalogues` in the real module, but it calls it
+      // MODULE-INTERNALLY - a mock of one export never reaches the other. The
+      // announcer takes the catalogues hook and the composer cards take the
+      // labels hook, so doubling only one would leave this file's whole point
+      // (that the two cannot print one tuple two ways) resting on two
+      // different resolvers, which is the agreement it exists to disprove.
+      useFallbackModelLabels: () => labelFor,
+      useFallbackModelCatalogues: () => ({
+        labelFor,
+        // Always settled, so the announcer consumes on the first observation.
+        // These cases are about WHAT gets announced; the catalogue-timing hold
+        // that defers consumption is a different behaviour with its own pin.
+        settledFor: () => true,
+      }),
     };
   },
 );
@@ -1289,7 +1304,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       undefined,
     );
     await flushAnnouncer();
-    expect(liveRegionText()).toContain("Fallback countdown paused.");
+    expect(liveRegionText()).toContain("Countdown paused.");
 
     // SWITCHING - now committed via `targetTuple`.
     setTurnState(
@@ -1444,7 +1459,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const holdIndex = batched.indexOf(
       `The chat will switch to ${TARGET_IDENTITY}.`,
     );
-    const choosingIndex = batched.indexOf("Fallback countdown paused.");
+    const choosingIndex = batched.indexOf("Countdown paused.");
     const switchingIndex = batched.indexOf(
       `Switching this chat to ${TARGET_IDENTITY}.`,
     );
@@ -1923,7 +1938,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       undefined,
     );
     await flushAnnouncer();
-    expect(liveRegionText()).toContain("Fallback countdown paused.");
+    expect(liveRegionText()).toContain("Countdown paused.");
   });
 
   it("D71: a confirmed manual switch speaks AFTER the initiating trigger unmounts, via the mutation's real host-level onSuccess (not a per-call callback that dies with the component); the same record replayed is silent, a later sequence with identical words speaks again as a genuinely new DOM node", async () => {

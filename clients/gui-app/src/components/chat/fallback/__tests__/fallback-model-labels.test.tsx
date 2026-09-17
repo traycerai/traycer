@@ -55,15 +55,28 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
     readonly requests: ReadonlyArray<{
       readonly params: { readonly harnessId: string };
     }>;
+    // The real hook forwards `combine` to `useQueries` and returns ITS value,
+    // not the result array. A double that ignored it would hand the caller
+    // raw query results where production hands back the combined projection -
+    // the double quietly standing in for a different hook than the one that
+    // ships, and passing while the mapping under test never runs.
+    readonly combine?: (
+      results: ReadonlyArray<{
+        readonly data: {
+          readonly models: ReadonlyArray<{ slug: string; label: string }>;
+        };
+      }>,
+    ) => unknown;
   }) => {
     hostQueriesCalls.requests = args.requests;
-    return args.requests.map((request) => ({
+    const results = args.requests.map((request) => ({
       data: {
         models: modelsByHarness.value.get(request.params.harnessId) ?? [],
       },
       isPending: false,
       isError: false,
     }));
+    return args.combine === undefined ? results : args.combine(results);
   },
 }));
 

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
  * The two cards that render a dismiss ×, and therefore the two things a
@@ -46,6 +47,25 @@ export type RoutingCardKind = "countdown" | "waiting";
  * here are exactly the two components that render a ×, which is what the user
  * is actually dismissing.
  *
+ * ## Why the card kind is still not enough, and the ACTION is the last segment
+ *
+ * One traversal can raise the same KIND of card twice about different things.
+ * A hold planning a switch to Codex can be re-planned onto Gemini inside the
+ * same traversal - a new `impendingAction`, a new destination, a new countdown
+ * to cancel - and both are `countdown` cards. Keyed by kind alone, waving away
+ * the first also swallowed the second, so the user lost the intervention
+ * window for a destination they had never been shown and never agreed to. A
+ * dismissal is the user answering "not this", not "nothing from now on".
+ *
+ * `planId` is the host's own answer to "is this the same action", and it is
+ * why this segment is that and not the destination tuple. The protocol commits
+ * it to change if and only if the rung, target, target family, resume time or
+ * probe changes, and to stay put across every countdown tick, every
+ * `siblingSwitching` change and every revision bump that moved nothing else.
+ * So it retains the dismissal across `hold` -> `choosing` -> `switching` for
+ * ONE plan - the phases the paragraph above exists to protect - while a
+ * genuinely different plan gets a genuinely new card.
+ *
  * ## Why it is not persisted
  *
  * Session-scoped on purpose. A countdown that survives an app restart is a
@@ -56,32 +76,55 @@ export type RoutingCardKind = "countdown" | "waiting";
  */
 interface DismissedRoutingCardsState {
   /**
-   * `"<chatId>:<traversalId>:<card>"` for every card waved away this session.
+   * `"<chatId>:<traversalId>:<card>:<action>"` for every card waved away this
+   * session.
    */
   readonly dismissed: ReadonlySet<string>;
   readonly dismiss: (
     chatId: string,
     traversalId: string,
     card: RoutingCardKind,
+    action: string,
   ) => void;
 }
 
-// A ":" separator over anything that could be mistyped invisibly, and the
-// segments are ids and a closed union - none of which can contain one.
+/**
+ * The action segment of the key, derived from the frame the card is drawn from.
+ *
+ * Exported and used by BOTH the gate and the × handlers for the same reason
+ * `dismissibleCardKind` is: the value a dismissal is written under and the
+ * value it is looked up under have to be decided by one function, or a card
+ * could be dismissed under one key and gated on another and never close.
+ *
+ * `"none"` where the host names no action. That is its own bucket rather than
+ * an error: a frame with nothing planned is one thing to dismiss, and it
+ * cannot collide with a real plan id.
+ */
+export function routingCardActionKey(
+  pending: PendingFallback | undefined,
+): string {
+  return pending?.impendingAction?.planId ?? "none";
+}
+
+// A ":" separator over anything that could be mistyped invisibly. The first
+// three segments are ids and a closed union, none of which can contain one;
+// the last is an opaque host string, so it goes LAST, where a ":" inside it
+// cannot shift the meaning of any segment before it.
 function cardKey(
   chatId: string,
   traversalId: string,
   card: RoutingCardKind,
+  action: string,
 ): string {
-  return `${chatId}:${traversalId}:${card}`;
+  return `${chatId}:${traversalId}:${card}:${action}`;
 }
 
 export const useDismissedRoutingCardsStore =
   create<DismissedRoutingCardsState>()((set) => ({
     dismissed: new Set<string>(),
-    dismiss: (chatId, traversalId, card) => {
+    dismiss: (chatId, traversalId, card, action) => {
       set((state) => {
-        const key = cardKey(chatId, traversalId, card);
+        const key = cardKey(chatId, traversalId, card, action);
         if (state.dismissed.has(key)) return state;
         const next = new Set(state.dismissed);
         next.add(key);
@@ -101,9 +144,10 @@ export function useRoutingCardDismissed(
   chatId: string,
   traversalId: string,
   card: RoutingCardKind,
+  action: string,
 ): boolean {
   return useDismissedRoutingCardsStore((state) =>
-    state.dismissed.has(cardKey(chatId, traversalId, card)),
+    state.dismissed.has(cardKey(chatId, traversalId, card, action)),
   );
 }
 
@@ -112,6 +156,7 @@ export function useDismissRoutingCard(): (
   chatId: string,
   traversalId: string,
   card: RoutingCardKind,
+  action: string,
 ) => void {
   return useDismissedRoutingCardsStore((state) => state.dismiss);
 }

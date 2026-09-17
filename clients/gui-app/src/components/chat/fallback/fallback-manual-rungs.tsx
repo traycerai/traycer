@@ -22,7 +22,10 @@ import {
   describeWaitDisposition,
   switchConsequencesText,
 } from "./fallback-copy";
-import { fallbackProviderModelLabel } from "./fallback-identity";
+import {
+  fallbackProviderModelLabel,
+  useFallbackModelLabels,
+} from "./fallback-identity";
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import { useFallbackRunManualRung } from "./use-fallback-actions";
@@ -197,6 +200,25 @@ function useChatFallbackActionsCanAct(input: {
 }
 
 /**
+ * The catalogue read the card below needs: its subject, and whether there is one.
+ *
+ * Gated on HAVING a failed tuple rather than on the switch disposition. The
+ * durable failed tuple is the one thing this card always holds or does not,
+ * whereas re-deriving `describeSwitchDisposition`'s branch here to decide
+ * whether to read a catalogue would be a second copy of the copy module's rule
+ * - the defect this module is organised against.
+ */
+function manualRungCatalogueRead(failedTuple: ChatRunSettings | null): {
+  readonly subjects: ReadonlyArray<string | null>;
+  readonly enabled: boolean;
+} {
+  return {
+    subjects: [failedTuple === null ? null : failedTuple.harnessId],
+    enabled: failedTuple !== null,
+  };
+}
+
+/**
  * The affordances themselves, and the pick's in-flight state with them.
  *
  * ## Why this is a THIRD component
@@ -254,6 +276,25 @@ function ManualRungAffordances({
     hostId,
   });
   const canAct = useChatFallbackActionsCanAct({ epicId, chatId, hostId });
+  // One tuple: the only model this card names is the FAILED one, in the
+  // sentence explaining why there is no Switch… button. The destination menu
+  // this card opens resolves its own rows - it names harnesses this card has no
+  // way to know about until the listing answers.
+  //
+  // Gated on having a subject rather than on the sentence being on screen. A
+  // durable failed tuple is the one thing this component always holds or does
+  // not, and re-deriving `describeSwitchDisposition`'s branch here to decide
+  // whether to read a catalogue would be a second copy of the copy module's
+  // rule - the defect this whole module is organised against. The read itself
+  // is the shared `listModels` slot the app-load prefetcher already fills, and
+  // the hook's own availability gate keeps a harness the user has since
+  // disabled from being asked about at all.
+  const catalogueRead = manualRungCatalogueRead(attempt.failedTuple);
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    catalogueRead.subjects,
+    catalogueRead.enabled,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const runManualRung = useFallbackRunManualRung(
@@ -395,7 +436,9 @@ function ManualRungAffordances({
   const failedTuple = attempt.failedTuple;
   const switchExplanation = describeSwitchDisposition(
     attempt.switchDisposition,
-    failedTuple === null ? null : fallbackProviderModelLabel(failedTuple),
+    failedTuple === null
+      ? null
+      : fallbackProviderModelLabel(failedTuple, modelLabelFor),
   );
 
   // Whether the RETRY is the request in flight, as opposed to a switch or a

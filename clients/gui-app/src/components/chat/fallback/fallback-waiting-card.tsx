@@ -23,7 +23,10 @@ import {
   useFallbackProfileLabels,
 } from "./fallback-identity";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
-import { useDismissRoutingCard } from "./use-dismissed-routing-cards";
+import {
+  routingCardActionKey,
+  useDismissRoutingCard,
+} from "./use-dismissed-routing-cards";
 import {
   IGNORE_FALLBACK_OUTCOME,
   useFallbackCancel,
@@ -92,8 +95,13 @@ export function FallbackWaitingCard({
   const openFallbackSettings = useOpenFallbackSettings(hostId);
   const dismissCard = useDismissRoutingCard();
   const onDismiss = useCallback(() => {
-    dismissCard(chatId, pending.traversalId, "waiting");
-  }, [chatId, dismissCard, pending.traversalId]);
+    dismissCard(
+      chatId,
+      pending.traversalId,
+      "waiting",
+      routingCardActionKey(pending),
+    );
+  }, [chatId, dismissCard, pending]);
 
   const waiting = fallbackTupleIdentity(
     pending.failedTuple,

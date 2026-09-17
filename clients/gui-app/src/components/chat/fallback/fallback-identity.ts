@@ -1,6 +1,10 @@
 import { useMemo } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ChatRunSettings,
   PendingFallback,
@@ -190,9 +194,21 @@ function fallbackProviderLabelForHarness(harnessId: GuiHarnessId): string {
  * One function for both surfaces on purpose. They are explaining one host
  * verdict, and the rule this file exists to enforce is that two surfaces
  * describing one thing must not describe it in two ways.
+ *
+ * `modelLabelFor` is REQUIRED rather than optional, and that is the whole point
+ * of the parameter: an optional resolver is a raw slug by default, and the
+ * default is what every call site quietly took. The sentence this builds sits
+ * beside cards that already resolve their models
+ * ({@link fallbackTupleIdentity}), so a chat named "Claude Fable" on the card
+ * and "claude-fable-5-1[1m]" in the menu underneath it is exactly the
+ * disagreement this module exists to prevent.
  */
-export function fallbackProviderModelLabel(tuple: ChatRunSettings): string {
-  return `${fallbackProviderLabelForHarness(tuple.harnessId)} · ${tuple.model}`;
+export function fallbackProviderModelLabel(
+  tuple: ChatRunSettings,
+  modelLabelFor: FallbackModelLabelResolver,
+): string {
+  const providerLabel = fallbackProviderLabelForHarness(tuple.harnessId);
+  return `${providerLabel} · ${modelLabelFor(tuple.harnessId, tuple.model)}`;
 }
 
 export interface FallbackTupleIdentity {
@@ -279,6 +295,71 @@ export interface FallbackIdentityResolvers {
 
 const NO_MODEL_HARNESSES: readonly GuiHarnessId[] = [];
 
+/** One harness's model catalogue, as `agent.gui.listModels` answers it. */
+type GuiModelCatalogue = ResponseOfMethod<
+  HostRpcRegistry,
+  "agent.gui.listModels"
+>["models"];
+
+/** What one harness's catalogue read has produced so far. */
+interface ModelCatalogueRead {
+  readonly models: GuiModelCatalogue | undefined;
+  /**
+   * Loaded, or failed and not coming - never "still in flight".
+   *
+   * SETTLED rather than loaded, and the distinction is a bound rather than a
+   * nicety. The only caller that asks is one that must decide whether WAITING
+   * would help, and a catalogue whose read failed will never resolve; a caller
+   * that waited for "loaded" would wait forever and say nothing at all. Failed
+   * counts as settled, that caller proceeds with the raw slug, and the user is
+   * told something true rather than left in silence.
+   */
+  readonly settled: boolean;
+}
+
+/**
+ * The two questions a surface can ask of a set of model catalogues.
+ *
+ * Almost every caller wants only the first and takes {@link
+ * useFallbackModelLabels}: a card renders whatever is resolved now and
+ * repaints when more arrives, so "not yet" costs it nothing.
+ *
+ * `settledFor` exists for the one surface that cannot repaint - the transcript
+ * announcer CONSUMES a confirmed manual switch, advancing a sequence counter so
+ * the event is never observed again, which makes whatever name it held at that
+ * instant the name that user hears permanently.
+ */
+export interface FallbackModelCatalogues {
+  readonly labelFor: FallbackModelLabelResolver;
+  /** Whether this harness's catalogue has settled. Unasked-for ids are settled. */
+  readonly settledFor: (harnessId: string) => boolean;
+}
+
+/**
+ * Every harness a pending fallback can NAME a model for. Three, not two.
+ *
+ * The account that failed, where the chat has BEEN moved (`targetTuple`), and
+ * where it is still only PLANNED to move (`impendingAction.target`). That third
+ * one is the whole cancellation window: the host writes `targetTuple` only once
+ * a destination is committed, so throughout the grace hold - exactly while the
+ * user is deciding - the destination exists only as the planned tuple. A
+ * subject list without it leaves that catalogue unsubscribed and the planned
+ * model named by its raw slug for the entire window it is being approved in.
+ *
+ * Shared rather than spelled out per caller because the card and the transcript
+ * announcer must name the same places; two hand-written lists is how one of
+ * them silently ends up a tuple short, which is the bug this replaced.
+ */
+export function pendingFallbackHarnessSubjects(
+  pending: PendingFallback,
+): ReadonlyArray<string | null> {
+  return [
+    pending.failedTuple.harnessId,
+    pending.targetTuple?.harnessId ?? null,
+    pending.impendingAction?.target?.harnessId ?? null,
+  ];
+}
+
 /**
  * Resolves model slugs to catalogue labels for the tuples one surface renders.
  *
@@ -314,7 +395,7 @@ const NO_MODEL_HARNESSES: readonly GuiHarnessId[] = [];
  * availability-blind read would hit that provider's `listModels` and retry the
  * failure on every mount of the card.
  */
-export function useFallbackModelLabels(
+export function useFallbackModelCatalogues(
   client: HostClient<HostRpcRegistry> | null,
   /**
    * The harnesses whose catalogues this surface needs, `null` entries ignored.
@@ -326,7 +407,7 @@ export function useFallbackModelLabels(
    */
   harnessIdsInPlay: ReadonlyArray<string | null>,
   enabled: boolean,
-): FallbackModelLabelResolver {
+): FallbackModelCatalogues {
   const harnessesQuery = useGuiHarnessesQueryForClient(client, {
     enabled,
     subscribed: enabled,
@@ -379,7 +460,20 @@ export function useFallbackModelLabels(
     [harnessIds],
   );
 
-  const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
+  // `combine` projects to catalogue DATA rather than handing back the result
+  // array, and it is not an optimisation. `useQueries` returns a FRESH
+  // result-array reference on every render, so without this the memo below -
+  // and therefore the resolver it returns - was rebuilt every frame. For the
+  // cards that is only wasted work; for the transcript announcer it is a
+  // correctness problem, because that surface lists this resolver in an
+  // effect's dependencies, and an unstable resolver would re-run the effect on
+  // every render. TanStack structurally shares the COMBINED value, so this
+  // array stays referentially stable for as long as the catalogues do.
+  const modelCatalogues = useHostQueries<
+    HostRpcRegistry,
+    "agent.gui.listModels",
+    ReadonlyArray<ModelCatalogueRead>
+  >({
     client,
     cacheKeyIdentity: undefined,
     requests,
@@ -389,6 +483,25 @@ export function useFallbackModelLabels(
       staleTime: Infinity,
       gcTime: Infinity,
     },
+    combine: (
+      results: Array<
+        UseQueryResult<
+          ResponseOfMethod<HostRpcRegistry, "agent.gui.listModels">,
+          HostRpcError
+        >
+      >,
+    ): ReadonlyArray<ModelCatalogueRead> =>
+      results.map((result) => ({
+        models: result.data?.models,
+        // Answered, failed, or switched off. The third arm reads this hook's
+        // own `enabled` rather than inferring idleness from the result, and
+        // that is the load-bearing choice: a DISABLED query sits at
+        // `isPending` with `isFetching` false forever, so a `!isFetching` test
+        // would call it settled - but so is a query that has mounted and not
+        // yet started its fetch, and calling THAT settled is precisely the
+        // premature answer this flag exists to prevent.
+        settled: result.isSuccess || result.isError || !enabled,
+      })),
   });
 
   // One map per catalogue read rather than a linear scan per chip: a menu
@@ -404,7 +517,7 @@ export function useFallbackModelLabels(
   const byHarness = useMemo(() => {
     const outer = new Map<string, ReadonlyMap<string, string>>();
     harnessIds.forEach((harnessId, index) => {
-      const models = modelQueries[index].data?.models;
+      const models = modelCatalogues[index].models;
       if (models === undefined) return;
       const inner = new Map<string, string>();
       for (const model of models) {
@@ -413,17 +526,48 @@ export function useFallbackModelLabels(
       outer.set(harnessId, inner);
     });
     return outer;
-  }, [harnessIds, modelQueries]);
+  }, [harnessIds, modelCatalogues]);
+
+  const unsettled = useMemo(() => {
+    const pendingIds = new Set<string>();
+    harnessIds.forEach((harnessId, index) => {
+      if (!modelCatalogues[index].settled) pendingIds.add(harnessId);
+    });
+    return pendingIds;
+  }, [harnessIds, modelCatalogues]);
 
   return useMemo(
-    () =>
-      (harnessId: string, model: string): string =>
+    () => ({
+      labelFor: (harnessId: string, model: string): string =>
         // Lower-cased on both sides, matching the engine's own family match
         // (`candidateFamilyMatchesSlug`), so "GPT-5" and "gpt-5" are one model
         // here exactly as they are to the walk.
         byHarness.get(harnessId)?.get(model.toLowerCase()) ?? model,
-    [byHarness],
+      // An id NOBODY asked about reads settled, and that is the safe default
+      // rather than an oversight: this set holds the subjects a caller listed
+      // and is still waiting on, so an id outside it has no read in flight for
+      // anyone to wait for. A caller that treated "unknown" as unsettled would
+      // block on a request that was never going to be made.
+      settledFor: (harnessId: string): boolean => !unsettled.has(harnessId),
+    }),
+    [byHarness, unsettled],
   );
+}
+
+/**
+ * The label half of {@link useFallbackModelCatalogues}, for the surfaces that
+ * only ever need to name a model.
+ *
+ * Which is nearly all of them: a card, a chip or a menu row renders whatever is
+ * resolved at this frame and repaints when the catalogue lands, so it has no
+ * use for `settledFor` and should not have to destructure past it.
+ */
+export function useFallbackModelLabels(
+  client: HostClient<HostRpcRegistry> | null,
+  harnessIdsInPlay: ReadonlyArray<string | null>,
+  enabled: boolean,
+): FallbackModelLabelResolver {
+  return useFallbackModelCatalogues(client, harnessIdsInPlay, enabled).labelFor;
 }
 
 /**
@@ -505,16 +649,31 @@ export function fallbackDestinationOfTuple(
  * `reasoningEffort`, which the engine re-derived against the DESTINATION's
  * catalog - never from the failed tuple, which may not have an equivalent
  * there at all.
+ *
+ * `modelLabelFor` resolves the CONCRETE model and nothing else. The family arm
+ * is deliberately left raw: `modelFamily` is an equivalence-GROUP name the user
+ * typed into Settings, not a catalogue slug, and the two are not
+ * interchangeable even when they happen to spell the same string. Passing a
+ * family through a slug resolver would relabel `gpt-5` - a family that is also
+ * a slug - as that model's catalogue label, and the row would then claim to
+ * name a model the host explicitly could not resolve. {@link
+ * FallbackDestinationDescription.modelIsFamily} keeps its meaning for the same
+ * reason: it says which of the two arms produced the label, and the resolver
+ * changes neither arm's identity.
  */
 export function fallbackDestinationOfModelTarget(
   target: FallbackModelTarget,
   labelFor: FallbackProfileLabelResolver,
+  modelLabelFor: FallbackModelLabelResolver,
 ): FallbackDestinationDescription {
   const model = target.model;
   return {
     providerLabel: fallbackHarnessLabelFor(target.harnessId),
     profileLabel: labelFor(target.profileId),
-    modelLabel: model ?? target.modelFamily,
+    modelLabel:
+      model === null
+        ? target.modelFamily
+        : modelLabelFor(target.harnessId, model),
     modelIsFamily: model === null,
     effortLabel: normalizedEffort(target.reasoningEffort),
   };

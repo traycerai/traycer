@@ -144,7 +144,8 @@ import {
   fallbackDestinationOfTuple,
   fallbackDestinationSentence,
   fallbackResolvedIdentitySentence,
-  useFallbackModelLabels,
+  pendingFallbackHarnessSubjects,
+  useFallbackModelCatalogues,
   useFallbackProfileLabels,
   type FallbackIdentityResolvers,
 } from "@/components/chat/fallback/fallback-identity";
@@ -1054,13 +1055,38 @@ interface ManualFallbackAnnouncementObservation {
   readonly announcement: FallbackAnnouncement | null;
 }
 
+/**
+ * The shared identity pair, plus the one question only a CONSUMING surface has
+ * any use for.
+ *
+ * One bundle rather than a fifth positional argument, and not merely to satisfy
+ * the parameter count: these three are read together on every call, and a
+ * resolver arriving separately from the question "is this resolver ready" is
+ * exactly the pairing that let the defect below exist in the first place.
+ */
+interface ManualAnnouncementResolvers extends FallbackIdentityResolvers {
+  /**
+   * Whether the destination's model catalogue has settled.
+   *
+   * This observation CONSUMES its event - returning a sequence advances
+   * `lastManualSequence`, and the action is never looked at again - so unlike
+   * every rendered surface it cannot correct a name afterwards. The subjects
+   * are read off live store state inside an effect event, but the resolver
+   * beside them is built from the LAST render's subscription list: a manual
+   * switch that introduces a harness this chat had not named before is seen by
+   * the store callback one render BEFORE that harness's catalogue is even
+   * requested. Consuming there spoke the raw slug permanently.
+   */
+  readonly modelCatalogueSettledFor: (harnessId: string) => boolean;
+}
+
 function observeManualFallbackAction(
   manual: ConfirmedManualFallbackAction | null,
   scope: ChatAnnouncementScope,
   lastSequence: number,
-  resolvers: FallbackIdentityResolvers,
+  resolvers: ManualAnnouncementResolvers,
 ): ManualFallbackAnnouncementObservation {
-  const { labelFor, modelLabelFor } = resolvers;
+  const { labelFor, modelLabelFor, modelCatalogueSettledFor } = resolvers;
   if (
     manual === null ||
     manual.hostId !== scope.hostId ||
@@ -1073,6 +1099,20 @@ function observeManualFallbackAction(
   const sequence = Math.max(lastSequence, manual.sequence);
   if (!newManual || manual.rung !== "switch" || manual.target === null) {
     return { sequence, announcement: null };
+  }
+  // Hold the event rather than consume it, and return the OLD sequence so the
+  // next observation sees it as new again. The layout effect below lists the
+  // catalogues among its dependencies, so the render that subscribes this
+  // harness - and then the frame its catalogue lands on - each re-observe, and
+  // the switch is announced once, by its real name.
+  //
+  // Bounded by `settled`, never by `loaded`: a catalogue read that FAILED, or
+  // one this surface never enabled, reports settled and the sentence goes out
+  // with the slug. Waiting for a label that is not coming would trade a clumsy
+  // announcement for silence about a switch that actually happened, which is
+  // the worse of the two for someone driving this by ear.
+  if (!modelCatalogueSettledFor(manual.target.harnessId)) {
+    return { sequence: lastSequence, announcement: null };
   }
   return {
     sequence,
@@ -1247,6 +1287,34 @@ function residentMessageIdsEqual(
   return true;
 }
 
+/**
+ * Every harness the announcer may have to name, read off live store state.
+ *
+ * Module level rather than inline in the `useShallow` below, so the selector is
+ * one stable function instead of a fresh closure per render - and so the
+ * component itself is not carrying this list's branching.
+ *
+ * FIXED length, including the three-`null` arm: `useShallow` compares
+ * element-wise, and a list whose LENGTH moves with the state it describes makes
+ * "did my subjects change" depend on two things at once. Padding keeps each
+ * slot meaning one subject for the life of the chat.
+ */
+function announcedHarnessIdsOf(
+  state: ChatSessionState,
+): ReadonlyArray<string | null> {
+  const pending = state.pendingFallback;
+  return [
+    // The three a pending fallback can name, shared with the countdown card so
+    // the card and the announcer cannot drift apart about where a chat is going.
+    ...(pending === undefined
+      ? [null, null, null]
+      : pendingFallbackHarnessSubjects(pending)),
+    state.pendingReturn?.preferredTuple.harnessId ?? null,
+    state.pendingReturn?.fallbackTuple.harnessId ?? null,
+    state.confirmedManualFallbackAction?.target?.harnessId ?? null,
+  ];
+}
+
 function ChatFallbackAnnouncementSource(
   props: ChatLiveAnnouncementsProps & {
     readonly hostId: string;
@@ -1279,19 +1347,17 @@ function ChatFallbackAnnouncementSource(
   // user is looking at would be a second voice describing one event.
   const announcedHarnessIds = useStore(
     handle.store,
-    useShallow((state: ChatSessionState): ReadonlyArray<string | null> => [
-      state.pendingFallback?.failedTuple.harnessId ?? null,
-      state.pendingFallback?.targetTuple?.harnessId ?? null,
-      state.pendingReturn?.preferredTuple.harnessId ?? null,
-      state.pendingReturn?.fallbackTuple.harnessId ?? null,
-      state.confirmedManualFallbackAction?.target?.harnessId ?? null,
-    ]),
+    useShallow(announcedHarnessIdsOf),
   );
-  const modelLabelFor = useFallbackModelLabels(
-    client,
-    announcedHarnessIds,
-    props.visible && hasFallback,
-  );
+  // `settledFor` beside the resolver, because this surface is the one that
+  // cannot take back a name it has already spoken - see its use in
+  // `observeState` below.
+  const { labelFor: modelLabelFor, settledFor: modelCatalogueSettledFor } =
+    useFallbackModelCatalogues(
+      client,
+      announcedHarnessIds,
+      props.visible && hasFallback,
+    );
   const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
   const lastManualSequence = useRef(0);
   const lastUnattendedSequence = useRef(0);
@@ -1327,7 +1393,7 @@ function ChatFallbackAnnouncementSource(
       state.confirmedManualFallbackAction,
       props,
       lastManualSequence.current,
-      { labelFor, modelLabelFor },
+      { labelFor, modelLabelFor, modelCatalogueSettledFor },
     );
     lastManualSequence.current = manual.sequence;
     const unattended = observeUnattendedFallbackOutcome(
@@ -1421,6 +1487,19 @@ function ChatFallbackAnnouncementSource(
     props.coldRewrittenMessageIds,
     props.visible,
     labelFor,
+    // Beside `labelFor`, and for the same reason: both resolvers start
+    // unresolved and land asynchronously. Omitting this one meant a catalogue
+    // that resolved after the first observation never reached the announcer,
+    // so a cold session announced the raw model slug and never corrected it.
+    // The resolver is referentially stable (see the `combine` in
+    // `useFallbackModelCatalogues`), so this dependency does not re-run the
+    // effect on every render.
+    modelLabelFor,
+    // The other half of the same subscription, and it is what actually
+    // releases a HELD manual switch: `observeManualFallbackAction` declines to
+    // consume one whose catalogue has not settled, and this dependency is the
+    // thing that brings the observation back once it has.
+    modelCatalogueSettledFor,
   ]);
   return null;
 }

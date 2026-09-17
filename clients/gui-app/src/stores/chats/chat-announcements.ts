@@ -342,7 +342,7 @@ function cancelOpportunityText(deadline: number | null, now: number): string {
   const action = `Select ${DONT_SWITCH_LABEL} to cancel.`;
   if (deadline === null) return action;
   const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000));
-  if (seconds === 0) return `The fallback is due now. ${action}`;
+  if (seconds === 0) return `The switch is due now. ${action}`;
   return `You have ${seconds} ${seconds === 1 ? "second" : "seconds"} to cancel. ${action}`;
 }
 
@@ -404,7 +404,7 @@ export function fallbackTraversalAnnouncement(input: {
       text = fallbackHoldText(pending, plan, failedIdentity, now);
       break;
     case "choosing":
-      text = `Fallback countdown paused. ${fallbackPlanText(plan, failedIdentity, now)} Choose a destination or close the menu to resume the countdown.`;
+      text = `Countdown paused. ${fallbackPlanText(plan, failedIdentity, now)} Choose a destination or close the menu to resume the countdown.`;
       break;
     case "switching": {
       // The wait rung's resume runs these same phases onto the tuple that
@@ -437,12 +437,28 @@ export function fallbackTraversalAnnouncement(input: {
   return {
     traversalId: pending.traversalId,
     revision: pending.revision,
-    // No display labels, tick, deadline, queued count or sibling count here.
-    // The host plan id changes when its action or destination changes.
+    // No tick, deadline, queued count or sibling count here. The host plan id
+    // changes when its action or destination changes.
+    //
+    // The resolved IDENTITIES are in the key, and that is a deliberate
+    // exception to "no display labels". The model catalogue is fetched only
+    // once a fallback exists, so the FIRST fallback of a cold session observes
+    // before it resolves and names the raw slug - "claude-fable-5-1[1m]", the
+    // provider-internal string this feature exists to stop showing. The
+    // resolver updates a moment later, but without these two fields the
+    // corrected sentence deduplicates against the slug one and the user is
+    // never told the real model name.
+    //
+    // Safe to key on precisely because they are pure IDENTITY - provider,
+    // account and model. Unlike a tick or a deadline they change once, when
+    // the catalogue lands, and then hold, so this re-announces a corrected
+    // name rather than re-announcing continuously.
     semanticKey: JSON.stringify([
       pending.state,
       plan?.planId ?? null,
       plan === null ? fallbackTupleAnnouncementKey(pending.targetTuple) : null,
+      failedIdentity,
+      targetIdentity,
     ]),
     text,
   };
@@ -465,6 +481,10 @@ export function fallbackReturnAnnouncement(
     semanticKey: JSON.stringify([
       pending.offeredAt,
       fallbackTupleAnnouncementKey(pending.preferredTuple),
+      // Same exception as the traversal key above, for the same reason: this
+      // sentence names a resolved account and model, and on a cold catalogue
+      // the slug-named version would otherwise be the only one ever heard.
+      preferredIdentity,
     ]),
     text: parts.join(" "),
   };

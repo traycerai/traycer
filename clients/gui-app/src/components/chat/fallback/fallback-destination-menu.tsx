@@ -39,7 +39,9 @@ import {
   fallbackDestinationRowTitle,
   fallbackKnownHarnessFor,
   fallbackProviderModelLabel,
+  useFallbackModelLabels,
   useFallbackProfileLabels,
+  type FallbackModelLabelResolver,
 } from "./fallback-identity";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import {
@@ -202,6 +204,37 @@ export function FallbackDestinationMenu({
   const labelFor = useFallbackProfileLabels(client, listing);
   const data = targets.data;
   const failedTuple = data?.failedTuple ?? null;
+  // Every harness this popover can NAME a model for, which is the failed
+  // tuple's PLUS one per equivalent-model row - not one, the way the cards can
+  // get away with.
+  //
+  // The two are different subjects and both are rendered here: the failed
+  // tuple's model is the subject of the `no-group` empty-state sentence
+  // (`emptyStateText`), and each model row titles itself with a model on its
+  // OWN provider, which is precisely the provider the failed tuple is not on.
+  // Listing only the failed harness would have left every cross-provider row -
+  // the ones this menu exists to offer - titled by its raw slug.
+  //
+  // A fresh array literal per render is what the hook asks for: it derives a
+  // sorted, deduped STRING from these ids every render rather than memoising on
+  // the array, exactly so a caller assembling one from its own props each frame
+  // costs nothing. See `useFallbackModelLabels`.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    [
+      failedTuple === null ? null : failedTuple.harnessId,
+      ...(data === undefined
+        ? []
+        : data.modelTargets.map((target) => target.harnessId)),
+    ],
+    // The same gate the profile labels take, and for the same reason: a closed
+    // popover, or one whose countdown is not yet held, is not listing anything
+    // and has no tuple to name. The hook's own availability gate still applies
+    // on top - a durable failed tuple can name a harness the user has since
+    // disabled, and an availability-blind read would retry that provider's
+    // `listModels` failure on every open.
+    listing,
+  );
   const headerId = useId();
 
   return (
@@ -343,6 +376,7 @@ export function FallbackDestinationMenu({
           isError={targets.isError}
           failedTuple={failedTuple}
           labelFor={labelFor}
+          modelLabelFor={modelLabelFor}
           picking={picking}
           onPick={onPick}
           emptyStateActions={emptyStateActions}
@@ -422,6 +456,7 @@ function MenuBody({
   isError,
   failedTuple,
   labelFor,
+  modelLabelFor,
   picking,
   onPick,
   emptyStateActions,
@@ -440,6 +475,7 @@ function MenuBody({
   readonly isError: boolean;
   readonly failedTuple: ChatRunSettings | null;
   readonly labelFor: (profileId: string | null) => string;
+  readonly modelLabelFor: FallbackModelLabelResolver;
   readonly picking: boolean;
   readonly onPick: (target: ChatRunSettings) => void;
   readonly emptyStateActions: ReactNode | null;
@@ -531,7 +567,7 @@ function MenuBody({
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-2 px-1 py-2">
           <span className="text-ui-xs text-muted-foreground">
-            {emptyStateText(data, failedTuple, hasRows)}
+            {emptyStateText(data, failedTuple, hasRows, modelLabelFor)}
           </span>
           {emptyStateActions}
           <FallbackNoticeSettingsLink />
@@ -548,6 +584,7 @@ function MenuBody({
             data={data}
             failedTuple={failedTuple}
             labelFor={labelFor}
+            modelLabelFor={modelLabelFor}
             picking={picking}
             onPick={onPick}
           />
@@ -561,6 +598,7 @@ function MenuBody({
       data={data}
       failedTuple={failedTuple}
       labelFor={labelFor}
+      modelLabelFor={modelLabelFor}
       picking={picking}
       onPick={onPick}
     />
@@ -584,6 +622,10 @@ function MenuBody({
  * that titles the rows - which is also what keeps this line and the error
  * card's identical, since both call `noSwitchDestinationText`.
  *
+ * The MODEL inside that identity goes through the same resolver the rows below
+ * it use, so one popover cannot name one model two ways - its explanation
+ * saying `claude-fable-5-1[1m]` above rows offering "Claude Fable".
+ *
  * **The host's own label, for every other reason.** Rendered verbatim per the
  * wire contract: `skip.reason` is an open string beside a rendered `label`
  * precisely so a reason a released client has never heard of still says
@@ -597,6 +639,7 @@ function emptyStateText(
   data: ChatFallbackListTargetsResponse,
   failedTuple: ChatRunSettings | null,
   hasRows: boolean,
+  modelLabelFor: FallbackModelLabelResolver,
 ): string {
   const skip = data.modelTargetsSkip;
   if (skip === null) {
@@ -607,7 +650,9 @@ function emptyStateText(
   // degrade to its label, never to a guess.
   const parsed = tierRungSkipReasonSchema.safeParse(skip.reason);
   if (parsed.success && parsed.data === "no-group" && failedTuple !== null) {
-    return noSwitchDestinationText(fallbackProviderModelLabel(failedTuple));
+    return noSwitchDestinationText(
+      fallbackProviderModelLabel(failedTuple, modelLabelFor),
+    );
   }
   return skip.label;
 }
@@ -616,12 +661,14 @@ function TargetSections({
   data,
   failedTuple,
   labelFor,
+  modelLabelFor,
   picking,
   onPick,
 }: {
   readonly data: ChatFallbackListTargetsResponse;
   readonly failedTuple: ChatRunSettings | null;
   readonly labelFor: (profileId: string | null) => string;
+  readonly modelLabelFor: FallbackModelLabelResolver;
   readonly picking: boolean;
   readonly onPick: (target: ChatRunSettings) => void;
 }) {
@@ -661,11 +708,15 @@ function TargetSections({
               // `claude`/`opus`/`low`), and both resolve to the same profile. On
               // the identity fields alone those are one key for two siblings, so
               // React warns and can carry the wrong row instance across a
-              // re-render. `model` joins for the same reason - it is the
-              // resolved slug the title leads with.
+              // re-render. `model` joins for the same reason - it is what the
+              // title leads with, as its catalogue label. The raw SLUG is what
+              // keys: it is the row's identity, while the label is a rendering
+              // of it that a cold catalogue changes and that two slugs could in
+              // principle share.
               key={`${target.groupId}:${target.harnessId}:${target.modelFamily}:${target.model ?? "unresolved"}:${target.reasoningEffort ?? "default"}:${target.profileId ?? "ambient"}`}
               target={target}
               labelFor={labelFor}
+              modelLabelFor={modelLabelFor}
               picking={picking}
               onPick={onPick}
             />
@@ -750,11 +801,13 @@ function ProfileRow({
 function ModelRow({
   target,
   labelFor,
+  modelLabelFor,
   picking,
   onPick,
 }: {
   readonly target: FallbackModelTarget;
   readonly labelFor: (profileId: string | null) => string;
+  readonly modelLabelFor: FallbackModelLabelResolver;
   readonly picking: boolean;
   readonly onPick: (target: ChatRunSettings) => void;
 }) {
@@ -784,8 +837,13 @@ function ModelRow({
       // fallback for a candidate the host stopped resolving. Titling by
       // `modelFamily` unconditionally meant a group named `gpt` offered a
       // click that would launch `gpt-6-astra`, and the row never said so.
+      //
+      // The resolved arm is named by its CATALOGUE label - the row beside the
+      // grace card that says "Switching to Claude Fable" must not offer
+      // "claude-fable-5-1[1m]". The family arm stays raw; it is a group name,
+      // not a slug.
       title={fallbackDestinationRowTitle(
-        fallbackDestinationOfModelTarget(target, labelFor),
+        fallbackDestinationOfModelTarget(target, labelFor, modelLabelFor),
       )}
       recommended={false}
       severity={target.severity}

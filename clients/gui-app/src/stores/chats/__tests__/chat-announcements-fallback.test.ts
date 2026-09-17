@@ -332,7 +332,7 @@ describe("fallbackTraversalAnnouncement", () => {
     expect(text).toContain(
       "There's nowhere to route this chat. It will stop and keep the error visible.",
     );
-    expect(text).toContain("The fallback is due now.");
+    expect(text).toContain("The switch is due now.");
     // Falsification: drop the `seconds === 0` branch in `cancelOpportunityText`
     // and this becomes "You have 0 seconds to cancel." instead.
     expect(text).not.toContain("0 seconds");
