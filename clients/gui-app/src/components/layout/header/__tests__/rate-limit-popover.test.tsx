@@ -344,6 +344,18 @@ import { useLayoutStore } from "@/stores/settings/layout-store";
 
 const NOW = Date.now();
 
+// jsdom's own window width, which `useIsMobileViewport` reads as a desktop;
+// a case that needs the mobile branch narrows it and `afterEach` puts it back.
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+const MOBILE_VIEWPORT_WIDTH = 500;
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
+
 /**
  * One host, followed. The picker row only appears when there is a choice to
  * make, so this is the scope under which every assertion in this suite about
@@ -895,6 +907,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   setMobileApp(false);
+  setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -1566,6 +1579,114 @@ describe("<RateLimitPopover /> rail", () => {
     expect(
       screen.getByRole("button", { name: "Show Personal in status bar" }),
     ).toBeTruthy();
+  });
+
+  // The eye governs a segment on the strip, so it is drawn only while the
+  // strip is: `placement` decides that on a desktop viewport, `mobileFooter`
+  // on a mobile one (`selectStatusBarShown`, the read `AppShell` mounts the
+  // strip on). The "drawn" highlight goes with it - with no strip there is
+  // nothing for an accented card to be drawn ON.
+  describe("while the strip is not on screen", () => {
+    function expectNoEyeAndNoHighlight(): void {
+      expect(
+        screen.queryByTestId("rate-limit-profile-status-bar-eye"),
+      ).toBeNull();
+      expect(document.querySelectorAll('[aria-current="true"]')).toHaveLength(
+        0,
+      );
+    }
+
+    it("offers the eye on every card under the status-bar placement", () => {
+      configureTwoAccountProviders();
+      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      renderPopover();
+
+      expect(statusBarEyes()).toHaveLength(4);
+    });
+
+    it("draws neither the eye nor the highlight under the header placement, and keeps the checks for the strip's return", () => {
+      configureTwoAccountProviders();
+      // A real check in the store for the viewed host, and the selection the
+      // caller would resolve from it.
+      useLayoutStore
+        .getState()
+        .setStatusBarProfileShown("host-a", "codex", "work-profile", true);
+      const checked = { "host-a": { codex: ["work-profile"] } };
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+      ).toEqual(checked);
+      mocks.profileSelection = {
+        shownProfiles: { codex: ["work-profile"] },
+        lastProfileByHarness: { claude: "personal-profile" },
+      };
+      useLayoutStore.getState().setStatusBarPlacement("header");
+      renderPopover();
+
+      // The cards themselves are unchanged; only the strip controls go.
+      expect(screen.getByText("Work")).toBeTruthy();
+      expect(screen.getByText("Personal")).toBeTruthy();
+      expectNoEyeAndNoHighlight();
+      // The check is untouched - withheld, not cleared.
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+      ).toEqual(checked);
+
+      // ...and takes effect again the moment the strip returns.
+      cleanup();
+      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      renderPopover();
+
+      expect(
+        screen
+          .getByRole("button", { name: "Hide Work from status bar" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      expect(
+        screen
+          .getByTestId("rate-limit-profile-card-codex-work-profile")
+          .getAttribute("aria-current"),
+      ).toBe("true");
+      expect(
+        useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
+      ).toEqual(checked);
+    });
+
+    it("ignores the placement on a mobile viewport and follows the footer switch", () => {
+      configureTwoAccountProviders();
+      mocks.profileSelection = {
+        shownProfiles: { codex: ["work-profile"] },
+        lastProfileByHarness: {},
+      };
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+      // The placement a desktop would mount the strip on says nothing here.
+      useLayoutStore.getState().setStatusBarPlacement("status-bar");
+      renderPopover();
+
+      expectNoEyeAndNoHighlight();
+
+      cleanup();
+      useLayoutStore.getState().setStatusBarMobileFooter(true);
+      renderPopover();
+
+      expect(statusBarEyes()).toHaveLength(4);
+      expect(
+        screen
+          .getByTestId("rate-limit-profile-card-codex-work-profile")
+          .getAttribute("aria-current"),
+      ).toBe("true");
+      // The provider rule still applies on top: a hidden provider has no
+      // segment on a strip that IS there.
+      cleanup();
+      useLayoutStore.getState().toggleStatusBarProvider("codex");
+      renderPopover();
+
+      expect(
+        screen.queryByRole("button", { name: "Hide Work from status bar" }),
+      ).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Show Personal in status bar" }),
+      ).toBeTruthy();
+    });
   });
 
   it("renders no eye for a provider that reports no profiles", () => {

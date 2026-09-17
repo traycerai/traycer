@@ -136,7 +136,10 @@ import {
   type RateLimitPopoverRevealTarget,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import {
+  useLayoutStore,
+  useStatusBarShown,
+} from "@/stores/settings/layout-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -161,6 +164,8 @@ const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
   ambient: false,
   managedProfiles: false,
 };
+/** What the strip draws for a provider while the strip itself is not on screen. */
+const NO_PROFILE_IDS: ReadonlyArray<string | null> = [];
 
 const POPOVER_SURFACE_CLASS_NAME =
   "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
@@ -1814,19 +1819,27 @@ function ProfileRateLimitProviderBlock({
   // The accounts the strip is drawing for this provider right now - what was
   // checked, or the one account it falls back to - and the checks themselves.
   // The two differ exactly when nothing is checked: the fallback card is
-  // highlighted as "on the strip" while its switch stays off, since nothing
-  // was asked for and flipping the switch is how to ask.
-  const shownProfileIds = resolveStatusBarProfileIds(
-    profileSelection,
-    providerId,
-    profiles,
-  );
+  // highlighted as "on the strip" while its eye stays off, since nothing
+  // was asked for and flipping the eye is how to ask.
+  //
+  // Neither means anything while the strip is not on screen (header
+  // placement, or a mobile viewport with the footer off): there is no segment
+  // for the highlight to point at and none for the eye to govern, so both go
+  // until the strip returns. The checks themselves stay in the store and take
+  // effect again when it does.
+  const stripShown = useStatusBarShown();
+  const shownProfileIds = stripShown
+    ? resolveStatusBarProfileIds(profileSelection, providerId, profiles)
+    : NO_PROFILE_IDS;
   const checkedProfileIds = profileSelection.shownProfiles[providerId] ?? [];
-  // A provider hidden from the strip has no segment for a switch to govern;
-  // the switch goes with it rather than toggling a preference nothing shows.
+  // A provider hidden from the strip has no segment for the eye to govern;
+  // the eye goes with it rather than toggling a preference nothing shows.
   const providerHiddenFromStrip = useLayoutStore((state) =>
     state.statusBar.rateLimits.hiddenProviders.includes(providerId),
   );
+  // The host the eye writes for, or `null` when there is no eye to draw.
+  const eyeHostId =
+    stripShown && !providerHiddenFromStrip ? displayedHostId : null;
   const setProfileShown = useLayoutStore(
     (state) => state.setStatusBarProfileShown,
   );
@@ -1954,7 +1967,7 @@ function ProfileRateLimitProviderBlock({
               shownOnStrip={shownProfileIds.includes(target.profileId)}
               checkedForStrip={checkedProfileIds.includes(target.profileId)}
               onSetShownOnStrip={
-                providerHiddenFromStrip || displayedHostId === null
+                eyeHostId === null
                   ? null
                   : (shown) => {
                       trackSettingChanged(
@@ -1962,7 +1975,7 @@ function ProfileRateLimitProviderBlock({
                         "layout.statusBar.shownProfiles",
                       );
                       setProfileShown(
-                        displayedHostId,
+                        eyeHostId,
                         providerId,
                         target.profileId,
                         shown,
@@ -2151,8 +2164,8 @@ function showInStatusBarTooltip(
  * so the eye and the colour it governs sit together: `Eye` when the account
  * is checked for the strip, `EyeOff` when not. An icon rather than a second
  * switch beside the enable one - two identical toggles on a card said
- * nothing about which was which. Rendered only when the provider itself is
- * on the strip (`onSetShownOnStrip` non-null).
+ * nothing about which was which. Rendered only while the strip is on screen
+ * and the provider itself is on it (`onSetShownOnStrip` non-null).
  */
 function StatusBarEyeToggle({
   profile,
@@ -2286,7 +2299,10 @@ function RateLimitProviderProfileRow({
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
   readonly fetchEligible: boolean;
-  /** Whether the strip is drawing this account - checked, or the fallback. */
+  /**
+   * Whether the strip is drawing this account - checked, or the fallback.
+   * Always false while the strip is not on screen.
+   */
   readonly shownOnStrip: boolean;
   readonly checkedForStrip: boolean;
   readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
@@ -2466,7 +2482,7 @@ function RateLimitProviderProfileStatusBadges({
   readonly planLabel: string | null;
   readonly shownOnStrip: boolean;
   readonly checkedForStrip: boolean;
-  /** `null` hides the eye: the provider itself is off the strip. */
+  /** `null` hides the eye: the strip is off screen, or the provider is off it. */
   readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
 }): ReactNode {
   return (
