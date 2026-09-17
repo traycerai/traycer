@@ -9803,8 +9803,28 @@ export function createChatSessionStoreWithNotificationDependencies(
         memory.chatWindows.detach(holderId);
         memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
         closeStreamClient();
-        // Disposal suppresses the stream's close callback; no live session remains.
-        set({ draftBlobBridgeSupported: false });
+        // Disposal suppresses the stream's close callback, so `onConnectionStatus`
+        // never runs here and nothing recomputes these. Every per-stream
+        // capability is meaningful ONLY while the status is `open`, so each has
+        // to be retired by hand or a store held past disposal keeps advertising
+        // a stream it no longer has.
+        //
+        // Clear them as a SET, and keep this list identical to `retry()`'s. The
+        // two teardown paths drifting apart is the defect here, and it has now
+        // happened TWICE: first when the draft-blob flag was added and cleared
+        // only here, then when `autoPermissionModeProtocolSupported` was added
+        // and cleared only in `retry()`. A new capability must join both.
+        //
+        // `null`, not `false`, for the auto flag: absence means "this handle
+        // cannot say", and a disposed store has not refused `auto` - it has
+        // stopped being able to answer. That is the same value `retry()` and
+        // the initial state use.
+        set({
+          steerProtocolSupported: false,
+          draftBlobBridgeSupported: false,
+          interviewDeliveryRetryProtocolSupported: false,
+          autoPermissionModeProtocolSupported: null,
+        });
       },
     };
   });
