@@ -349,6 +349,18 @@ export function bindComposerDraftHost(chatId: string, hostId: string): void {
   composerHostByChatId.set(chatId, hostId);
 }
 
+/**
+ * Host a mounted composer bound this chat's draft to, or `null` when no
+ * composer for it is mounted here. The sibling of `newChatBoundHostId`, and
+ * the drafts list's test for "will an edit to this row be routed at all":
+ * `routeLocalEdit` and the dirty-write collector both resolve a chat draft
+ * through this map alone, so an unbound chat's restored row needs an explicit
+ * upsert rather than a notice nothing acts on.
+ */
+export function composerBoundHostId(chatId: string): string | null {
+  return composerHostByChatId.get(chatId) ?? null;
+}
+
 export function unbindComposerDraftHost(chatId: string, hostId: string): void {
   if (composerHostByChatId.get(chatId) === hostId) {
     composerHostByChatId.delete(chatId);
@@ -384,6 +396,15 @@ export function unbindInterviewDraftHost(
 
 export function bindNewChatDraftHost(epicId: string, hostId: string): void {
   newChatHostByEpicId.set(epicId, hostId);
+}
+
+/**
+ * Host a mounted modal bound this epic's new-chat draft to. The drafts list
+ * reads it as the owner fallback for a patch no host document has echoed
+ * `ownerHostId` onto yet.
+ */
+export function newChatBoundHostId(epicId: string): string | null {
+  return newChatHostByEpicId.get(epicId) ?? null;
 }
 
 export function unbindNewChatDraftHost(epicId: string, hostId: string): void {
@@ -729,6 +750,14 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
   for (const { epicId, patch } of collectNewChatDirtyWrites()) {
     if (newChatHostByEpicId.get(epicId) !== hostId) continue;
     if (patch.draftId === null) continue;
+    // The host a write is sent to owns the row. Nothing else records it on
+    // this plane - the upsert path only calls `rememberSynced`, never an
+    // `applyUpsert` - so without this a modal that published normally kept
+    // `ownerHostId: null`, and the drafts list lost the row the moment the
+    // epic was unbound and the `newChatBoundHostId` fallback went with it.
+    useNewConversationModalStore
+      .getState()
+      .setNewChatOwnerHostId(epicId, hostId);
     out.push({
       generation: patch.generation,
       write: composerDraftWrite({
@@ -1138,7 +1167,17 @@ export async function submitComposerDraft(chatId: string): Promise<void> {
   await retrySubmittedDraftDelete(before.draftId);
 }
 
-async function retrySubmittedDraftDelete(draftId: string): Promise<void> {
+/**
+ * Send (or re-send) the pending delete/retract a submit or a drafts-list
+ * delete recorded for `draftId`, through the session of the host its receipt
+ * names. No session, no request - the receipt stays pending for whichever
+ * session mounts next. Exported for the drafts list, whose rows belong to
+ * composers that are not mounted: it fences the row exactly as submit does and
+ * then needs that same receipt acted on.
+ */
+export async function retrySubmittedDraftDelete(
+  draftId: string,
+): Promise<void> {
   const pending = pendingSubmittedDraftDelete(draftId);
   if (pending === null) return;
   const session = sessions.get(pending.hostId)?.session;

@@ -69,6 +69,14 @@ export interface NewConversationModalDraftPatch {
    * epic has mounted.
    */
   readonly epicTitle: string | null;
+  /**
+   * Host that owns this row, echoed from the host document. `null` until one
+   * applies - a modal typed in offline has no owner yet. The drafts list
+   * falls back to the epic's bound mirror host (`newChatBoundHostId`) and
+   * hides the row when neither answers, since every row action has to name a
+   * host client to reach.
+   */
+  readonly ownerHostId: string | null;
 }
 
 interface NewConversationModalStore {
@@ -108,6 +116,13 @@ interface NewConversationModalStore {
     epicId: string,
     epicTitle: string | null,
   ) => void;
+  /**
+   * Record the host a write for this epic is being sent to. Non-dirtying for
+   * the same reason as the title setter, and for a sharper one: it runs while
+   * the mirror is COLLECTING dirty writes, so bumping `generation` there would
+   * re-dirty the row the collector is about to mark clean and loop it forever.
+   */
+  readonly setNewChatOwnerHostId: (epicId: string, hostId: string) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
   readonly addResolvedFolders: (
@@ -142,7 +157,32 @@ const EMPTY_DRAFT_PATCH: NewConversationModalDraftPatch = {
   generation: 0,
   syncedGeneration: 0,
   epicTitle: null,
+  ownerHostId: null,
 };
+
+/**
+ * Draft ids this window has deleted, so a document still in flight for one
+ * cannot re-attach it. The landing store has retirement receipts and the
+ * composer store has an identity check; this plane had neither, and a late
+ * apply (an upsert or list entry that was awaiting blob reads) would either
+ * resurrect a deleted row or - after Delete then Undo - clobber the fresh id
+ * the restore minted, leaving the pending delete's ACK to mark the restored
+ * content clean and never publish it.
+ *
+ * Insertion-ordered and capped: a fence only has to outlive the requests that
+ * were already in the air.
+ */
+const RETIRED_NEW_CHAT_DRAFT_IDS_CAP = 256;
+const retiredNewChatDraftIds = new Set<string>();
+
+function retireNewChatDraftId(draftId: string): void {
+  retiredNewChatDraftIds.delete(draftId);
+  retiredNewChatDraftIds.add(draftId);
+  for (const id of retiredNewChatDraftIds) {
+    if (retiredNewChatDraftIds.size <= RETIRED_NEW_CHAT_DRAFT_IDS_CAP) break;
+    retiredNewChatDraftIds.delete(id);
+  }
+}
 
 // Merge a partial patch onto the epic's current draft (seeded from
 // EMPTY_DRAFT_PATCH on first touch). Single writer behind every `set*` reducer.
@@ -227,6 +267,20 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           };
         });
       },
+      setNewChatOwnerHostId: (epicId, hostId) => {
+        set((state) => {
+          const current = state.draftPatchesByEpicId[epicId];
+          if (current === undefined || current.ownerHostId === hostId) {
+            return state;
+          }
+          return {
+            draftPatchesByEpicId: {
+              ...state.draftPatchesByEpicId,
+              [epicId]: { ...current, ownerHostId: hostId },
+            },
+          };
+        });
+      },
       addResolvedFolders: (epicId, seedWorkspace, folders) => {
         const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
         const beforeWorkspace = current.workspace ?? seedWorkspace;
@@ -286,6 +340,7 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         // first left a modal the user is not looking at with no route for its
         // `drafts.delete` at all, and the host went on listing the row.
         if (removed?.draftId !== undefined && removed.draftId !== null) {
+          retireNewChatDraftId(removed.draftId);
           notifyDraftLocalDelete(removed.draftId);
         }
         set((state) => {
@@ -294,7 +349,10 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           return { draftPatchesByEpicId };
         });
       },
-      resetForTests: () => set({ draftPatchesByEpicId: {} }),
+      resetForTests: () => {
+        retiredNewChatDraftIds.clear();
+        set({ draftPatchesByEpicId: {} });
+      },
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.newConversationDraft)),
@@ -355,6 +413,7 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             generation: nonNegativeNumber(raw.generation),
             syncedGeneration: nonNegativeNumber(raw.syncedGeneration),
             epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
+            ownerHostId: parseNullableId(raw.ownerHostId),
           };
         }
         return { ...currentState, draftPatchesByEpicId };
@@ -471,6 +530,10 @@ export function newChatDraftRememberSynced(
 
 export function applyNewChatHostDocument(document: DraftDocument): void {
   if (document.kind !== "new-chat") return;
+  // A document for an id this window already deleted is stale by
+  // construction: applying it would re-attach the dead id to whatever patch
+  // the epic holds now (see `retiredNewChatDraftIds`).
+  if (retiredNewChatDraftIds.has(document.draftId)) return;
   const epicId = document.target.epicId;
   if (epicId === null) return;
   useNewConversationModalStore.setState((state) => {
@@ -483,6 +546,7 @@ export function applyNewChatHostDocument(document: DraftDocument): void {
             ...current,
             draftId: document.draftId,
             hostRevision: document.revision,
+            ownerHostId: document.ownerHostId,
           },
         },
       };
@@ -499,6 +563,7 @@ export function applyNewChatHostDocument(document: DraftDocument): void {
           workspace: document.workspace,
           draftId: document.draftId,
           hostRevision: document.revision,
+          ownerHostId: document.ownerHostId,
           lastTouchedAt: document.lastTouchedAt,
           revision: current.revision + 1,
           generation: current.generation,
@@ -510,6 +575,9 @@ export function applyNewChatHostDocument(document: DraftDocument): void {
 }
 
 export function applyNewChatHostDelete(draftId: string): void {
+  // Retired whether or not a local entry still holds the id: the fence exists
+  // for the documents already in flight, not for the row.
+  retireNewChatDraftId(draftId);
   const found = findNewChatByDraftId(draftId);
   if (found === null) return;
   useNewConversationModalStore.setState((state) => {

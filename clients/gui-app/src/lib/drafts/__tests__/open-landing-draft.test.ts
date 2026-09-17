@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { openLandingDraftFromHistory } from "@/lib/commands/actions/open-landing-draft-from-history";
+import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
 import { draftTabIntent } from "@/lib/tab-navigation/intents";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { tabSourceRefs } from "@/stores/tabs/source-refs";
@@ -23,7 +23,7 @@ function textContent(text: string): JsonContent {
   };
 }
 
-describe("openLandingDraftFromHistory", () => {
+describe("openLandingDraft", () => {
   beforeEach(() => {
     activateTabIntent.mockReset();
     window.localStorage.clear();
@@ -40,7 +40,7 @@ describe("openLandingDraftFromHistory", () => {
     expect(tabSourceRefs().some((ref) => ref.id === id)).toBe(false);
 
     const navigate = vi.fn() as UseNavigateResult<string>;
-    openLandingDraftFromHistory(navigate, id);
+    openLandingDraft(navigate, id);
 
     expect(useLandingDraftStore.getState().drafts[0]?.closed).toBe(false);
     expect(useLandingDraftStore.getState().drafts[0]?.id).toBe(id);

@@ -201,8 +201,8 @@ const testState = vi.hoisted(() => ({
   hostId: "host-test" as string | null,
 }));
 
-vi.mock("@/lib/commands/actions/open-landing-draft-from-history", () => ({
-  openLandingDraftFromHistory: (navigate: unknown, draftId: string): void => {
+vi.mock("@/lib/drafts/open-landing-draft", () => ({
+  openLandingDraft: (navigate: unknown, draftId: string): void => {
     testState.openLandingDraftFromHistory(navigate, draftId);
   },
 }));

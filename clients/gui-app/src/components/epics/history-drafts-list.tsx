@@ -13,7 +13,7 @@ import {
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useDraftRetract } from "@/hooks/drafts/use-draft-retract";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { openLandingDraftFromHistory } from "@/lib/commands/actions/open-landing-draft-from-history";
+import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
 import { deleteLandingDraftThroughHost } from "@/lib/drafts/draft-mirror-coordinator";
 import {
   listHistoryLandingDrafts,
@@ -48,7 +48,7 @@ export function HistoryDraftsList(props: {
   const openDraft = useCallback(
     (draftId: string) => {
       onBeforeOpen?.(draftId);
-      openLandingDraftFromHistory(navigate, draftId);
+      openLandingDraft(navigate, draftId);
     },
     [navigate, onBeforeOpen],
   );
