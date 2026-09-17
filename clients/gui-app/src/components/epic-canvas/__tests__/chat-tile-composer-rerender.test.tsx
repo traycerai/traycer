@@ -156,6 +156,7 @@ const TURN_IDLE: ChatLowerTurnState = {
   onStopTurn: () => null,
   steerCapable: false,
   steerProtocolSupported: true,
+  autoPermissionModeProtocolSupported: null,
   getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
 };
@@ -165,6 +166,7 @@ const TURN_RUNNING: ChatLowerTurnState = {
   onStopTurn: () => null,
   steerCapable: false,
   steerProtocolSupported: true,
+  autoPermissionModeProtocolSupported: null,
   getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
 };

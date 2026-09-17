@@ -1742,3 +1742,60 @@ describe("ChatStreamClient pre-1.7 browser payload neutralization", () => {
     }
   });
 });
+
+// Read off the registry rather than restated as a literal - the same lesson
+// `chat-subscribe-auto-mode-lines.test.ts` documents: the auto-mode minor has
+// been renumbered twice mid-PR, and `latestMinor` cannot be redirected by a
+// rename because nothing about it is a name.
+const CHAT_SUBSCRIBE_AUTO_MINOR =
+  hostStreamRpcRegistry["chat.subscribe"][1].latestMinor;
+
+describe("ChatStreamClient.autoPermissionModeProtocolSupported", () => {
+  it("answers true when this session negotiated the auto-mode minor", () => {
+    const { wsStreamClient } = stubClientAtVersion({
+      major: 1,
+      minor: CHAT_SUBSCRIBE_AUTO_MINOR,
+    });
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: recordingCallbacks().callbacks,
+    });
+
+    expect(client.autoPermissionModeProtocolSupported()).toBe(true);
+
+    client.close();
+  });
+
+  it("answers false when this session negotiated one minor below the auto-mode line", () => {
+    const { wsStreamClient } = stubClientAtVersion({
+      major: 1,
+      minor: CHAT_SUBSCRIBE_AUTO_MINOR - 1,
+    });
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: recordingCallbacks().callbacks,
+    });
+
+    expect(client.autoPermissionModeProtocolSupported()).toBe(false);
+
+    client.close();
+  });
+
+  it("answers false when this session has not negotiated yet", () => {
+    const { wsStreamClient } = stubClientAtVersion(null);
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: recordingCallbacks().callbacks,
+    });
+
+    expect(client.autoPermissionModeProtocolSupported()).toBe(false);
+
+    client.close();
+  });
+});

@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 5
             }
           },
           "required": [
@@ -196,11 +196,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                     },
                     "permissionMode": {
                       "type": "string",
-                      "enum": [
-                        "supervised",
-                        "auto_accept_edits",
-                        "full_access"
-                      ]
+                      "minLength": 1
                     },
                     "reasoningEffort": {
                       "anyOf": [
@@ -457,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 5
             }
           },
           "required": [
@@ -643,11 +639,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                     },
                     "permissionMode": {
                       "type": "string",
-                      "enum": [
-                        "supervised",
-                        "auto_accept_edits",
-                        "full_access"
-                      ]
+                      "minLength": 1
                     },
                     "reasoningEffort": {
                       "anyOf": [
@@ -1214,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 5
             }
           },
           "required": [
@@ -1289,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 4
+              "const": 5
             }
           },
           "required": [

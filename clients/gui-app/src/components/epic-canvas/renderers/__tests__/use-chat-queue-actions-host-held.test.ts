@@ -155,6 +155,10 @@ function baseInput(
     replaceDraftContent: () => undefined,
     clearDraftContent: () => undefined,
     currentComposerSettings: SETTINGS,
+    // The same tuple as the raw one on purpose: these cases ask where a queue
+    // action is ROUTED, never what permission mode it carries, and the clamp
+    // that makes the two diverge is asserted in `chat-tile.test.tsx`.
+    nextStepSettings: SETTINGS,
     currentEpicId: "epic-1",
     editingQueueItemId: null,
     activeEditingQueueItemId: null,

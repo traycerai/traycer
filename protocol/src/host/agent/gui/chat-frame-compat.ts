@@ -17,21 +17,40 @@
  *    `1.7` opened above it.
  *
  * 3. `projectChatServerFrameForVersion` - the host's outbound projection,
- *    including `projectChatActionAckForVersion` for the 1.11 refusal cause.
+ *    including `projectChatActionAckForVersion` for the 1.12 refusal cause.
  *
  * These are pure and dependency-free so the host and the OSS clients run the
  * same code rather than two drifting copies.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
+import { autoJudgeUnattendedDenialRowSource } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 
-/** Strip draft-image refusal causes before emitting to a pre-1.11 session. */
+/**
+ * The minor that added the typed draft-image refusal `cause` to a rejected
+ * `MISSING_ATTACHMENT_BYTES` acknowledgement.
+ *
+ * A SEPARATE cliff from {@link CHAT_SUBSCRIBE_AUTO_MODE_MINOR}, and they sit
+ * one apart, so naming this rather than leaving a bare `12` beside a named `13`
+ * is the whole point: the two ride different axes - a line can carry the cause
+ * without carrying `auto`, which is exactly what `1.12` is - and collapsing
+ * them would either strip the cause from a line that can read it or hand
+ * `auto` to one that cannot.
+ */
+const CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR = 12;
+
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   if (frame.kind !== "actionAck") return frame;
-  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 12) {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR
+  ) {
     return frame;
   }
   if (!("cause" in frame)) return frame;
@@ -63,6 +82,181 @@ function supportsV17(negotiated: SchemaVersion | null): boolean {
     negotiated.major === 1 &&
     negotiated.minor >= CHAT_SUBSCRIBE_V17_MINOR
   );
+}
+
+/**
+ * The minor whose client frames re-bound the permission mode to the live enum.
+ *
+ * `1.13` is the first line whose CLIENT may say `auto`: `1.0`-`1.12` name
+ * `permissionModeSchemaPreAuto` on every frame that carries the mode, so a host
+ * parsing one of those lines rejects the frame outright rather than ignoring an
+ * unknown value. That is the whole difference from the `1.7` cliff above, where
+ * the extra fields were strippable.
+ */
+const CHAT_SUBSCRIBE_AUTO_MODE_MINOR = 13;
+
+/**
+ * Typed against the live enum on purpose: a rename of the mode breaks this
+ * compile rather than leaving a string literal that silently matches nothing.
+ *
+ * ONE predicate, not a table, matching the host's own
+ * `minimumChatSubscribeMinorForPermissionMode` - the mode enum has grown once
+ * in its life, and a per-mode table would invite a row where a single question
+ * says the fact.
+ */
+const AUTO_PERMISSION_MODE: PermissionMode = "auto";
+
+/**
+ * Whether this negotiated line's client frames can carry `auto`.
+ *
+ * A null version - the handshake has not resolved - reads as NOT capable, the
+ * same safe direction `supportsV17` takes.
+ *
+ * The host has a twin of this predicate for the frames it SENDS
+ * (`chatSubscribeSupportsPermissionMode`), and the two must move together. This
+ * copy lives here for the reason the module header gives: the client→host half
+ * belongs to both peers, and a protocol-side predicate is what keeps the OSS
+ * clients and the host from drifting into two answers.
+ */
+export function supportsAutoPermissionMode(
+  negotiated: SchemaVersion | null,
+): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_AUTO_MODE_MINOR
+  );
+}
+
+/**
+ * The minor a line must have negotiated to DRAW this event's transcript row.
+ *
+ * Zero for all but one: `auto-judge-unattended-denial`, which `1.13` added to
+ * `row-projection.ts`. Every other row kind predates the split and every
+ * supported line can materialize it.
+ *
+ * ## Why a row needs a floor at all, when the event that backs it does not
+ *
+ * The row is not backed by a new event KIND. It is an ordinary
+ * `approval.denied` carrying auto-judge metadata, so every line decodes the
+ * event itself perfectly well. What an older peer lacks is the CODE: it bundles
+ * a `row-order.ts` that predates `autoJudgeUnattendedDenialRowSource`, so its
+ * own projection produces no row where the host's produced one.
+ *
+ * On the windowed line that is not cosmetic. Ordinals ARE the address space -
+ * the skeleton carries one entry per row and `loadRange` is addressed by index
+ * - so a peer that materializes one fewer row than the host counted cannot fill
+ * the id it was answered for. The skeleton entry is opaque (`rowId`,
+ * `createdAt`, `role`, sizes - no source kind), so nothing fails loudly; the row
+ * is simply never drawn, and the range that would have filled it is asked for
+ * again.
+ *
+ * ## Why a FLOOR rather than projecting the row out
+ *
+ * The decisive reason is that a projection cannot REACH the peer this is about.
+ * On the windowed line the client runs `projectTranscriptRows` itself - to map
+ * the records a range served back onto the skeleton row ids it was answered for
+ * (`transcript-window.ts`'s `assistantTurnKeysForServedRows` /
+ * `namedLiveEventIds`) - and the copy it runs is the one it shipped with.
+ * Making TODAY's module version-aware changes what a new client does; it
+ * changes nothing about a released one, whose projection is already missing the
+ * row. The only lever that reaches a peer running stale code is refusing it.
+ *
+ * Three more reasons point the same way:
+ *
+ * - `row-projection.ts` is deliberately ONE enumeration, shared by the live
+ *   host, the renderer and the PUBLISHER writing a head's index section. The
+ *   publisher has no negotiated version to be version-aware against, and "a
+ *   published copy and a live chat that disagreed about ordinals would be the
+ *   same chat rendering differently depending on how it was opened".
+ * - The row records that Traycer REFUSED something without asking anyone. An
+ *   old peer silently served a transcript with that row removed is being shown
+ *   a permission-relevant omission, which is the harm the compatibility rules
+ *   put above preservation.
+ * - The precedent one file over is already termination, not dropping: stateful
+ *   frames (`snapshot`, `queueChanged`, `eventAppended`) are NOT droppable, and
+ *   the host evicts a below-floor subscriber with a typed
+ *   `CHAT_HARNESS_REQUIRES_NEWER_CLIENT` instead. Only transient
+ *   harness-bearing events are projected away.
+ *
+ * ## How the host uses it
+ *
+ * `requiredChatSubscribeMinorForChat` already walks `chat.events` for the
+ * sender floor; this folds into that same loop with one `Math.max`, so history
+ * containing the row keeps the chat above the floor even after its
+ * `permissionMode` has been switched back - which is exactly the hole, since
+ * the mode floor reads `chat.settings` and a durable row outlives the setting
+ * that produced it.
+ *
+ * Lives here rather than beside the row source because the MINOR is a
+ * `chat.subscribe` fact and `persistence/chat-transcript` does not own one; it
+ * reads the row predicate rather than restating its condition, so the two
+ * cannot drift.
+ */
+export function minimumChatSubscribeMinorForTranscriptEvent(
+  event: ChatEvent,
+): number {
+  return autoJudgeUnattendedDenialRowSource(event) === null
+    ? 0
+    : CHAT_SUBSCRIBE_AUTO_MODE_MINOR;
+}
+
+/**
+ * Whether this line can draw every transcript row these events produce.
+ *
+ * The whole-history form of {@link minimumChatSubscribeMinorForTranscriptEvent},
+ * for a caller holding a version rather than composing a floor.
+ */
+export function supportsTranscriptRowsFor(
+  negotiated: SchemaVersion | null,
+  events: ReadonlyArray<ChatEvent>,
+): boolean {
+  const required = events.reduce(
+    (floor, event) =>
+      Math.max(floor, minimumChatSubscribeMinorForTranscriptEvent(event)),
+    0,
+  );
+  if (required === 0) return true;
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= required
+  );
+}
+
+/**
+ * Whether this frame would ask the host to run `auto`.
+ *
+ * By SHAPE rather than by a list of the six mode-bearing kinds. The list is
+ * already written down twice in `subscribe.ts` (the pre-auto options and their
+ * live re-binds), and a third copy here would be the one nobody updates: a
+ * seventh frame growing a `settings` tuple would leak through a kind list and
+ * cannot leak through this.
+ *
+ * `in` narrowing rather than an index into the union, because the union's
+ * members genuinely differ - `newSettings` is nullable where `settings` is not,
+ * and only two frames have either.
+ */
+function carriesAutoPermissionMode(frame: ChatSubscribeClientFrame): boolean {
+  if (
+    "permissionMode" in frame &&
+    frame.permissionMode === AUTO_PERMISSION_MODE
+  ) {
+    return true;
+  }
+  if (
+    "settings" in frame &&
+    frame.settings.permissionMode === AUTO_PERMISSION_MODE
+  ) {
+    return true;
+  }
+  if (
+    "newSettings" in frame &&
+    frame.newSettings?.permissionMode === AUTO_PERMISSION_MODE
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -98,20 +292,42 @@ export function supportsInterviewSettlementActions(
  *   refuses it instead of relying on an older host to discard an unknown
  *   action literal.
  *
- * ONE CLIFF, DELIBERATELY - and the thing to know before adding a `1.8`. This
- * is a single "does the peer know 1.7" test, not a chain of per-line strips,
- * because `1.7` is the only client-frame growth above the frozen `1.6`. The
- * moment a `1.8` adds another client-frame field, identity
- * for every minor `>= 7` becomes WRONG: a `1.7` peer would receive the `1.8`
- * field. At that point this must become a per-line projection (strip `1.8`
- * fields below 8, then `1.7` fields below 7), and
+ * TWO CLIFFS, and the second one is the case this comment used to only predict.
+ * It said that the moment a line above `1.7` grew another client-frame field,
+ * identity for every minor `>= 7` would become WRONG - and `1.13` is that line:
+ * it re-bound six frames to the live permission-mode enum, so a frame saying
+ * `auto` rode out unchanged onto `1.7`-`1.12` and the host rejected the user's
+ * send or settings update against its frozen pre-auto union.
+ *
+ * The `auto` cliff is a REFUSAL, not a strip, and that asymmetry is the point.
+ * The `1.7` fields are additions, so removing one leaves a frame the older line
+ * fully understands. The mode is a VALUE on a field both lines have, and its
+ * only downgrade target is `auto_accept_edits` - which the host refuses to
+ * project for its own frames, in the same words this borrows: a settings write
+ * replaces the WHOLE run-settings tuple, so a projected mode comes straight
+ * back as the user's own choice and silently ends `auto` on a chat they set to
+ * it. Refusal costs that user a failed action; projection costs them the mode,
+ * with nothing to see.
+ *
  * `supportsInterviewSettlementActions` stays what it is - the `1.7` predicate -
- * rather than being widened to mean "current".
+ * rather than being widened to mean "current", and a third growth above `1.13`
+ * needs its own test here for the same reason.
  */
 export function projectChatClientFrameForVersion(
   frame: ChatSubscribeClientFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
+  // BEFORE the `1.7` identity return, because this cliff is higher than that
+  // one: a `1.10` line takes the identity path and is exactly the line that
+  // cannot decode the value.
+  if (
+    !supportsAutoPermissionMode(negotiated) &&
+    carriesAutoPermissionMode(frame)
+  ) {
+    throw new Error(
+      'permissionMode "auto" requires chat.subscribe@1.13 or newer',
+    );
+  }
   if (supportsV17(negotiated)) return frame;
 
   switch (frame.kind) {

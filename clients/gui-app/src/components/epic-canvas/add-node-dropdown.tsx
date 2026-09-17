@@ -325,6 +325,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     hostClient: launchHostClient,
     hostId: memoryHostId,
     tuiOnly: true,
+    chatLineCarriesAutoMode: null,
   });
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;
@@ -430,6 +431,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             labelDisplay="responsive"
             store={toolbarStore}
             withServiceTier={false}
+            withReasoning
             tuiOnly
             lockedHarnessId={null}
             disabled={tuiAgentPending}
