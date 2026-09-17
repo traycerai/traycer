@@ -31,6 +31,7 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   },
 }));
 
+import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 
 describe("useProvidersSetEnabled native invalidation", () => {
@@ -92,12 +93,12 @@ describe("useProvidersSetEnabled native invalidation", () => {
 
     const options = captured.options;
     if (options === null) throw new Error("Expected mutation options.");
-    expect(options.invalidateMethods).toEqual([
-      "agent.gui.listHarnesses",
-      "agent.tui.listHarnesses",
-      "agent.selectionGuide.getGlobal",
-      "agent.selectionGuide.getGlobalOnboardingDraft",
-    ]);
+    // Everything the shared list names except the provider list itself,
+    // which onSuccess below refreshes for one host and one provider instead.
+    expect(options.invalidateMethods).toEqual(
+      PROVIDER_INVALIDATIONS.filter((method) => method !== "providers.list"),
+    );
+    expect(options.invalidateMethods).not.toContain("providers.list");
 
     const before = new Map(calls);
     await act(async () => {
