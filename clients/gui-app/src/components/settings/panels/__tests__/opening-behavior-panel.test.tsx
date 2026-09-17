@@ -101,19 +101,13 @@ describe("<OpeningBehaviorPanel /> tile placement", () => {
     expect(placement.conversation).toBe("split");
   });
 
-  it("floats the browser type picture-in-picture", () => {
-    render(<OpeningBehaviorPanel />);
-
-    choose("Browsers", "Picture in picture");
-
-    expect(useSettingsStore.getState().tilePlacement.browser).toBe("pip");
-  });
-
-  it("offers picture in picture nowhere else - the others have no PiP host", () => {
+  // Picture in picture is a browser-only placement now (Settings > Browser);
+  // the per-type rows here only offer "In this pane" / "In a new split".
+  it("offers no picture-in-picture option on any row here", () => {
     render(<OpeningBehaviorPanel />);
 
     fireEvent.keyDown(
-      screen.getByRole("combobox", { name: "Files, diffs & artifacts" }),
+      screen.getByRole("combobox", { name: "Open new tiles" }),
       { key: "ArrowDown" },
     );
 
@@ -144,47 +138,6 @@ describe("<OpeningBehaviorPanel /> tile placement", () => {
         .getByRole("combobox", { name: "Open new tiles" })
         .getAttribute("aria-describedby"),
     ).toBeNull();
-  });
-});
-
-describe("<OpeningBehaviorPanel /> agent-opened tabs", () => {
-  it("writes the surfacing mode", () => {
-    render(<OpeningBehaviorPanel />);
-
-    expect(useSettingsStore.getState().agentTabSurfacing).toBe("off");
-
-    choose("Agent-opened tabs", "Like any browser tile");
-
-    expect(useSettingsStore.getState().agentTabSurfacing).toBe("surface");
-  });
-
-  it("lives in a group of its own, not under Tile placement", () => {
-    render(<OpeningBehaviorPanel />);
-
-    const control = screen.getByRole("combobox", { name: "Agent-opened tabs" });
-    expect(
-      screen.getByTestId("settings-opening-agent-tabs").contains(control),
-    ).toBe(true);
-    expect(screen.getByTestId("settings-opening-tiles").contains(control)).toBe(
-      false,
-    );
-  });
-
-  it("stays put when the placement default hides the per-type rows", () => {
-    useSettingsStore.setState({
-      tilePlacement: {
-        default: "tab",
-        content: "tab",
-        conversation: "tab",
-        browser: "split",
-        sideChat: "split",
-      },
-    });
-    render(<OpeningBehaviorPanel />);
-
-    expect(
-      screen.getByRole("combobox", { name: "Agent-opened tabs" }),
-    ).not.toBeNull();
   });
 });
 

@@ -825,6 +825,7 @@ function ProvidersRailLayout({
                 badge: null,
                 description: null,
                 trailing: null,
+                disabledReason: null,
                 onSelect: onSelectProvider,
               }))}
             />
