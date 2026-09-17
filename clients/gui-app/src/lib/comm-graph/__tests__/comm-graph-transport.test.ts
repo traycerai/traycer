@@ -8,7 +8,6 @@ import {
   commGraphEventAtFraction,
   commGraphPlaybackPace,
   commGraphPlayheadFraction,
-  commGraphPlaybackPace as pace,
   commGraphTrackFraction,
   commGraphTransportMarkers,
   commGraphTransportTrack,
@@ -88,12 +87,24 @@ describe("commGraphTransportTrack", () => {
 
     // The hour costs one step; the four 100ms gaps cost 100ms each.
     expect(track.totalMs).toBe(BASE_STEP_MS + 400);
-    // And the idle is now a minority of the track rather than all of it.
-    const idleShare = BASE_STEP_MS / track.totalMs;
-    expect(idleShare).toBeLessThan(0.7);
-    // The wall-clock axis this replaced would have given it essentially
-    // everything - stated as a number so the comparison is not rhetorical.
-    expect(3_600_000 / 3_600_200).toBeGreaterThan(0.999);
+
+    // THE IDLE STOPS SCALING, which is the property - not "the idle is small".
+    // It still takes 64% of this track, because six rows either side of an
+    // hour genuinely IS mostly a wait; what it no longer does is grow. Make
+    // the hour a week and the track does not move by a millisecond, where the
+    // wall-clock axis would have handed the wait everything there was.
+    const week = [...burstThenIdle];
+    for (let i = 3; i < week.length; i += 1) {
+      week[i] = event({
+        ...week[i],
+        timestamp: week[i].timestamp + 604_800_000,
+      });
+    }
+
+    expect(trackFor(week).totalMs).toBe(track.totalMs);
+    // Stated as a number so the comparison is not rhetorical: under the axis
+    // this replaced, that week would have been all but the whole bar.
+    expect(604_800_000 / 604_800_200).toBeGreaterThan(0.999);
   });
 
   it("renders a SUB-STEP gap proportionally, so a burst still looks like a burst", () => {
@@ -274,13 +285,22 @@ describe("commGraphEventAtFraction", () => {
 
 describe("commGraphPlaybackPace", () => {
   it("shortens the tick and advances one row while there is room to", () => {
-    expect(pace(1)).toEqual({ tickMs: BASE_STEP_MS, rowsPerTick: 1 });
-    expect(pace(0.5)).toEqual({ tickMs: BASE_STEP_MS * 2, rowsPerTick: 1 });
-    expect(pace(4)).toEqual({ tickMs: BASE_STEP_MS / 4, rowsPerTick: 1 });
+    expect(commGraphPlaybackPace(1)).toEqual({
+      tickMs: BASE_STEP_MS,
+      rowsPerTick: 1,
+    });
+    expect(commGraphPlaybackPace(0.5)).toEqual({
+      tickMs: BASE_STEP_MS * 2,
+      rowsPerTick: 1,
+    });
+    expect(commGraphPlaybackPace(4)).toEqual({
+      tickMs: BASE_STEP_MS / 4,
+      rowsPerTick: 1,
+    });
   });
 
   it("buys ROWS rather than a shorter tick past the renderer's floor", () => {
-    // The point of the two new rungs: 16x has to actually be four times 4x,
+    // The point of the three new rungs: 16x has to actually be four times 4x,
     // and a 44ms timer would not have delivered that.
     const fast = commGraphPlaybackPace(16);
     expect(fast.rowsPerTick).toBeGreaterThan(1);

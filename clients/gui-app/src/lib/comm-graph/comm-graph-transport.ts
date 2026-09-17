@@ -25,14 +25,23 @@
  * each, whatever the real interval was. So a two-hour idle costs exactly one
  * step to cross and a two-hundred-millisecond reply costs the same step. An
  * axis that gave the idle half the bar was measuring something the player does
- * not spend. Each gap now contributes `min(gap, BASE_STEP_MS)`, which makes the
- * track a picture of the replay: the playhead crosses it at a near-constant
- * rate, and distance along it is proportional to how long you will wait.
+ * not spend. Each gap now contributes `min(gap, BASE_STEP_MS)`: one step is
+ * the MOST a gap can be worth, however long the epic sat still.
  *
- * Bursts stay dense, which is the point of `commGraphTransportMarkers`'s
- * refusal to bucket - sub-step gaps are still rendered PROPORTIONALLY, so four
- * messages in the same second still pack tighter than four a second apart. It
- * is only the part of a gap that playback refuses to replay that gets trimmed.
+ * WHICH IS A CEILING, NOT A CONVERSION, and the difference is worth being
+ * exact about. Every row costs one tick to replay, while the track gives it
+ * `min(gap, BASE_STEP_MS)` - so a stretch of track never takes LONGER to cross
+ * than it looks like it will, and for anything idler than a step the two are
+ * equal. Below a step the track deliberately understates: four messages in the
+ * same second cost four ticks to replay and are drawn almost on top of each
+ * other, because that is what makes them four readable ticks rather than one.
+ *
+ * That understatement is the point of `commGraphTransportMarkers`'s refusal to
+ * bucket - sub-step gaps are rendered PROPORTIONALLY, so four messages in a
+ * second still pack tighter than four a second apart, and a pointer can still
+ * land on one of them. What is TRIMMED is only the part of a gap that playback
+ * refuses to replay, which is the part that was smearing the bursts into
+ * unreadable smudges to begin with.
  *
  * A degenerate track (one row, or several sharing a millisecond) collapses to a
  * single point and every marker sits at the right edge - see

@@ -202,8 +202,9 @@ describe("layoutNameTags against lettering it did not draw", () => {
     );
 
     expect(placed).toHaveLength(1);
-    // Below the plate, not through it. The anchor at 50 put the tag's box at
-    // 40..50, entirely inside the plate's 40..54.
+    // Below the plate, not through it. The anchor at 50 put the tag's painted
+    // box at 39..51 - halo included - which is straight through the plate's
+    // 40..54.
     expect(placed[0].baselineY).toBeGreaterThanOrEqual(plate.bottom);
   });
 

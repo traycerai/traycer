@@ -15,6 +15,20 @@
  * COUNTED THROUGH `markdownToPlainText`, which is the expensive half of a
  * marker's label and is reached only from there in this component, so its call
  * count is a direct reading of work the bar did rather than a proxy for it.
+ *
+ * THE OUTCOME, NOT EACH MECHANISM. Two things stop the re-parsing - a `memo`
+ * boundary on the marker layer and a `WeakMap` keyed by the row - and either
+ * alone would satisfy the count below. That is on purpose: what a reader is
+ * owed is that a step costs nothing, and pinning the two separately would pin
+ * an implementation rather than a bill. They are not redundant in the long
+ * run, though, and the split is worth knowing - the memo is what keeps the
+ * cache from being consulted N times a tick, and the `WeakMap` is what
+ * survives the layer remounting.
+ *
+ * `markerTitles` is module-scoped and outlives `mockClear`, so the first case
+ * here depends on running before its sibling. That is the safe direction - a
+ * reorder makes `afterFirstPaint >= ROWS` fail loudly rather than quietly
+ * measure nothing - but it is worth knowing before moving either.
  */
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,5 +179,39 @@ describe("the scrubber's own time readout", () => {
     });
 
     expect(screen.queryByTestId("comm-graph-transport-cursor-time")).toBeNull();
+  });
+
+  it("holds the same footprint whether or not there is a cursor", () => {
+    // WHAT THE TRACK IS STANDING NEXT TO. The reading sits in the bar's flex
+    // row beside a `flex-1 min-w-0` track, so one that mounts on the first
+    // seek takes its width out of the track - and the first seek is a
+    // pointer-down on that track, which would then re-lay-out under the
+    // finger that started it and resolve the rest of the drag against a rect
+    // that had moved.
+    //
+    // PINNED AS THE MECHANISM, because jsdom has no layout to measure: the
+    // element that occupies the row is present in both states and reads the
+    // same in both, so its width cannot be a function of the cursor. A
+    // component that went back to rendering `null` while live fails the
+    // first half; one that reserved the CURSOR's own time fails the second.
+    render(<CommGraphTransportBar epicId={EPIC} events={EVENTS} />);
+    const reserved = (): HTMLElement =>
+      screen.getByTestId("comm-graph-transport-cursor-time-reserve");
+
+    const live = reserved().textContent;
+    expect(live).not.toBe("");
+
+    act(() => {
+      useCommGraphTimelineStore
+        .getState()
+        .setCursor(EPIC, commGraphCursorForEvent(EVENTS[3]));
+    });
+
+    expect(reserved().textContent).toBe(live);
+    // And it is the NEWEST row it holds room for, not the one the cursor
+    // happens to name - that is what makes it independent of scrubbing.
+    expect(live).toBe(
+      new Date(EVENTS[EVENTS.length - 1].timestamp).toLocaleTimeString(),
+    );
   });
 });

@@ -186,6 +186,16 @@ function shifted(box: OfficeLabelBox, dy: number): OfficeLabelBox {
  * hang off a label (a subtitle line, a ward's beacon) from the returned box
  * rather than from the one they offered, because those two differ by exactly
  * the displacement this applied.
+ *
+ * A LINEAR SCAN, AND DELIBERATELY SO, because what bounds it is the VIEWPORT
+ * rather than the epic: the frame this places from is already culled to what
+ * is on screen, so the space holds a few hundred boxes on the densest real
+ * frame (294 readings, towers at 1.6x, over the census fixture) and not one
+ * per agent in the log. Measured at that size - 300 labels, three attempts
+ * each, placed into one space - a whole frame's placement costs 86us, which is
+ * a quarter of one percent of a 33ms frame. An index would cost more to
+ * maintain per frame than the scan it replaced; revisit only if a view ever
+ * letters something the camera does not bound.
  */
 export function placeOfficeLabel(
   space: OfficeLabelSpace,

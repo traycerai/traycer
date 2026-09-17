@@ -160,7 +160,7 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
         onSeekToFraction={seekToFraction}
       />
 
-      <CommGraphCursorTime transport={transport} />
+      <CommGraphCursorTime transport={transport} events={events} />
 
       {/*
         WITH NOTHING CAPTURED THERE IS NO LIVE BADGE either: "Live" next to an
@@ -388,22 +388,55 @@ function CommGraphEmptyTrack(props: { readonly following: boolean }) {
  * NOTHING WHILE LIVE - not the current time, which would be a clock, and not a
  * dash holding the space. Live has no cursor to report, and the Live badge
  * beside it says so.
+ *
+ * BUT IT HOLDS ITS FOOTPRINT WHILE LIVE, which is a different question and one
+ * the chip never had to answer. This sits in the bar's flex row beside a track
+ * that is `flex-1 min-w-0`, so a readout that mounts on the first seek TAKES
+ * ITS WIDTH OUT OF THE TRACK - and the first seek is a pointer-down ON that
+ * track. The playhead would land some seventy pixels left of the finger that
+ * placed it, every marker would slide with it, and the next `pointermove`
+ * would measure a narrower rect and resolve the same screen position to a
+ * different row. So the width is reserved by an invisible copy of the NEWEST
+ * row's time and the reading is laid over it: the footprint is a function of
+ * the log, never of the cursor, and nothing moves when one appears.
  */
 function CommGraphCursorTime(props: {
   readonly transport: CommGraphTransport;
+  readonly events: ReadonlyArray<CommGraphEvent>;
 }) {
-  const cursor = props.transport.cursor;
-  if (cursor === null) return null;
+  const { events, transport } = props;
+  // Nothing captured: no reading to hold room for, and the Live badge beside
+  // this is hidden for the same reason.
+  if (events.length === 0) return null;
+  const cursor = transport.cursor;
   return (
     <span
-      data-testid="comm-graph-transport-cursor-time"
       // `shrink-0` against a track that is `flex-1 min-w-0`: the readout is a
       // fixed handful of digits and the track is what should give up width.
-      className="shrink-0 text-ui-xs text-muted-foreground tabular-nums"
+      className="relative shrink-0 text-ui-xs text-muted-foreground tabular-nums"
     >
-      {new Date(cursor.timestamp).toLocaleTimeString()}
+      <span
+        aria-hidden
+        data-testid="comm-graph-transport-cursor-time-reserve"
+        className="invisible"
+      >
+        {cursorTimeText(events[events.length - 1].timestamp)}
+      </span>
+      {cursor === null ? null : (
+        <span
+          data-testid="comm-graph-transport-cursor-time"
+          className="absolute inset-0 whitespace-nowrap"
+        >
+          {cursorTimeText(cursor.timestamp)}
+        </span>
+      )}
     </span>
   );
+}
+
+/** One spelling of a cursor's instant, so the reading and its reserved box agree. */
+function cursorTimeText(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString();
 }
 
 /**

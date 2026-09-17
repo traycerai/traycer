@@ -312,7 +312,14 @@ const SIGN_PLATE_HEIGHT_PX = OFFICE_SIGN_FONT_PX + OFFICE_SIGN_PADDING_Y * 2;
  * row it was already lifted clear of - the air is the only direction with
  * nothing in it. A plate's height rather than a line of text, so two stacked
  * plates sit flush the way a plate and its claim line do, and two attempts
- * because a third would put a room's name a plate and a half off the room.
+ * because a third would float a room's name three plates clear of the room,
+ * by which point it names the air rather than anything under it.
+ *
+ * A LIFTED PLATE USUALLY LOSES ITS CLAIM LINE, and that is the trade rather
+ * than an oversight: the claim hangs FIXED one plate below its own, which is
+ * precisely the box that forced the lift, so it finds that box taken and is
+ * dropped. A room keeps its name and gives up whose room it is - the right
+ * way round, since the name is the thing a reader is scanning for.
  */
 const FLOATING_SIGN_LIFT = { dy: -SIGN_PLATE_HEIGHT_PX, max: 2 } as const;
 /** The same escape for a storey's name, in the face that name is set in. */
@@ -4902,13 +4909,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           viewPicker={viewPicker}
           modeToggle={modeToggle}
         />
-        {/*
-          A detached cursor has to be VISIBLE on the floor. Scrubbing back
-          changes little here - the same people sit at the same desks, only
-          their screens go dark and later arrivals vanish - so without a sign
-          the past reads as a live floor that stopped moving. The chip names
-          the moment being shown; the transport bar below owns moving it.
-        */}
         {hoverCard === null || hoveredAgent === null ? null : (
           <OfficeAgentHover
             epicId={epicId}
