@@ -576,31 +576,62 @@ export function useFallbackModelCatalogues(
             .split(" ")
             .filter((id) => guiHarnessIdSchema.safeParse(id).success);
 
+    // A failed harness read settles the AVAILABILITY wait rather than blocking
+    // it - the same trade the catalogue flag makes, for the same reason:
+    // waiting on a read that is never coming would swap a clumsy label for
+    // silence about a switch that happened.
+    //
+    // Read OUT HERE, not inside the no-data branch, and that placement is the
+    // whole point. TanStack's error reducer SPREADS existing state and never
+    // clears `data` ("flag existing data as invalidated if we get a background
+    // error"), so a refetch failure after one success leaves `isError` true
+    // WITH the last good rows still retained. An `isError` test reachable only
+    // when `available === undefined` therefore never fires in that case, and a
+    // cached `availabilityPending` row was re-added on every render for as long
+    // as the refetch kept failing. `settledFor` would never come back true, and
+    // the manual-switch announcer - which CONSUMES its event - stays silent
+    // about a switch that already happened. Indefinite silence is the worse
+    // half of this trade, not the safer one.
+    const harnessReadFailed = harnessesQuery.isError;
+
     if (available === undefined) {
-      // A failed read is never coming, so it SETTLES rather than blocking - the
-      // same trade the catalogue flag makes, for the same reason: waiting on it
-      // would swap a clumsy label for silence about a switch that happened.
-      if (!harnessesQuery.isError) for (const id of wanted) pendingIds.add(id);
+      if (!harnessReadFailed) for (const id of wanted) pendingIds.add(id);
       return pendingIds;
     }
 
-    const rowById = new Map(available.map((row) => [String(row.id), row]));
-    for (const id of wanted) {
-      const row = rowById.get(id);
-      // Pending is not an unavailable verdict. A row still deciding gets left
-      // out of `harnessIds` by the `available` filter above, so without this it
-      // would read settled while its answer - and the catalogue fetch that
-      // follows it - are both still outstanding. `lastSettledAvailable ===
-      // false` is a row that has already ANSWERED unavailable once and is only
-      // re-checking; there is no catalogue coming for it either way.
-      if (
-        row !== undefined &&
-        row.availabilityPending &&
-        !row.available &&
-        row.error === null &&
-        row.lastSettledAvailable !== false
-      ) {
-        pendingIds.add(id);
+    // Model reads below are still honoured on a harness-read error: this gate
+    // is only about waiting for an AVAILABILITY verdict that is not coming.
+    if (!harnessReadFailed) {
+      const rowById = new Map(available.map((row) => [String(row.id), row]));
+      for (const id of wanted) {
+        const row = rowById.get(id);
+        // Pending is not an unavailable verdict. A row still deciding gets left
+        // out of `harnessIds` by the `available` filter above, so without this
+        // it would read settled while its answer - and the catalogue fetch that
+        // follows it - are both still outstanding.
+        //
+        // `row.enabled`, and NOT `lastSettledAvailable !== false`, which this
+        // used to test. That field answers "what did we last conclude", and the
+        // question here is "is an answer still coming" - a re-probe of a row
+        // that previously answered unavailable can succeed, and settling on its
+        // stale negative consumed the announcement with a raw slug that no
+        // later resolution could correct. The accumulator's own negative guard
+        // exists to stop stale MODELS being resurrected mid-probe, which is a
+        // different question from whether a one-shot sentence should wait.
+        //
+        // The `enabled` gate has to be explicit because dropping the old field
+        // would otherwise let disabled rows through: the accumulator forces
+        // `lastSettledAvailable` false whenever `enabled` is false, so that
+        // test had been doing this filtering as a side effect.
+        if (
+          row !== undefined &&
+          row.enabled &&
+          row.availabilityPending &&
+          !row.available &&
+          row.error === null
+        ) {
+          pendingIds.add(id);
+        }
       }
     }
 

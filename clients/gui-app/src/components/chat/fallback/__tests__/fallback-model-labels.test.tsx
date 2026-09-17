@@ -62,6 +62,14 @@ const hostQueriesCalls = vi.hoisted(() => ({
   }>,
 }));
 
+/**
+ * Whether the model reads report as ANSWERED. Default `true`, because most
+ * cases here are about the availability half and want the model half out of
+ * the way - but it has to be controllable, or the double can only ever prove
+ * that a settled catalogue settles, never that a pending one waits.
+ */
+const modelsSettled = vi.hoisted(() => ({ value: true }));
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: (
     _client: unknown,
@@ -99,13 +107,13 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
       data: {
         models: modelsByHarness.value.get(request.params.harnessId) ?? [],
       },
-      isPending: false,
+      isPending: !modelsSettled.value,
       isError: false,
       // Production's `combine` treats `isSuccess || isError || !enabled` as
       // settled. Without this the double would report every available
       // harness's catalogue as still in flight, and `settledFor` tests
       // below would be pinning the mock rather than the memo.
-      isSuccess: true,
+      isSuccess: modelsSettled.value,
     }));
     return args.combine === undefined ? results : args.combine(results);
   },
@@ -162,6 +170,7 @@ describe("useFallbackModelLabels", () => {
   beforeEach(() => {
     harnessesQueryState.isPending = false;
     harnessesQueryState.isError = false;
+    modelsSettled.value = true;
     harnessesData.value = {
       harnesses: [
         settledRow("claude", true, SETTLED_TRUE),
@@ -375,8 +384,12 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     );
     expect(settledUnavailable.current.settledFor("claude")).toBe(true);
 
-    // A row that already answered unavailable and is only re-checking:
-    // there is no catalogue coming for it either way.
+    // A row that previously answered unavailable and is being RE-PROBED still
+    // has an answer coming, so it must wait. This assertion used to read
+    // `true`, on the theory that a prior negative verdict meant no catalogue
+    // was coming - but a probe can succeed, and settling here consumed the
+    // manual-switch announcement with a raw slug that no later resolution
+    // could correct, because that path advances a sequence counter.
     harnessesData.value = {
       harnesses: [
         settledRow("claude", false, {
@@ -387,9 +400,56 @@ describe("useFallbackModelCatalogues.settledFor", () => {
         }),
       ],
     };
-    const { result: rechecking } = renderHook(() =>
+    const { result: reprobing } = renderHook(() =>
       useFallbackModelCatalogues(null, ["claude"], true),
     );
-    expect(rechecking.current.settledFor("claude")).toBe(true);
+    expect(reprobing.current.settledFor("claude")).toBe(false);
+  });
+
+  it("settles a pending row once the harness read itself has errored, even though TanStack retains the last good rows", () => {
+    // The state the previous version could not see: `listHarnesses` succeeded
+    // once, so `data` is populated, and a later refetch failed. The error
+    // reducer spreads existing state rather than clearing `data`, so `isError`
+    // and a full row set are true at the same time - and an `isError` test
+    // placed inside the no-data branch never runs.
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", false, {
+          enabled: true,
+          availabilityPending: true,
+          error: null,
+          lastSettledAvailable: null,
+        }),
+      ],
+    };
+    harnessesQueryState.isError = true;
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+
+    // Falsification: move the `isError` read back inside the
+    // `available === undefined` branch and this goes red - the cached pending
+    // row is re-added on every render, `settledFor` never returns true, and
+    // the manual-switch announcer stays silent about a switch that happened
+    // for as long as the refetch keeps failing.
+    expect(result.current.settledFor("claude")).toBe(true);
+  });
+
+  it("still waits on a pending MODEL read when the harness read has errored - the error only releases the availability wait", () => {
+    // `claude` is available, so it reaches `requests` and the model read
+    // governs it. A harness-read error must not short-circuit that: the
+    // catalogue answer is a separate read and is genuinely still in flight.
+    harnessesData.value = {
+      harnesses: [settledRow("claude", true, SETTLED_TRUE)],
+    };
+    harnessesQueryState.isError = true;
+    modelsSettled.value = false;
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+
+    expect(result.current.settledFor("claude")).toBe(false);
   });
 });
