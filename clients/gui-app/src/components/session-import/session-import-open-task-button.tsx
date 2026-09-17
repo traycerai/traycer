@@ -128,9 +128,10 @@ export function SessionImportOpenTaskButton(props: {
       >
         {openTask.isPending ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
             variant={undefined}
+            tone="muted"
           />
         ) : (
           <ExternalLink aria-hidden className="size-3.5" />

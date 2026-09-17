@@ -116,6 +116,8 @@ function showWorktreeDeleteProgressToast(
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       duration: Infinity,
+      // Sonner merges updates by id; clear the preceding progress spinner.
+      icon: undefined,
       onDismiss: undefined,
     },
     WORKTREE_DELETE_REPORT_CONTEXT,

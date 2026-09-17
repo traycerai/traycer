@@ -63,6 +63,9 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   errorMessage: null,
   retry: () => undefined,
   openTab: () => Promise.reject(new Error("not used")),
+  prepareOpenTab: () => {
+    throw new Error("not used");
+  },
   closeTab: () => Promise.resolve(),
   attachTab: () => Promise.reject(new Error("not used")),
   moveTab: () => Promise.reject(new Error("not used")),
@@ -559,6 +562,7 @@ function createChatHarness(): ChatHarness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,

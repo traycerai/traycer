@@ -429,6 +429,7 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -474,6 +475,7 @@ function createProtocolChainHarness(
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
+        draftBlobBridgeSupported: () => client.draftBlobBridgeSupported(),
         // Delegated rather than stubbed: this harness drives a REAL
         // `ChatStreamClient` over a mock socket, so the reads have to reach it
         // for a test to observe what was put on the wire.
@@ -1163,6 +1165,7 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
           requestTranscriptRange: () => undefined,
           requestResnapshot: () => undefined,
           close: () => {
@@ -1222,6 +1225,7 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
           requestTranscriptRange: () => undefined,
           requestResnapshot: () => undefined,
           close: () => undefined,
@@ -1410,6 +1414,63 @@ describe("createChatSessionStore", () => {
     ).toBe("after_safe_point");
 
     harness.handle.dispose();
+  });
+
+  it("keeps draftBlobBridgeSupported false on a pre-1.12 session and every non-open status", () => {
+    // `1.10` is the ADJACENT line - the fallback minor, which says nothing
+    // about draft blobs. A harness at `1.9` would pass with the threshold left
+    // one minor low.
+    const harness = createProtocolChainHarness({ major: 1, minor: 10 });
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
+    expect(harness.chatStreamClient.draftBlobBridgeSupported()).toBe(false);
+
+    harness.session.emitStatus("open", null);
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
+    harness.session.emitStatus("reconnecting", null);
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
+    harness.session.emitStatus("closed", { kind: "caller" });
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
+
+    harness.handle.dispose();
+  });
+
+  it("projects draftBlobBridgeSupported true only when this session is open at 1.12", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 12 });
+    expect(harness.chatStreamClient.draftBlobBridgeSupported()).toBe(true);
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
+
+    harness.session.emitStatus("open", null);
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(true);
+
+    harness.session.emitStatus("reconnecting", null);
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
+
+    harness.session.emitStatus("open", null);
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(true);
+
+    harness.session.emitStatus("closed", { kind: "caller" });
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
+
+    harness.session.emitStatus("open", null);
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(true);
+    harness.handle.dispose();
+    expect(harness.handle.store.getState().draftBlobBridgeSupported).toBe(
+      false,
+    );
   });
 
   it("dedupes an exact interview delivery retry and reconciles newer generations", () => {
@@ -11996,6 +12057,7 @@ function createCoalesceHarness(): CoalesceHarness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -12395,6 +12457,7 @@ describe("surface visibility rollup", () => {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -12859,6 +12922,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
           requestTranscriptRange: () => undefined,
           requestResnapshot: () => undefined,
           close: () => undefined,

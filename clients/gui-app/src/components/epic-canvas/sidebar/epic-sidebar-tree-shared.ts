@@ -3,6 +3,7 @@
  * Extracted from the original monolithic epic-sidebar.tsx to eliminate duplication.
  */
 
+import type { CSSProperties } from "react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -77,7 +78,7 @@ export const PANEL_HEADER_ACTION_REVEAL_CLASS =
  * `disabled:opacity-50` is a `:disabled` pseudo-class (specificity 0,2,0) and
  * outweighs the plain `opacity-0` rest rule (0,1,0), which would otherwise pin
  * a *disabled* control visible at 50% even when the row is not hovered.
- * `disabled:opacity-0` restores hidden-at-rest (tailwind-merge keeps it over
+ * `disabled:opacity-0` restores hidden-at-rest (`cn` keeps it over
  * the base rule), and `disabled:group-hover/tree-item:opacity-50` keeps the
  * control dimmed once the row reveals it, signalling it is non-interactive.
  *
@@ -90,9 +91,9 @@ export function rowAddControlRevealClass(addChildIsPending: boolean): string {
 }
 
 export const STATUS_DOT_CLASSES: Record<number, string> = {
-  0: "bg-slate-400",
-  1: "bg-amber-500",
-  2: "bg-emerald-500",
+  0: "bg-muted-foreground",
+  1: "bg-warning",
+  2: "bg-success",
 };
 
 export const STATUS_LABELS: Record<number, string> = {
@@ -137,16 +138,27 @@ export function anyMutationPending(values: ReadonlyArray<boolean>): boolean {
  */
 export function useNodeIconDisplay(artifactType: EpicNodeKind): {
   readonly className: string;
-  readonly style: { color: string | undefined } | undefined;
+  readonly style: CSSProperties | undefined;
 } {
   const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
   const color = useSettingsStore((s) => s.artifactIconColors[artifactType]);
   return {
     className: cn(
       "size-3.5 shrink-0",
+      // The tint travels as a custom property rather than as `color`, the same
+      // way the six call sites that resolve this setting inline do (the
+      // add-node dropdown, the node tab icon, the artifact child index, the
+      // view menu, the colour picker, the file icons). Two idioms for one
+      // concept is how a setting ends up half-applied; a literal colour in
+      // `--swatch` also still fails `no-inline-styles`, where a literal in
+      // `color` would not.
+      colorMode === "byType" && "text-[var(--swatch)]",
       colorMode === "none" && "text-muted-foreground/70",
     ),
-    style: colorMode === "byType" ? { color } : undefined,
+    style:
+      colorMode === "byType"
+        ? ({ "--swatch": color } as CSSProperties)
+        : undefined,
   };
 }
 

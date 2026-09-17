@@ -250,11 +250,12 @@ export function ShellProgramCombobox(props: {
         </button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="end"
         container={dialogContainer ?? undefined}
         collisionBoundary={dialogContainer ?? undefined}
         collisionPadding={8}
-        className="w-[min(88vw,26rem)] p-0"
+        className="w-[min(88vw,26rem)]"
       >
         <div
           role="listbox"

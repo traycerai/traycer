@@ -4,11 +4,13 @@ import type { PrQuoteTarget } from "@/lib/pr/pr-quote";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
@@ -46,56 +48,55 @@ export function PrQuoteTargetPicker(props: {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        data-testid="pr-quote-target-trigger"
-        className={cn(
-          "flex min-w-0 items-center gap-1.5 rounded-md border border-border/70 text-ui-xs",
-          "transition-colors hover:bg-accent/40 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-          props.variant === "card" ? "w-full px-2 py-1.5" : "px-1.5 py-0.5",
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate text-left text-foreground">
-          {props.target?.title ?? "Choose a chat"}
-        </span>
-        <ChevronDown
-          className="size-3 shrink-0 text-muted-foreground"
-          aria-hidden
-        />
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          data-testid="pr-quote-target-trigger"
+          className={cn("min-w-0", props.variant === "card" && "w-full")}
+        >
+          <span className="min-w-0 flex-1 truncate text-left text-foreground">
+            {props.target?.title ?? "Choose a chat"}
+          </span>
+          <ChevronDown
+            className="size-3 shrink-0 text-muted-foreground"
+            aria-hidden
+          />
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         className="w-[min(90vw,17rem)]"
         data-testid="pr-quote-target-menu"
       >
-        {chats.length > 0 ? (
-          <DropdownMenuLabel className="text-ui-xs text-muted-foreground">
-            Chats in this epic
-          </DropdownMenuLabel>
-        ) : null}
-        {chats.map((entry) => (
-          <PrQuoteTargetItem
-            key={entry.id}
-            entry={entry}
-            selected={entry.id === props.target?.id}
-            onSelect={props.onSelectTarget}
-          />
-        ))}
-        {agents.length > 0 ? (
-          <>
-            {chats.length > 0 ? <DropdownMenuSeparator /> : null}
-            <DropdownMenuLabel className="text-ui-xs text-muted-foreground">
-              Terminal agents
-            </DropdownMenuLabel>
-          </>
-        ) : null}
-        {agents.map((entry) => (
-          <PrQuoteTargetItem
-            key={entry.id}
-            entry={entry}
-            selected={entry.id === props.target?.id}
-            onSelect={props.onSelectTarget}
-          />
-        ))}
+        {/* A radio GROUP, not a list of items: exactly one destination is the
+            current one, and the check indicator plus the checked tint are the
+            primitive's way of saying so. The hand-drawn `bg-accent/50` this
+            replaces was also the fill AGENTS.md rules out inside a popover. */}
+        <DropdownMenuRadioGroup
+          value={props.target?.id ?? ""}
+          onValueChange={(id) => {
+            const picked = props.targets.find((entry) => entry.id === id);
+            if (picked !== undefined) props.onSelectTarget(picked);
+          }}
+        >
+          {chats.length > 0 ? (
+            <DropdownMenuLabel>Chats in this epic</DropdownMenuLabel>
+          ) : null}
+          {chats.map((entry) => (
+            <PrQuoteTargetItem key={entry.id} entry={entry} />
+          ))}
+          {agents.length > 0 ? (
+            <>
+              {chats.length > 0 ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuLabel>Terminal agents</DropdownMenuLabel>
+            </>
+          ) : null}
+          {agents.map((entry) => (
+            <PrQuoteTargetItem key={entry.id} entry={entry} />
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -103,23 +104,19 @@ export function PrQuoteTargetPicker(props: {
 
 function PrQuoteTargetItem(props: {
   readonly entry: PrQuoteTarget;
-  readonly selected: boolean;
-  readonly onSelect: (target: PrQuoteTarget) => void;
 }): ReactNode {
   const relative = useRelativeTimestamp(props.entry.updatedAt);
   const Icon = props.entry.kind === "chat" ? MessagesSquare : Terminal;
   return (
-    <DropdownMenuItem
+    <DropdownMenuRadioItem
       data-testid="pr-quote-target-item"
-      data-selected={props.selected ? "true" : "false"}
-      onSelect={() => props.onSelect(props.entry)}
-      className={cn(props.selected && "bg-accent/50")}
+      value={props.entry.id}
     >
       <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{props.entry.title}</span>
       <span className="shrink-0 text-ui-xs text-muted-foreground/70">
         {relative}
       </span>
-    </DropdownMenuItem>
+    </DropdownMenuRadioItem>
   );
 }

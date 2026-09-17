@@ -108,7 +108,7 @@ function ImageActionButton(props: {
       >
         {props.pending ? (
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId="image-action-spinner"
             variant={undefined}
           />

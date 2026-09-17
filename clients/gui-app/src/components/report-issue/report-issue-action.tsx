@@ -37,6 +37,16 @@ interface ReportIssueActionProps {
     | ReportIssueDraftContext
     | (() => ReportIssueDraftContext);
   readonly presentation: "text" | "icon" | "link";
+  /**
+   * The quiet Button variant this action wears. `muted` is right everywhere
+   * the action sits in ordinary chrome; inside a warning or error banner the
+   * glyph belongs to the banner's role, so those callers pass the matching
+   * status variant instead of tinting the button from outside.
+   *
+   * `link` presentation ignores it: that one renders inside a sentence and
+   * takes the colour of the text around it.
+   */
+  readonly variant?: "muted" | "warning-ghost" | "destructive-ghost";
   readonly className: string | undefined;
 }
 
@@ -77,8 +87,8 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
       <Button
         type="button"
         size="sm"
-        variant="ghost"
-        className={cn("text-muted-foreground", props.className)}
+        variant={props.variant ?? "muted"}
+        className={cn(props.className)}
         onClick={handleClick}
       >
         <Bug aria-hidden />
@@ -89,11 +99,16 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
 
   if (props.presentation === "link") {
     return (
+      // `inline-xs` + `text-current`: this presentation renders INSIDE a
+      // sentence ("... couldn't load. Report issue."), so it must reserve no
+      // box of its own and must take the colour of the paragraph rather than
+      // `link`'s `text-primary`. Every call site used to spell that out as
+      // `h-auto p-0 text-current`; it belongs here, once.
       <Button
         type="button"
-        size="xs"
+        size="inline-xs"
         variant="link"
-        className={props.className}
+        className={cn("text-current", props.className)}
         onClick={handleClick}
       >
         Report issue
@@ -107,8 +122,8 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
         <Button
           type="button"
           size="icon-xs"
-          variant="ghost"
-          className={cn("text-muted-foreground", props.className)}
+          variant={props.variant ?? "muted"}
+          className={cn(props.className)}
           aria-label="Report issue"
           onClick={handleClick}
         >

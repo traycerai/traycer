@@ -199,8 +199,8 @@ export function FallbackTierGroupCard(
         <div className="flex-1" />
         <Button
           type="button"
-          variant="ghost"
-          className="h-8 px-2 text-ui-sm text-muted-foreground"
+          variant="muted"
+          className="h-8"
           // Addressed by the editor's focus handoff after a sibling group is
           // deleted - by this group's DRAFT KEY, never by its editable name.
           {...{ [FALLBACK_GROUP_DELETE_ATTRIBUTE]: group.draftKey }}
@@ -311,9 +311,10 @@ export function FallbackTierGroupCard(
         ))}
       </div>
       <Button
+        size="inline"
         type="button"
         variant="link"
-        className="mt-2 h-auto p-0 text-ui-sm"
+        className="mt-2"
         {...{ [FALLBACK_ADD_MODEL_ATTRIBUTE]: "" }}
         onClick={() => {
           onCommit({
@@ -600,9 +601,10 @@ function CandidateRow(props: {
           }}
         />
         <Button
+          size="inline"
           type="button"
-          variant="ghost"
-          className="size-7 p-0 text-muted-foreground"
+          variant="muted"
+          className="size-7"
           aria-label={`Remove ${candidate.modelFamily.trim() === "" ? "model" : candidateDisplayName(candidate, catalog)}`}
           {...{ [FALLBACK_CANDIDATE_REMOVE_ATTRIBUTE]: removeKey }}
           onClick={props.onRemove}
@@ -863,9 +865,10 @@ function MoveButton(props: {
   const Icon = direction === "up" ? ArrowUp : ArrowDown;
   return (
     <Button
+      size="inline"
       type="button"
-      variant="ghost"
-      className="size-7 p-0 text-muted-foreground"
+      variant="muted"
+      className="size-7"
       disabled={disabled}
       aria-label={direction === "up" ? "Move up" : "Move down"}
       onClick={onClick}

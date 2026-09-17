@@ -52,10 +52,24 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  layout = "padded",
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  /**
+   * `padded` is one padded box - the dialog's own `p-4 gap-4`, with the footer
+   * negative-margining out to the edges for its band.
+   *
+   * `banded` is a header band, a body and a footer band, each edge to edge
+   * with its own padding. Thirty-one of this component's fifty-six call sites
+   * were assembling it from `p-0 gap-0` here plus a band hand-written on
+   * `DialogHeader` / `DialogFooter`, and they disagreed with each other:
+   * `px-5` in fourteen places and `px-6` in twelve, `border-border/40` in
+   * nine and `/70` in four, `bg-foreground/2` in five and `/3` in five. One
+   * name for the composition is what settles that.
+   */
+  layout?: "padded" | "banded";
 }) {
   // Dialog roots retain their logical open state so operation/staging state
   // survives split focus changes. A modal dialog kept mounted in the background
@@ -77,6 +91,7 @@ function DialogContent({
       <DialogPrimitive.Content
         ref={ref}
         data-slot="dialog-content"
+        data-layout={layout}
         className={cn(
           // `top-safe-center-y` / `left-safe-center-x`, not `top-1/2` /
           // `left-1/2`: a fixed element centres on the viewport, which on a
@@ -88,7 +103,9 @@ function DialogContent({
           // unmodified so a caller's `sm:max-w-*` still wins at width; a caller
           // that sets an UNMODIFIED `max-w-*` displaces it, which is what the
           // contract test watches for.
-          "fixed top-safe-center-y left-safe-center-x z-50 grid w-full max-w-[min(calc(100%-2rem),var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-ui-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "group/dialog-content fixed top-safe-center-y left-safe-center-x z-50 grid w-full max-w-[min(calc(100%-2rem),var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-ui-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // The bands carry the padding, so the box carries none.
+          layout === "banded" && "gap-0 p-0",
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
@@ -116,7 +133,13 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2", className)}
+      className={cn(
+        "flex flex-col gap-2",
+        // `pr-12` clears the close button (`absolute top-2 right-2` on the
+        // content): in a banded dialog the header band runs under it.
+        "group-data-[layout=banded]/dialog-content:border-b group-data-[layout=banded]/dialog-content:px-5 group-data-[layout=banded]/dialog-content:py-4 group-data-[layout=banded]/dialog-content:pr-12",
+        className,
+      )}
       {...props}
     />
   );
@@ -140,6 +163,9 @@ function DialogFooter({
         // disappear in all of them and leave only `border-t`. See
         // `ui/skeleton.tsx` for the token collapse in full.
         "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-foreground/5 p-4 sm:flex-row sm:justify-end",
+        // A banded dialog's content has no padding to escape, so the footer is
+        // already at the edges and sets its own band rhythm.
+        "group-data-[layout=banded]/dialog-content:mx-0 group-data-[layout=banded]/dialog-content:mb-0 group-data-[layout=banded]/dialog-content:px-5 group-data-[layout=banded]/dialog-content:py-3",
         className,
       )}
       {...props}
@@ -154,14 +180,36 @@ function DialogFooter({
   );
 }
 
+const DIALOG_TITLE_SIZE = {
+  sm: "text-ui-sm",
+  default: "text-ui",
+  lg: "text-ui-lg",
+} as const;
+
 function DialogTitle({
   className,
+  size = "default",
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Title>) {
+}: React.ComponentProps<typeof DialogPrimitive.Title> & {
+  /**
+   * Six sites wanted a title that was not the default rank - three smaller
+   * (a fullscreen viewer's filename), three larger (a full-page composer) -
+   * and wrote `text-ui-sm` / `text-ui-lg` to get it. Five more wrote
+   * `text-base`, which is the same 1rem the default already sets.
+   */
+  size?: keyof typeof DIALOG_TITLE_SIZE;
+}) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("font-heading text-ui leading-none font-medium", className)}
+      className={cn(
+        // `font-semibold` and `leading-snug` are what 22 and 15 of the 60 title
+        // sites were adding back; `leading-none` is too tight for a title that
+        // wraps, which is most of them.
+        "font-heading leading-snug font-semibold",
+        DIALOG_TITLE_SIZE[size],
+        className,
+      )}
       {...props}
     />
   );
@@ -175,7 +223,7 @@ function DialogDescription({
     <DialogPrimitive.Description
       data-slot="dialog-description"
       className={cn(
-        "max-w-[72ch] text-ui-sm text-muted-foreground *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
+        "max-w-[72ch] text-ui-sm leading-relaxed text-muted-foreground *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
         className,
       )}
       {...props}

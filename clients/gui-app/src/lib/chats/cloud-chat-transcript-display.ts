@@ -1,4 +1,8 @@
 import {
+  codexRetryVisibility,
+  codexRetryTitle,
+} from "@traycer/protocol/host/agent/gui/retry-feedback";
+import {
   describeMissingPayload,
   describeUnknownVariant,
   type ChatPayloadRef,
@@ -88,10 +92,32 @@ export type CloudChatTranscript = {
 export function buildCloudChatTranscript(
   presented: PresentedChat,
 ): CloudChatTranscript {
+  const completedTurnIds = new Set<string>();
+  for (const event of presented.events) {
+    const known = event.known;
+    if (known === null || known.turnId === null) continue;
+    if (known.type === "turn.started") completedTurnIds.delete(known.turnId);
+    if (
+      known.type === "turn.completed" ||
+      known.type === "turn.stopped" ||
+      known.type === "turn.interrupted"
+    ) {
+      completedTurnIds.add(known.turnId);
+    }
+  }
   return {
-    messages: presented.messages.map((message, index) =>
-      buildMessage(message, index),
-    ),
+    messages: presented.messages.flatMap((message, index) => {
+      const display = buildMessage(message, index, completedTurnIds);
+      // An all-hidden retry record contributes no archival content. Its key
+      // still comes from the original index, so later records keep their IDs.
+      if (
+        message.known?.role === "assistant" &&
+        message.blocks.length > 0 &&
+        display.blocks.length === 0
+      )
+        return [];
+      return [display];
+    }),
     events: presented.events.map((event, index) => buildEvent(event, index)),
   };
 }
@@ -126,6 +152,7 @@ export function describeTranscriptFidelity(
 function buildMessage(
   message: PresentedMessage,
   index: number,
+  completedTurnIds: ReadonlySet<string>,
 ): TranscriptMessageDisplay {
   const known = message.known;
   if (known === null) {
@@ -165,9 +192,31 @@ function buildMessage(
     author: known.sender.displayName ?? "Agent",
     timestamp: message.timestamp,
     body: null,
-    blocks: message.blocks.map((block, blockIndex) =>
-      buildBlock(block, blockIndex),
-    ),
+    blocks: message.blocks.flatMap((block, blockIndex) => {
+      const retry =
+        block.known?.type === "error"
+          ? codexRetryVisibility(
+              known.sender.harnessId,
+              block.known.code,
+              known.turnId !== null && completedTurnIds.has(known.turnId),
+            )
+          : null;
+      if (retry === "hidden") return [];
+      const display = buildBlock(block, blockIndex);
+      if (retry === "active" && block.known?.type === "error") {
+        return [
+          {
+            ...display,
+            label: codexRetryTitle(block.known.message),
+            details: ["Retrying automatically. · Reported by Codex"],
+          },
+        ];
+      }
+      if (known.sender.harnessId === "codex" && block.known?.type === "error") {
+        return [{ ...display, label: "Codex turn failed" }];
+      }
+      return [display];
+    }),
   };
 }
 

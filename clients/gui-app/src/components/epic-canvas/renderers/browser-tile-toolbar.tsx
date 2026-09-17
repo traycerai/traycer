@@ -29,7 +29,6 @@ import {
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useOpenLink } from "@/lib/links/open-link";
-import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   DropdownMenu,
@@ -141,9 +140,10 @@ export function BrowserTileToolbarCompact(props: {
       {props.loading && !props.controller.capabilities.reload ? (
         <span role="status" aria-label="Page loading" className="shrink-0">
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId="browser-tile-toolbar-compact-loading"
             variant={undefined}
+            tone="muted"
           />
         </span>
       ) : null}
@@ -195,9 +195,10 @@ function BrowserTileToolbarNav(props: {
         >
           {props.loading ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="browser-reload-loading"
               variant={undefined}
+              tone="muted"
             />
           ) : (
             <RotateCw />
@@ -250,7 +251,8 @@ function BrowserTileToolbarAddress(props: {
           }}
           onFocus={() => onAddressFocusChange(true)}
           onBlur={() => onAddressFocusChange(false)}
-          className="h-full truncate px-2 font-mono text-ui-sm"
+          font="mono"
+          className="h-full truncate px-2"
           spellCheck={false}
         />
         {canOpenExternally ? (
@@ -276,7 +278,8 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
         type="button"
         size="icon-xs"
         aria-label="Open in default browser"
-        className="pointer-events-none text-muted-foreground opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
+        variant="muted"
+        className="pointer-events-none opacity-0 transition-[color,opacity] duration-150 group-hover/address:pointer-events-auto group-hover/address:opacity-100 group-focus-within/address:pointer-events-auto group-focus-within/address:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
         onClick={() => {
           void openLink(props.url, "app", null);
         }}
@@ -379,10 +382,10 @@ function BrowserPrivateSessionShield() {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={`Saved logins: ${copy.headline}`}
-            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="shrink-0"
           >
             <VenetianMask aria-hidden />
           </Button>
@@ -391,9 +394,7 @@ function BrowserPrivateSessionShield() {
       <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
         <PopoverHeader>
           <PopoverTitle>{copy.headline}</PopoverTitle>
-          <PopoverDescription className="text-ui-xs">
-            {copy.detail}
-          </PopoverDescription>
+          <PopoverDescription>{copy.detail}</PopoverDescription>
         </PopoverHeader>
       </PopoverContent>
     </Popover>
@@ -419,10 +420,10 @@ function BrowserMoreMenu(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="More browser controls"
-            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="shrink-0"
           >
             <EllipsisVertical aria-hidden />
           </Button>
@@ -450,9 +451,7 @@ function BrowserMoreMenu(props: {
         )}
         {capabilities.devtools ? (
           <>
-            <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-              Developer
-            </DropdownMenuLabel>
+            <DropdownMenuLabel className="mt-1">Developer</DropdownMenuLabel>
             <DropdownMenuItem
               aria-label="Open browser DevTools"
               disabled={controller.disabled}
@@ -514,7 +513,8 @@ function BrowserZoomControls(props: { readonly controller: TileController }) {
       </DropdownMenuItem>
       <DropdownMenuItem
         aria-label="Reset zoom"
-        className="size-7 shrink-0 justify-center p-0 text-muted-foreground"
+        variant="muted"
+        className="size-7 shrink-0 justify-center p-0"
         disabled={disabled}
         onSelect={(event) => {
           event.preventDefault();
@@ -571,7 +571,6 @@ function BrowserAnnotateToggle(props: {
         aria-pressed={controller.isActive}
         disabled={!controller.canStart && !controller.isActive}
         onClick={controller.toggle}
-        className={cn(controller.isActive && "bg-primary/15 text-primary")}
       >
         <SquareMousePointer aria-hidden />
       </Button>
@@ -590,7 +589,7 @@ function BrowserSiteInfoMenu(props: { readonly url: string }) {
     <DropdownMenuSub open={open} onOpenChange={setOpen}>
       <DropdownMenuSubTrigger
         aria-label={`Site information. ${originTitle}. ${originDetail}`}
-        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
+        className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
         onClick={() => setOpen(true)}
       >
         <span className="min-w-0 truncate">Site information</span>
@@ -601,7 +600,8 @@ function BrowserSiteInfoMenu(props: { readonly url: string }) {
       <DropdownMenuSubContent
         sideOffset={8}
         alignOffset={-4}
-        className="w-[min(80vw,18rem)] min-w-0 space-y-3 p-3 text-ui-sm"
+        layout="panel"
+        className="w-[min(80vw,18rem)] min-w-0 space-y-3"
       >
         <BrowserSiteInfoRow title={originTitle} detail={originDetail} />
       </DropdownMenuSubContent>

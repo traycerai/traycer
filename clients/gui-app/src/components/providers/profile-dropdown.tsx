@@ -254,7 +254,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         align="start"
         sideOffset={4}
         container={contentContainer}
-        className="min-w-[var(--radix-dropdown-menu-trigger-width)] rounded-lg p-1"
+        className="min-w-[var(--radix-dropdown-menu-trigger-width)]"
         onCloseAutoFocus={(event) => {
           if (onCloseAutoFocus === null) return;
           event.preventDefault();
@@ -462,7 +462,7 @@ function ProfileSelectionControl(props: {
       aria-keyshortcuts={state.usageEntry?.fetchEligible ? "R" : undefined}
       aria-current={state.selected ? "true" : undefined}
       className={cn(
-        "min-w-0 flex-1 pr-1.5",
+        "min-w-0 flex-1",
         visibleDisabledReason !== null && "flex-col items-start gap-0.5",
       )}
       onFocus={(event) =>
@@ -493,7 +493,7 @@ function ProfileSelectionControl(props: {
         activeProfileId={context.activeProfileId}
       />
       {visibleDisabledReason !== null ? (
-        <span className="pl-[22px] text-left text-[11px] leading-tight text-muted-foreground">
+        <span className="pl-5.5 text-left text-overline leading-tight text-muted-foreground">
           {visibleDisabledReason}
         </span>
       ) : null}
@@ -580,7 +580,9 @@ function ProfileShortcut(props: {
     <DropdownMenuShortcut
       data-testid={`model-profile-digit-${props.shortcutHint.digit}`}
     >
-      <Kbd className="font-mono tabular-nums">{props.shortcutHint.label}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {props.shortcutHint.label}
+      </Kbd>
     </DropdownMenuShortcut>
   );
 }
@@ -740,10 +742,7 @@ function admissionTooltipRow(
  *  closed trigger and the open rows. */
 function TerminalProfileBadge() {
   return (
-    <Badge
-      variant="outline"
-      className="h-5 shrink-0 px-1.5 text-[10px] text-muted-foreground"
-    >
+    <Badge variant="muted" className="h-5 shrink-0" size="xs">
       Terminal
     </Badge>
   );

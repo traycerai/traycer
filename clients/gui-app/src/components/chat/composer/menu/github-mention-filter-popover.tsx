@@ -137,10 +137,10 @@ export function GithubMentionFilterPopover(
           <Button
             ref={triggerRef}
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-xs"
             aria-label={isDefault ? "Filter" : "Filter (active)"}
-            className="relative -my-1 text-muted-foreground/70 hover:text-foreground"
+            className="relative -my-1 opacity-70"
             onMouseDown={(event) => {
               // The composer must not lose focus to the mousedown itself; the
               // popover takes focus on open, deliberately and afterwards.
@@ -151,16 +151,17 @@ export function GithubMentionFilterPopover(
             {isDefault ? null : (
               <span
                 data-testid="github-mention-filter-dot"
-                className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-500"
+                className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-warning"
               />
             )}
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
       <PopoverContent
+        layout="bare"
         align="end"
         side="bottom"
-        className="w-[min(90vw,14rem)] gap-0 p-0"
+        className="w-[min(90vw,14rem)]"
         onOpenAutoFocus={undefined}
         onInteractOutside={(event) => {
           // An outside interaction moves focus where the user POINTED, and

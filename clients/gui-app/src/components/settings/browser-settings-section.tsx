@@ -31,9 +31,19 @@ import {
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { useHostBinding } from "@/lib/host";
+import { trackSettingChanged } from "@/lib/analytics";
+import { configMutationKeys } from "@/lib/query-keys";
+import {
+  useHostBinding,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { appLogger } from "@/lib/logger";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
@@ -49,13 +59,28 @@ export function BrowserSettingsSection(): ReactNode {
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
   );
+  // The ACTIVE host, like the sibling Website sessions group: General carries
+  // no host scope of its own, so this page's host IS the app-wide one.
+  const hostId = useAddressableHostId();
+  // `null` (no handshake yet) hides the row exactly as `false` does - the row
+  // reappears on its own once the host advertises the method, no reload.
+  //
+  // BOTH methods, because they negotiate independently: the row is an
+  // interactive switch, so a host that could answer `get` but not `set` would
+  // render a control whose every flip fails. They ship together today, which is
+  // exactly why `degrade` is declared per method rather than per namespace.
+  // Two statements, not one `&&`: short-circuiting a hook call is a
+  // rules-of-hooks violation.
+  const getSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET);
+  const setSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_SET);
+  const agentAccessSupported = getSupported === true && setSupported === true;
 
   return (
     <>
-      {/* The whole group is conditional now, not just its row: link and agent
-          controls moved to Settings > Opening behavior, so with no detected
-          origins the card would be a heading over an empty box. */}
-      {browserDevOrigins.length > 0 ? (
+      {/* Both members are conditional, so the group is too: with no detected
+          origins and a host that cannot answer for agent access, the card would
+          be a heading over an empty box. */}
+      {browserDevOrigins.length > 0 || agentAccessSupported ? (
         <SettingsGroup
           group={GENERAL.definitions.browser}
           showTitle
@@ -63,19 +88,84 @@ export function BrowserSettingsSection(): ReactNode {
           dataTestId={undefined}
           fill={false}
         >
-          <SettingsRow
-            row={GENERAL.definitions.detectedDevOrigins}
-            control={
-              <BrowserDevOriginsControl
-                origins={browserDevOrigins}
-                onRemove={removeBrowserDevOrigin}
-              />
-            }
-          />
+          {agentAccessSupported ? (
+            <AgentBrowserAccessRow hostId={hostId} />
+          ) : null}
+          {browserDevOrigins.length > 0 ? (
+            <SettingsRow
+              row={GENERAL.definitions.detectedDevOrigins}
+              control={
+                <BrowserDevOriginsControl
+                  origins={browserDevOrigins}
+                  onRemove={removeBrowserDevOrigin}
+                />
+              }
+            />
+          ) : null}
         </SettingsGroup>
       ) : null}
       <BrowserSavedLoginsGroup />
     </>
+  );
+}
+
+const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
+const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
+
+/**
+ * The host-wide "let agents use the in-app browser" switch (plan B08).
+ *
+ * Off means agent registrations on this host are minted with no browser MCP
+ * server and no steering that names it; the user's own browser tiles, saved
+ * logins and dev-origin detection are untouched. The value is machine-user
+ * global, so the row names the host it is about - Settings > General has no
+ * host picker, and this is the one place on the page where "which machine"
+ * is not obvious from the copy.
+ *
+ * Rendered ONLY under a positive `useHostMethodSupport` for both the getter and
+ * the setter, which is what makes `useHostClient()` safe here: a host that
+ * advertised the methods has a binding.
+ */
+function AgentBrowserAccessRow(props: {
+  readonly hostId: string | null;
+}): ReactNode {
+  const client = useHostClient();
+  const entry = useHostDirectoryEntry(props.hostId);
+  const hostName = entry?.label ?? props.hostId;
+  const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: AGENT_BROWSER_ACCESS_GET,
+    params: {},
+    options: { enabled: true },
+  });
+  const setAccess = useHostScopedMutationForClient(client, {
+    method: AGENT_BROWSER_ACCESS_SET,
+    mutationKey: configMutationKeys.browserSet(),
+    errorMessage: "Couldn't update agent browser access",
+    invalidateMethods: [AGENT_BROWSER_ACCESS_GET],
+  });
+
+  return (
+    <SettingsRow
+      row={GENERAL.definitions.agentBrowserAccess}
+      status={
+        query.isError
+          ? "Couldn't read this host's browser setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
+          : `On ${hostName ?? "this host"}. ${GENERAL.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
+      }
+      control={
+        <Switch
+          checked={query.data?.agentAccess === true}
+          disabled={query.isPending || query.isError || setAccess.isPending}
+          aria-label="Let agents use the in-app browser"
+          onCheckedChange={(next) => {
+            trackSettingChanged("general", "agentBrowserAccess");
+            setAccess.mutate({ agentAccess: next });
+          }}
+        />
+      }
+    />
   );
 }
 
@@ -457,9 +547,8 @@ function SavedWebsiteSessionsState(props: {
           {props.onRemoveAll === null ? null : (
             <Button
               type="button"
-              variant="outline"
+              variant="destructive-ghost"
               size="sm"
-              className="text-destructive hover:text-destructive"
               onClick={() => {
                 void props.onRemoveAll?.();
               }}
@@ -535,8 +624,8 @@ function SavedWebsiteSessionsManager(props: {
             <SheetTrigger asChild>
               <Button
                 type="button"
-                variant="ghost"
-                className="h-auto w-full justify-between rounded-none border-t border-border/40 px-5 py-3 text-start text-muted-foreground"
+                variant="muted"
+                className="h-auto w-full justify-between rounded-none border-t border-border/40 px-5 py-3 text-start"
               >
                 {disclosureLabel}
                 <ArrowRightIcon aria-hidden="true" />
@@ -556,7 +645,7 @@ function SavedWebsiteSessionsManager(props: {
           fallback.focus();
         }}
       >
-        <SheetHeader className="shrink-0 pe-12">
+        <SheetHeader className="shrink-0">
           <SheetTitle>Saved website sessions</SheetTitle>
           <SheetDescription>
             Search and remove website sessions without losing your place in
@@ -613,9 +702,8 @@ function SavedWebsiteSessionsManager(props: {
                     />
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant="muted-destructive"
                       size="sm"
-                      className="text-muted-foreground hover:text-destructive"
                       aria-label={`Remove saved website session for ${site.domain}`}
                       onClick={() => {
                         void props.onRemove(site.domain).then((removed) => {
@@ -696,8 +784,7 @@ function SavedWebsiteSessionsManager(props: {
           <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
             <Button
               type="button"
-              variant="ghost"
-              className="text-destructive hover:text-destructive"
+              variant="destructive-ghost"
               disabled={props.sites.length === 0}
               onClick={() => {
                 void props.onRemoveAll().then((removed) => {

@@ -268,6 +268,7 @@ import {
   chatSubscribeV19,
   chatSubscribeV110,
   chatSubscribeV111,
+  chatSubscribeV112,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -361,6 +362,8 @@ import {
   lifecycleReleaseShutdownV10,
 } from "@traycer/protocol/host/lifecycle/contracts";
 import {
+  configBrowserGetV10,
+  configBrowserSetV10,
   configEnvDeleteV10,
   configEnvListV10,
   configEnvSetV10,
@@ -4851,6 +4854,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: configLogLevelsSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.browser.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configBrowserGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.browser.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configBrowserSetV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -11429,7 +11458,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 11,
+      latestMinor: 12,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11480,6 +11509,15 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         11: {
           contract: chatSubscribeV111,
+        },
+        // @1.11 is frozen without the draft-image refusal cause: it is the
+        // shell-host line, and a host that serves it need not be able to
+        // materialize a hash-only draft image at all.
+        // @1.12 signals draft-blob materialization at send and adds the
+        // optional typed cause to MISSING_ATTACHMENT_BYTES acknowledgements.
+        // The host uses projectChatActionAckForVersion to strip it below 1.12.
+        12: {
+          contract: chatSubscribeV112,
         },
       },
     },

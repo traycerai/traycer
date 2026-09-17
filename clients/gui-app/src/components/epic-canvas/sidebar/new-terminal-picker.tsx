@@ -101,18 +101,18 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
       <PopoverTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="New terminal"
           data-testid="epic-terminals-panel-add"
-          className="text-muted-foreground hover:text-foreground"
         >
           <Plus className="size-4" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
+        layout="bare"
         align="start"
-        className="w-[min(90vw,28rem)] gap-0 p-0"
+        className="w-[min(90vw,28rem)]"
         data-testid="new-terminal-picker-popover"
         // The host picker's list is a nested Radix popover: it portals OUTSIDE
         // this content, so every click in it arrives here as an interaction

@@ -200,10 +200,11 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       onOpenChange={setOpen}
       data-testid="queued-message-rows"
       className={cn(
-        "@container bg-muted/30",
+        "@container",
         props.separated === true ? "border-t border-border/50" : null,
         props.readOnly ? "opacity-95" : null,
       )}
+      variant="panel"
     >
       <QueuedMessageHeader
         open={open}
@@ -429,8 +430,9 @@ function QueuedMessageHeader(props: {
         align={undefined}
       >
         <CollapsibleTrigger
-          className="group/queue flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="group/queue flex min-w-0 flex-1 items-center text-left"
           data-testid="queued-message-header-toggle"
+          variant="panel"
         >
           <ChevronDown
             aria-hidden
@@ -476,9 +478,9 @@ function QueuedMessageHeader(props: {
         <div className="flex shrink-0 items-center gap-1 pr-1.5">
           <Button
             type="button"
-            size="sm"
+            size="xs"
             variant="outline"
-            className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+            className="h-7 shrink-0"
             disabled={!canAct || showKeepPausedButton}
             onClick={handleResume}
             data-testid="resume-queue-button"
@@ -489,9 +491,9 @@ function QueuedMessageHeader(props: {
           {showKeepPausedButton ? (
             <Button
               type="button"
-              size="sm"
+              size="xs"
               variant="outline"
-              className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+              className="h-7 shrink-0"
               disabled={!canAct || keepPausedRequested}
               onClick={handlePause}
               data-testid="keep-paused-queue-button"
@@ -506,9 +508,9 @@ function QueuedMessageHeader(props: {
         <div className="flex shrink-0 items-center pr-1.5">
           <Button
             type="button"
-            size="sm"
+            size="xs"
             variant="outline"
-            className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+            className="h-7 shrink-0"
             disabled={!canAct}
             onClick={handlePause}
             data-testid="pause-queue-button"
@@ -828,8 +830,8 @@ function ManagedCommandCancelButton(props: { readonly onCancel: () => void }) {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             aria-label="Cancel queued command output"
             onClick={props.onCancel}
           >
@@ -1143,8 +1145,8 @@ function QueuedMessageAbortSteerButton(props: {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             aria-label="Cancel steer"
             onClick={props.onAbortSteer}
           >
@@ -1180,8 +1182,8 @@ function QueuedMessageRowActions(props: {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             disabled={props.actionsDisabled}
             aria-label={props.editLabel}
             onClick={props.onEdit}
@@ -1198,8 +1200,8 @@ function QueuedMessageRowActions(props: {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             disabled={props.actionsDisabled}
             aria-label="Delete queued message"
             onClick={props.onCancel}
@@ -1214,8 +1216,8 @@ function QueuedMessageRowActions(props: {
             <Button
               type="button"
               size="icon"
-              variant="ghost"
-              className="size-7 shrink-0 text-muted-foreground"
+              variant="muted"
+              className="size-7 shrink-0"
               disabled={props.steerNowDisabled}
               aria-label="Steer queued message now"
               onClick={props.onSteerNow}

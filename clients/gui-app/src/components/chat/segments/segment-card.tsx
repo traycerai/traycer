@@ -95,7 +95,7 @@ export function SegmentCard(props: SegmentCardProps) {
   return <ExpandableSegmentCard {...props} />;
 }
 
-function ExpandableSegmentCard(props: SegmentCardProps) {
+function ExpandableSegmentCard({ className, ...props }: SegmentCardProps) {
   const {
     open,
     onOpenChange,
@@ -108,18 +108,13 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
     bodyOverflow,
     headerFindUnitId,
     bodyFindUnitId,
-    className,
   } = props;
   return (
     <Collapsible
       open={open}
       onOpenChange={onOpenChange}
-      className={cn(
-        "rounded-md border text-ui-sm",
-        TONE_CLASS[tone],
-        "transition-colors",
-        className,
-      )}
+      className={cn(TONE_CLASS[tone], className)}
+      variant="card"
     >
       <div
         className={cn(
@@ -134,11 +129,11 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
           data-find-include="true"
           data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(
-            // muted-fill-ok: transcript segment header on bg-background
-            "group/segment-card relative flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-2.5 py-2 text-left transition-colors hover:bg-muted/40",
+            "group/segment-card relative flex min-w-0 flex-1 items-center overflow-hidden text-left",
             headerAction === null ? "rounded-md" : "rounded-l-md",
             open ? "rounded-b-none" : null,
           )}
+          variant="panel"
         >
           <span className="relative flex min-w-0 flex-1 items-center gap-2">
             {header}

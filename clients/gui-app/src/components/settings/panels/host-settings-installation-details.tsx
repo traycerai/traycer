@@ -115,8 +115,8 @@ export function InstallationDetailsDisclosure(
             value={describeVerification(record)}
             valueClassName={
               isSignatureVerified(record)
-                ? "text-emerald-500"
-                : "text-amber-500"
+                ? "text-success-foreground"
+                : "text-warning-foreground"
             }
             testId="settings-host-verification"
           />

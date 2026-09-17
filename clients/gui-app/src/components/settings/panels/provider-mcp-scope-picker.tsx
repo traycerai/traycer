@@ -10,6 +10,7 @@ import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
@@ -30,7 +31,6 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 // would let the trigger's fallback title and the row title disagree about the
 // same path the moment either one is tweaked.
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
-import { cn } from "@/lib/utils";
 
 /**
  * One place an MCP server config can live, as a thing the user can point at.
@@ -132,37 +132,39 @@ export function McpScopePicker(props: {
         sideOffset={undefined}
         align="start"
       >
-        <PopoverTrigger
-          // The DESTINATION is in the accessible name, not only the static
-          // role. `aria-label` replaces the visible text outright, so a bare
-          // role label told a screen-reader user what the control is for while
-          // withholding the one thing it displays - which of Global or a
-          // specific project it currently points at. That is the whole content
-          // of the trigger for a sighted user.
-          aria-label={`${locationLabel}: ${triggerTitle}`}
-          className={cn(
-            "flex h-7 w-[min(100%,22rem)] min-w-0 items-center gap-2 rounded-sm border border-border bg-background px-2.5 text-left text-ui-sm transition-colors",
-            "hover:bg-foreground/8 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-            "dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
-          )}
-        >
-          {effectiveScope === "global" ? (
-            <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate font-medium text-foreground">
-            {triggerTitle}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-            {triggerDetail}
-          </span>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            // The DESTINATION is in the accessible name, not only the static
+            // role. `aria-label` replaces the visible text outright, so a bare
+            // role label told a screen-reader user what the control is for
+            // while withholding the one thing it displays - which of Global or
+            // a specific project it currently points at. That is the whole
+            // content of the trigger for a sighted user.
+            aria-label={`${locationLabel}: ${triggerTitle}`}
+            className="w-[min(100%,22rem)] min-w-0 justify-start text-left"
+          >
+            {effectiveScope === "global" ? (
+              <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span className="truncate font-medium text-foreground">
+              {triggerTitle}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+              {triggerDetail}
+            </span>
+            <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+          </Button>
         </PopoverTrigger>
       </TooltipWrapper>
       <PopoverContent
+        layout="bare"
         align="start"
-        className="w-[min(90vw,26rem)] p-0"
+        className="w-[min(90vw,26rem)]"
         ref={contentRef}
         onOpenAutoFocus={coarseOpenAutoFocus}
       >
