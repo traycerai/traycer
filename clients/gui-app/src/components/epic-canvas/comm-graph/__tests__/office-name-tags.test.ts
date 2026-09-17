@@ -3,8 +3,33 @@ import {
   layoutNameTags,
   type OfficeNameTagCandidate,
 } from "@/components/epic-canvas/comm-graph/office/office-name-tags";
+import {
+  createLabelSpace,
+  type OfficeLabelBox,
+  type OfficeLabelSpace,
+} from "@/components/epic-canvas/comm-graph/office/office-label-space";
 
 const LINE = 10;
+
+/**
+ * An empty frame: no signage, no storey names, nothing else lettered yet.
+ *
+ * Every case below but the last one is about tags meeting tags, so each gets
+ * its own empty space rather than sharing one - a space carried between cases
+ * would make the second `expect` in a file depend on the first.
+ */
+function emptySpace(): OfficeLabelSpace {
+  return createLabelSpace();
+}
+
+/** A frame that has already lettered `boxes` - a room plate, say. */
+function spaceHolding(
+  ...boxes: ReadonlyArray<OfficeLabelBox>
+): OfficeLabelSpace {
+  const space = createLabelSpace();
+  for (const box of boxes) space.boxes.push(box);
+  return space;
+}
 
 function tag(
   text: string,
@@ -37,6 +62,7 @@ describe("layoutNameTags", () => {
     const placed = layoutNameTags(
       [tag("Alpha", 100, 50, 40), tag("Beta", 300, 50, 40)],
       LINE,
+      emptySpace(),
     );
 
     expect(placed).toHaveLength(2);
@@ -47,6 +73,7 @@ describe("layoutNameTags", () => {
     const placed = layoutNameTags(
       [tag("Alpha", 100, 50, 60), tag("Beta", 110, 50, 60)],
       LINE,
+      emptySpace(),
     );
 
     expect(placed).toHaveLength(2);
@@ -71,6 +98,7 @@ describe("layoutNameTags", () => {
         tag("Four", 100, 50, 60),
       ],
       LINE,
+      emptySpace(),
     );
 
     expect(placed).toHaveLength(3);
@@ -84,8 +112,12 @@ describe("layoutNameTags", () => {
       tag("UpperRight", 140, 50, 60),
     ];
 
-    const forward = layoutNameTags(candidates, LINE);
-    const reversed = layoutNameTags([...candidates].reverse(), LINE);
+    const forward = layoutNameTags(candidates, LINE, emptySpace());
+    const reversed = layoutNameTags(
+      [...candidates].reverse(),
+      LINE,
+      emptySpace(),
+    );
 
     // Same answer either way: a tie broken by emission order would make a name
     // flicker as the scene re-emits its drawables.
@@ -99,6 +131,7 @@ describe("layoutNameTags", () => {
     const placed = layoutNameTags(
       [tag("Alpha", 100, 50, 40), tag("Beta", 140, 50, 40)],
       LINE,
+      emptySpace(),
     );
 
     expect(placed.map((entry) => entry.baselineY)).toEqual([50, 50]);
@@ -119,10 +152,67 @@ describe("layoutNameTags on a cluster", () => {
         tag("The Multi Agent C…", 140, 200, 110),
       ],
       LINE,
+      emptySpace(),
     );
 
     expect(placed).toHaveLength(2);
     // Not on the same line: that is precisely the mush being fixed.
     expect(placed[0].baselineY).not.toBe(placed[1].baselineY);
+  });
+});
+
+/**
+ * THE OTHER HALF OF THE SAME COMPLAINT, and the half this module could not see
+ * until the space was shared.
+ *
+ * The screenshot that opened round 2 has `#1158 — DEL…` - an agent's tag -
+ * printed a dozen pixels off `TRAYCER ISS…`, a board sign. Both were "correct"
+ * by their own channel's rules, because neither channel had ever been told the
+ * other one existed. A tag now places into a space the signage has already
+ * filled, so the two resolve against each other exactly as two tags do.
+ */
+describe("layoutNameTags against lettering it did not draw", () => {
+  it("moves a tag off a sign plate that is already on the floor", () => {
+    const plate: OfficeLabelBox = {
+      left: 80,
+      right: 220,
+      top: 40,
+      bottom: 54,
+    };
+    const placed = layoutNameTags(
+      [tag("#1158 — DEL…", 150, 50, 90)],
+      LINE,
+      spaceHolding(plate),
+    );
+
+    expect(placed).toHaveLength(1);
+    // Below the plate, not through it. The anchor at 50 put the tag's box at
+    // 40..50, entirely inside the plate's 40..54.
+    expect(placed[0].baselineY).toBeGreaterThanOrEqual(plate.bottom);
+  });
+
+  it("drops a tag boxed in by signage rather than printing it over the plate", () => {
+    // A plate deep enough to swallow the anchor and both shifts.
+    const placed = layoutNameTags(
+      [tag("#1158 — DEL…", 150, 50, 90)],
+      LINE,
+      spaceHolding({ left: 80, right: 220, top: 30, bottom: 100 }),
+    );
+
+    expect(placed).toEqual([]);
+  });
+
+  it("still places a tag whose column the signage never reached", () => {
+    // The control: a plate that is close in Y but nowhere near in X must not
+    // displace anything, or "no overlaps" would be satisfied by a pass that
+    // simply drops everything near a sign.
+    const placed = layoutNameTags(
+      [tag("#1158 — DEL…", 150, 50, 90)],
+      LINE,
+      spaceHolding({ left: 600, right: 740, top: 40, bottom: 54 }),
+    );
+
+    expect(placed).toHaveLength(1);
+    expect(placed[0].baselineY).toBe(50);
   });
 });
