@@ -70,10 +70,16 @@ export const chatSearchModeSchema = z.enum(["ranked", "substring"]);
 export type ChatSearchMode = z.infer<typeof chatSearchModeSchema>;
 
 /** Epoch-ms bounds, inclusive; `null` leaves that side open. */
-export const chatSearchDateRangeSchema = z.object({
-  from: z.number().int().nullable(),
-  to: z.number().int().nullable(),
-});
+export const chatSearchDateRangeSchema = z
+  .object({
+    from: z.number().int().nullable(),
+    to: z.number().int().nullable(),
+  })
+  .refine(
+    (range) =>
+      range.from === null || range.to === null || range.from <= range.to,
+    { message: "a date range starts at or before it ends" },
+  );
 export type ChatSearchDateRange = z.infer<typeof chatSearchDateRangeSchema>;
 
 export const CHAT_SEARCH_MAX_QUERY_CHARS = 512;
