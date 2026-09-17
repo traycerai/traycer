@@ -22,6 +22,7 @@ import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
+import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
@@ -106,6 +107,11 @@ const SettingsAppNotificationsRoute =
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: "/appearance",
   path: "/appearance",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsBrowserRoute = SettingsBrowserRouteImport.update({
+  id: "/browser",
+  path: "/browser",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
@@ -216,6 +222,7 @@ export interface FileRoutesByFullPath {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -248,6 +255,7 @@ export interface FileRoutesByTo {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -283,6 +291,7 @@ export interface FileRoutesById {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -319,6 +328,7 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -351,6 +361,7 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -385,6 +396,7 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -509,6 +521,13 @@ declare module "@tanstack/react-router" {
       path: "/appearance";
       fullPath: "/settings/appearance";
       preLoaderRoute: typeof SettingsAppearanceRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/browser": {
+      id: "/settings/browser";
+      path: "/browser";
+      fullPath: "/settings/browser";
+      preLoaderRoute: typeof SettingsBrowserRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/delete-account": {
@@ -664,6 +683,7 @@ interface SettingsRouteChildren {
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
+  SettingsBrowserRoute: typeof SettingsBrowserRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
@@ -690,6 +710,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsBrowserRoute: SettingsBrowserRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,

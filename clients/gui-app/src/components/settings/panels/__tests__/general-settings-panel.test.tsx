@@ -399,30 +399,6 @@ describe("GeneralSettingsPanel", () => {
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
   });
 
-  // Link and agent-tab controls moved to Settings > Opening behavior; the
-  // Browser group here is dev origins and saved logins only, and its card is
-  // dropped entirely when nothing was detected.
-  it("renders removable dev origins", () => {
-    useSettingsStore.setState({
-      browserDevOrigins: ["http://localhost:5173"],
-    });
-
-    renderPanel();
-
-    expect(screen.getByText("Detected dev origins")).toBeTruthy();
-    expect(screen.getByText("http://localhost:5173")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-
-    expect(useSettingsStore.getState().browserDevOrigins).toEqual([]);
-  });
-
-  it("leaves the Browser group out when nothing was detected", () => {
-    renderPanel();
-
-    expect(screen.queryByText("Detected dev origins")).toBeNull();
-  });
-
   it("labels the steering chord with the platform modifier", () => {
     renderPanel();
 

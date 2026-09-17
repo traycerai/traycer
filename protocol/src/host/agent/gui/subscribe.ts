@@ -77,6 +77,7 @@ import {
   chatQueueSteerModeSchema,
   runtimeApprovalDecisionSchema,
   runtimeEventSchema,
+  runtimeEventSchemaPreBrowser,
   runtimeEventSchemaPreFallback,
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
@@ -116,12 +117,14 @@ import {
   chatIndexChangeSchema,
   chatLoadRangeRequestSchema,
   chatRangeResponseSchema,
+  chatRangeResponseSchemaPreBrowser,
   chatRangeResponseSchemaPreFallback,
   chatRangeResponseSchemaPreShellHost,
   chatRecordSchema,
   chatSkeletonChunkSchema,
   chatTranscriptDerivedSchema,
   chatTranscriptWindowSchema,
+  chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreFallback,
   chatTranscriptWindowSchemaPreShellHost,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
@@ -2294,20 +2297,20 @@ const chatSubscribeSharedServerFrameSchemasV18 = [
 // notice kinds and error `failure`) over the pre-`auto` common set.
 const chatSubscribeSharedServerFrameSchemasV110 = [
   ...chatSubscribeCommonServerFrameSchemasV110,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreBrowser),
 ];
 // `chat.subscribe@1.11`'s shared frames: the live `blockDelta` over the
 // shell-host-but-pre-`auto` common set.
 const chatSubscribeSharedServerFrameSchemasV111 = [
   ...chatSubscribeCommonServerFrameSchemasV111,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreBrowser),
 ];
 
 // `chat.subscribe@1.12`'s shared frames: the same live `blockDelta`, over the
 // pre-`auto`-with-draft-cause common set.
 const chatSubscribeSharedServerFrameSchemasV112 = [
   ...chatSubscribeCommonServerFrameSchemasV112,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreBrowser),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
   ...chatSubscribeCommonServerFrameSchemas,
@@ -4080,7 +4083,7 @@ const chatWindowedSnapshotSchemaV110 = z.object({
 // arrives a minor later.
 const chatWindowedSnapshotSchemaV111 = chatWindowedSnapshotSchemaV110.extend({
   queue: chatQueueStateSchemaPreAuto,
-  tail: chatTranscriptWindowSchema,
+  tail: chatTranscriptWindowSchemaPreBrowser,
   // `pendingFallback` / `pendingReturn` / `lastFailedAttempt` are deliberately
   // NOT re-widened here: `1.11` is pre-`auto` as well, so it inherits V110's
   // frozen fallback tuples. Only `1.13` re-widens them.
@@ -4094,6 +4097,7 @@ export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV111.extend(
     chat: chatRecordSchema,
     queue: chatQueueStateSchema,
     pendingApprovals: z.array(chatApprovalStateSchema),
+    tail: chatTranscriptWindowSchema,
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
     // and `1.11` inherited that freeze, so `1.13` is where a tuple may name the
     // mode again.
@@ -4193,6 +4197,13 @@ const chatSubscribeRangeServerFrameSchemaPreShellHost = z.object({
   ...textFrameFields,
   ...chatReferenceFields,
   range: chatRangeResponseSchemaPreShellHost,
+});
+
+const chatSubscribeRangeServerFrameSchemaPreBrowser = z.object({
+  kind: z.literal("range"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  range: chatRangeResponseSchemaPreBrowser,
 });
 
 const chatRangeResponseSchemaV18 = z.object({
@@ -4330,7 +4341,7 @@ const chatSubscribeServerFrameSchemaV111 = z.discriminatedUnion("kind", [
   chatSubscribeSkeletonChunkServerFrameSchema,
   chatSubscribeAccumulatedChangesServerFrameSchema,
   chatSubscribeIndexChangedServerFrameSchema,
-  chatSubscribeRangeServerFrameSchema,
+  chatSubscribeRangeServerFrameSchemaPreBrowser,
   chatSubscribeTurnStateChangedServerFrameSchemaPreAuto,
   chatSubscribeManagedCommandsChangedServerFrameSchema,
   chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -4347,7 +4358,7 @@ const chatSubscribeServerFrameSchemaV112 = z.discriminatedUnion("kind", [
   chatSubscribeSkeletonChunkServerFrameSchema,
   chatSubscribeAccumulatedChangesServerFrameSchema,
   chatSubscribeIndexChangedServerFrameSchema,
-  chatSubscribeRangeServerFrameSchema,
+  chatSubscribeRangeServerFrameSchemaPreBrowser,
   chatSubscribeTurnStateChangedServerFrameSchemaPreAuto,
   chatSubscribeManagedCommandsChangedServerFrameSchema,
   chatSubscribeHeldUpdatesChangedServerFrameSchema,

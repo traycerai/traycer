@@ -15,6 +15,7 @@ import { DEVICES } from "@/components/settings/panels/devices-sessions.definitio
 import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
+import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { KEYBINDINGS } from "@/components/settings/panels/keybindings-settings.definitions";
@@ -37,6 +38,7 @@ import {
 export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollection> =
   [
     GENERAL,
+    BROWSER,
     APPEARANCE,
     OPENING_BEHAVIOR,
     APP_NOTIFICATIONS,
