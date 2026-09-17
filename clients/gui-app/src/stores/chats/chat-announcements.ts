@@ -352,10 +352,10 @@ function fallbackPlanText(
   now: number,
 ): string {
   if (plan === null || plan.action === "notify") {
-    return "No fallback destination is available. The chat will stop and keep the error visible.";
+    return "There's nowhere to route this chat. It will stop and keep the error visible.";
   }
   if (plan.action === "checking") {
-    return "The host is checking the next fallback action.";
+    return "Working out where to route this chat…";
   }
   switch (plan.action) {
     case "switch":

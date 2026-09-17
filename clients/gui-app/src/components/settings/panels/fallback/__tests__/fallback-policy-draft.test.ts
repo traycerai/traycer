@@ -288,7 +288,7 @@ describe("validateFallbackPolicyDraft", () => {
     );
     // Falsification: drop the `.trim()` from `groupListIssueMessage`'s walk.
     // The two ids no longer match in the walk, so it falls through to the
-    // generic "Two model groups have the same name." - the schema still refuses
+    // generic "Two groups have the same name." - the schema still refuses
     // the draft, but the message stops naming which name, on exactly the input
     // where the trim is what made them duplicates.
     expect(result).toEqual({
@@ -345,7 +345,7 @@ describe("validateFallbackPolicyDraft", () => {
     // ["defaultTierGroupId"]`).
     expect(result).toEqual({
       kind: "invalid",
-      message: "The default group must be one of the groups below.",
+      message: 'Choose an existing group under "For a model not in any group".',
     });
   });
 });

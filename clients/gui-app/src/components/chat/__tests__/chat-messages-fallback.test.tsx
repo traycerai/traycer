@@ -741,6 +741,38 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module -
+ * same double as `fallback-grace-card.test.tsx`, and for the same reason:
+ * this file's real `HostClient`/`MockHostMessenger` has no
+ * `agent.gui.listHarnesses`/`agent.gui.listModels` handler, so the real hook
+ * would hit an unhandled-method `HostRpcError` on every mount - which is
+ * harmless (the resolver degrades to the slug, matching every literal already
+ * pinned in this file) but noisy, and gives this file no way to prove the
+ * ONE thing worth proving at this level: that the announcer and a composer
+ * card, fed the SAME resolver, cannot print two different names for one
+ * tuple. `null` (every case but that one) is the slug passthrough every
+ * existing literal here already assumes.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
 // One fixed, always-selectable destination - inert for every case in this
 // file except the MF11 real-parent-transition pin below, which is the only
 // test that opens a destination menu at all.
@@ -1177,6 +1209,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     });
     runManualRungState.handler = () => Promise.resolve({ outcome: "applied" });
     runManualRungState.callCount.current = 0;
+    modelLabelOverride.value = null;
     disposeAllChatSessions();
   });
 
@@ -2989,5 +3022,59 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // job (the liveOutcome/metadata-then-body and body-then-metadata
     // describe block); this test is not a substitute falsifier for that
     // guard.
+  });
+
+  /**
+   * The model-catalogue-label resolver, end to end: the announcer
+   * (`ChatMessages`) and a composer card (`FallbackGraceCard`, via the real
+   * `ChatComposerFallbackBanners`) are TWO independent renderers naming the
+   * SAME tuple, and `useFallbackModelLabels` exists precisely so they cannot
+   * name it differently - see that hook's own doc in `fallback-identity.ts`.
+   *
+   * `modelLabelOverride` (this file's `useFallbackModelLabels` double) is the
+   * one resolver both trees below read - a real catalogue would answer both
+   * from the same cached `agent.gui.listModels` read, and mocking one level
+   * down from that lets this test stay about the AGREEMENT rather than
+   * re-proving the resolver's own mapping rules, which
+   * `fallback-model-labels.test.tsx` already owns.
+   *
+   * Falsification: have either renderer read `tuple.model` directly instead
+   * of threading `modelLabelFor` through - that renderer's assertion below
+   * goes red while the other stays green, which is exactly the divergence
+   * this hook exists to make impossible.
+   */
+  it("the announcer and a composer card name the SAME resolved label for one tuple - they cannot diverge", async () => {
+    const harness = createHarness();
+    registerHarness(harness);
+    modelLabelOverride.value = new Map([
+      [`${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`, "Astra Mini"],
+    ]);
+
+    const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+    const chat = renderChat(baselineEpoch, undefined);
+
+    const pending = pendingFallback({
+      state: "switching",
+      traversalId: "trav-agree",
+      revision: 1,
+      deadline: null,
+      targetTuple: TARGET_TUPLE,
+      impendingAction: null,
+      queuedItemsMoving: 0,
+    });
+    setTurnState(harness, pending, undefined, undefined);
+    await flushAnnouncer();
+    const announced = liveRegionText();
+    expect(announced).toContain("Astra Mini");
+    expect(announced).not.toContain(TARGET_TUPLE.model);
+
+    // The identical `PendingFallback` DTO, rendered by the composer's real
+    // grace card via `renderBanners` - sharing the chat's own `QueryClient`,
+    // and (module-mocked) the exact same resolver function the announcer
+    // above just read.
+    renderBanners(pending, chat.queryClient);
+    const card = screen.getByTestId("fallback-grace-card").textContent;
+    expect(card).toContain("Astra Mini");
+    expect(card).not.toContain(TARGET_TUPLE.model);
   });
 });

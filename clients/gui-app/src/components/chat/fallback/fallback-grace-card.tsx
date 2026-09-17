@@ -1,5 +1,5 @@
 import { useCallback, useRef, type ReactNode } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   FallbackImpendingAction,
@@ -31,12 +31,14 @@ import {
   fallbackResolvedIdentitySentence,
   fallbackTupleIdentity,
   pendingFallbackResumesFailedTuple,
+  useFallbackModelLabels,
   useFallbackProfileLabels,
 } from "./fallback-identity";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
 import type { FallbackActionOutcome } from "@traycer/protocol/host/chat-fallback";
 import { useFallbackCancel } from "./use-fallback-actions";
+import { useDismissRoutingCard } from "./use-dismissed-routing-cards";
 
 /**
  * The moment-of-failure card: what is about to happen, and how to stop it.
@@ -83,6 +85,13 @@ export function FallbackGraceCard({
   readonly menu: ReactNode | null;
 }) {
   const labelFor = useFallbackProfileLabels(client, true);
+  // Both tuples this card names: the account that failed and where it is
+  // going. A cross-provider hop means two harnesses, so both are listed.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    [pending.failedTuple.harnessId, pending.targetTuple?.harnessId ?? null],
+    true,
+  );
   // The sign-in navigation, armed by the click and run by the host's answer -
   // or `null` when the cancel in flight is a plain "Don't switch".
   //
@@ -103,8 +112,16 @@ export function FallbackGraceCard({
   const cancel = useFallbackCancel(client, chatId, onCancelOutcome);
   const openFallbackSettings = useOpenFallbackSettings(hostId);
   const { openSettings } = useSystemTabModalActions();
+  const dismissCard = useDismissRoutingCard();
+  const onDismiss = useCallback(() => {
+    dismissCard(chatId, pending.traversalId, "countdown");
+  }, [chatId, dismissCard, pending.traversalId]);
 
-  const failed = fallbackTupleIdentity(pending.failedTuple, labelFor);
+  const failed = fallbackTupleIdentity(
+    pending.failedTuple,
+    labelFor,
+    modelLabelFor,
+  );
   // The whole destination, not just its account. "Switching to Terminal
   // account" named the one field that is identical on both sides of a
   // cross-provider hop and omitted the provider, the model and the effort -
@@ -114,6 +131,7 @@ export function FallbackGraceCard({
   const targetLabel = fallbackResolvedIdentitySentence(
     { kind: "fallback", pending },
     labelFor,
+    modelLabelFor,
   );
   // Whether that destination is the tuple that failed: the wait rung's resume,
   // which has no "to" at all - see {@link pendingFallbackResumesFailedTuple}.
@@ -251,14 +269,37 @@ export function FallbackGraceCard({
             </span>
           ) : null}
         </div>
-        <Button
-          size="xs"
-          variant="muted"
-          className="h-auto"
-          onClick={openFallbackSettings}
-        >
-          {FALLBACK_SETTINGS_LABEL}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            size="xs"
+            variant="muted"
+            className="h-auto"
+            onClick={openFallbackSettings}
+          >
+            {FALLBACK_SETTINGS_LABEL}
+          </Button>
+          {/*
+           * ALWAYS, and never disabled - not gated on `canAct`, `busy`, or the
+           * traversal's state. This is the one control on the card that acts on
+           * the CARD rather than on the chat, so the standing the other buttons
+           * need does not apply: a viewer with no right to steer this chat, or
+           * an owner mid-reconnect, may still put a banner away. Gating it on
+           * `busy` would also strand the card open for the whole of an
+           * in-flight cancel, which is exactly when a user wants it gone.
+           *
+           * It does NOT cancel. "Don't switch" is beside it and is the answer;
+           * this only stops the card occupying the composer while the switch
+           * goes ahead as planned.
+           */}
+          <Button
+            size="icon-xs"
+            variant="muted"
+            aria-label="Dismiss"
+            onClick={onDismiss}
+          >
+            <X aria-hidden />
+          </Button>
+        </div>
       </div>
 
       <FallbackGraceHeadline

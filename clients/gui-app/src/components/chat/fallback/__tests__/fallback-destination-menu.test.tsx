@@ -238,6 +238,7 @@ function renderMenu(input: {
       <FallbackDestinationMenu
         triggerLabel="Open destinations"
         triggerDisabled={false}
+        triggerVariant="ghost"
         header={input.header}
         selector={{
           kind: "traversal",
@@ -1012,9 +1013,7 @@ describe("FallbackDestinationMenu", () => {
       onOpenChange: () => undefined,
     });
     expect(screen.getByText(NO_DESTINATIONS_LABEL)).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Fallback settings" }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Model routing" })).toBeDefined();
     unmount();
 
     renderMenu({
@@ -1246,6 +1245,7 @@ describe("FallbackDestinationMenu", () => {
         <FallbackDestinationMenu
           triggerLabel="Open destinations"
           triggerDisabled={false}
+          triggerVariant="ghost"
           header={null}
           selector={{
             kind: "traversal",
@@ -1285,6 +1285,7 @@ describe("FallbackDestinationMenu", () => {
         <FallbackDestinationMenu
           triggerLabel="Open destinations"
           triggerDisabled={false}
+          triggerVariant="ghost"
           header={null}
           selector={{
             kind: "traversal",
@@ -1313,6 +1314,7 @@ describe("FallbackDestinationMenu", () => {
         <FallbackDestinationMenu
           triggerLabel="Open destinations"
           triggerDisabled={false}
+          triggerVariant="ghost"
           header={null}
           selector={{
             kind: "traversal",

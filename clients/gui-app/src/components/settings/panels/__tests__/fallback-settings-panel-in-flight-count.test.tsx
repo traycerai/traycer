@@ -232,7 +232,7 @@ function renderPanel(fixture: Fixture): RenderResult {
 /** The switch's live description, read through `aria-describedby` rather
  * than a text query - the exact sentence, including the trailing clause. */
 function masterToggleDescriptionText(): string {
-  const toggle = screen.getByRole("switch", { name: "Automatic fallback" });
+  const toggle = screen.getByRole("switch", { name: "Route automatically" });
   const describedBy = toggle.getAttribute("aria-describedby");
   if (describedBy === null) {
     throw new Error("expected the master toggle to carry aria-describedby");
@@ -382,7 +382,7 @@ describe("FallbackSettingsPanel - the policy read stays read-once while the coun
 
     // The seeded control still shows the ORIGINAL value (15s) - the changed
     // one (45s) was never read back, because the policy read is read-once.
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     expect(
       screen
         .getByRole("option", { name: "15 seconds" })
@@ -440,7 +440,9 @@ describe("FallbackSettingsPanel - a save keeps the polled count a NUMBER (contro
     // the method's SCOPE, reaching both cache entries, per
     // `use-fallback-in-flight-count-query`'s own doc comment) the
     // near-miss bug lived in.
-    fireEvent.click(screen.getByRole("switch", { name: "Automatic fallback" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
     await waitFor(() => {
       expect(fixture.setCallCount()).toBe(1);
     });

@@ -408,7 +408,7 @@ describe("FallbackSettingsPanel - local validation failure sends nothing", () =>
     );
     renderPanel();
 
-    openCombobox("Longest wait for a reset");
+    openCombobox("Longest wait for a usage limit to reset");
     chooseOption("1 day");
 
     const error = await screen.findByTestId("fallback-local-error");
@@ -426,7 +426,7 @@ describe("FallbackSettingsPanel - local validation failure sends nothing", () =>
     // The edited-but-invalid value is still what is on screen. Selecting an
     // option closes the popover, so it has to be reopened to read the
     // control's current selection back.
-    openCombobox("Longest wait for a reset");
+    openCombobox("Longest wait for a usage limit to reset");
     expect(
       screen.getByRole("option", { name: "1 day" }).getAttribute("data-state"),
     ).toBe("checked");
@@ -456,18 +456,18 @@ describe("FallbackSettingsPanel - a host rejection reverts and names the reason"
     );
     renderPanel();
 
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     const error = await screen.findByTestId("fallback-host-error");
     expect(error.textContent).toContain("Couldn't save: policy is out of date");
     expect(error.textContent).toContain(
-      "Your last saved settings are back on screen and still in force.",
+      "Your last saved settings are back, and still in force.",
     );
 
     // The revert: the control shows the PERSISTED value again, not the
     // rejected edit.
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     expect(
       screen
         .getByRole("option", { name: "15 seconds" })
@@ -527,12 +527,12 @@ describe("FallbackSettingsPanel - reset reads from the refetch, never the mutati
     await waitFor(() => {
       expect(
         screen
-          .getByRole("switch", { name: "Automatic fallback" })
+          .getByRole("switch", { name: "Route automatically" })
           .getAttribute("aria-checked"),
       ).toBe("true");
     });
 
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     expect(
       screen
         .getByRole("option", { name: "13 seconds" })
@@ -566,7 +566,7 @@ describe("FallbackSettingsPanel - a refused reset reports under the danger zone"
     renderPanel();
 
     // Leave a rejected edit sitting under "behavior" first.
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
     await screen.findByTestId("fallback-host-error");
 
@@ -810,13 +810,15 @@ describe("FallbackSettingsPanel - a text field commits on blur/Enter, not per ke
     // blur involved at all. Without this, a change that broke committing
     // ENTIRELY (e.g. `commit` silently doing nothing) would read as "text
     // fields correctly wait for blur" instead of "nothing saves any more".
-    fireEvent.click(screen.getByRole("switch", { name: "Automatic fallback" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
     expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(3);
   });
 });
 
 const TIER_SWITCH_LABEL =
-  "Switch to an equivalent model on another provider - run this step";
+  "An equivalent model on another provider - run this step";
 
 describe("FallbackSettingsPanel - F15 a disabled step's echo does not move it past a terminal notify", () => {
   it("turning a step off then back on preserves the WHOLE local order across the echo of the OFF commit", async () => {
@@ -930,9 +932,9 @@ describe("FallbackSettingsPanel - F15 a disabled step's echo does not move it pa
 });
 
 describe("FallbackSettingsPanel - R5 a move cannot carry an enabled step across an externally authored early notify", () => {
-  const PROFILE_LABEL = "Switch to another profile of the same provider";
+  const PROFILE_LABEL = "Another account on the same provider";
   const WAIT_LABEL = "Wait for the limit to reset";
-  const TIER_LABEL = "Switch to an equivalent model on another provider";
+  const TIER_LABEL = "An equivalent model on another provider";
 
   it("disables the two arrows that would cross the fixed slot, so no sequence of presses lands a running step below it", async () => {
     // Written elsewhere: `notify` third, with `tier` stored after it. The
@@ -1067,7 +1069,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // denied us. The banner's subject did not change and neither did this
     // sequence; only the strength of the claim did.
     expect(banner.textContent).toContain(
-      "may not be what this host is using now",
+      "still shows the settings from before the reset",
     );
     expect(banner.textContent).not.toContain("out of date");
     // The reset is NOT reported as refused anywhere: it demonstrably succeeded.
@@ -1082,7 +1084,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // from a read that did not happen.
     expect(
       screen
-        .getByRole("switch", { name: "Automatic fallback" })
+        .getByRole("switch", { name: "Route automatically" })
         .getAttribute("aria-checked"),
     ).toBe("true");
 
@@ -1105,10 +1107,10 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // the default policy's automation-off and 15-second window are what render.
     expect(
       screen
-        .getByRole("switch", { name: "Automatic fallback" })
+        .getByRole("switch", { name: "Route automatically" })
         .getAttribute("aria-checked"),
     ).toBe("false");
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     expect(
       screen
         .getByRole("option", { name: "15 seconds" })
@@ -1173,7 +1175,7 @@ describe("FallbackSettingsPanel - R8 P2 a refusal after an unread reset must not
     fallbackMocks.setMutateAsync.mockRejectedValueOnce(
       refusedForTest("policy is out of date"),
     );
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     const notice = await screen.findByTestId("fallback-host-error");
@@ -1203,7 +1205,7 @@ describe("FallbackSettingsPanel - R8 P2 a refusal after an unread reset must not
     expect(screen.getByTestId("fallback-reset-retry")).toBeDefined();
     // The revert put the pre-reset timing back, which is what the sentence now
     // describes rather than endorses.
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     expect(
       screen
         .getByRole("option", { name: "13 seconds" })
@@ -1227,7 +1229,9 @@ describe("FallbackSettingsPanel - R8 P2 a refusal after an unread reset must not
       isSuccess: true,
       data: respond(createDefaultFallbackPolicy()),
     });
-    fireEvent.click(screen.getByRole("switch", { name: "Automatic fallback" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
 
     // Falsification: remove `unrefreshedReset: null` from the `reconciled`
     // arm's shared object in `fallback-policy-draft.ts`. The read-back lands,
@@ -1264,7 +1268,7 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
     expect(screen.queryByTestId("fallback-tier-group-fast")).toBeNull();
 
     openFallbackTab("plan");
-    openCombobox("Longest wait for a reset");
+    openCombobox("Longest wait for a usage limit to reset");
     chooseOption("1 day");
     await waitFor(() => {
       expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
@@ -1552,7 +1556,9 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     });
     renderPanel();
 
-    fireEvent.click(screen.getByRole("switch", { name: "Automatic fallback" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
 
     // Falsification: fold `HostTransportFailureError` into the `refused` arm of
     // `classifyFallbackSaveFailure` (`fallback-settings-panel.tsx`). The
@@ -1563,7 +1569,7 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     await waitFor(() => {
       expect(
         screen
-          .getByRole("switch", { name: "Automatic fallback" })
+          .getByRole("switch", { name: "Route automatically" })
           .getAttribute("aria-checked"),
       ).toBe("false");
     });
@@ -1588,15 +1594,19 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     });
     renderPanel();
 
-    fireEvent.click(screen.getByRole("switch", { name: "Automatic fallback" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
 
     const notice = await screen.findByTestId("fallback-host-error");
     expect(notice.textContent).not.toContain("still in force");
-    expect(notice.textContent).toContain("may or may not have been saved");
+    expect(notice.textContent).toContain(
+      "haven't confirmed whether they were saved",
+    );
     // The user's edit stands: an unknown outcome does not revert.
     expect(
       screen
-        .getByRole("switch", { name: "Automatic fallback" })
+        .getByRole("switch", { name: "Route automatically" })
         .getAttribute("aria-checked"),
     ).toBe("false");
     const checkAgain = within(notice).getByTestId("fallback-check-again");
@@ -1612,7 +1622,7 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     await waitFor(() => {
       expect(
         screen
-          .getByRole("switch", { name: "Automatic fallback" })
+          .getByRole("switch", { name: "Route automatically" })
           .getAttribute("aria-checked"),
       ).toBe("true");
     });
@@ -1669,18 +1679,20 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
       renderPanel();
 
       fireEvent.click(
-        screen.getByRole("switch", { name: "Automatic fallback" }),
+        screen.getByRole("switch", { name: "Route automatically" }),
       );
 
       const notice = await screen.findByTestId("fallback-host-error");
-      expect(notice.textContent).toContain("may or may not have been saved");
+      expect(notice.textContent).toContain(
+        "haven't confirmed whether they were saved",
+      );
       // Still offered, because nothing has settled the question.
       expect(within(notice).getByTestId("fallback-check-again")).toBeDefined();
       // And the edit stands: a read-back that failed settles nothing, so it
       // must not revert any more than the failed save did.
       expect(
         screen
-          .getByRole("switch", { name: "Automatic fallback" })
+          .getByRole("switch", { name: "Route automatically" })
           .getAttribute("aria-checked"),
       ).toBe("false");
 
@@ -1737,7 +1749,7 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
       renderPanel();
 
       fireEvent.click(
-        screen.getByRole("switch", { name: "Automatic fallback" }),
+        screen.getByRole("switch", { name: "Route automatically" }),
       );
 
       const notice = await screen.findByTestId("fallback-host-error");
@@ -1746,7 +1758,9 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
       // Still standing, and still offering the retry: a read-back that failed
       // settles nothing, so nothing about the notice may change.
       const after = await screen.findByTestId("fallback-host-error");
-      expect(after.textContent).toContain("may or may not have been saved");
+      expect(after.textContent).toContain(
+        "haven't confirmed whether they were saved",
+      );
       expect(within(after).getByTestId("fallback-check-again")).toBeDefined();
 
       // Falsification: drop the `.catch` at the `checkSaveOutcomeAgain` call
@@ -1775,14 +1789,16 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
     );
     renderPanel();
 
-    fireEvent.click(screen.getByRole("switch", { name: "Automatic fallback" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
     const notice = await screen.findByTestId("fallback-host-error");
     expect(notice.textContent).toContain("nothing was saved");
     expect(notice.textContent).toContain("still in force");
     expect(within(notice).queryByTestId("fallback-check-again")).toBeNull();
     expect(
       screen
-        .getByRole("switch", { name: "Automatic fallback" })
+        .getByRole("switch", { name: "Route automatically" })
         .getAttribute("aria-checked"),
     ).toBe("true");
   });
@@ -1838,7 +1854,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   it("R1: a read-back that FAILS keeps the editor, the draft and Check again - and never adopts the stale cached policy as the host's answer", async () => {
@@ -1866,7 +1882,9 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // is then dispatched as `reconciled`, which clears the notice and snaps the
     // switch back to ON - the read-back "answering" with a value that predates
     // the save it was sent to check. Both assertions below go red.
-    expect(notice.textContent).toContain("may or may not have been saved");
+    expect(notice.textContent).toContain(
+      "haven't confirmed whether they were saved",
+    );
     expect(within(notice).getByTestId("fallback-check-again")).toBeDefined();
     expect(automaticFallback().getAttribute("aria-checked")).toBe("false");
 
@@ -1943,10 +1961,10 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     await flushHostReplies();
     expect(
       (await screen.findByTestId("fallback-host-error")).textContent,
-    ).toContain("may or may not have been saved");
+    ).toContain("haven't confirmed whether they were saved");
 
     // Save B: a different control, refused by the host while A is still open.
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
     saveB.rejectWith(refusedByHost("policy is out of date"));
     await flushHostReplies();
@@ -1980,7 +1998,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // to put the timing back to the host's 15 seconds. Leaving 11 on screen
     // under no notice at all would present a value the host rejected as saved -
     // the same lie as the switch, one control over.
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     expect(
       screen
         .getByRole("option", { name: "15 seconds" })
@@ -2026,7 +2044,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     await flushHostReplies();
     expect(
       (await screen.findByTestId("fallback-host-error")).textContent,
-    ).toContain("may or may not have been saved");
+    ).toContain("haven't confirmed whether they were saved");
 
     // B: the same switch back OFF, definitively refused. The draft is left at
     // OFF - correctly, since reverting to a `persisted` that A may already have
@@ -2103,10 +2121,10 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     await flushHostReplies();
     expect(
       (await screen.findByTestId("fallback-host-error")).textContent,
-    ).toContain("may or may not have been saved");
+    ).toContain("haven't confirmed whether they were saved");
 
     // B (revision 2): a timing change, still in flight.
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     // C: typed into the group name field and NOT committed - no blur, no Enter.
@@ -2191,7 +2209,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
 
     // A turns automation ON; B changes a timing. Both are in flight.
     fireEvent.click(automaticFallback());
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     // B is refused FIRST, and reverts the page to the last value this editor
@@ -2309,7 +2327,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   /**
@@ -2443,7 +2461,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // so "a later change was saved" is false exactly half the time. The claim
     // this sentence is entitled to make is about the VALUES on screen, not
     // about which request came first, and that is what it now says.
-    expect(notice.textContent).toContain("is in force");
+    expect(notice.textContent).toContain("saved and in use");
     expect(notice.textContent).not.toContain("haven't been saved yet");
     expect(notice.textContent).toContain("policy is out of date");
   });
@@ -2508,16 +2526,16 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     expect(screen.getByTestId("fallback-check-again")).toBeDefined();
     // R10 (fifth pass): WHICH draft that uncertainty is about. The unanswered
     // request was A; what is on screen is the never-sent, invalid C. The
-    // sentence used to open "What's on screen is your change, not a confirmed
-    // setting", attaching A's uncertainty to an edit A never carried - and this
-    // is the cell where that is most misleading, because the other alert
-    // directly above says C was not sent at all.
+    // sentence used to open "This is your change, not a confirmed setting",
+    // attaching A's uncertainty to an edit A never carried - and this is the
+    // cell where that is most misleading, because the other alert directly
+    // above says C was not sent at all.
     //
     // Falsification: make `saveNoticeConsequence`'s `unknown` arm return its
     // first branch unconditionally.
-    expect(hostAlert.textContent).toContain("hasn't been sent");
+    expect(hostAlert.textContent).toContain("haven't been sent");
     expect(hostAlert.textContent).not.toContain(
-      "What's on screen is your change",
+      "This is your change, not a confirmed setting",
     );
   });
 
@@ -2545,7 +2563,9 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     fireEvent.click(screen.getByTestId("confirm-action"));
     const banner = await screen.findByTestId("fallback-reset-unrefreshed");
     // While nothing has been typed, the strong sentence is true and is said.
-    expect(banner.textContent).toContain("the ones you had before the reset");
+    expect(banner.textContent).toContain(
+      "still shows the settings from before the reset",
+    );
 
     // Now the user changes something and its reply is lost. What is on screen
     // is their own edit, which that write may well have stored.
@@ -2555,7 +2575,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     await waitFor(() => {
       expect(
         screen.getByTestId("fallback-reset-unrefreshed").textContent,
-      ).toContain("what's below is your own edit");
+      ).toContain("These are your edits");
     });
     // Falsification: pass `showingPreResetValues` a literal `true` at the
     // render site (or drop the prop and keep only the first sentence). The
@@ -2567,7 +2587,9 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
       "the ones you had before the reset",
     );
     // What stays true either way, and is still said.
-    expect(after.textContent).toContain("has not been read yet");
+    expect(after.textContent).toContain(
+      "Select Reload settings to show what's now saved on this host",
+    );
     expect(screen.getByTestId("fallback-reset-retry")).toBeDefined();
   });
 });
@@ -2611,7 +2633,7 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   function storedGroups(): TierGroup[] {
@@ -2679,9 +2701,11 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     expect(banner.textContent).not.toContain(
       "the ones you had before the reset",
     );
-    expect(banner.textContent).toContain("your own edit");
+    expect(banner.textContent).toContain("These are your edits");
     // The banner is still up and still says the true thing.
-    expect(banner.textContent).toContain("has not been read yet");
+    expect(banner.textContent).toContain(
+      "Select Reload settings to show what's now saved on this host",
+    );
 
     // And it stays right once B's own reply is lost.
     saveB.rejectWith(lostTheReply());
@@ -2734,7 +2758,7 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // is false about the only value on screen: this host's use of B is exactly
     // what was confirmed.
     expect(notice.textContent).toContain(
-      "Your last saved settings are back on screen and still in force.",
+      "Your last saved settings are back, and still in force.",
     );
     expect(notice.textContent).not.toContain("before the reset");
     // The banner is still up, because the reset's own result was never read -
@@ -2796,8 +2820,8 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // The page then says "what's on screen is in force" about `opus`, which has
     // never left the browser, while the policy the host actually confirmed
     // holds the group named "fast".
-    expect(notice.textContent).toContain("haven't been saved yet");
-    expect(notice.textContent).not.toContain("is in force");
+    expect(notice.textContent).toContain("still unsaved");
+    expect(notice.textContent).not.toContain("in force");
     expect(screen.getByLabelText<HTMLInputElement>("Group name").value).toBe(
       "opus",
     );
@@ -2829,8 +2853,10 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // their own live edit and the banner is entitled to say so.
     fireEvent.click(automaticFallback());
     const live = screen.getByTestId("fallback-reset-unrefreshed");
-    expect(live.textContent).toContain("what's below is your own edit");
-    expect(live.textContent).toContain("has not been read yet");
+    expect(live.textContent).toContain("These are your edits");
+    expect(live.textContent).toContain(
+      "Select Reload settings to show what's now saved on this host",
+    );
 
     // The host refuses it on its own revision, so the revert puts the
     // pre-reset `persisted` back. What is on screen is now neither the user's
@@ -2897,7 +2923,7 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // `revision` is still C's and `persistedRevision` is B's, so the page tells
     // the user the settings in front of them "haven't been saved yet" - about a
     // policy the host confirmed and this reducer itself put on screen.
-    expect(notice.textContent).toContain("is in force");
+    expect(notice.textContent).toContain("saved and in use");
     expect(notice.textContent).not.toContain("haven't been saved yet");
     // ...and the sentence does not claim the saved request was the later one,
     // because here it was the earlier one.
@@ -2944,7 +2970,7 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   /** Reset confirmed, its follow-up read lost. Leaves `persisted` UNVERIFIED. */
@@ -2995,7 +3021,7 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
     // confirmed branch. The page says the restored PRE-reset policy "is in
     // force" while the host holds whatever the reset wrote - which nothing has
     // read.
-    expect(kept.textContent).not.toContain("is in force");
+    expect(kept.textContent).not.toContain("in force");
     // ...and NOT by forcing the equality false, which would select a sentence
     // that is equally untrue of a value this reducer put back.
     expect(kept.textContent).not.toContain("haven't been saved yet");
@@ -3036,7 +3062,7 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
     // sent."`. The page tells the user their change was never sent while the
     // request carrying it is on the wire.
     expect(notice.textContent).toContain("Another change is being saved");
-    expect(notice.textContent).not.toContain("hasn't been sent");
+    expect(notice.textContent).not.toContain("haven't been sent");
     expect(notice.textContent).toContain("may or may not have been saved");
   });
 
@@ -3074,8 +3100,8 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
     // adopt a policy nobody authored. The sentence now describes the display's
     // relation to the host, and this sequence's account is unchanged under
     // either: the values on screen really are the host's row.
-    expect(notice.textContent).toContain("what this host has saved");
-    expect(notice.textContent).not.toContain("hasn't been sent");
+    expect(notice.textContent).toContain("the settings this host has saved");
+    expect(notice.textContent).not.toContain("haven't been sent");
   });
 
   it("R8: resetting an already-default policy does not license claiming the displayed values are NOT what the host holds", async () => {
@@ -3092,10 +3118,10 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
     // now." to `unrefreshedResetBody`'s `pre-reset-values` arm.
     expect(banner.textContent).not.toContain("out of date");
     expect(banner.textContent).toContain(
-      "may not be what this host is using now",
+      "still shows the settings from before the reset",
     );
     expect(banner.textContent).toContain(
-      "haven't been re-read since the reset",
+      "Select Reload settings to show what's now saved on this host",
     );
 
     // The rollback continuation reaches the parallel claim in the notice.
@@ -3152,11 +3178,11 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
-  const NEVER_SENT = "hasn't been sent";
-  const SENT_UNKNOWN = "was sent, but we don't know what the host did with it";
+  const NEVER_SENT = "haven't been sent";
+  const SENT_UNKNOWN = "we couldn't confirm they were saved";
 
   it("a read-back that ADOPTED the host's policy is not then called unsent when a later save goes unknown", async () => {
     // Sequence 1. A and B are both in flight. B's reply is lost, its read-back
@@ -3174,7 +3200,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     renderPanel();
 
     fireEvent.click(automaticFallback());
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     // B's reply is lost and its read-back answers with B's own values.
@@ -3214,7 +3240,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // adopt a policy nobody authored. The sentence now describes the display's
     // relation to the host, and this sequence's account is unchanged under
     // either: the values on screen really are the host's row.
-    expect(notice.textContent).toContain("what this host has saved");
+    expect(notice.textContent).toContain("the settings this host has saved");
     // The controls still show what the host confirmed.
     expect(automaticFallback().getAttribute("aria-checked")).toBe("true");
   });
@@ -3241,9 +3267,9 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     renderPanel();
 
     fireEvent.click(automaticFallback());
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("12 seconds");
 
     saveC.rejectWith(refusedByHost("policy is out of date"));
@@ -3277,7 +3303,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // adopt a policy nobody authored. The sentence now describes the display's
     // relation to the host, and this sequence's account is unchanged under
     // either: the values on screen really are the host's row.
-    expect(notice.textContent).toContain("what this host has saved");
+    expect(notice.textContent).toContain("the settings this host has saved");
     expect(automaticFallback().getAttribute("aria-checked")).toBe("true");
   });
 
@@ -3302,7 +3328,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     renderPanel();
 
     fireEvent.click(automaticFallback());
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     saveB.rejectWith(lostTheReply());
@@ -3366,7 +3392,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   const AUTHORED = "change you made since";
@@ -3387,7 +3413,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     renderPanel();
 
     fireEvent.click(automaticFallback());
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     // The read-back answers with the ORIGINAL, not with B.
@@ -3413,7 +3439,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     // is back OFF, which is what P says and what neither of their saves asked
     // for.
     expect(notice.textContent).not.toContain(AUTHORED);
-    expect(notice.textContent).toContain("what this host has saved");
+    expect(notice.textContent).toContain("the settings this host has saved");
     // The controls are P, which is what makes the sentence above the true one.
     expect(automaticFallback().getAttribute("aria-checked")).toBe("false");
   });
@@ -3434,7 +3460,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     renderPanel();
 
     fireEvent.click(automaticFallback());
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
 
     const bPolicy = policy({ enabled: true, graceWindowSeconds: 11 });
@@ -3454,7 +3480,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     await flushHostReplies();
 
     const notice = await screen.findByTestId("fallback-host-error");
-    expect(notice.textContent).toContain("what this host has saved");
+    expect(notice.textContent).toContain("the settings this host has saved");
     expect(automaticFallback().getAttribute("aria-checked")).toBe("true");
   });
 
@@ -3500,13 +3526,13 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     // `displayDispatchState`'s first arm. The reset's uncertainty is then
     // pinned to the invalid draft, which the reset never carried and nothing
     // ever sent.
-    expect(notice.textContent).toContain("whether the reset went through");
+    expect(notice.textContent).toContain("whether model routing was reset");
     expect(notice.textContent).not.toContain(
-      "What's on screen is your change, not a confirmed setting",
+      "This is your change, not a confirmed setting",
     );
     // The display's own account comes from the gate, and it is TRUE of these
     // values: nothing dispatched them.
-    expect(notice.textContent).toContain("hasn't been sent");
+    expect(notice.textContent).toContain("haven't been sent");
   });
 
   it("a RESTORE whose own reply is lost is named as the restore, not as the reset", async () => {
@@ -3545,9 +3571,9 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     // both no-draft operations the reset's sentence. The page then reports a
     // reset that never happened.
     expect(notice.textContent).toContain(
-      "whether restoring the default groups went through",
+      "whether the default model groups were restored",
     );
-    expect(notice.textContent).not.toContain("whether the reset went through");
+    expect(notice.textContent).not.toContain("whether model routing was reset");
     // Re-specified under D353 (ninth pass). This asserted
     // `toContain("hasn't been sent")`, which was the whole `uncommitted` arm at
     // the time. The matrix splits that arm: this display is `loaded-unchanged`
@@ -3555,8 +3581,9 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     // been sent" was false about both halves. The REQUEST half of this pin is
     // unchanged; only the display account moved, and it moved because the cell
     // it always occupied finally has its own sentence.
-    expect(notice.textContent).toContain("what was loaded");
-    expect(notice.textContent).toContain("nothing has been changed since");
+    expect(notice.textContent).toContain(
+      "This page still shows the settings it loaded",
+    );
     expect(notice.textContent).not.toContain("a newer edit");
   });
 
@@ -3624,7 +3651,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   /**
@@ -3669,11 +3696,13 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
 
     const notice = await screen.findByTestId("fallback-host-error");
     // Falsification: drop the `authorityInvalidated` branch from
-    // `displayAccount`'s `confirmed` arm. The page says "What's on screen is
-    // what this host has saved" while an unanswered reset may already have
-    // replaced the row - and no banner contradicts it, because the reset was
-    // never confirmed.
-    expect(notice.textContent).not.toContain("is what this host has saved");
+    // `displayAccount`'s `confirmed` arm. The page says "These are the
+    // settings this host has saved" while an unanswered reset may already
+    // have replaced the row - and no banner contradicts it, because the reset
+    // was never confirmed.
+    expect(notice.textContent).not.toContain(
+      "These are the settings this host has saved",
+    );
     // The confirmation is KEPT, not collapsed into "we don't know": B really
     // was stored, and the sentence says so in the past tense.
     //
@@ -3685,16 +3714,16 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // the confirmation is not thrown away.
     expect(notice.textContent).toContain("was confirmed as saved on this host");
     expect(notice.textContent).toContain(
-      "A reset is also outstanding whose result is unknown",
+      "A reset is also outstanding and unconfirmed, so these may not be the settings now in use",
     );
     // BOTH orderings rejected, not just the first one. "before the" said the
     // confirmation came first and "since then" said the reset did; this state
     // knows neither, so neither may appear.
     expect(notice.textContent).not.toContain("before the");
     expect(notice.textContent).not.toContain("since then");
-    expect(notice.textContent).toContain("hasn't been re-read");
+    expect(notice.textContent).toContain("may not be the settings now in use");
     // The REQUEST account names the reset, per the matrix's second axis.
-    expect(notice.textContent).toContain("whether the reset went through");
+    expect(notice.textContent).toContain("whether model routing was reset");
     expect(screen.queryByTestId("fallback-reset-unrefreshed")).toBeNull();
   });
 
@@ -3747,7 +3776,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
       "Model 1 in “fast” needs a model.",
     );
     const notice = screen.getByTestId("fallback-host-error");
-    expect(notice.textContent).toContain("whether the reset went through");
+    expect(notice.textContent).toContain("whether model routing was reset");
     // The uncertainty is the reset's, so its recovery is on screen too.
     expect(screen.getByTestId("fallback-check-again")).toBeDefined();
     // And the draft the reset never carried is still in the editor - which
@@ -3817,11 +3846,11 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // reddens the restore pin instead. The two recipes and the two pins are
     // the two halves of one split. Under M3i these values, which are NOT the
     // loaded ones, get called what was loaded.
-    expect(notice.textContent).toContain("hasn't been sent");
+    expect(notice.textContent).toContain("haven't been sent");
     expect(notice.textContent).not.toContain("what was loaded");
     // The reset's own account is unchanged by any of this - the two sentences
     // answer independent questions, which is the factorisation itself.
-    expect(notice.textContent).toContain("whether the reset went through");
+    expect(notice.textContent).toContain("whether model routing was reset");
   });
 });
 
@@ -3864,7 +3893,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   function failEveryRead(): void {
@@ -3935,14 +3964,14 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // answer. Historical, not relative.
     expect(notice.textContent).toContain("was confirmed as saved on this host");
     expect(notice.textContent).toContain(
-      "A reset is also outstanding whose result is unknown",
+      "A reset is also outstanding and unconfirmed, so these may not be the settings now in use",
     );
     // BOTH orderings rejected, not just the first one. "before the" said the
     // confirmation came first and "since then" said the reset did; this state
     // knows neither, so neither may appear.
     expect(notice.textContent).not.toContain("before the");
     expect(notice.textContent).not.toContain("since then");
-    expect(notice.textContent).toContain("hasn't been re-read");
+    expect(notice.textContent).toContain("may not be the settings now in use");
   });
 
   it("N1: refused-on-screen - a refusal that was never rolled back is not described as settings put back", async () => {
@@ -3972,7 +4001,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     fallbackMocks.setMutateAsync.mockRejectedValueOnce(
       refusedByHost("that grace window is out of range"),
     );
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
     await flushHostReplies();
 
@@ -3992,9 +4021,11 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // settings, put back": wrong about the values AND about what happened.
     expect(notice.textContent).not.toContain("put back");
     expect(notice.textContent).not.toContain("last saved settings");
-    expect(notice.textContent).toContain("a change the host turned down");
+    expect(notice.textContent).toContain(
+      "These edits were rejected and haven't been saved.",
+    );
     // The REQUEST account is still the reset's, unchanged by any of this.
-    expect(notice.textContent).toContain("whether the reset went through");
+    expect(notice.textContent).toContain("whether model routing was reset");
   });
 
   it("N1: a refused RESET does not erase the unsent invalid draft it never carried", async () => {
@@ -4100,9 +4131,9 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // The cell renders, which is the reachability claim itself: both accounts
     // are present and each names its own subject.
     expect(notice.textContent).toContain(
-      "whether restoring the default groups went through",
+      "whether the default model groups were restored",
     );
-    expect(notice.textContent).toContain("hasn't been sent");
+    expect(notice.textContent).toContain("haven't been sent");
   });
 
   it("the refused-kept consequence over a CONFIRMED display says the host has it, not that changes are unsaved", async () => {
@@ -4165,9 +4196,8 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     // changes you have made since are still on screen and haven't been saved
     // yet" about values that are the loaded ones and that the host has
     // confirmed - the arm's own reason for existing.
-    expect(notice.textContent).toContain("This change wasn't saved.");
     expect(notice.textContent).toContain(
-      "What's on screen is a different change the host has confirmed, and it is in force.",
+      "That save failed. The settings now shown on this page are saved and in use.",
     );
   });
 });
@@ -4180,7 +4210,7 @@ describe("FallbackSettingsPanel - #15 chooseOption leaves the page queryable by 
     );
     renderPanel();
 
-    openCombobox("Longest wait for a reset");
+    openCombobox("Longest wait for a usage limit to reset");
     chooseOption("1 day");
     await flushHostReplies();
 
@@ -4190,7 +4220,7 @@ describe("FallbackSettingsPanel - #15 chooseOption leaves the page queryable by 
     // of these would throw while the `getByTestId` calls the other fifteen
     // sites use kept working. That asymmetry is the whole finding.
     expect(
-      screen.getByRole("switch", { name: "Automatic fallback" }),
+      screen.getByRole("switch", { name: "Route automatically" }),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Reset" })).toBeDefined();
     // And the list is really unmounted, not merely still reachable.
@@ -4209,8 +4239,9 @@ describe("FallbackSettingsPanel - #15 chooseOption leaves the page queryable by 
     // The value was committed, so this is not a cell that passes by never
     // having opened the Select at all.
     expect(
-      screen.getByRole("combobox", { name: "Longest wait for a reset" })
-        .textContent,
+      screen.getByRole("combobox", {
+        name: "Longest wait for a usage limit to reset",
+      }).textContent,
     ).toContain("1 day");
 
     // This cell is a STANDING check, not a falsifier for a fix - there is no
@@ -4270,7 +4301,7 @@ describe("FallbackSettingsPanel - #17 a refusal consequence takes the SAME autho
   }
 
   function automaticFallback(): HTMLElement {
-    return screen.getByRole("switch", { name: "Automatic fallback" });
+    return screen.getByRole("switch", { name: "Route automatically" });
   }
 
   /**
@@ -4333,7 +4364,7 @@ describe("FallbackSettingsPanel - #17 a refusal consequence takes the SAME autho
     // already have replaced it, and with no staleness banner to contradict it
     // (that banner needs a CONFIRMED reset, which this sequence never had).
     expect(notice.textContent).toContain(
-      "Your last saved settings are back on screen; a reset is also outstanding whose result is unknown, so what the host has now hasn't been re-read.",
+      "Your last saved settings are back on screen; a reset is also outstanding and unconfirmed, so these may not be the settings now in use.",
     );
     expect(notice.textContent).not.toContain("still in force");
     // The account is ORDER-FREE. A lost reply is not dated: this state knows a
@@ -4389,7 +4420,7 @@ describe("FallbackSettingsPanel - #17 a refusal consequence takes the SAME autho
     // why both cells exist rather than one.
     expect(notice.textContent).toContain("This change wasn't saved.");
     expect(notice.textContent).toContain(
-      "What's on screen is a different change the host has confirmed; a reset is also outstanding whose result is unknown, so what the host has now hasn't been re-read.",
+      "What's on screen is a different change the host has confirmed; a reset is also outstanding and unconfirmed, so these may not be the settings now in use.",
     );
     expect(notice.textContent).not.toContain("and it is in force");
     expect(notice.textContent).not.toContain(
@@ -4403,7 +4434,7 @@ describe("FallbackSettingsPanel - AX8: the master switch names its own consequen
     fallbackMocks.queryData = respond(policy({}));
     renderPanel();
     const toggle = await screen.findByRole("switch", {
-      name: "Automatic fallback",
+      name: "Route automatically",
     });
     const describedBy = toggle.getAttribute("aria-describedby");
     // Falsification: replace `<MasterFallbackToggle>` with a bare `<Switch>`
@@ -4413,7 +4444,7 @@ describe("FallbackSettingsPanel - AX8: the master switch names its own consequen
     const description =
       describedBy === null ? null : document.getElementById(describedBy);
     expect(description?.textContent ?? "").toContain(
-      "Recovery already in progress continues; stop it from the chat.",
+      "Chats already switching or waiting carry on - stop those from the chat.",
     );
   });
 });
@@ -4567,7 +4598,7 @@ describe("the tab rail: what splitting one page into four has to keep true", () 
     for (const tab of ["equivalentModels", "overrides"] as const) {
       openFallbackTab(tab);
       expect(
-        screen.getByRole("switch", { name: "Automatic fallback" }),
+        screen.getByRole("switch", { name: "Route automatically" }),
       ).toBeDefined();
     }
   });

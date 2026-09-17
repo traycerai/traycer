@@ -8,6 +8,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { FallbackModelTarget } from "@traycer/protocol/host/chat-fallback";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   ORDERED_PROVIDERS,
@@ -16,6 +17,8 @@ import {
   providerDisplayName,
 } from "@/lib/provider-ordering";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useHostQueries } from "@/hooks/host/use-host-queries";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -249,6 +252,181 @@ export function useFallbackProfileLabels(
 }
 
 /**
+ * Resolves a run tuple's model SLUG to the catalogue label a user recognises.
+ *
+ * `(harnessId, model) => label` - "claude-fable-5-1[1m]" becomes "Claude
+ * Fable". Returns the slug unchanged when nothing can say otherwise, which is
+ * the only honest degradation: a harness the user has since disabled, a cold
+ * catalogue slot, a model the provider has dropped. A slug is ugly; a blank or
+ * an invented name is wrong.
+ */
+export type FallbackModelLabelResolver = (
+  harnessId: string,
+  model: string,
+) => string;
+
+/**
+ * The pair of resolvers every routing surface needs to name a tuple.
+ *
+ * They always travel together - an account label with a raw model slug beside
+ * it is exactly the half-resolved state this pairing exists to prevent - so
+ * helpers that take both take this rather than two positional arguments.
+ */
+export interface FallbackIdentityResolvers {
+  readonly labelFor: FallbackProfileLabelResolver;
+  readonly modelLabelFor: FallbackModelLabelResolver;
+}
+
+const NO_MODEL_HARNESSES: readonly GuiHarnessId[] = [];
+
+/**
+ * Resolves model slugs to catalogue labels for the tuples one surface renders.
+ *
+ * ## Why this exists
+ *
+ * Every routing surface printed `tuple.model` raw, so a countdown card read
+ * "Switching to claude-fable-5-1[1m] · medium on Simar Personal" - a provider's
+ * internal identifier, bracket suffix and all, in a sentence a user is supposed
+ * to make a decision from. The settings page has resolved slugs to labels since
+ * it shipped (`catalogModelForFamily(models, resolved)?.label`); the chat
+ * surfaces simply never did, so one product named one model two ways depending
+ * on which screen you were looking at.
+ *
+ * ## Shape
+ *
+ * A resolver FUNCTION, exactly like {@link useFallbackProfileLabels} beside it,
+ * and for the same reason: a surface names several tuples from one read - the
+ * countdown card's failed and target pair, the return banner's preferred and
+ * fallback pair, a menu's worth of rows - and a hook per tuple would issue a
+ * query per chip.
+ *
+ * ## Cost
+ *
+ * One `agent.gui.listModels` per DISTINCT harness named in `tuples`, which is
+ * one or two in practice and never the rail. It rides the shared cache slot the
+ * app-load prefetcher already fills with the same cache-only contract
+ * (`staleTime`/`gcTime: Infinity`), so on a warm host this adds no request at
+ * all - this is the "label surfaces warming their one subject harness" lane the
+ * catalogue module documents, widened only to the two subjects a hop has.
+ *
+ * Gated on AVAILABILITY as that lane requires: a failed tuple is durable and
+ * can name a harness the user has since disabled or never installed, and an
+ * availability-blind read would hit that provider's `listModels` and retry the
+ * failure on every mount of the card.
+ */
+export function useFallbackModelLabels(
+  client: HostClient<HostRpcRegistry> | null,
+  /**
+   * The harnesses whose catalogues this surface needs, `null` entries ignored.
+   *
+   * Harness IDS rather than tuples, because that is all the hook reads and a
+   * caller does not always hold a tuple: the transcript announcer resolves its
+   * subjects inside an effect event, off live store state, so it subscribes to
+   * the ids it needs and never assembles an array of tuples at render.
+   */
+  harnessIdsInPlay: ReadonlyArray<string | null>,
+  enabled: boolean,
+): FallbackModelLabelResolver {
+  const harnessesQuery = useGuiHarnessesQueryForClient(client, {
+    enabled,
+    subscribed: enabled,
+  });
+  const available = harnessesQuery.data?.harnesses;
+
+  // The wanted harnesses as a stable STRING, computed every render rather than
+  // memoised on `tuples`.
+  //
+  // `tuples` is a fresh array literal at most call sites - a card assembles it
+  // from its own props each render - so a memo keyed on it would rebuild on
+  // every frame anyway, and keying a memo on a value DERIVED from it is the
+  // shape that needs a lint suppression. Deriving the string directly is both
+  // honest and cheaper: it is a set over one to three ids, and the string is
+  // what the memos below actually depend on. A harness id is an enum slug and
+  // cannot contain a space, so the join and split are exact inverses.
+  const wantedKey = [
+    ...new Set(harnessIdsInPlay.flatMap((id) => (id === null ? [] : [id]))),
+  ]
+    .sort()
+    .join(" ");
+
+  const harnessIds = useMemo<readonly GuiHarnessId[]>(() => {
+    if (available === undefined || wantedKey === "") return NO_MODEL_HARNESSES;
+    const availableIds = new Set(
+      available.flatMap((harness) => (harness.available ? [harness.id] : [])),
+    );
+    return wantedKey.split(" ").flatMap((harnessId) => {
+      // `safeParse` rather than trusting the id: a tuple's harness is typed as
+      // the wire's `HarnessId`, and only a `GuiHarnessId` has a GUI model
+      // catalogue to ask about. The two unions list the same members today, so
+      // this refuses nothing - it is here because they are SEPARATELY declared,
+      // and the first terminal-only vendor would otherwise reach `listModels`
+      // for a harness that has no catalogue.
+      const parsed = guiHarnessIdSchema.safeParse(harnessId);
+      return parsed.success && availableIds.has(parsed.data)
+        ? [parsed.data]
+        : [];
+    });
+  }, [available, wantedKey]);
+
+  const requests = useMemo(
+    () =>
+      harnessIds.map((harnessId) => ({
+        method: "agent.gui.listModels" as const,
+        // `null`: these cards name a tuple, not a workspace, and a
+        // project-scoped catalogue would resolve the same slugs anyway.
+        params: { harnessId, workingDirectory: null },
+      })),
+    [harnessIds],
+  );
+
+  const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
+    client,
+    cacheKeyIdentity: undefined,
+    requests,
+    options: {
+      enabled,
+      subscribed: enabled,
+      staleTime: Infinity,
+      gcTime: Infinity,
+    },
+  });
+
+  // One map per catalogue read rather than a linear scan per chip: a menu
+  // resolves one label per row, and re-walking a provider's whole model array
+  // for each of them is the accidental O(rows x models) this avoids - the same
+  // argument the profile resolver's own memo makes.
+  // NESTED maps rather than one map under a composite `harness<sep>slug` key.
+  // A composite key needs a separator that appears in neither half, and a model
+  // slug is provider-authored free text - `claude-fable-5-1[1m]` already
+  // carries brackets - so any separator choice is an assumption about a string
+  // we do not own. Nesting has no separator to choose and no pair of distinct
+  // inputs can collide.
+  const byHarness = useMemo(() => {
+    const outer = new Map<string, ReadonlyMap<string, string>>();
+    harnessIds.forEach((harnessId, index) => {
+      const models = modelQueries[index].data?.models;
+      if (models === undefined) return;
+      const inner = new Map<string, string>();
+      for (const model of models) {
+        inner.set(model.slug.toLowerCase(), model.label);
+      }
+      outer.set(harnessId, inner);
+    });
+    return outer;
+  }, [harnessIds, modelQueries]);
+
+  return useMemo(
+    () =>
+      (harnessId: string, model: string): string =>
+        // Lower-cased on both sides, matching the engine's own family match
+        // (`candidateFamilyMatchesSlug`), so "GPT-5" and "gpt-5" are one model
+        // here exactly as they are to the walk.
+        byHarness.get(harnessId)?.get(model.toLowerCase()) ?? model,
+    [byHarness],
+  );
+}
+
+/**
  * A DESTINATION as every fallback surface names it.
  *
  * One description feeding a menu row's title, a card's headline and the
@@ -305,8 +483,9 @@ function normalizedEffort(reasoningEffort: string | null): string | null {
 export function fallbackDestinationOfTuple(
   tuple: ChatRunSettings,
   labelFor: FallbackProfileLabelResolver,
+  modelLabelFor: FallbackModelLabelResolver,
 ): FallbackDestinationDescription {
-  const identity = fallbackTupleIdentity(tuple, labelFor);
+  const identity = fallbackTupleIdentity(tuple, labelFor, modelLabelFor);
   return {
     providerLabel: identity.providerLabel,
     profileLabel: identity.profileLabel,
@@ -413,6 +592,7 @@ export type FallbackIdentitySubject =
 export function fallbackResolvedIdentitySentence(
   subject: FallbackIdentitySubject,
   labelFor: FallbackProfileLabelResolver,
+  modelLabelFor: FallbackModelLabelResolver,
 ): string | null {
   const pair =
     subject.kind === "return"
@@ -426,7 +606,7 @@ export function fallbackResolvedIdentitySentence(
         };
   if (pair.destination === null) return null;
   return fallbackDestinationSentence(
-    fallbackDestinationOfTuple(pair.destination, labelFor),
+    fallbackDestinationOfTuple(pair.destination, labelFor, modelLabelFor),
     pair.destination.harnessId !== pair.source.harnessId,
   );
 }
@@ -495,6 +675,7 @@ export function pendingFallbackResumesFailedTuple(
 export function fallbackTupleIdentity(
   tuple: ChatRunSettings,
   labelFor: FallbackProfileLabelResolver,
+  modelLabelFor: FallbackModelLabelResolver,
 ): FallbackTupleIdentity {
   const harnessId = tuple.harnessId;
   // Two questions, deliberately answered by two different projections. The
@@ -509,7 +690,11 @@ export function fallbackTupleIdentity(
     providerLabel: fallbackProviderLabelForHarness(harnessId),
     profileLabel: labelFor(tuple.profileId),
     harnessId,
-    model: tuple.model,
+    // The CATALOGUE label, degrading to the slug when nothing can say. Every
+    // surface reads `identity.model`, so resolving it here is what stops one
+    // card saying "Claude Fable" while the one beside it says
+    // "claude-fable-5-1[1m]".
+    model: modelLabelFor(harnessId, tuple.model),
     providerId: providerCliIdForHarness(harnessId),
   };
 }

@@ -144,8 +144,9 @@ import {
   fallbackDestinationOfTuple,
   fallbackDestinationSentence,
   fallbackResolvedIdentitySentence,
+  useFallbackModelLabels,
   useFallbackProfileLabels,
-  type FallbackProfileLabelResolver,
+  type FallbackIdentityResolvers,
 } from "@/components/chat/fallback/fallback-identity";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -156,6 +157,7 @@ import type {
   UnattendedFallbackOutcome,
 } from "@/stores/chats/chat-session-store";
 import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import type {
   BackgroundItem,
   FallbackImpendingAction,
@@ -1056,8 +1058,9 @@ function observeManualFallbackAction(
   manual: ConfirmedManualFallbackAction | null,
   scope: ChatAnnouncementScope,
   lastSequence: number,
-  labelFor: FallbackProfileLabelResolver,
+  resolvers: FallbackIdentityResolvers,
 ): ManualFallbackAnnouncementObservation {
+  const { labelFor, modelLabelFor } = resolvers;
   if (
     manual === null ||
     manual.hostId !== scope.hostId ||
@@ -1084,7 +1087,7 @@ function observeManualFallbackAction(
         manual.sequence,
       ]),
       text: `Switched this chat to ${fallbackDestinationSentence(
-        fallbackDestinationOfTuple(manual.target, labelFor),
+        fallbackDestinationOfTuple(manual.target, labelFor, modelLabelFor),
         true,
       )}.`,
     },
@@ -1265,6 +1268,30 @@ function ChatFallbackAnnouncementSource(
     client,
     props.visible && hasFallback,
   );
+  // The harnesses this announcer may have to name, subscribed rather than
+  // assembled from props: its subjects are read inside an effect event off live
+  // store state, so there is no tuple in hand at render. `useShallow` is what
+  // keeps the array from being a new reference every frame.
+  //
+  // It resolves the same labels the cards do BY CONSTRUCTION - one resolver,
+  // one catalogue - which is the rule this file already states for the sentence
+  // itself: an announcement naming a destination differently from the row the
+  // user is looking at would be a second voice describing one event.
+  const announcedHarnessIds = useStore(
+    handle.store,
+    useShallow((state: ChatSessionState): ReadonlyArray<string | null> => [
+      state.pendingFallback?.failedTuple.harnessId ?? null,
+      state.pendingFallback?.targetTuple?.harnessId ?? null,
+      state.pendingReturn?.preferredTuple.harnessId ?? null,
+      state.pendingReturn?.fallbackTuple.harnessId ?? null,
+      state.confirmedManualFallbackAction?.target?.harnessId ?? null,
+    ]),
+  );
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    announcedHarnessIds,
+    props.visible && hasFallback,
+  );
   const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
   const lastManualSequence = useRef(0);
   const lastUnattendedSequence = useRef(0);
@@ -1281,6 +1308,7 @@ function ChatFallbackAnnouncementSource(
         : fallbackResolvedIdentitySentence(
             { kind: "fallback", pending },
             labelFor,
+            modelLabelFor,
           );
     const plan = fallbackPlanForAnnouncement(
       pending?.impendingAction ?? null,
@@ -1293,12 +1321,13 @@ function ChatFallbackAnnouncementSource(
         : fallbackResolvedIdentitySentence(
             { kind: "return", pending: returning },
             labelFor,
+            modelLabelFor,
           );
     const manual = observeManualFallbackAction(
       state.confirmedManualFallbackAction,
       props,
       lastManualSequence.current,
-      labelFor,
+      { labelFor, modelLabelFor },
     );
     lastManualSequence.current = manual.sequence;
     const unattended = observeUnattendedFallbackOutcome(
@@ -1333,7 +1362,11 @@ function ChatFallbackAnnouncementSource(
           pending === undefined
             ? ""
             : fallbackDestinationSentence(
-                fallbackDestinationOfTuple(pending.failedTuple, labelFor),
+                fallbackDestinationOfTuple(
+                  pending.failedTuple,
+                  labelFor,
+                  modelLabelFor,
+                ),
                 true,
               ),
         targetIdentity,

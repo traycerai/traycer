@@ -407,7 +407,7 @@ describe("settings search", () => {
         "Saved website sessions",
         "In-app notifications",
         "Notification hooks",
-        "Automatic fallback",
+        "Route automatically",
       ]) {
         expect(labelsFor(label, DESKTOP), label).not.toContain(label);
       }

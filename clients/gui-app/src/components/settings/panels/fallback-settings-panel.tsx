@@ -124,7 +124,7 @@ export function FallbackSettingsPanel(): ReactNode {
   const body = <FallbackSettingsPanelBody scope={scope} />;
   return (
     <SettingsPanelShell
-      title="Fallback"
+      title="Model routing"
       description={fallbackPanelDescription(scope)}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
@@ -160,7 +160,12 @@ export function FallbackSettingsPanel(): ReactNode {
  * "No host": the gate below is already saying there is nothing to configure.
  */
 function fallbackPanelDescription(scope: HostScope): string {
-  const base = "When a turn fails on a provider error, try these in order.";
+  // "blocks" is the page's own word for this - the section description in
+  // `fallback-settings.definitions.ts` already says "when a provider blocks
+  // it" - and the panel heading saying "fails on a provider error" instead
+  // made one event sound like two things. The engine's word is the failure
+  // REASON; the user's word is what the provider did to their turn.
+  const base = "When a provider blocks a turn, try these in order.";
   if (scope.host === null) return base;
   return `${base} Applies to your chat agents on ${scope.hostLabel}.`;
 }
@@ -238,7 +243,7 @@ function FallbackSettingsPanelBody(props: {
   // by any failed fetch on this query, including the read-back the editor runs
   // itself after a save whose reply was lost - and that is the one moment the
   // editor must survive. Replacing it wholesale there takes the draft, the
-  // uncertainty notice and the "Check again" button off screen together,
+  // uncertainty notice and the "Check saved settings" button off screen together,
   // leaving no way to find out what the host stored and no record that a save
   // was ever in doubt. So the load-error view is for a load that produced
   // nothing to edit; once there is a policy, a later fetch failure is the
@@ -250,13 +255,13 @@ function FallbackSettingsPanelBody(props: {
           role="alert"
           className="rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"
         >
-          Couldn&apos;t load fallback settings for this host.
+          Couldn&apos;t load model routing for this host.
           <ReportIssueAction
             context={createReportIssueContext({
-              title: "Couldn't load fallback settings",
+              title: "Couldn't load model routing",
               message: null,
               code: null,
-              source: "Fallback settings",
+              source: "Model routing",
             })}
             presentation="link"
             className="ml-1"
@@ -336,7 +341,7 @@ function FallbackPolicyEditor(props: {
    * A read-back of the host's policy is running.
    *
    * Covers BOTH read-backs - the unknown-outcome one and the post-reset one -
-   * because they share the one "Check again" affordance, and a flag named for
+   * because they share the one "Check saved settings" affordance, and a flag named for
    * only one of them would have to be read as covering the other.
    */
   const [readBackInFlight, setReadBackInFlight] = useState(false);
@@ -425,7 +430,7 @@ function FallbackPolicyEditor(props: {
    * Driven from the failure itself rather than from an effect: the request that
    * went unanswered is right here, and an effect watching for the state to
    * contain one would be a second trigger for the same episode. A read-back
-   * that fails leaves the notice standing with its own "Check again", which is
+   * that fails leaves the notice standing with its own "Check saved settings", which is
    * the honest state - we still do not know.
    */
   const reconcileUnknownSave = useCallback(
@@ -491,7 +496,7 @@ function FallbackPolicyEditor(props: {
           if (failure.outcome === "unknown") {
             void reconcileUnknownSave(requestId).catch(() => {
               // Deliberately nothing. A read-back that fails leaves the notice
-              // standing with its own "Check again" - we still do not know -
+              // standing with its own "Check saved settings" - we still do not know -
               // which is reached by NOT dispatching `reconciled`, and that has
               // already happened by the time this runs.
               //
@@ -550,7 +555,7 @@ function FallbackPolicyEditor(props: {
   /**
    * The read that turns a CONFIRMED reset into a rendered one.
    *
-   * Shared by the reset itself and by the banner's "Try again", because they
+   * Shared by the reset itself and by the banner's "Reload settings", because they
    * are the same act: the host has already replaced the row, and the only thing
    * missing is a read of what it now holds. On success the panel remounts the
    * editor onto that read (`onPolicyReplaced`); on failure the editor stays
@@ -633,7 +638,7 @@ function FallbackPolicyEditor(props: {
           void reconcileUnknownSave(requestId).catch(() => {
             // Nothing, for the reason spelled out at the `commit()` call site:
             // a read-back that fails leaves the notice standing with its own
-            // "Check again", and an unowned rejection would replace that
+            // "Check saved settings", and an unowned rejection would replace that
             // honest state with a renderer error nobody handles.
           });
         }
@@ -703,7 +708,7 @@ function FallbackPolicyEditor(props: {
           void reconcileUnknownSave(requestId).catch(() => {
             // Nothing, for the reason spelled out at the `commit()` call site:
             // a read-back that fails leaves the notice standing with its own
-            // "Check again", and an unowned rejection would replace that
+            // "Check saved settings", and an unowned rejection would replace that
             // honest state with a renderer error nobody handles.
           });
         }
@@ -714,17 +719,17 @@ function FallbackPolicyEditor(props: {
   const checkSaveOutcomeAgain = useCallback((): void => {
     const unknown = stateRef.current.unknownSave;
     if (unknown === null) return;
-    // The "Check again" button, so this is the call a person reaches
+    // The "Check saved settings" button, so this is the call a person reaches
     // DELIBERATELY - and the one whose failure the standing notice already
     // describes. Same guard and same reason as the `commit()` call site.
     void reconcileUnknownSave(unknown.requestId).catch(() => {
-      // Nothing: the notice and its "Check again" stay exactly as they are,
+      // Nothing: the notice and its "Check saved settings" stay exactly as they are,
       // which is the honest state when the read-back could not answer either.
     });
   }, [reconcileUnknownSave]);
 
   /**
-   * The banner's "Try again" - the second half of the reset, retried on its
+   * The banner's "Reload settings" - the second half of the reset, retried on its
    * own.
    *
    * Distinct from `checkSaveOutcomeAgain`, which asks the host what it stored
@@ -1072,7 +1077,7 @@ function MasterFallbackToggle(props: {
     <Switch
       checked={props.checked}
       onCheckedChange={props.onCheckedChange}
-      aria-label="Automatic fallback"
+      aria-label="Route automatically"
       aria-describedby={describedById}
     />
   );
@@ -1116,9 +1121,16 @@ function masterToggleDescription(inFlightCount: number): string {
  * where the whole editor is, next to the other notice that says the same kind
  * of thing.
  *
- * "Try again", not "Check again": there is nothing to check. The question the
- * unknown-outcome notice asks - what did the host store? - is already answered
- * here, and only the read is outstanding.
+ * "Reload settings", not "Check saved settings": there is nothing to check. The
+ * question the unknown-outcome notice asks - what did the host store? - is
+ * already answered here, and only the read is outstanding.
+ *
+ * It was "Try again" until a user-lens review pointed out that the nearest
+ * antecedent for "again" is the RESET - so on a banner that appears precisely
+ * because a reset just succeeded, the button read as an offer to re-run the
+ * destructive thing. The distinction this comment draws, between checking an
+ * unknown outcome and reloading a known one, was right; only the label was
+ * wrong, and it was wrong in the most expensive direction available here.
  */
 /**
  * What the controls are currently showing, which decides how much the staleness
@@ -1152,9 +1164,9 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
     // that is exactly the request that failed - so the old "not what this host
     // is using now" asserted an inequality the client cannot know.
     case "pre-reset-values":
-      return "The settings below are the ones you had before the reset - they may not be what this host is using now; the settings on this host haven't been re-read since the reset.";
+      return "This page still shows the settings from before the reset. Select Reload settings to show what's now saved on this host.";
     case "own-edit":
-      return "You have changed things since, so what's below is your own edit. Either way, what the reset left on this host has not been read yet.";
+      return "These are your edits. Select Reload settings to show what's now saved on this host.";
     // D327: the notice under the control already says where these values came
     // from ("your last saved settings are back on screen", or that they still
     // predate the reset). The banner's subject is the RESET, so here it says
@@ -1204,7 +1216,7 @@ function UnrefreshedResetNotice(props: {
           onClick={props.onTryAgain}
           data-testid="fallback-reset-retry"
         >
-          Try again
+          Reload settings
           {props.readBackInFlight ? (
             <AgentSpinningDots
               className="ml-1"
@@ -1226,12 +1238,16 @@ function UnreadablePolicyNotice(): ReactNode {
       data-testid="fallback-policy-unreadable"
     >
       <div className="font-medium text-ui-sm text-warning-foreground">
-        Your saved fallback settings couldn&apos;t be read
+        Your saved routing couldn&apos;t be read
       </div>
       <p className="mt-1 max-w-[68ch] text-ui-sm text-muted-foreground">
-        These are the defaults, not your settings. Automatic fallback is not
-        running for you until you save - changing anything here replaces the
-        unreadable copy.
+        {/* "until you save" implied a Save button. There isn't one - this
+            page commits on change (ten `commit()` call sites, no Save
+            control) - so the sentence promised the reader a deliberate moment
+            of consent that does not exist, in front of the one action that
+            destroys their unreadable configuration. */}
+        We&apos;re showing default settings, with automatic routing off. Changes
+        save automatically and replace the settings we couldn&apos;t read.
       </p>
     </div>
   );
@@ -1255,7 +1271,7 @@ function UnreadablePolicyNotice(): ReactNode {
  * rather than the condition written out twice.
  *
  * Deliberately NOT `unknownSave`: that field renders no line of its own, it
- * only adds "Check again" INSIDE the host-error block, so a dot keyed on it
+ * only adds "Check saved settings" INSIDE the host-error block, so a dot keyed on it
  * would point at a tab with nothing on it. Deliberately not `saveInFlight`
  * either - a spinner is not something to act on.
  */
@@ -1272,7 +1288,7 @@ function FallbackSaveStatus(props: {
   /** Alignment for the group this is rendered inside; groups differ. */
   readonly className: string;
   readonly saveInFlight: boolean;
-  /** A read-back is running, so "Check again" is already answered. */
+  /** A read-back is running, so "Check saved settings" is already answered. */
   readonly readBackInFlight: boolean;
   readonly onCheckAgain: () => void;
 }): ReactNode {
@@ -1317,7 +1333,7 @@ function FallbackSaveStatus(props: {
   // reachable now that a failure preserves a validation error it did not judge:
   // the failure also claims `activeField`, so its own notice landed in a group
   // whose status line was already spoken for, and an early return took the
-  // notice AND the only "Check again" off the page while its ticket stayed
+  // notice AND the only "Check saved settings" off the page while its ticket stayed
   // open. That is the R9 defect from the other side - an affordance dropped
   // because a rendered claim was keyed on something other than the fact it
   // describes - and it predates the preservation on the `refused-kept` arm,
@@ -1363,7 +1379,7 @@ function FallbackSaveStatus(props: {
                 onClick={onCheckAgain}
                 data-testid="fallback-check-again"
               >
-                Check again
+                Check saved settings
                 {readBackInFlight ? (
                   <AgentSpinningDots
                     className="ml-1"
@@ -1796,7 +1812,7 @@ function saveNoticeStatus(
  * hedges rather than asserting an inequality no client can know.
  */
 const PRE_RESET_ROLLBACK_ACCOUNT =
-  "What's back on screen is still the settings from before the reset, which may no longer be what this host is using.";
+  "These are still the settings from before the reset, which may no longer be what this host is using.";
 
 /**
  * The tail every host-claiming sentence ends in while an operation's outcome is
@@ -1809,7 +1825,7 @@ const PRE_RESET_ROLLBACK_ACCOUNT =
  * not drift - that lives here.
  */
 const OUTSTANDING_OPERATION_TAIL =
-  "is also outstanding whose result is unknown, so what the host has now hasn't been re-read.";
+  "is also outstanding and unconfirmed, so these may not be the settings now in use.";
 
 /**
  * The account of the host's row when an operation that did NOT carry the
@@ -1862,7 +1878,7 @@ function saveNoticeConsequence(
       if (status.authorityInvalidated !== null) {
         return `Your last saved settings are back on screen; ${outstandingOperationAccount(status.authorityInvalidated)}`;
       }
-      return "Your last saved settings are back on screen and still in force.";
+      return "Your last saved settings are back, and still in force.";
     case "refused-kept":
       // The refusal is about a request that judged some other draft, so the
       // question is what is on screen NOW - and "haven't been saved yet" is a
@@ -1881,11 +1897,11 @@ function saveNoticeConsequence(
         if (status.authorityInvalidated !== null) {
           return `This change wasn't saved. What's on screen is a different change the host has confirmed; ${outstandingOperationAccount(status.authorityInvalidated)}`;
         }
-        return "This change wasn't saved. What's on screen is a different change the host has confirmed, and it is in force.";
+        return "That save failed. The settings now shown on this page are saved and in use.";
       }
-      return "The changes you have made since are still on screen and haven't been saved yet.";
+      return "The changes you made since are still here, and still unsaved.";
     case "refused-unverified":
-      return "This change wasn't saved. Another change is still unconfirmed, so what's stored may not be what you last saw.";
+      return "One save failed, and another hasn't been confirmed. We can't yet tell which settings are saved.";
     case "unknown":
       // "What's on screen" is only the unanswered draft while the user has not
       // moved on. Where they have, the second sentence must describe what the
@@ -1893,7 +1909,7 @@ function saveNoticeConsequence(
       // that is in flight, or one the host has already stored, is a dispatch
       // claim read off a revision comparison.
       if (status.displayDispatch === "unanswered") {
-        return "What's on screen is your change, not a confirmed setting - it may or may not have been saved.";
+        return "These are your edits. We haven't confirmed whether they were saved.";
       }
       // The REQUEST account and the DISPLAY account are two different sentences
       // about two different things, and a no-draft request is where they come
@@ -1929,9 +1945,9 @@ function unknownRequestAccount(carries: FallbackSaveCarries): string {
     case "draft":
       return "That change may or may not have been saved.";
     case "reset":
-      return "We don't know whether the reset went through - it hasn't been re-read.";
+      return "We couldn't confirm whether model routing was reset.";
     case "restore":
-      return "We don't know whether restoring the default groups went through - it hasn't been re-read.";
+      return "We couldn't confirm whether the default model groups were restored.";
   }
 }
 
@@ -1980,26 +1996,26 @@ function displayAccount(status: {
       // is then recorded over values nobody changed, where "a change you made
       // since has been saved" is false twice over: no change of theirs was
       // saved, and the controls are showing what was there all along.
-      return "What's on screen is what this host has saved.";
+      return "These are the settings this host has saved.";
     case "rollback":
       // Deferring to the rollback account rather than inventing a third
       // description of the same values.
       return status.persistedUnverified
         ? PRE_RESET_ROLLBACK_ACCOUNT
-        : "What's back on screen is your last saved settings, put back.";
+        : "Showing your last saved settings.";
     case "sent-unknown":
       // Deliberately neutral, and deliberately NOT a dispatch verdict either
       // way. These values reached the host; what it did with them is the one
       // thing nobody here knows, and the two sentences that would resolve it -
       // "hasn't been sent" and "has been saved" - are both false (D339).
-      return "What's on screen was sent, but we don't know what the host did with it.";
+      return "These settings were sent, but we couldn't confirm they were saved.";
     case "loaded-unchanged":
       // No host claim at all, which is why this arm has no authority branch:
       // "what was loaded" is a fact about this page, and an unanswered reset
       // cannot make it false (D353).
-      return "What's on screen is what was loaded; nothing has been changed since.";
+      return "This page still shows the settings it loaded.";
     case "uncommitted":
-      return "What's on screen is a newer edit that hasn't been sent.";
+      return "You have changes that haven't been sent.";
     case "refused-on-screen":
       // NOT the rollback's sentence, which is what N1 found this wearing. The
       // host turned this value down and the reducer deliberately did not put
@@ -2009,10 +2025,10 @@ function displayAccount(status: {
       // restored, and the two words the rollback account turns on - "saved",
       // "put back" - are both false here. No host claim is made either, so
       // this arm needs no authority branch.
-      return "What's on screen is a change the host turned down; it's kept here so you can fix it.";
+      return "These edits were rejected and haven't been saved. They are still shown here.";
     // Handled by the caller, which returns before reaching here.
     case "unanswered":
-      return "What's on screen is your change, not a confirmed setting.";
+      return "These are your edits. We haven't confirmed whether they were saved.";
   }
 }
 
@@ -2146,7 +2162,7 @@ function FallbackPanelSkeleton(): ReactNode {
         testId={undefined}
         variant="orbit"
       />
-      Loading fallback settings…
+      Loading model routing…
     </div>
   );
 }

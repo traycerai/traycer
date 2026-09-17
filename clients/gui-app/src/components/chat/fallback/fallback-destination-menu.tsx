@@ -98,6 +98,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 export function FallbackDestinationMenu({
   triggerLabel,
   triggerDisabled,
+  triggerVariant,
   header,
   selector,
   epicId,
@@ -113,6 +114,25 @@ export function FallbackDestinationMenu({
 }: {
   readonly triggerLabel: string;
   readonly triggerDisabled: boolean;
+  /**
+   * How much weight the trigger carries, which differs per entry point because
+   * what the menu is an ALTERNATIVE to differs.
+   *
+   * On the two composer cards a plan is already in motion and the menu is the
+   * "actually, somewhere else" escape from it, so `ghost` is right - the card's
+   * own refusal is the louder control.
+   *
+   * On the error card nothing is in motion and switching IS the thing that
+   * helps, so it takes `secondary` and the retry beside it drops to `ghost`.
+   * Hard-coding `ghost` here is what made the error card read the way it did:
+   * a filled Retry, a bare Switch… and a bare settings link in one row, with
+   * the weakest of the three actions carrying all the visual weight.
+   *
+   * A narrow union rather than the full variant type on purpose - these are the
+   * only two weights this trigger has a meaning for, and widening it would
+   * invite a `destructive` switch trigger.
+   */
+  readonly triggerVariant: "secondary" | "ghost";
   /**
    * One line above the rows, or `null`. The two card entry points use it to say
    * what is happening to the window behind the menu - "countdown paused while
@@ -187,7 +207,7 @@ export function FallbackDestinationMenu({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <Button size="sm" variant="ghost" disabled={triggerDisabled}>
+        <Button size="sm" variant={triggerVariant} disabled={triggerDisabled}>
           {triggerLabel}
         </Button>
       </PopoverTrigger>

@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { Clock } from "lucide-react";
+import { Clock, X } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,11 @@ import {
 } from "./fallback-copy";
 import {
   fallbackTupleIdentity,
+  useFallbackModelLabels,
   useFallbackProfileLabels,
 } from "./fallback-identity";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
+import { useDismissRoutingCard } from "./use-dismissed-routing-cards";
 import {
   IGNORE_FALLBACK_OUTCOME,
   useFallbackCancel,
@@ -76,13 +78,28 @@ export function FallbackWaitingCard({
   readonly menu: ReactNode | null;
 }) {
   const labelFor = useFallbackProfileLabels(client, true);
+  // One tuple: a wait parks on the account that failed and resumes there,
+  // so there is no destination to name.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    [pending.failedTuple.harnessId],
+    true,
+  );
   // Nothing to do with the outcome: "Stop waiting" has no follow-on
   // navigation, and the shared toast already reports a refusal. The grace
   // card's "Sign in instead" is the one caller that needs the answer.
   const cancel = useFallbackCancel(client, chatId, IGNORE_FALLBACK_OUTCOME);
   const openFallbackSettings = useOpenFallbackSettings(hostId);
+  const dismissCard = useDismissRoutingCard();
+  const onDismiss = useCallback(() => {
+    dismissCard(chatId, pending.traversalId, "waiting");
+  }, [chatId, dismissCard, pending.traversalId]);
 
-  const waiting = fallbackTupleIdentity(pending.failedTuple, labelFor);
+  const waiting = fallbackTupleIdentity(
+    pending.failedTuple,
+    labelFor,
+    modelLabelFor,
+  );
   const reasonLabel = fallbackReasonLabelFor(pending.reason);
   const queuedText = queuedMessagesWaitingText(pending.queuedItemsMoving);
 
@@ -120,14 +137,27 @@ export function FallbackWaitingCard({
             </span>
           ) : null}
         </div>
-        <Button
-          size="xs"
-          variant="muted"
-          className="h-auto"
-          onClick={openFallbackSettings}
-        >
-          {FALLBACK_SETTINGS_LABEL}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            size="xs"
+            variant="muted"
+            className="h-auto"
+            onClick={openFallbackSettings}
+          >
+            {FALLBACK_SETTINGS_LABEL}
+          </Button>
+          {/* Never disabled, and not an answer to the card - see the same
+              control on the countdown card. "Stop waiting" is the answer;
+              this only puts the banner away while the wait runs on. */}
+          <Button
+            size="icon-xs"
+            variant="muted"
+            aria-label="Dismiss"
+            onClick={onDismiss}
+          >
+            <X aria-hidden />
+          </Button>
+        </div>
       </div>
 
       <FallbackWaitHeadline deadline={pending.deadline} />

@@ -330,7 +330,7 @@ describe("fallbackTraversalAnnouncement", () => {
       now: NOW,
     })?.text;
     expect(text).toContain(
-      "No fallback destination is available. The chat will stop and keep the error visible.",
+      "There's nowhere to route this chat. It will stop and keep the error visible.",
     );
     expect(text).toContain("The fallback is due now.");
     // Falsification: drop the `seconds === 0` branch in `cancelOpportunityText`
@@ -355,7 +355,7 @@ describe("fallbackTraversalAnnouncement", () => {
       now: NOW,
     })?.text;
     expect(exhausted).toContain(
-      "No fallback destination is available. The chat will stop and keep the error visible.",
+      "There's nowhere to route this chat. It will stop and keep the error visible.",
     );
     // Falsification: revert `fallbackPlanText(null)` to "The host is
     // checking the next fallback action." - an exhausted traversal would
@@ -382,9 +382,7 @@ describe("fallbackTraversalAnnouncement", () => {
       targetIdentity: null,
       now: NOW,
     })?.text;
-    expect(stillResolving).toContain(
-      "The host is checking the next fallback action.",
-    );
+    expect(stillResolving).toContain("Working out where to route this chat…");
 
     // And a RESOLVED switch plan whose destination is not yet chosen is a
     // third, separate sentence - none of these three may collide.
