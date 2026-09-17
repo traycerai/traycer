@@ -36,6 +36,45 @@ describe("providers cache invalidation", () => {
     expect(PROVIDER_INVALIDATIONS).toContain("agent.tui.listHarnesses");
   });
 
+  it("PROVIDER_INVALIDATIONS names autoJudge.get", () => {
+    // `autoJudge.get` answers a `blocked` verdict whose reasons include
+    // `provider-disabled`, so enabling/disabling a provider changes the
+    // answer. Without this entry the response stays cached indefinitely
+    // while mounted - the Auto row keeps claiming no judge would run, or
+    // keeps promising a provider account, after the provider toggle that
+    // should have changed that.
+    expect(PROVIDER_INVALIDATIONS).toContain("autoJudge.get");
+  });
+
+  it("commitAuthoritativeProvidersList invalidates autoJudge.get for the written host only", async () => {
+    const queryClient = new QueryClient();
+    const autoJudgeKey = hostQueryKeys.method<HostRpcRegistry, "autoJudge.get">(
+      "host-1",
+      "autoJudge.get",
+      {},
+    );
+    const otherHostAutoJudgeKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "autoJudge.get"
+    >("host-2", "autoJudge.get", {});
+    queryClient.setQueryData(autoJudgeKey, { selection: null });
+    queryClient.setQueryData(otherHostAutoJudgeKey, { selection: null });
+
+    await commitAuthoritativeProvidersList({
+      queryClient,
+      hostId: "host-1",
+      update: () => ({ providers: [], native: null }),
+    });
+
+    expect(queryClient.getQueryState(autoJudgeKey)?.isInvalidated).toBe(true);
+    // The per-host keying is the AGENTS.md rule this has to keep: a provider
+    // toggle written on host-1 must not stale-out host-2's independent judge
+    // verdict.
+    expect(
+      queryClient.getQueryState(otherHostAutoJudgeKey)?.isInvalidated,
+    ).toBe(false);
+  });
+
   it("commitAuthoritativeProvidersList invalidates both harness catalogs for the written host", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(guiKey, { harnesses: [] });

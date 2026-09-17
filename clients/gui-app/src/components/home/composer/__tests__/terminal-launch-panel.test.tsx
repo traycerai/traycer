@@ -83,6 +83,7 @@ function makeToolbarStore() {
     },
     onSettingsChange: null,
     tuiOnly: true,
+    chatLineCarriesAutoMode: null,
     hostId: "host-a",
   });
   // The Start gate reads the selected harness's runtime `modes` from the
@@ -104,6 +105,7 @@ function makeToolbarStore() {
           "auto_accept_edits",
           "full_access",
         ],
+        nativeAutoJudge: false,
         availabilityPending: false,
       },
     ],
@@ -111,6 +113,7 @@ function makeToolbarStore() {
     models: [],
     modelsLoaded: true,
     tuiOnly: true,
+    chatLineCarriesAutoMode: null,
   });
   return store;
 }
@@ -126,6 +129,7 @@ function makeGuiOnlyToolbarStore() {
     },
     onSettingsChange: null,
     tuiOnly: true,
+    chatLineCarriesAutoMode: null,
     hostId: "host-a",
   });
   // A GUI-only harness cannot back a terminal agent. The Start gate follows
@@ -142,6 +146,7 @@ function makeGuiOnlyToolbarStore() {
         modes: ["gui"],
         requiresApiKey: false,
         supportedPermissionModes: ["supervised", "full_access"],
+        nativeAutoJudge: false,
         availabilityPending: false,
       },
     ],
@@ -149,6 +154,7 @@ function makeGuiOnlyToolbarStore() {
     models: [],
     modelsLoaded: true,
     tuiOnly: true,
+    chatLineCarriesAutoMode: null,
   });
   return store;
 }

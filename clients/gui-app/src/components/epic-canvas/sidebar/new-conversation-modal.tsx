@@ -664,6 +664,7 @@ export function NewConversationModalBody(props: {
       hostClient,
       hostId: resolvedHostId,
       tuiOnly: draftComposerMode === "terminal",
+      chatLineCarriesAutoMode: null,
     },
   );
   const harnessId = useStore(

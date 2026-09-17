@@ -21,6 +21,8 @@ import {
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV71,
+  listGuiHarnessesResponseSchemaV80,
+  listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -28,6 +30,8 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV90,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -38,6 +42,7 @@ import {
 import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
+  getChatRunSettingsResponseSchemaV20,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -74,8 +79,16 @@ const LIVE_FROZEN_EXPORTS = {
   // of major 7 from growing the id enum (`versioned-rpc.ts` refuses it), so
   // 7.1 could not absorb the id even though no tag has shipped 7.1 itself.
   "agent.gui.listHarnesses@7.1": listGuiHarnessesResponseSchemaV71,
-  // The head line, pinned for the same reason `providers.list@8.0` is.
-  "agent.gui.listHarnesses@8.0": listGuiHarnessesResponseSchema,
+  // Two freezes, one line apart. 8.0 froze when 9.0 opened for Antigravity
+  // (`cli-v1.3.0` shipped 8.0 at the twenty-id row); 9.0 then froze when 9.1
+  // opened for the `auto` permission mode and the `nativeAutoJudge` row field.
+  // Both give the same response as when they were head - each names its frozen
+  // schema now and its dump is unchanged, so neither row was regenerated.
+  "agent.gui.listHarnesses@8.0": listGuiHarnessesResponseSchemaV80,
+  "agent.gui.listHarnesses@9.0": listGuiHarnessesResponseSchemaV90,
+  // The head line, holding 9.0's old job: it names the LIVE schema, so the next
+  // attempt to grow the row fails here first.
+  "agent.gui.listHarnesses@9.1": listGuiHarnessesResponseSchema,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
@@ -144,13 +157,32 @@ const LIVE_FROZEN_EXPORTS = {
   // list and the snapshot's key set are held equal below, so deleting a row
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
-  "providers.list@8.0": providersListResponseSchema,
+  // Two freezes here as well: 8.0 froze when 9.0 opened, and 9.0 froze at the
+  // pre-`autoJudge` provider state when 9.1 opened to publish the per-provider
+  // judge. Same response as when each was head - each names its frozen schema
+  // now and its dump is unchanged, so neither row was regenerated.
+  "providers.list@8.0": providersListResponseSchemaV80,
+  "providers.list@9.0": providersListResponseSchemaV90,
+  // The head line, holding 9.0's old job: it names the LIVE schema, so the next
+  // attempt to grow the provider state fails here first.
+  "providers.list@9.1": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate
   // noticed.
   "epic.getChatRunSettings@1.0": getChatRunSettingsResponseSchemaV10,
-  "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchema,
+  // 2.0 is RELEASED (the `1.3.0` tags shipped it), so it is frozen pre-`auto`
+  // rather than widened in place: it names its own hand-copied
+  // `chatRunSettingsSchemaV20`, whose `permissionMode` is pinned to
+  // `permissionModeSchemaPreAuto` for the same half-freeze reason its harness
+  // id is. Major 3 is the head and the only line that may spell `auto`. What
+  // protects the released 1.0 reader is the identical pin on
+  // `chatRunSettingsSchemaV10` plus the V2->V1 bridge's existing
+  // `DOWNGRADE_UNSUPPORTED` refusal, which covers the mode dimension for free.
+  "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchemaV20,
+  // The head line: it names the LIVE response, so the next attempt to grow the
+  // settings tuple fails here first.
+  "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;

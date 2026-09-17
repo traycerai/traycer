@@ -99,6 +99,19 @@ export function SessionImportWizard(props: {
   const hostId = streamBinding?.hostId ?? null;
   const runStatus = useSessionImportRun(hostId).status;
   const runIdle = runStatus === "idle";
+  // No catalog warm-up here, deliberately, and the reason is worth keeping.
+  //
+  // This used to prefetch the target host's `agent.gui.listHarnesses` rows
+  // because `importPermissionModeFor` fell back to them to decide whether the
+  // host knew `auto`. That fallback is gone - a catalog row is a different
+  // method's fact - so the warm-up was paying an RPC to fill a slot nothing
+  // reads. The gate now asks `sessionImport.run`'s own line and nothing else.
+  //
+  // What warms THAT line is already on screen: `useSessionImportScan` opens a
+  // `sessionImport.scan` subscription on this same binding's client while the
+  // user is still picking rows, and a stream handshake caches a declarable
+  // version for every method in the peer's manifest - `sessionImport.run`
+  // included - so the line is warm before the Import button exists to click.
   const statusQuery = useSessionImportCheckStatus(streamBinding, runIdle);
   const activeRun = statusQuery.isSuccess ? statusQuery.data.active : null;
   const canSubmit = sessionImportHostIsIdle(statusQuery);

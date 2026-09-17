@@ -193,6 +193,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           labelDisplay="responsive"
           store={store}
           withServiceTier={false}
+          withReasoning
           tuiOnly
           lockedHarnessId={null}
           disabled={pending}

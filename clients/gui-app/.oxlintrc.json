@@ -296,6 +296,7 @@
         "@tanstack/query/mutation-property-order": "error",
         "@tanstack/router/create-route-property-order": "error",
         "react/no-array-index-key": "error",
+        "react/jsx-no-duplicate-props": "error",
         "react/jsx-no-target-blank": "error",
         "react/no-danger": "error",
         "react/no-direct-mutation-state": "error",

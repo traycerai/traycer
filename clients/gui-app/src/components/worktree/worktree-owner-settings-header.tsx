@@ -413,13 +413,14 @@ function OwnerSettingsHarnessMark(props: {
 /** Terminal-agent mode in the same icon + label grammar as chat permission. */
 /**
  * Permission mode with the icon the rest of the app already uses for it -
- * `ShieldCheck` / `FileCheck2` / `UnlockKeyhole`, resolved through the shared
- * `findPermissionOption` table rather than chosen here.
+ * `ShieldCheck` / `FileCheck2` / `Gavel` / `UnlockKeyhole`, resolved through
+ * the shared `findPermissionOption` table rather than chosen here.
  *
- * This row previously hardcoded a closed padlock for ALL THREE modes, so the
- * least restricted one - "Full access" - was the one that read as locked down.
+ * This row previously hardcoded a closed padlock for every mode, so the least
+ * restricted one - "Full access" - was the one that read as locked down.
  * Taking the icon from the same lookup as the label is what makes that
- * inversion unrepresentable rather than merely fixed.
+ * inversion unrepresentable rather than merely fixed, and it is why adding
+ * `auto` to that table lit this surface up with nothing to change here.
  */
 function OwnerSettingsPermission(props: {
   readonly mode: PermissionMode;

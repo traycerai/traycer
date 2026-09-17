@@ -18,6 +18,11 @@ import type {
   HostRpcError,
   RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -189,6 +194,20 @@ const providerMocks = vi.hoisted(() => ({
   } | null,
   refreshUsageLimits: vi.fn(() => Promise.resolve()),
   openLink: vi.fn(),
+}));
+
+// The auto-judge row the panel now renders reaches TanStack Query for the
+// harness catalog and the set-judge mutation. This suite renders the panel
+// without a `QueryClientProvider` (every other data hook it uses is mocked at
+// this same seam), and the row is not what any test here asserts, so both go
+// the same way. `use-gui-harness-catalog` is stubbed with only the member this
+// subtree calls.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessesQuery: () => ({ data: undefined, isPending: false }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
+  useProvidersSetAutoJudge: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -500,15 +519,59 @@ vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
   }),
 }));
 
+// NOTE: this is the SECOND `vi.mock` for this module in this file (see the
+// stub near the top) and the one that wins, so it is the shape the suite
+// actually runs against.
+//
+// `supportedPermissionModes` is stated rather than omitted because the panel
+// derives the Permissions TAB from it now, and the real row schema defaults the
+// field to every mode - a row without it is a shape the host cannot send.
+//
+// It includes `auto`, which is what makes this suite's "every supported
+// section" case true. That matches the stance the file already takes one mock
+// up: `useHostSupportsMethod` is stubbed `() => true` for every method, so this
+// is a host with everything, now expressed in the catalog because that is where
+// the tab's answer comes from.
+//
+// Held in a `vi.hoisted` holder, per-test mutable, so the Permissions-tab
+// visibility tests can swap the catalog's `supportedPermissionModes` (or drop
+// the catalog to `undefined` for "still loading") without a third `vi.mock`
+// racing this one - mirrors `providersUpdatedAt` in
+// `provider-auto-judge-section.test.tsx`.
+interface CatalogHarnessFixture {
+  readonly id: string;
+  readonly modes: ReadonlyArray<string>;
+  readonly supportedPermissionModes: ReadonlyArray<string>;
+}
+const DEFAULT_CATALOG_HARNESSES: ReadonlyArray<CatalogHarnessFixture> = [
+  {
+    id: "claude",
+    modes: ["gui", "tui"],
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "auto",
+      "full_access",
+    ],
+  },
+  {
+    id: "codex",
+    modes: ["gui", "tui"],
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "auto",
+      "full_access",
+    ],
+  },
+];
+const guiHarnessesCatalogMock = vi.hoisted(() => ({
+  data: undefined as
+    | { harnesses: ReadonlyArray<CatalogHarnessFixture> }
+    | undefined,
+}));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
-    data: {
-      harnesses: [
-        { id: "claude", modes: ["gui", "tui"] },
-        { id: "codex", modes: ["gui", "tui"] },
-      ],
-    },
-  }),
+  useGuiHarnessesQuery: () => ({ data: guiHarnessesCatalogMock.data }),
 }));
 
 vi.mock("@/hooks/providers/use-refresh-providers", async () => {
@@ -1397,6 +1460,15 @@ function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
 
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
+    // The Permissions tab reads the NEGOTIATED `agent.gui.listHarnesses` line
+    // (see `permissionsTab`), through the real manifest registry - only the
+    // scope's host id is mocked. `9.1` is the line `auto` became expressible
+    // on, so this is the ordinary auto-capable host; the cases about the gate
+    // record their own manifest over it.
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     useProvidersFocusStore.setState({
       focusHarnessId: null,
       focusTab: null,
@@ -1482,6 +1554,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // fake timers mid-test, and a leaked fake clock would strand every later
     // test's timers (and Testing Library's own unmount work).
     vi.useRealTimers();
+    resetNegotiatedManifests();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     cleanup();
     useProvidersFocusStore.setState({
@@ -6716,6 +6789,70 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
   });
+
+  // The Permissions tab is derived from the NEGOTIATED
+  // `agent.gui.listHarnesses` line, which is the fact that says this machine
+  // has Auto mode at all. Two earlier gates are retired: the host-wide
+  // `autoJudge.get` method (a different question one method over) and the
+  // catalog's UNION of `supportedPermissionModes` (which an unconstrained row
+  // contributes nothing to - see `permissionsTab` in
+  // `providers-settings-panel.tsx`).
+  //
+  // `useHostSupportsMethod` is stubbed `() => true` for every method throughout
+  // this file, which is what makes these cases prove the gate moved off the
+  // method; and they hold the ROWS fixed while moving the line, which is what
+  // proves it moved off the union.
+  it("hides the Permissions tab when the negotiated catalog line predates auto, even though the rows name it", () => {
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
+      "agent.gui.listHarnesses": {
+        major: agentGuiListHarnessesV91.schemaVersion.major,
+        minor: agentGuiListHarnessesV91.schemaVersion.minor - 1,
+      },
+    });
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
+  });
+
+  // THE REGRESSION the line-based gate exists for: rows that constrain nothing
+  // are rows the host accepts every mode on, and they contribute nothing to the
+  // union the previous gate read - so a union test hid the tab on exactly the
+  // host that would run Auto.
+  it("shows the Permissions tab on an auto-capable line whose rows are all unconstrained", () => {
+    guiHarnessesCatalogMock.data = {
+      harnesses: DEFAULT_CATALOG_HARNESSES.map((harness) => ({
+        ...harness,
+        supportedPermissionModes: [],
+      })),
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("tab", { name: "Permissions" })).toBeDefined();
+  });
+
+  it("hides the Permissions tab until a handshake with this host has been recorded", () => {
+    resetNegotiatedManifests();
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -6790,6 +6927,11 @@ function pickerProviderState(input: {
 
 describe("<ProvidersSettingsPanel /> mobile section picker", () => {
   beforeEach(() => {
+    // The main desktop describe's last test can leave this at any value
+    // (including `undefined`, for its "still loading" case) - reset to the
+    // "everything supported" default here so this suite's Permissions-tab
+    // row is unaffected by test order.
+    guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     // `useIsMobileViewport` reads `window.innerWidth` directly (not
     // `matchMedia().matches`, which the global test shim always reports as
     // `false`), so setting it before render is enough to force the phone
@@ -6811,6 +6953,12 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     hostScopeMocks.host = undefined;
     hostScopeMocks.status = undefined;
     hostScopeMocks.client = null;
+    // Same auto-capable line the desktop suite records: the Permissions section
+    // is drawn from the negotiated `agent.gui.listHarnesses` minor, and this
+    // describe asserts the phone picker offers EVERY supported section.
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
     // Default fixture for the "entering a provider" tests below: a single
     // provider advertising every hub section.
     providerMocks.listResult.data = {
@@ -6827,6 +6975,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
 
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     // Restore before the next file's tests (or the suite above, if test order
     // ever changes) see the default desktop width again.
     Object.defineProperty(window, "innerWidth", {
@@ -6870,6 +7019,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
       "Profiles & Limits",
       "CLI & Args",
       "Env",
+      "Permissions",
       "Model Providers",
       "MCP",
       "Plugins",

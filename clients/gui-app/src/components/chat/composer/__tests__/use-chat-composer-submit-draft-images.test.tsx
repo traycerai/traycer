@@ -186,6 +186,7 @@ function mountSubmit(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
   return renderHook(() =>
@@ -628,6 +629,7 @@ function mountSubmitRerenderable(initial: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
   const bridgeSource = mutableBridgeSource(initial.draftBlobBridgeSupported);
@@ -944,6 +946,7 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: null,
     });
     const { result } = renderHook(() =>

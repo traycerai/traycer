@@ -1,12 +1,16 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { useStore } from "zustand";
 
 import { ComposerSendButton } from "@/components/home/composer/composer-send-button";
 import { ComposerOptionsSheet } from "@/components/home/mobile/composer-options-sheet";
 import {
+  autoModeOfferableHere,
+  catalogSupportedPermissionModes,
   findPermissionOption,
   normalizePermissionMode,
 } from "@/components/home/data/landing-options";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import {
   ComposerMicButton,
@@ -40,6 +44,12 @@ interface ComposerMobileToolbarProps {
   readonly runTargetHostId: string | null;
   /** Where the picker's setup terminal lands - see `HarnessModelPicker`. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  /**
+   * Whether THIS chat's negotiated `chat.subscribe` line can carry `auto`, or
+   * `null` with no chat session in scope - see `ComposerToolbar`'s prop of the
+   * same name and {@link autoModeOfferableHere}.
+   */
+  readonly chatLineCarriesAutoMode: boolean | null;
 }
 
 /**
@@ -69,6 +79,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
+    chatLineCarriesAutoMode,
   } = props;
 
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -80,6 +91,37 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   );
   const harnessLabel = useStore(store, (s) => s.harnessLabel);
   const setPermission = useStore(store, (s) => s.setPermission);
+  // Same two inputs the desktop toolbar computes, from the same helpers - see
+  // `ComposerToolbar`.
+  const harnesses = useStore(store, (s) => s.catalog.harnesses);
+  const catalogSupportedModes = useMemo(
+    () => catalogSupportedPermissionModes(harnesses),
+    [harnesses],
+  );
+  // The HOST capability the union cannot express: a catalog of unconstrained
+  // rows names no modes at all, and even a fully constrained one cannot tell
+  // "this machine predates `auto`" from "every provider here declines it".
+  // The negotiated catalog line answers the first question directly, and the
+  // picker's unsupported copy uses it to decide who to blame.
+  // `null` when no host is named: that is "no host in scope", not "the host
+  // cannot spell `auto`", and the two are different claims. A named host whose
+  // line is unreadable still answers `false` - the composer is about to send on
+  // it - which is what `catalogLineKnowsAutoMode(null)` gives.
+  //
+  // ANDed with this chat's own `chat.subscribe` line, exactly as on desktop -
+  // the catalog line says the host can OFFER the mode, a different method
+  // CARRIES it. See `autoModeOfferableHere`.
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    runTargetHostId,
+    "agent.gui.listHarnesses",
+  );
+  const hostKnowsAutoMode =
+    runTargetHostId === null
+      ? null
+      : autoModeOfferableHere(listHarnessesLine, chatLineCarriesAutoMode);
+  // Same two inputs as the desktop toolbar - see `ComposerToolbar`.
+  const runHarnessId = useStore(store, (s) => s.selection.harnessId);
+  const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);
   // Same gate as `ComposerToolbarRight`: an empty slug is the transient
   // "catalog still loading" marker and must never reach the wire as `model: ""`.
   const modelResolved = useStore(
@@ -90,7 +132,11 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   // Mirror the desktop picker: show the mode the harness will actually run,
   // never a stale sticky it does not honor.
   const permissionOption = findPermissionOption(
-    normalizePermissionMode(permission, supportedPermissionModes),
+    normalizePermissionMode(
+      permission,
+      supportedPermissionModes,
+      hostKnowsAutoMode,
+    ),
   );
   const PermissionIcon = permissionOption.icon;
 
@@ -141,6 +187,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
         <HarnessModelPicker
           store={store}
           withServiceTier
+          withReasoning
           tuiOnly={false}
           lockedHarnessId={null}
           disabled={settingsLocked}
@@ -175,6 +222,10 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
         onPermissionChange={setPermission}
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
+        catalogSupportedModes={catalogSupportedModes}
+        hostKnowsAutoMode={hostKnowsAutoMode}
+        turnActive={activeTurnStatus !== null && !settingsLocked}
+        judgeBilling={judgeBilling}
         settingsLocked={settingsLocked}
       />
     </div>
