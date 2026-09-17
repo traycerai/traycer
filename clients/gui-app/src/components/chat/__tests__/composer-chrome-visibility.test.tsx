@@ -214,6 +214,11 @@ function renderPermissionsPicker() {
       onChange={vi.fn()}
       supportedPermissionModes={null}
       harnessLabel={null}
+      catalogSupportedModes={null}
+      hostKnowsAutoMode={false}
+      turnActive={false}
+      judgeBilling={null}
+      closeFocus="composer"
     />,
   );
 }

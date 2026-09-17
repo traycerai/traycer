@@ -229,6 +229,7 @@ function makeToolbarStore(seedKey: string) {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 }

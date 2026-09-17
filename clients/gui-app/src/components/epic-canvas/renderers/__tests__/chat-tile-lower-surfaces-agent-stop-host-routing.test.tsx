@@ -227,6 +227,7 @@ function surfacesProps(
       activeTurnStatus: null,
       steerCapable: false,
       steerProtocolSupported: true,
+      autoPermissionModeProtocolSupported: null,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
       stopDisabled: false,

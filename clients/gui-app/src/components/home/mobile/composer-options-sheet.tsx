@@ -2,10 +2,17 @@ import type { ReactNode } from "react";
 import { Check } from "lucide-react";
 
 import {
+  AUTO_MID_TURN_NOTICE,
   PERMISSION_OPTIONS,
+  composerOffersPermissionMode,
   normalizePermissionMode,
+  unsupportedPermissionModeCopy,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
+import {
+  autoJudgeMetaLine,
+  type AutoJudgeBilling,
+} from "@/lib/auto-mode/auto-judge-billing";
 import {
   Drawer,
   DrawerContent,
@@ -24,6 +31,14 @@ interface ComposerOptionsSheetProps {
   /** See `PermissionsPicker`: `null` (or empty) means "no harness scope". */
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
   readonly harnessLabel: string | null;
+  /** See `PermissionsPicker`: the union across the host's whole catalog. */
+  readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /** See `PermissionsPicker`'s prop of the same name. */
+  readonly hostKnowsAutoMode: boolean | null;
+  /** See `PermissionsPicker`: drives the `auto` row's mid-turn notice. */
+  readonly turnActive: boolean;
+  /** See `PermissionsPicker`: which pocket this host's judge spends. */
+  readonly judgeBilling: AutoJudgeBilling | null;
   readonly settingsLocked: boolean;
 }
 
@@ -48,8 +63,8 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
   const effectivePermission = normalizePermissionMode(
     props.permission,
     props.supportedPermissionModes,
+    props.hostKnowsAutoMode,
   );
-  const unsupportedSuffix = props.harnessLabel ?? "this provider";
   const supported = props.supportedPermissionModes;
 
   return (
@@ -72,13 +87,15 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
             <OptionsSectionLabel>Permissions</OptionsSectionLabel>
             {PERMISSION_OPTIONS.map((option) => {
               const Icon = option.icon;
-              // Inlined rather than hoisted into a boolean alias: TypeScript
-              // narrows `supported` to non-null only through the check itself.
-              // Empty is treated as `null` - see `normalizePermissionMode`.
-              const isSupported =
-                supported === null ||
-                supported.length === 0 ||
-                supported.includes(option.id);
+              // Through the shared predicate, which is where the "empty means
+              // unconstrained" rule AND the host's own line live now - see
+              // `composerOffersPermissionMode`. The row alone would offer
+              // `auto` on a host that cannot carry it.
+              const isSupported = composerOffersPermissionMode(
+                supported,
+                option.id,
+                props.hostKnowsAutoMode,
+              );
               return (
                 <OptionRow
                   key={option.id}
@@ -89,7 +106,31 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                   description={
                     isSupported
                       ? option.description
-                      : `Not supported by ${unsupportedSuffix}.`
+                      : unsupportedPermissionModeCopy({
+                          mode: option.id,
+                          harnessLabel: props.harnessLabel,
+                          catalogSupportedModes: props.catalogSupportedModes,
+                          hostKnowsAutoMode: props.hostKnowsAutoMode,
+                        })
+                  }
+                  // The same two `auto`-only lines the desktop dropdown adds,
+                  // through the same helpers: this sheet reads the desktop
+                  // picker's registries rather than restating them, so the copy
+                  // and the gating stay in one place.
+                  metaLine={
+                    isSupported &&
+                    option.id === "auto" &&
+                    props.judgeBilling !== null
+                      ? autoJudgeMetaLine(props.judgeBilling)
+                      : null
+                  }
+                  notice={
+                    isSupported &&
+                    option.id === "auto" &&
+                    props.turnActive &&
+                    effectivePermission !== "auto"
+                      ? AUTO_MID_TURN_NOTICE
+                      : null
                   }
                   selected={option.id === effectivePermission}
                   disabled={props.settingsLocked || !isSupported}
@@ -124,6 +165,10 @@ interface OptionRowProps {
   readonly icon: ReactNode;
   readonly label: string;
   readonly description: string;
+  /** The `auto` row's billing disclosure; `null` on every other row. */
+  readonly metaLine: string | null;
+  /** The `auto` row's mid-turn notice; `null` on every other row. */
+  readonly notice: string | null;
   readonly selected: boolean;
   readonly disabled: boolean;
   readonly testId: string;
@@ -152,6 +197,22 @@ function OptionRow(props: OptionRowProps) {
         <span className="text-ui-xs text-muted-foreground">
           {props.description}
         </span>
+        {props.metaLine !== null ? (
+          <span
+            data-testid="composer-options-permission-meta"
+            className="text-ui-xs text-muted-foreground"
+          >
+            {props.metaLine}
+          </span>
+        ) : null}
+        {props.notice !== null ? (
+          <span
+            data-testid="composer-options-permission-mid-turn-notice"
+            className="text-pretty text-ui-xs text-muted-foreground"
+          >
+            {props.notice}
+          </span>
+        ) : null}
       </span>
       {props.selected ? (
         <Check className="mt-0.5 size-4 shrink-0 text-foreground" />

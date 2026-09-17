@@ -18,8 +18,12 @@ const MULTI_WORKSPACE_PARAGRAPH = `Multiple workspaces provide instructions belo
 export const AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION =
   "The agent selection guide provides instructions for choosing Traycer agents' harnesses, models, and reasoning effort when creating or reconfiguring them. It does not automatically configure provider-native subagents. Those follow their provider's settings: OpenCode's native task uses the named agent's configured model, or inherits the parent model when no model is configured. Native subagents do not have their own Traycer agent IDs.";
 
+// Byte-parity-locked to the host's copy in
+// `traycer-host/src/domain/agent/a2a-tool-catalog.ts`, which a host test
+// asserts against this constant. This side moves FIRST; the host copy follows
+// in the same change.
 export const A2A_PERMISSION_MODE_INSTRUCTION =
-  "Use `full_access` unless the user's agent selection guide explicitly instructs you to use `supervised` or `auto_accept_edits`; never infer a more restrictive permission mode from the task, the current or parent agent's mode, or a general safety preference.";
+  "Use `full_access` unless the user's agent selection guide explicitly instructs you to use `supervised`, `auto_accept_edits` or `auto`; never infer a more restrictive permission mode from the task, the current or parent agent's mode, or a general safety preference.";
 
 function withGuideInstructions(content: string): string {
   return `${AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION}\n\n${content}\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`;

@@ -44,6 +44,7 @@ function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
         modes: ["gui", "tui"],
         requiresApiKey: false,
         supportedPermissionModes: ["supervised", "full_access"],
+        nativeAutoJudge: false,
         availabilityPending: false,
       },
     ],
@@ -51,6 +52,7 @@ function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
     models,
     modelsLoaded: true,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
   };
 }
 
@@ -71,6 +73,7 @@ function createStore(
         ? null
         : (settings) => onSettingsChange(settings.model),
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 }
