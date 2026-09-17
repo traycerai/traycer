@@ -1,6 +1,7 @@
 import type { MouseEvent, ReactNode } from "react";
 import { Copy, Trash2 } from "lucide-react";
 
+import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 import { Badge } from "@/components/ui/badge";
 import { CommandItem } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
@@ -50,9 +51,16 @@ export function DraftRow(props: DraftRowProps) {
       onMouseMove={onHighlight}
       onSelect={onOpen}
     >
-      <span className="line-clamp-3 w-full text-ui-sm leading-5 break-words">
-        {row.preview}
-      </span>
+      {/* The same read-only renderer the queue and the sent message use, so
+          mention, slash-command and image chips survive the round trip
+          instead of flattening to `@epic:<id>`. `emptyLabel` is the per-kind
+          fallback for a draft with no nodes at all. */}
+      <ComposerContentPreview
+        content={row.content}
+        emptyLabel={row.preview}
+        testId="draft-row-content"
+        className="line-clamp-3 w-full text-ui-sm leading-5 break-words"
+      />
       <span className="flex w-full min-w-0 items-center gap-1.5 text-ui-xs leading-5 text-muted-foreground">
         <span className="min-w-0 flex-1" />
         {sourceChip === null ? null : (

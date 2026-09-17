@@ -303,6 +303,51 @@ describe("ComposerDraftsControl", () => {
     expect(rowText("landing-a")).toContain("Start page");
   });
 
+  it("renders a mention as a chip in the row, not the raw @ serialised form", () => {
+    useLandingDraftStore.setState({
+      drafts: [
+        ...useLandingDraftStore.getState().drafts,
+        landingTab({
+          id: "landing-mention",
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [
+                  { type: "text", text: "see " },
+                  {
+                    type: "mention",
+                    attrs: {
+                      contextType: "file",
+                      id: "/tmp/CODE_OF_CONDUCT.md",
+                      path: "CODE_OF_CONDUCT.md",
+                      pathKind: "file",
+                      relPath: "CODE_OF_CONDUCT.md",
+                      absolutePath: "/tmp/CODE_OF_CONDUCT.md",
+                      workspacePath: "/tmp",
+                      label: "CODE_OF_CONDUCT.md",
+                      description: null,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          lastTouchedAt: 6_000,
+        }),
+      ],
+    });
+    render(landingControl("landing-active", true));
+    openList();
+
+    const content = document.querySelector<HTMLElement>(
+      '[data-draft-row-id="landing-mention"] [data-testid="draft-row-content"]',
+    );
+    expect(content?.textContent).toContain("CODE_OF_CONDUCT.md");
+    expect(content?.textContent).not.toContain("@CODE_OF_CONDUCT.md");
+  });
+
   it("toggles the filter on Tab", () => {
     renderLandingControl("landing-active");
     openList();
