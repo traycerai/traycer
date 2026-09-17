@@ -186,7 +186,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
       {loadingMore ? (
         <div className="flex justify-center py-2">
           <AgentSpinningDots
-            className="text-muted-foreground"
+            tone="muted"
             testId={undefined}
             variant={undefined}
           />
@@ -444,9 +444,9 @@ function ShowMoreButton(props: {
   return (
     <Button
       {...navProps}
-      variant="ghost"
+      variant="muted"
       size="xs"
-      className="mx-1.5 mt-0.5 self-start text-muted-foreground"
+      className="mx-1.5 mt-0.5 self-start"
       disabled={props.disabled}
       onClick={props.onClick}
     >
@@ -485,7 +485,7 @@ export function ChatSearchHighlightedText(props: {
           // Keyed by offset: segments never overlap, so the start is unique.
           <mark
             key={segment.start}
-            className="rounded-[2px] bg-primary/25 text-foreground"
+            className="rounded-xs bg-primary/25 text-foreground"
           >
             {segment.text}
           </mark>

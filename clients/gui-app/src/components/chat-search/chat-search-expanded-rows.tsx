@@ -41,7 +41,7 @@ export function ChatSearchExpandedRows(props: {
     return (
       <div className="flex py-1.5 pl-7">
         <AgentSpinningDots
-          className="text-muted-foreground"
+          tone="muted"
           testId={undefined}
           variant={undefined}
         />
@@ -88,9 +88,9 @@ export function ChatSearchExpandedRows(props: {
           </p>
           <Button
             {...navProps}
-            variant="ghost"
+            variant="muted"
             size="xs"
-            className="self-start text-muted-foreground"
+            className="self-start"
             onClick={status.loadMoreError.retry}
           >
             Retry
@@ -100,9 +100,9 @@ export function ChatSearchExpandedRows(props: {
       {status.loadMoreError === null && status.nextCursor !== null ? (
         <Button
           {...navProps}
-          variant="ghost"
+          variant="muted"
           size="xs"
-          className="self-start text-muted-foreground"
+          className="self-start"
           disabled={status.loadingMore}
           onClick={() => {
             const next = status.nextCursor;

@@ -274,7 +274,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
         />
         {status.kind === "loading" ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            tone="muted"
             testId={undefined}
             variant={undefined}
           />
