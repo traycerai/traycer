@@ -91,7 +91,7 @@ describe("landing draft store: forkDraft", () => {
     ).toBe(sourceId);
 
     // hostRevision 0 (still unacknowledged): the pointer must ride along.
-    landingDraftRememberSynced(nextId, 0, 1);
+    landingDraftRememberSynced(nextId, 0, 1, "host-fork");
     expect(
       useLandingDraftStore
         .getState()
@@ -101,7 +101,7 @@ describe("landing draft store: forkDraft", () => {
     // The fork's first write ACKs with a real host revision: the host now
     // holds the row (and the retraction debt), so the one-shot pointer is
     // cleared and must not ride a later write.
-    landingDraftRememberSynced(nextId, 1, 1);
+    landingDraftRememberSynced(nextId, 1, 1, "host-fork");
     expect(
       useLandingDraftStore
         .getState()

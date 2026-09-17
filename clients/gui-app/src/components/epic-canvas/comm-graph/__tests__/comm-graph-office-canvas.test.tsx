@@ -110,8 +110,6 @@ import {
 import { cloneElement, type ReactNode } from "react";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
-import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
-import type { OfficeAutoDecision } from "@/lib/comm-graph/office/office-auto";
 import {
   useAppLocalNotificationsStore,
   type AppLocalNotificationEntry,
@@ -164,6 +162,7 @@ import {
   OFFICE_SIGN_LETTER_SPACING_EM,
   OFFICE_SIGN_MONOSPACE_STACK,
   OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PADDING_Y,
   OFFICE_SIREN_FRAME_MS,
   officeSignsToDraw,
 } from "@/lib/comm-graph/office/office-signs";
@@ -184,6 +183,7 @@ import {
   officeLodForZoom,
 } from "@/lib/comm-graph/office/office-lod";
 import { NAME_TAG_LINE_HEIGHT } from "@/components/epic-canvas/comm-graph/office/office-name-tags";
+import { OFFICE_LABEL_HALO_PX } from "@/components/epic-canvas/comm-graph/office/office-label-space";
 
 const OFFICE_VIEW: CommGraphTileViewState = {
   x: 0,
@@ -395,7 +395,6 @@ function officeElement(
       onAutoProbe={vi.fn()}
       onRegisterFlush={vi.fn()}
       viewPicker={null}
-      autoChip={null}
       onCameraChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}
@@ -1086,44 +1085,45 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getByTestId("comm-graph-office-fit")).toBeDefined();
   });
 
-  it("shows no cursor chip when there is no cursor", () => {
-    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
-
-    expect(screen.queryByTestId("comm-graph-office-cursor-chip")).toBeNull();
-  });
-
-  it("shows a Paused chip once the epic's cursor is set", () => {
-    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
-
-    act(() => {
-      useCommGraphTimelineStore
-        .getState()
-        .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
-    });
-
-    const chip = screen.getByTestId("comm-graph-office-cursor-chip");
-    expect(chip.textContent).toMatch(/^Paused at/);
-  });
-
-  it("shows a Replaying chip when the cursor is set and playback is running", () => {
-    render(
-      withQueryClient(
-        officeElement(
-          new Set([ORCHESTRATOR.id, REVIEWER.id]),
-          { ...STATIC_OFFICE, playing: true },
-          {},
+  it("draws no cursor chip over the floor, detached or playing", () => {
+    // THE LAST READ-ONLY SENTENCE OVER THE DRAWING, and the fourth chip to
+    // leave this canvas. It said `Paused at 14:32:07` / `Replaying 14:32:07`
+    // in the top-left corner whenever the floor was detached from live -
+    // which is the whole time a person is watching a replay.
+    //
+    // The READING survived; the chip did not. It moved to the transport bar,
+    // where a media player puts its time and where it costs the drawing
+    // nothing (`comm-graph-transport-cursor-time`, pinned in the transport
+    // suite). The prefix went with the corner: the bar's own play/pause button
+    // already says which of the two states this is.
+    //
+    // Pinned as an absence from BOTH states it used to appear in, because a
+    // deleted component is not a decision anything can read.
+    for (const playing of [false, true]) {
+      render(
+        withQueryClient(
+          officeElement(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            { ...STATIC_OFFICE, playing },
+            {},
+          ),
         ),
-      ),
-    );
+      );
+      act(() => {
+        useCommGraphTimelineStore
+          .getState()
+          .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
+      });
 
-    act(() => {
-      useCommGraphTimelineStore
-        .getState()
-        .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
-    });
-
-    const chip = screen.getByTestId("comm-graph-office-cursor-chip");
-    expect(chip.textContent).toMatch(/^Replaying/);
+      expect(screen.queryByTestId("comm-graph-office-cursor-chip")).toBeNull();
+      expect(screen.queryByText(/paused at/i)).toBeNull();
+      expect(screen.queryByText(/replaying/i)).toBeNull();
+      // ANTI-VACUITY: the canvas really mounted with a cursor set, so "no
+      // chip" is a fact about this floor and not about a render that never
+      // reached the state the chip needed.
+      expect(screen.getByTestId("comm-graph-office-zoom-in")).toBeDefined();
+      cleanup();
+    }
   });
 
   it("suspends its scene while ineligible and resumes it exactly once on return", () => {
@@ -2440,14 +2440,23 @@ describe("CommGraphOfficeCanvas", () => {
     expect(modeWrapper.className).toContain("pointer-events-auto");
   });
 
-  it("lets a pointer gesture pass through the informational chips to the canvas beneath them (Finding 36)", () => {
-    // Codex: the bottom-left overlay (auto/catch-up/LOD chips + zoom group)
-    // kept the default pointer-events on its wrapper, so a pan or
-    // double-click started over the read-only chips hit the wrapper instead
-    // of the canvas underneath. The frame is now pointer-events-none with the
-    // zoom-button group re-enabling its own - same pattern as the toolbar
-    // (Findings 32/33), asserted the same way: jsdom lays nothing out, so
-    // this reads the utility classes on the real rendered tree.
+  it("leaves nothing read-only in the bottom-left corner for a gesture to snag on (Finding 36)", () => {
+    // Codex, Finding 36: the bottom-left overlay (auto/catch-up/LOD chips +
+    // zoom group) kept the default pointer-events on its wrapper, so a pan or
+    // double-click started over the READ-ONLY chips hit the wrapper instead
+    // of the canvas underneath. The answer then was a pointer-events-none
+    // frame with the button group re-enabling its own.
+    //
+    // The finding is now closed by subtraction instead: all three chips are
+    // gone (round 1 took two, round 2 the catching-up line), so the corner is
+    // the button group itself - shrink-to-fit around three buttons, covering
+    // no canvas a gesture could be aimed at. The frame and its opt-back-in
+    // went with them; two classes that cancel out are not worth keeping to
+    // describe a child that no longer exists.
+    //
+    // What still has to hold is the PREMISE, so that is what this asserts: no
+    // read-only sibling in the corner. jsdom lays nothing out, so this reads
+    // the real rendered tree rather than geometry.
     render(
       withQueryClient(
         officeElement(
@@ -2459,13 +2468,22 @@ describe("CommGraphOfficeCanvas", () => {
     );
 
     const zoomIn = screen.getByTestId("comm-graph-office-zoom-in");
-    const zoomGroup = zoomIn.parentElement;
-    if (zoomGroup === null) throw new Error("zoom-in has no parent group");
-    const wrapper = zoomGroup.parentElement;
-    if (wrapper === null) throw new Error("zoom group has no parent wrapper");
+    const corner = zoomIn.parentElement;
+    if (corner === null) throw new Error("zoom-in has no parent group");
 
-    expect(zoomGroup.className).toContain("pointer-events-auto");
-    expect(wrapper.className).toContain("pointer-events-none");
+    // Every child of the corner is one of the three buttons - so there is
+    // nothing in it that a pointer can land on without meaning to.
+    expect(corner.className).toContain("absolute");
+    expect(corner.className).not.toContain("pointer-events-none");
+    expect(
+      Array.from(corner.children).map((child) =>
+        child.getAttribute("data-testid"),
+      ),
+    ).toEqual([
+      "comm-graph-office-zoom-in",
+      "comm-graph-office-zoom-out",
+      "comm-graph-office-fit",
+    ]);
   });
 
   it("carries a glyph on its lod 0 pip for attention, failure, awaiting and archived", () => {
@@ -2543,78 +2561,6 @@ describe("CommGraphOfficeCanvas", () => {
     const surface = screen.getByTestId("comm-graph-office-canvas");
     expect(surface.contains(screen.getByTestId("marker-view-picker"))).toBe(
       true,
-    );
-  });
-
-  it("shows Auto's chip text for the decision it was given", () => {
-    const decision: OfficeAutoDecision = {
-      view: "towers",
-      fits: [
-        { view: "floor", zoom: 0.12 },
-        { view: "towers", zoom: 0.83 },
-      ],
-      agents: 42,
-    };
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={decision} restoredView={null} />,
-        }),
-      ),
-    );
-
-    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
-      "Auto · Towers · measured at 42 agents · Floor would be 0.12×",
-    );
-  });
-
-  it("shows the measuring placeholder while Auto has not decided yet", () => {
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={null} restoredView={null} />,
-        }),
-      ),
-    );
-
-    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
-      "Auto · measuring…",
-    );
-  });
-
-  it("caps the auto-chip chrome at a tokenized sentence width, not a fixed rem (Finding 18)", () => {
-    // `max-w-[min(100%,24rem)]` caps a new layout surface at an arbitrary
-    // fixed rem, which the GUI fluid-sizing rule forbids - `max-w-sm`
-    // replaces it, relying on the wrapper already being clamped by its own
-    // absolute positioning against the tile.
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={null} restoredView={null} />,
-        }),
-      ),
-    );
-
-    const chip = screen.getByTestId("comm-graph-office-auto-chip");
-    const chrome = chip.parentElement;
-    expect(chrome).not.toBeNull();
-    expect(chrome?.className).toContain("max-w-sm");
-    expect(chrome?.className).not.toContain("max-w-[min(100%,24rem)]");
-  });
-
-  it("reads the LOD chip as Office at 1x and Overview once zoomed out past 0.7x", () => {
-    renderOffice(new Set([ORCHESTRATOR.id]));
-
-    expect(screen.getByTestId("comm-graph-office-lod-chip").textContent).toBe(
-      "Office",
-    );
-
-    // Two clicks: 1 / 1.25 / 1.25 = 0.64, below the 0.7x office-detail floor.
-    fireEvent.click(screen.getByTestId("comm-graph-office-zoom-out"));
-    fireEvent.click(screen.getByTestId("comm-graph-office-zoom-out"));
-
-    expect(screen.getByTestId("comm-graph-office-lod-chip").textContent).toBe(
-      "Overview",
     );
   });
 
@@ -5445,7 +5391,6 @@ function officeElementWithView(
       onAutoProbe={vi.fn()}
       onRegisterFlush={vi.fn()}
       viewPicker={null}
-      autoChip={null}
       onCameraChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}
@@ -6361,7 +6306,14 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     };
     const hqBoard: OfficeSign = {
       kind: "hq-board",
-      tile: { col: 8, row: 2 },
+      // EIGHT ROWS DOWN, not eight columns across. Side by side these two
+      // eight-tile boards letter close enough that their plates overlap, and
+      // the frame's shared occupancy set now drops the loser instead of
+      // painting them through each other - which left this case with one
+      // plate where it counts two. The case is about what the two boards SAY
+      // over one roster; where they hang is the fixture's own business, so it
+      // hangs them somewhere a reader could actually read both.
+      tile: { col: 0, row: 10 },
       widthTiles: 8,
       text: "",
       ownerAgentId: null,
@@ -7273,7 +7225,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * NONE WAS DRAWN"), and the call site sits at the one spot between the
      * gate's refusal and every downstream draw call that nothing skips: the
      * gate's `if (!draw) { … return; }` returns before camera work, shift,
-     * auto-fit, `advanceCamera`, `trackLodBand` and `worldRectOf` - all of
+     * auto-fit, `advanceCamera` and `worldRectOf` - all of
      * which run unconditionally on a drawn frame, ending in this one call.
      * `scene.isAnimating` is NOT this proxy: it is read as an argument to
      * `shouldDraw` itself, so it runs on a REFUSED frame too.
@@ -7328,34 +7280,42 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     /**
-     * A native wheel WITH a modifier key zooms about the cursor, and
-     * `zoomAbout` calls `syncLodBand` synchronously - so the chip is the
-     * precondition, not a flushed frame.
+     * A native wheel WITH a modifier key zooms about the cursor. `zoomAbout`
+     * mutates the camera synchronously and reads no React state to do it, so
+     * there is nothing left for this case to synchronize on before checking
+     * for a restart - unlike the pan case above, a zoom needs no fake-timer
+     * flush either.
+     *
+     * The two deltas below are chosen to cross both LOD-band thresholds (see
+     * `office-lod.ts`) in turn, which used to be the highest-risk shape of
+     * this gesture: it drove `syncLodBand`, a callback the render loop's
+     * effect once depended on. That callback is gone - the loop now reads the
+     * band straight off the camera inside the draw call - so nothing here
+     * synchronizes on it any more either; the deltas are kept because a zoom
+     * that crosses both bands still exercises `zoomAbout` more thoroughly
+     * than a token wheel notch would.
      */
-    it("a lod-band change does not restart the loop", () => {
+    it("a zoom does not restart the loop", () => {
       renderLoop({});
       const surface = screen.getByTestId("comm-graph-office-canvas");
-      const chip = screen.getByTestId("comm-graph-office-lod-chip");
-      expect(chip.textContent).toBe("Office");
 
-      // factor = exp(-300 / 300) = exp(-1) ≈ 0.368, below the 0.7 floor.
+      // factor = exp(-300 / 300) = exp(-1) ≈ 0.368, below the 0.7 office
+      // floor - crosses into the overview band.
       fireEvent.wheel(surface, {
         deltaY: 300,
         ctrlKey: true,
         clientX: 0,
         clientY: 0,
       });
-      expect(chip.textContent).toBe("Overview");
 
       // factor = exp(600 / 300) = exp(2) ≈ 7.39; 0.368 * 7.39 ≈ 2.72, above
-      // the 1.6 ceiling.
+      // the 1.6 ceiling - crosses into the close-up band.
       fireEvent.wheel(surface, {
         deltaY: -600,
         ctrlKey: true,
         clientX: 0,
         clientY: 0,
       });
-      expect(chip.textContent).toBe("Close-up");
 
       expect(mainCanvasContextCalls).toBe(0);
       expect(releaseSpy).not.toHaveBeenCalled();
@@ -8144,7 +8104,19 @@ describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to 
     expect(plan).toHaveBeenCalled();
   });
 
-  it("shows the catching-up chip while ready and the feed is behind", () => {
+  it("puts nothing but the three zoom buttons in the bottom-left corner", () => {
+    // THREE CHIPS HAVE STOOD HERE AND ALL THREE ARE GONE. Auto's measurement
+    // and the zoom band went in feedback round 1; the catching-up line - "the
+    // feed is still replaying, statuses may lag" - went in round 2, asked for
+    // by name ("why do we still have this Catching up label above the zoom
+    // buttons? We were supposed to remove all those labels!").
+    //
+    // Pinned as an ABSENCE rather than simply deleted with the chip, because
+    // the deletion of a component is not a decision anything can read: the
+    // next person to want a status line in this corner should meet a red test
+    // and this comment, not an empty div. The state it described is real and
+    // transient; the ruling is that a drawn office settling behind its feed is
+    // not worth a sentence of chrome over the drawing.
     render(
       withQueryClient(
         officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
@@ -8154,39 +8126,18 @@ describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to 
       ),
     );
 
-    expect(
-      screen.getByTestId("comm-graph-office-catching-up-chip"),
-    ).toBeDefined();
-  });
-
-  it("hides the catching-up chip once the feed has caught up", () => {
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
-          ready: true,
-          initialHistoryCaughtUp: true,
-        }),
-      ),
-    );
-
+    // The feed is behind AND the office is drawn - the exact state the chip
+    // existed for, so this is the case that would have shown it.
     expect(
       screen.queryByTestId("comm-graph-office-catching-up-chip"),
     ).toBeNull();
-  });
-
-  it("hides the catching-up chip while not ready, even with the feed behind", () => {
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
-          ready: false,
-          initialHistoryCaughtUp: false,
-        }),
-      ),
-    );
-
-    expect(
-      screen.queryByTestId("comm-graph-office-catching-up-chip"),
-    ).toBeNull();
+    expect(screen.queryByText(/catching up/i)).toBeNull();
+    expect(screen.queryByText(/statuses may lag/i)).toBeNull();
+    // ANTI-VACUITY: the corner really rendered, so "no chip" is a fact about
+    // the corner rather than about a canvas that never mounted.
+    expect(screen.getByTestId("comm-graph-office-zoom-in")).toBeDefined();
+    expect(screen.getByTestId("comm-graph-office-zoom-out")).toBeDefined();
+    expect(screen.getByTestId("comm-graph-office-fit")).toBeDefined();
   });
 });
 
@@ -8946,4 +8897,237 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
       useAppLocalNotificationsStore.setState({ byId: {} });
     }
   });
+});
+
+/**
+ * NO TWO READINGS ON THE SAME PIXELS, whichever channel drew them.
+ *
+ * Round 2's screenshot has an agent's tag printed through a board sign, and a
+ * census over every view, four epic shapes, four populations, two seeds and
+ * four zooms found the same defect in 129 of 768 cases and in seven distinct
+ * pairs - `HOSPITAL` on `BUS STOP` and `LOUNGE` on `FRONT DESK` (two plates),
+ * `POLICE STATION` and `FRONT DESK` on a host's floor sign, two host signs,
+ * two pod plates. The floor letters itself through five channels and exactly
+ * one of them - name tags - had ever resolved a collision, against exactly
+ * itself.
+ *
+ * So the pin is not per channel either. Every painted reading in a real frame
+ * goes in one bag and no two of them may overlap, which is the only shape of
+ * assertion a SIXTH channel added later cannot sidestep: a new label that
+ * skips {@link OfficeLabelSpace} reddens this without anyone remembering to
+ * extend a list.
+ *
+ * WHICH CASES ARE LOAD-BEARING TODAY, measured rather than assumed: with the
+ * collision pass ablated to "always accept", four of these twenty-four redden
+ * - mission control at 1.6 (80 pairs, the screenshot's own tag-through-plate
+ * family) and at 2.4, campus at 1.6 (a civic plate on a host's floor sign) and
+ * city at 1.6 (`HOSPITAL` on `BUS STOP`). The other twenty are honest coverage
+ * rather than proof: three views and three distinct families is what the
+ * fixture reaches, and the rest of the grid is there to catch the NEXT one.
+ * Do not delete a green row on the grounds that it passes without the feature.
+ *
+ * AND WHAT IT COSTS, measured the same way. Counting the readings actually
+ * painted with the pass on and with it ablated, twenty-three of these
+ * twenty-four frames draw the IDENTICAL number and campus at 1.6 draws one
+ * fewer - eighty colliding pairs on mission control resolve by moving a label,
+ * not by losing one. That is the answer to the only real objection to dropping
+ * a label rather than drawing it: in practice almost nothing is dropped,
+ * because almost everything finds a line to move into.
+ *
+ * COUNTING THE OUTLINE COSTS NOTHING FURTHER, measured the same way again
+ * after the halo was folded into the reserved box: all twenty-four frames draw
+ * exactly the reading count they drew when the box was the glyph run alone -
+ * 2,108 across the grid, unchanged frame for frame. A two-pixel box is a
+ * label that moves a line sooner, not one that runs out of lines.
+ */
+describe("CommGraphOfficeCanvas - one occupancy set for every label on the floor", () => {
+  let rafQueue: Array<{
+    readonly id: number;
+    readonly callback: FrameRequestCallback;
+  }> = [];
+  let nextRafId = 1;
+  let canceledRafIds = new Set<number>();
+  let calls: RecordedCall[] = [];
+  let restoreGetContext: (() => void) | null = null;
+  let frameClockMs = 0;
+
+  function flushRaf(times: number): void {
+    for (let step = 0; step < times; step += 1) {
+      const pending = rafQueue;
+      rafQueue = [];
+      frameClockMs += 40;
+      const at = frameClockMs;
+      act(() => {
+        for (const queued of pending) {
+          if (!canceledRafIds.has(queued.id)) queued.callback(at);
+        }
+      });
+    }
+  }
+
+  beforeEach(() => {
+    activeObserverCallbacks = [];
+    vi.stubGlobal("IntersectionObserver", ControllableIntersectionObserver);
+    calls = [];
+    rafQueue = [];
+    canceledRafIds = new Set();
+    nextRafId = 1;
+    frameClockMs = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const id = nextRafId;
+      nextRafId += 1;
+      rafQueue.push({ id, callback });
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      canceledRafIds.add(id);
+    });
+    // A WIDER TILE THAN THE REST OF THIS FILE USES, on purpose. A frame is
+    // culled to its viewport, so the 1200x800 stub everywhere else frames
+    // perhaps a third of a real floor at close-up - and a pair of labels this
+    // case never draws is a pair it cannot clear. The census's own viewport.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      ...BOUNDING_RECT_STUB,
+      width: 2600,
+      height: 1800,
+      right: 2600,
+      bottom: 1800,
+    });
+    restoreGetContext = stubGetContext(() => createRecordingContext(calls));
+  });
+
+  afterEach(() => {
+    cleanup();
+    restoreGetContext?.();
+    restoreGetContext = null;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * EVERY painted reading, plates INCLUDED.
+   *
+   * {@link tagBoxesFrom} drops the bold face on purpose - it answers questions
+   * about name tags, and a plate is not one. That exclusion is also exactly
+   * why the tag-on-plate collision survived three rounds of tests: the one
+   * assertion in this file that looks for overlapping text could not see half
+   * the text on the floor.
+   *
+   * THE BOX IS THE ONE THE RENDERER RESERVES, not the glyph run. For a plate
+   * that means the BACKING - four padded pixels wider than the letters and
+   * four taller - because the wash is what a reader sees as one label sitting
+   * on another, and because reserving less here than `drawSignLabels` reserves
+   * would let this case pass a frame the renderer itself considers crowded.
+   * The bold face is exactly the plate face ({@link applySignPlateFont}) and
+   * nothing else on the floor is set in it, so it is a sound discriminator.
+   */
+  function everyReadingFrom(
+    records: ReadonlyArray<FillTextRecord>,
+  ): ReadonlyArray<TagBox> {
+    const byBlock = new Map<number, FillTextRecord[]>();
+    for (const record of records) {
+      const list = byBlock.get(record.blockId);
+      if (list === undefined) byBlock.set(record.blockId, [record]);
+      else list.push(record);
+    }
+    const seen = new Set<string>();
+    const boxes: TagBox[] = [];
+    for (const list of byBlock.values()) {
+      const last = list[list.length - 1];
+      const key = `${last.text}\0${last.x}\0${last.y}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const plate = last.font.startsWith("bold ");
+      // THE TWO BACKINGS ARE DIFFERENT SHAPES, and each label carries its own.
+      // A plate paints a filled rect `SIGN_PADDING` beyond its letters; every
+      // other reading paints its own text once at each neighbouring pixel, so
+      // its ink runs a halo past the glyph run on all four sides. Reserving
+      // the glyph run alone here would let this case pass a frame whose
+      // outlines print into each other - and since a lift lands a box flush
+      // with the one it moved off, that is the ORDINARY outcome, not a corner.
+      const halo = plate ? 0 : OFFICE_LABEL_HALO_PX * last.cssScale;
+      const fontPx = modelledFontPx(last.font) * last.cssScale;
+      const width =
+        (modelledTextWidth(last.text, last.font, last.letterSpacing) +
+          (plate ? OFFICE_SIGN_PADDING_X * 2 : 0)) *
+          last.cssScale +
+        halo * 2;
+      // A plate's baseline sits `SIGN_PADDING_Y` above its backing's bottom
+      // edge, and a haloed label's sits one pixel above its own - so neither
+      // box bottoms out on its `y`. `TagBox` carries a bottom-anchored height,
+      // so the shift goes into `y` and the rest into `height`.
+      const height =
+        fontPx +
+        (plate ? OFFICE_SIGN_PADDING_Y * 2 * last.cssScale : 0) +
+        halo * 2;
+      if (!(width > 0) || !(height > 0)) continue;
+      boxes.push({
+        left: last.x - width / 2,
+        right: last.x + width / 2,
+        y: last.y + (plate ? OFFICE_SIGN_PADDING_Y * last.cssScale : 0) + halo,
+        height,
+        text: last.text,
+      });
+    }
+    return boxes;
+  }
+
+  /** Real boxes, not a baseline window: the faces here are not all one height. */
+  function overlappingReadings(
+    boxes: ReadonlyArray<TagBox>,
+  ): ReadonlyArray<string> {
+    const violations: string[] = [];
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i];
+        const b = boxes[j];
+        if (a.left >= b.right || b.left >= a.right) continue;
+        if (a.y - a.height >= b.y || b.y - b.height >= a.y) continue;
+        violations.push(
+          `"${a.text}"@(${a.left.toFixed(1)}-${a.right.toFixed(1)},${a.y.toFixed(1)}) ` +
+            `overlaps "${b.text}"@(${b.left.toFixed(1)}-${b.right.toFixed(1)},${b.y.toFixed(1)})`,
+        );
+      }
+    }
+    return violations;
+  }
+
+  /**
+   * A real population through a real plan - the census's own fixture, which is
+   * what makes the seven pairs above reachable at all. `triage` is the shape
+   * whose teams, solos and archived agents fill every civic room a view has.
+   */
+  const CENSUS_EPIC = makeTestEpic("triage", 200, 1);
+  const CENSUS_AGENTS = CENSUS_EPIC.agents.map(canvasAgent);
+  const CENSUS_VISIBLE = new Set(CENSUS_AGENTS.map((person) => person.id));
+
+  for (const [viewName, view] of Object.entries(OFFICE_VIEWS)) {
+    for (const zoom of [0.7, 1, 1.6, 2.4]) {
+      it(`draws no two overlapping readings on ${viewName} at zoom ${zoom}`, () => {
+        render(
+          withQueryClient(
+            cloneElement(
+              officeElementWithView(view, CENSUS_VISIBLE, CENSUS_AGENTS, {}),
+              { view: { ...FIXED_CAMERA_VIEW, zoom } },
+            ),
+          ),
+        );
+        setIntersecting(true);
+        flushRaf(4);
+
+        const boxes = everyReadingFrom(replayFillText(calls));
+        // ANTI-VACUITY, both halves. A frame that painted nothing, or one that
+        // painted only name tags, satisfies "no overlaps" while proving
+        // nothing at all - and the bold half is where the census found the
+        // collisions, so its absence would void exactly the case being made.
+        expect(boxes.length).toBeGreaterThan(3);
+        expect(
+          replayFillText(calls).some((record) =>
+            record.font.startsWith("bold "),
+          ),
+        ).toBe(true);
+        expect(overlappingReadings(boxes)).toEqual([]);
+      });
+    }
+  }
 });

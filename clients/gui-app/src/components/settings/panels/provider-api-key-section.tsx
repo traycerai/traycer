@@ -139,7 +139,7 @@ export function ProviderApiKeySection({
           id={inputId}
           type="password"
           autoComplete="off"
-          className="w-full font-mono text-ui-sm"
+          className="w-full"
           placeholder={
             state.apiKey.source === "stored"
               ? "Replace stored key…"
@@ -151,6 +151,8 @@ export function ProviderApiKeySection({
           onKeyDown={(e) => {
             if (e.key === "Enter") onSave();
           }}
+          font="mono"
+          size="sm"
         />
         <Button
           size="sm"

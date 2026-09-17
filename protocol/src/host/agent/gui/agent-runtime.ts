@@ -21,12 +21,14 @@ import {
   interviewQuestionSchema,
   interviewQuestionSchemaPreCustomAnswer,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   agentFailureSchema,
   agentMessageReceiptSchema,
   agentMessageSendSchema,
   artifactOperationActionSchema,
   backgroundTaskOutputSchema,
+  browserSessionReferenceSchema,
   diffSourceSchema,
   fileEditReasonSchema,
   imageGenerationResultSchema,
@@ -138,11 +140,25 @@ export const runtimeTokenUsageSchema = z.object({
 });
 export type RuntimeTokenUsage = z.infer<typeof runtimeTokenUsageSchema>;
 
-export const runtimePermissionModeSchema = z.enum([
-  "supervised",
-  "auto_accept_edits",
-  "full_access",
-]);
+/**
+ * The permission mode a turn executes under, as the runtime seam carries it.
+ *
+ * Bound to the LIVE persisted enum rather than restated, and the difference is
+ * not stylistic. This used to be a hand-written triple, and being a hand-written
+ * triple is exactly how it fell behind: `auto` reached every persisted, wire and
+ * catalog surface while THIS one - the seam every adapter actually reads the
+ * mode from - could not express it, so the mode was unrepresentable at the one
+ * place that has to act on it.
+ *
+ * Binding by reference is safe here in a way it is not for the frozen copies
+ * next to it: `runtimeAgentRunInputSchema` is bound to no RPC contract, appears
+ * in no released baseline surface, and is parsed by nothing on the wire - it is
+ * a host-internal shape that happens to live in the protocol package. There is
+ * therefore no installed peer whose strict enum this can widen underneath.
+ * Should that ever change - should this schema be given a contract - it needs
+ * the same pre-`auto` freeze treatment as `chatRunSettingsSchemaPreReasonix`.
+ */
+export const runtimePermissionModeSchema = permissionModeSchema;
 export type RuntimePermissionMode = z.infer<typeof runtimePermissionModeSchema>;
 
 export const runtimeImageAttachmentSchema = attachmentMentionAttrsSchema.omit({
@@ -385,8 +401,19 @@ export const textDeltaEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("text.delta"),
   delta: z.string(),
+  browserSession: browserSessionReferenceSchema.optional(),
 });
 export type TextDeltaEvent = z.infer<typeof textDeltaEventSchema>;
+
+// Wire-freeze copy from before browser-session references. Released
+// `chat.subscribe` lines must not follow the live text delta shape: adding this
+// optional field to the shared schema would change every frozen blockDelta
+// JSON schema at once. The current line uses `textDeltaEventSchema` above.
+const textDeltaEventSchemaPreBrowser = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("text.delta"),
+  delta: z.string(),
+});
 
 export const textCompletedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1680,6 +1707,57 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
+// Wire-freeze copy of the current runtime-event union before browser-session
+// references. `chat.subscribe@1.10`-`@1.12` use this line; only the current
+// `@1.13` contract may expose the enrichment. Keep the option list explicit so
+// future event additions cannot silently widen a released contract.
+export const runtimeEventSchemaPreBrowser = z.discriminatedUnion("type", [
+  textDeltaEventSchemaPreBrowser,
+  textCompletedEventSchema,
+  reasoningDeltaEventSchema,
+  reasoningCompletedEventSchema,
+  toolCallStartedEventSchema,
+  toolCallCompletedEventSchema,
+  toolCallErroredEventSchema,
+  toolCallProgressEventSchema,
+  approvalRequestedEventSchema,
+  approvalResolvedEventSchema,
+  todoUpdatedEventSchema,
+  planDeltaEventSchema,
+  planUpdatedEventSchema,
+  planCompletedEventSchema,
+  compactionStartedEventSchema,
+  compactionCompletedEventSchema,
+  compactionErroredEventSchema,
+  interviewRequestedEventSchema,
+  interviewResolvedEventSchema,
+  interviewErroredEventSchema,
+  subAgentStartedEventSchema,
+  subAgentProgressEventSchema,
+  subAgentCompletedEventSchema,
+  fileChangeStartedEventSchema,
+  fileChangeCompletedEventSchema,
+  artifactOperationEventSchema,
+  commandStartedEventSchema,
+  commandCompletedEventSchema,
+  sessionCreatedEventSchema,
+  sessionResumedEventSchema,
+  turnStartedEventSchema,
+  userMessageAnchorResolvedEventSchema,
+  turnCompletedEventSchema,
+  turnStoppedEventSchema,
+  turnInterruptedEventSchema,
+  steerSubmittedEventSchema,
+  usageUpdatedEventSchema,
+  errorEventSchema,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
+  providerNoticeUpsertEventSchema,
+  imageResolutionUpdatedEventSchema,
+  userMessageAnchorTailUpdatedEventSchema,
+]);
+
 // Wire-freeze copy of the live runtime-event union from before image support
 // existed (`chat.subscribe@1.4`/`1.5` - `1.6` takes `runtimeEventSchemaPreSettlement`):
 // every live member EXCEPT
@@ -1694,7 +1772,7 @@ export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 // so the freeze can't silently absorb a future event, and to keep the
 // discriminated-union typing intact.
 export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
-  textDeltaEventSchema,
+  textDeltaEventSchemaPreBrowser,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
@@ -1745,7 +1823,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
 // union) so the freeze can't silently absorb a future sender-bearing event, and
 // to keep the discriminated-union typing intact.
 export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
-  textDeltaEventSchema,
+  textDeltaEventSchemaPreBrowser,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
@@ -1805,7 +1883,7 @@ export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
 // union, for the same reason `runtimeEventSchemaPreImage` is: a future event
 // must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
-  textDeltaEventSchema,
+  textDeltaEventSchemaPreBrowser,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
@@ -1861,7 +1939,7 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
 // union, for the same reason `runtimeEventSchemaPreImage` is: a future event
 // must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreFallback = z.discriminatedUnion("type", [
-  textDeltaEventSchema,
+  textDeltaEventSchemaPreBrowser,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,

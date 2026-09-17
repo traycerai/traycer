@@ -259,7 +259,7 @@ function FallbackSettingsPanelBody(props: {
               source: "Fallback settings",
             })}
             presentation="link"
-            className="ml-1 h-auto p-0"
+            className="ml-1"
           />
         </div>
       );
@@ -856,13 +856,13 @@ function FallbackPolicyEditor(props: {
             the long-form reasoning. Four panes is inside what a rail holds. */}
         <TabsList
           variant="line"
-          className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+          className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start"
         >
           {FALLBACK_TABS.map((tab) => (
             <TabsTrigger
               key={tab.key}
               value={tab.key}
-              className="flex-none px-3"
+              className="flex-none"
               data-testid={`settings-fallback-tab-${tab.key}`}
             >
               {tab.label}
@@ -1184,10 +1184,10 @@ function UnrefreshedResetNotice(props: {
   return (
     <div
       role="alert"
-      className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-5 py-4"
+      className="rounded-lg border border-warning/40 bg-warning/5 px-5 py-4"
       data-testid="fallback-reset-unrefreshed"
     >
-      <div className="font-medium text-ui-sm text-amber-600 dark:text-amber-400">
+      <div className="font-medium text-ui-sm text-warning-foreground">
         {props.message}
       </div>
       {/* A `div`, not the `p` its sibling notice uses: this one carries a
@@ -1196,9 +1196,10 @@ function UnrefreshedResetNotice(props: {
       <div className="mt-1 max-w-[68ch] text-ui-sm text-muted-foreground">
         {unrefreshedResetBody(props.displaySubject)}
         <Button
+          size="inline"
           type="button"
           variant="link"
-          className="ml-1 h-auto p-0 text-ui-sm"
+          className="ml-1"
           disabled={props.readBackInFlight}
           onClick={props.onTryAgain}
           data-testid="fallback-reset-retry"
@@ -1221,10 +1222,10 @@ function UnreadablePolicyNotice(): ReactNode {
   return (
     <div
       role="alert"
-      className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-5 py-4"
+      className="rounded-lg border border-warning/40 bg-warning/5 px-5 py-4"
       data-testid="fallback-policy-unreadable"
     >
-      <div className="font-medium text-ui-sm text-amber-600 dark:text-amber-400">
+      <div className="font-medium text-ui-sm text-warning-foreground">
         Your saved fallback settings couldn&apos;t be read
       </div>
       <p className="mt-1 max-w-[68ch] text-ui-sm text-muted-foreground">
@@ -1354,9 +1355,10 @@ function FallbackSaveStatus(props: {
             (hostError.outcome === "unknown" ||
               hostError.outcome === "refused-unverified") ? (
               <Button
+                size="inline"
                 type="button"
                 variant="link"
-                className="ml-1 h-auto p-0 text-ui-sm"
+                className="ml-1"
                 disabled={readBackInFlight}
                 onClick={onCheckAgain}
                 data-testid="fallback-check-again"
@@ -1426,9 +1428,9 @@ function ProfileStepHint(): ReactNode {
           wrong under the overlay. That helper asks the modal bridge and does
           the right thing either way. */}
       <Button
+        size="inline"
         type="button"
         variant="link"
-        className="h-auto p-0 text-ui-sm"
         onClick={() => {
           navigateToSettingsSection("providers");
         }}

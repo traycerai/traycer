@@ -281,6 +281,17 @@ export type ProviderNoticeMetadata = z.infer<
   typeof providerNoticeMetadataSchema
 >;
 
+export const browserSessionReferenceSchema = z.object({
+  hostId: z.string(),
+  sessionId: z.string(),
+  tabId: z.string(),
+  profile: z.enum(["primary", "isolated"]),
+  title: z.string().optional(),
+});
+export type BrowserSessionReference = z.infer<
+  typeof browserSessionReferenceSchema
+>;
+
 export const textBlockSchema = z.object({
   ...baseBlockFields,
   type: z.literal("text"),
@@ -295,8 +306,20 @@ export const textBlockSchema = z.object({
   // subscribers can be projected down to the fallback text (see
   // `chat-frame-projection.ts`).
   providerNotice: providerNoticeMetadataSchema.nullable().default(null),
+  // First browser use in a chat. Older readers retain the text fallback.
+  browserSession: browserSessionReferenceSchema.optional(),
 });
 export type TextBlock = z.infer<typeof textBlockSchema>;
+
+// Wire-freeze copy from before browser-session references. Released chat
+// snapshots must retain the text fallback without absorbing this live-only
+// enrichment through a shared text-block schema.
+const textBlockSchemaPreBrowser = z.object({
+  ...baseBlockFields,
+  type: z.literal("text"),
+  text: z.string(),
+  providerNotice: providerNoticeMetadataSchema.nullable().default(null),
+});
 
 export const reasoningBlockSchema = z.object({
   ...baseBlockFields,
@@ -2155,7 +2178,7 @@ export const contentBlockSchemaPreFallback = z.discriminatedUnion("type", [
 // its live schema, so a field added to one of them later reaches this line
 // too: freeze the member here before adding it.
 export const contentBlockSchemaPreShellHost = z.discriminatedUnion("type", [
-  textBlockSchema,
+  textBlockSchemaPreBrowser,
   reasoningBlockSchema,
   toolCallBlockSchema,
   fileChangeBlockSchema,
@@ -2167,6 +2190,28 @@ export const contentBlockSchemaPreShellHost = z.discriminatedUnion("type", [
   errorBlockSchema,
   compactionBlockSchema,
   autonomousResumeBlockSchemaPreShellHost,
+  steerBlockSchema,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);
+
+// Wire-freeze copy for `chat.subscribe@1.11`/`@1.12`: those lines include the
+// shell-host fields in the live block vocabulary but predate the browser
+// session enrichment. Keep this option list explicit so a future block field
+// cannot silently widen either released line.
+export const contentBlockSchemaPreBrowser = z.discriminatedUnion("type", [
+  textBlockSchemaPreBrowser,
+  reasoningBlockSchema,
+  toolCallBlockSchema,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchema,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
   steerBlockSchema,
   interviewBlockSchema,
   artifactOperationBlockSchema,

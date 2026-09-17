@@ -13,6 +13,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import {
   stagedWorktreeIntentAwaitsDispatchOutcome,
   partitionSweptIntent,
+  sessionSweptRefsForHost,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
@@ -185,6 +186,29 @@ describe("worktreeFolderIntentReferencesRemoved", () => {
           kind: "local",
           workspacePath: "/repo",
           repoIdentifier: null,
+          isPrimary: true,
+        },
+        REMOVED,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps a local intent even when its own path was swept", () => {
+    // The case above uses `/repo`, which is in neither removed set - so on its
+    // own it cannot tell "a local intent is never stale" from "that particular
+    // path was not removed". This one puts the local intent's `workspacePath`
+    // squarely in `worktreePaths` and in the deleted branch's repo, so only the
+    // rule itself can keep it live.
+    //
+    // The rule: `local` means "run against the workspace checkout itself (no
+    // git)". It names no worktree and no branch, and a sweep removes worktrees,
+    // never a workspace checkout - so a path collision is not a reference.
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        {
+          kind: "local",
+          workspacePath: "/wt/gone",
+          repoIdentifier: ACME,
           isPrimary: true,
         },
         REMOVED,
@@ -369,6 +393,173 @@ describe("worktree intent purge on sweep completion", () => {
         worktreeStagingKeyString(unresolvedKey)
       ],
     ).toBeUndefined();
+  });
+});
+
+// R6F5(a): a worktree removed and then RECREATED at the same path must not
+// stay marked gone forever. `sessionSweptRefsByHost` only ever GROWS - that
+// is what lets a frozen ref be asked about long after the fact - so staging
+// a path is the only signal that can retract a mark, and it must retract
+// ONLY that path.
+//
+// The signal is `stageEntry`, the per-row action, and NOT `stageIntent`: see
+// the bulk-restage test at the end of this block for why the distinction
+// carries weight.
+describe("R6F5(a): staging a swept path clears its own swept mark", () => {
+  const key = {
+    surface: "owner" as const,
+    hostId: SWEPT_HOST,
+    epicId: "epic-r6f5",
+    ownerKind: "chat" as const,
+    ownerId: "chat-r6f5",
+  };
+
+  beforeEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("a BULK restage does not un-mark anything - only a per-row stage does (DRIVE RED)", () => {
+    // `stageIntent` re-stages a whole captured intent, and its one caller does
+    // that to restamp `isPrimary` after a primary switch - so it names entries
+    // the user did not touch and asserts nothing about whether they exist.
+    // Retracting there let picking a different primary folder erase the
+    // deletion evidence for every other staged path on the host.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, {
+        worktreePaths: new Set(["/repo-bulk-a", "/repo-bulk-b"]),
+        branches: [],
+      });
+
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo-bulk-a",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+        {
+          kind: "local",
+          workspacePath: "/repo-bulk-b",
+          repoIdentifier: null,
+          isPrimary: false,
+        },
+      ],
+    });
+
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.worktreePaths.has("/repo-bulk-a"),
+    ).toBe(true);
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.worktreePaths.has("/repo-bulk-b"),
+    ).toBe(true);
+
+    // The per-row action still retracts, and only for the row it names.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, {
+        worktreePaths: new Set(["/repo-recreated", "/repo-still-gone"]),
+        branches: [],
+      });
+    useWorktreeIntentStagingStore.getState().stageEntry(key, {
+      kind: "local",
+      workspacePath: "/repo-recreated",
+      repoIdentifier: null,
+      isPrimary: true,
+    });
+
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.worktreePaths.has(
+        "/repo-recreated",
+      ) ?? false,
+    ).toBe(false);
+    // The OTHER swept path, never re-staged, is still reported gone.
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.worktreePaths.has(
+        "/repo-still-gone",
+      ),
+    ).toBe(true);
+  });
+
+  it("stageEntry naming the swept path also un-marks it (DRIVE RED)", () => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, {
+        worktreePaths: new Set(["/repo-entry-recreated"]),
+        branches: [],
+      });
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.worktreePaths.has(
+        "/repo-entry-recreated",
+      ),
+    ).toBe(true);
+
+    useWorktreeIntentStagingStore.getState().stageEntry(key, {
+      kind: "local",
+      workspacePath: "/repo-entry-recreated",
+      repoIdentifier: null,
+      isPrimary: true,
+    });
+
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.worktreePaths.has(
+        "/repo-entry-recreated",
+      ) ?? false,
+    ).toBe(false);
+  });
+});
+
+describe("R7F?/C: staging a swept EXISTING-BRANCH selection clears its own swept mark", () => {
+  const key = {
+    surface: "owner" as const,
+    hostId: SWEPT_HOST,
+    epicId: "epic-r7fc",
+    ownerKind: "chat" as const,
+    ownerId: "chat-r7fc",
+  };
+
+  beforeEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("stageEntry re-picking a swept existing branch un-marks it (DRIVE RED)", () => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, {
+        worktreePaths: new Set(),
+        branches: [
+          { repoIdentifier: ACME, branch: "traycer/recreated-branch" },
+          { repoIdentifier: ACME, branch: "traycer/still-gone-branch" },
+        ],
+      });
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.branches.some(
+        (ref) => ref.branch === "traycer/recreated-branch",
+      ),
+    ).toBe(true);
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.branches.some(
+        (ref) => ref.branch === "traycer/still-gone-branch",
+      ),
+    ).toBe(true);
+
+    // The user re-picks the SAME existing branch - it was recreated.
+    useWorktreeIntentStagingStore
+      .getState()
+      .stageEntry(key, existingBranchIntent("traycer/recreated-branch"));
+
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.branches.some(
+        (ref) => ref.branch === "traycer/recreated-branch",
+      ) ?? false,
+    ).toBe(false);
+    // The OTHER swept branch, never re-staged, is still reported gone.
+    expect(
+      sessionSweptRefsForHost(SWEPT_HOST)?.branches.some(
+        (ref) => ref.branch === "traycer/still-gone-branch",
+      ),
+    ).toBe(true);
   });
 });
 

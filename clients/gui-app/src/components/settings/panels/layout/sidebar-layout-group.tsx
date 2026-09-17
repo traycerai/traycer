@@ -181,8 +181,20 @@ export function SidebarLayoutGroup(): ReactNode {
 function SidebarPanelsSection(): ReactNode {
   const narrowViewport = useIsMobileViewport();
   if (narrowViewport) {
+    // The note's own definition only contributes to the group's search entry,
+    // so the anchor is written here: search reveal and the appearance guide's
+    // last step both land on this row when the arranger is not drawn.
     return (
-      <SettingsRow row={LAYOUT.definitions.sidebarPanelsNote} control={null} />
+      <div
+        data-settings-anchor={
+          LAYOUT.definitions.sidebarPanels.anchor ?? undefined
+        }
+      >
+        <SettingsRow
+          row={LAYOUT.definitions.sidebarPanelsNote}
+          control={null}
+        />
+      </div>
     );
   }
   return <SidebarPanelList />;

@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
-  ChatQueueDeliveryPolicy,
-  ChatRunSettings,
-} from "@traycer/protocol/host/agent/gui/subscribe";
-import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+  ChatSessionStoreHandle,
+  SendChatSessionMessageInput,
+} from "@/stores/chats/chat-session-store";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
-import type { Attachment } from "@/lib/composer/types";
 
 /**
  * Pins that `useChatActions.sendMessage` forwards `deliveryPolicy` to the
@@ -30,38 +28,24 @@ const SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
+/**
+ * DERIVED from the store's own parameter, not restated. This fake is why that
+ * matters: a hand-typed copy of `sendMessage`'s input drifted from production
+ * and, because the only thing `tsc` checks is the object literal the proxy
+ * builds, it stayed green through a compile and reached committed history RED.
+ */
 interface SendMessageStoreSlice {
-  readonly sendMessage: (input: {
-    readonly content: JsonContent;
-    readonly sender: UserMessageSender;
-    readonly settings: ChatRunSettings;
-    readonly attachments: ReadonlyArray<Attachment>;
-    readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-    readonly restore: {
-      readonly content: JsonContent;
-      readonly browserAnnotations: ReadonlyArray<unknown>;
-    };
-  }) => { readonly clientActionId: string; readonly messageId: string } | null;
+  readonly sendMessage: (
+    input: SendChatSessionMessageInput,
+  ) => { readonly clientActionId: string; readonly messageId: string } | null;
 }
 
 describe("useChatActions deliveryPolicy threading", () => {
   it("forwards deliveryPolicy to the chat session store sendMessage", () => {
-    const sendMessage = vi.fn(
-      (_input: {
-        readonly content: JsonContent;
-        readonly sender: UserMessageSender;
-        readonly settings: ChatRunSettings;
-        readonly attachments: ReadonlyArray<Attachment>;
-        readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-        readonly restore: {
-          readonly content: JsonContent;
-          readonly browserAnnotations: ReadonlyArray<unknown>;
-        };
-      }) => ({
-        clientActionId: "action-1",
-        messageId: "message-1",
-      }),
-    );
+    const sendMessage = vi.fn((_input: SendChatSessionMessageInput) => ({
+      clientActionId: "action-1",
+      messageId: "message-1",
+    }));
     const storeSlice: SendMessageStoreSlice = { sendMessage };
     const handle = createDeliveryPolicyHandle(storeSlice);
 

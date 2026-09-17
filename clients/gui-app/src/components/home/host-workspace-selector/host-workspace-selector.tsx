@@ -1,4 +1,9 @@
 import {
+  firstTaskImports,
+  firstTaskImportPending,
+  useFirstTaskGuideStore,
+} from "@/stores/onboarding/first-task-guide-store";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -600,9 +605,7 @@ export function ActiveHostWorkspaceControls(
           data-testid="host-workspace-selector-folders-section"
           className="w-full max-w-full min-w-0"
         >
-          <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
-            Workspaces
-          </DropdownMenuLabel>
+          <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
           <HomeWorkspaceRows
             workspaceSource={workspaceSource}
             resolvedFolders={resolved.folders}
@@ -1286,6 +1289,16 @@ function HomeWorkspaceSummaryControl(props: {
   readonly recentWorkspaceCount: number;
   readonly moveToRecent: boolean;
 }) {
+  const guidedSetup = useFirstTaskGuideStore(
+    (state) =>
+      state.status === "active" &&
+      !state.workspaceReviewed &&
+      !firstTaskImportPending(state.imports) &&
+      firstTaskImports(state.imports).length === 0,
+  );
+  const reviewWorkspace = useFirstTaskGuideStore(
+    (state) => state.reviewWorkspace,
+  );
   return (
     <div
       className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
@@ -1298,6 +1311,9 @@ function HomeWorkspaceSummaryControl(props: {
       )}
       <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
         <WorkspaceFolderSummaryControl
+          onFirstTaskSetupComplete={
+            guidedSetup && props.items.length > 0 ? reviewWorkspace : undefined
+          }
           items={props.items}
           readOnly={false}
           bindingResolved
@@ -1888,7 +1904,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ptyLive: surface.kind === "terminal-agent" && surface.isOwnerActive,
   });
   const stopManagedCommand = useManagedCommandStop();
-  const stopAgent = useAgentStop();
+  const stopAgent = useAgentStop(props.hostClient);
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly choice: TeardownCommitChoice;
     readonly holders: readonly WorktreeBusyHolder[];

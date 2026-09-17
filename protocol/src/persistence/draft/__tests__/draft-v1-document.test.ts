@@ -102,6 +102,7 @@ const STASH_HEAD: DraftHeadRecord = {
     content: EMPTY_DOC,
     blobHashes: ["ab".repeat(32)],
     createdAt: 1_753_000_000_000,
+    annotations: [],
   },
   hostLocal: { hostId: "host-1", workspace: null },
 };

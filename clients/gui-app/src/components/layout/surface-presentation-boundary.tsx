@@ -1,10 +1,10 @@
+import { cn } from "@/lib/utils";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -14,12 +14,6 @@ import {
   PaneVisibilityContext,
   runPresentationLossBlur,
 } from "@/components/epic-tabs/pane-visibility-context";
-
-const CONTENTS_STYLE: CSSProperties = { display: "contents" };
-const HIDDEN_CONTAINER_STYLE: CSSProperties = {
-  visibility: "hidden",
-  pointerEvents: "none",
-};
 
 /**
  * One generic focused-presentation boundary around EVERY top-level `TabSurface`
@@ -87,7 +81,7 @@ export function SurfacePresentationBoundary(props: {
             <div
               ref={probeRef}
               data-pane-focused={props.focused ? "true" : "false"}
-              style={CONTENTS_STYLE}
+              className="contents"
             >
               {props.children}
             </div>
@@ -97,7 +91,7 @@ export function SurfacePresentationBoundary(props: {
               aria-hidden={!props.focused}
               inert={!props.focused}
               hidden={!props.visible}
-              style={props.focused ? undefined : HIDDEN_CONTAINER_STYLE}
+              className={cn(!props.focused && "invisible pointer-events-none")}
             />
           </PanePortalContainerContext.Provider>
         </PaneVisibilityContext.Provider>

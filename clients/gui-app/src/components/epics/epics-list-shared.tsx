@@ -209,8 +209,9 @@ export function EpicsListFilteringLoading(): ReactNode {
     >
       <AgentSpinningDots
         variant="dots"
-        className="text-muted-foreground"
+        className={undefined}
         testId={undefined}
+        tone="muted"
       />
       <p className="font-medium text-foreground">Searching tasks</p>
     </div>
@@ -420,8 +421,9 @@ export function EpicsListShowMore(props: EpicsListShowMoreProps): ReactNode {
         {props.isFetchingNextPage ? (
           <AgentSpinningDots
             variant="dots"
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
+            tone="muted"
           />
         ) : null}
         Show more

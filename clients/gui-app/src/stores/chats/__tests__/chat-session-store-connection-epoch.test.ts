@@ -45,6 +45,7 @@ function createHarness(): Harness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => false,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -247,6 +248,7 @@ describe("chat-session-store - a connection status that settles during construct
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => false,
           requestTranscriptRange: () => undefined,
           requestResnapshot: () => undefined,
           close: () => undefined,

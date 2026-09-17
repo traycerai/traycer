@@ -607,7 +607,22 @@ export interface AgentSpinningDotsProps {
   readonly className: string | undefined;
   readonly testId: string | undefined;
   readonly variant: AgentSpinnerVariant | undefined;
+  /**
+   * The spinner INHERITS its colour by default - it is punctuation inside a
+   * line of text, and the sentence around it has already chosen one. `muted`
+   * is the one exception worth naming: a spinner beside a quiet label, which
+   * 60-odd call sites were writing as `className="text-muted-foreground"`
+   * before this prop existed. Optional, unlike the props above, because every
+   * one of the ~286 call sites would otherwise have to say `tone={undefined}`
+   * to express the default it already gets.
+   */
+  readonly tone?: "inherit" | "muted";
 }
+
+const SPINNER_TONE: Record<"inherit" | "muted", string> = {
+  inherit: "text-current",
+  muted: "text-muted-foreground",
+};
 
 const WORKING_DOTS_CYCLE_MS = 1400;
 const WORKING_DOTS_STAGGER_MS = 200;
@@ -641,6 +656,7 @@ function dotLift(elapsedMs: number, index: number): number {
 function WorkingDots(props: {
   readonly className: string | undefined;
   readonly testId: string | undefined;
+  readonly tone: "inherit" | "muted";
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
@@ -666,7 +682,7 @@ function WorkingDots(props: {
   return (
     <span
       ref={ref}
-      className={cn("working-dots text-current", props.className)}
+      className={cn("working-dots", SPINNER_TONE[props.tone], props.className)}
       aria-hidden="true"
       data-testid={props.testId}
     >
@@ -725,8 +741,16 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
     }, STATUS_ANIMATION_SMOOTH_CADENCE_MS);
   }, [presetFrames, presetIntervalMs, paneVisible]);
 
+  const tone = props.tone ?? "inherit";
+
   if (preset === null) {
-    return <WorkingDots className={props.className} testId={props.testId} />;
+    return (
+      <WorkingDots
+        className={props.className}
+        testId={props.testId}
+        tone={tone}
+      />
+    );
   }
 
   return (
@@ -740,6 +764,7 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
         // makes Chromium's fallback pick the hollow-grid "Apple Braille
         // Outline" faces instead of the filled-dot regular face.
         "inline-flex h-3.5 min-w-3.5 shrink-0 items-center justify-center whitespace-pre font-mono text-code font-normal leading-none tabular-nums",
+        SPINNER_TONE[tone],
         props.className,
       )}
       style={{ width: `${preset.widthCh}ch` }}
@@ -750,9 +775,10 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
 export function MutedAgentSpinner() {
   return (
     <AgentSpinningDots
-      className="text-muted-foreground"
+      className={undefined}
       testId={undefined}
       variant={undefined}
+      tone="muted"
     />
   );
 }

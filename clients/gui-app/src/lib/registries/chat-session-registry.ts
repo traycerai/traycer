@@ -333,11 +333,15 @@ export function useChatSessionHandle(
         close: result.close,
         sameTurnSteeringProtocolSupported: () =>
           result.client.sameTurnSteeringProtocolSupported(),
+        draftBlobBridgeSupported: () =>
+          result.client.draftBlobBridgeSupported(),
         requestTranscriptRange: (request) =>
           result.client.requestTranscriptRange(request),
         requestResnapshot: () => result.client.requestResnapshot(),
         interviewSettlementActionsProtocolSupported: () =>
           result.client.interviewSettlementActionsProtocolSupported(),
+        autoPermissionModeProtocolSupported: () =>
+          result.client.autoPermissionModeProtocolSupported(),
       };
     };
 

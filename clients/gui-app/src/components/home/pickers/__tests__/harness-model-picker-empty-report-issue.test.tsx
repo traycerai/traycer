@@ -24,6 +24,7 @@ function harnessEntry(
     modes: ["gui"],
     requiresApiKey: false,
     supportedPermissionModes: ["full_access"],
+    nativeAutoJudge: false,
     availabilityPending: false,
     models: [],
     modelsLoading: false,

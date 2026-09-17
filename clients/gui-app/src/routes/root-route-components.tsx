@@ -14,6 +14,7 @@ import { PreventSleepController } from "@/components/layout/bridges/prevent-slee
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
@@ -22,6 +23,7 @@ import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-b
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import { FirstTaskImportBridge } from "@/components/onboarding/first-task-guide";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
 import { AuthLandingPage } from "@/components/auth/auth-landing-page";
 import {
@@ -125,6 +127,7 @@ export function RootComponent() {
           into their declared default-host scope rather than each creating its
           own route gate. */}
       <HostReadyGate>
+        <FirstTaskImportBridge />
         <HostScopeReady scope="default-host">
           <PreventSleepController />
           <TrayOpenEpicBridge />
@@ -140,6 +143,7 @@ export function RootComponent() {
         {isStandalone ? null : (
           <>
             <SystemTabModalHost />
+            <ChatSearchDialogHost />
             {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
             <NotificationsMobileSheet />

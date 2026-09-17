@@ -82,6 +82,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: null,
     });
 
@@ -104,6 +105,11 @@ describe("chat-composer submit gate (path resolution)", () => {
           attachmentPreparationPending: pending,
           onSubmitMessage,
           onSideChat: null,
+          targetHostId: null,
+          queueEditTargetId: null,
+          // T5's gate is off in these fixtures: they predate it and assert the
+          // inline behaviour, which is what `false` preserves exactly.
+          getDraftBlobBridgeSupported: () => false,
         }),
       { initialProps: true },
     );
@@ -403,6 +409,7 @@ function mountSubmitHook(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 
@@ -424,6 +431,11 @@ function mountSubmitHook(args: {
       attachmentPreparationPending: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
+      targetHostId: null,
+      queueEditTargetId: null,
+      // T5's gate is off in these fixtures: they predate it and assert the
+      // inline behaviour, which is what `false` preserves exactly.
+      getDraftBlobBridgeSupported: () => false,
     }),
   );
 }

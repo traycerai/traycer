@@ -13,7 +13,7 @@ import {
 } from "@/lib/composer/composer-editor-incarnation";
 import { useLandingPromptStashDestination } from "@/components/home/composer/use-landing-prompt-stash-adapters";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   putImage,
   releaseSession,
@@ -95,6 +95,7 @@ export function makeEntry(args: {
   readonly blobHashes: readonly string[];
 }): PromptStashEntry {
   return {
+    annotations: [],
     id: args.id,
     createdAt: 1,
     content: args.content,
@@ -157,6 +158,7 @@ export async function restoreThroughLanding(
     return await dest.importAndInsert({
       identity,
       content: materialized.content,
+      entry,
     });
   } finally {
     materialized.release?.();
@@ -264,7 +266,7 @@ export function collectImageNodes(content: JsonContent): JsonContent[] {
 
 export async function drainLandingStore(): Promise<void> {
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
 }

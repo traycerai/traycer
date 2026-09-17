@@ -60,6 +60,7 @@ describe("commitProfileSelection", () => {
           serviceTier: settings.serviceTier,
         }),
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: HOST_A,
     });
 
@@ -128,6 +129,7 @@ describe("commitSelection - provider switch", () => {
           profileId: settings.profileId,
         }),
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: HOST_A,
     });
 
@@ -177,6 +179,7 @@ describe("commitSelection - host scoping", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: HOST_B,
     });
 
@@ -202,6 +205,7 @@ describe("commitSelection - host scoping", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: HOST_A,
     });
 
@@ -234,6 +238,7 @@ describe("commitSelection - host scoping", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: null,
     });
 

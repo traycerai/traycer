@@ -7,6 +7,7 @@ import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import {
   officeSpriteColors,
   officeSpriteMaps,
+  officeSpriteSize,
   rasterizeSpriteMap,
 } from "@/lib/comm-graph/office/office-pixel-art";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
@@ -29,6 +30,7 @@ import {
   AISLE_EVERY,
   frozenOf,
   isMissionControlFrozen,
+  missionControlLettersReserve,
   TIER_BASE_SEATS,
   TIER_SEAT_GROWTH,
   tierSeatCount,
@@ -43,6 +45,7 @@ import type {
 } from "@/lib/comm-graph/office/views/office-view";
 import {
   OFFICE_CHARACTER_HEIGHT,
+  OFFICE_LABEL_GAP,
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeAgentStatus,
@@ -2755,5 +2758,137 @@ describe("mission-control cold review: one hall for every host", () => {
     );
     expect(atTwoTiles).toBe(ward.name);
     expect(counterOn(atTwoTiles)).toBeNull();
+  });
+});
+
+/**
+ * Fixup 6, rule 4, mission control's own version (see
+ * `MissionControlFrozen.reserveLabelSeatIds`'s own doc comment): `paintSeat`
+ * used to letter `reserve` under every empty console, which on a full bank
+ * was several identical grey words in a row. `missionControlLettersReserve`
+ * now names one seat a TIER - mirroring the oblique views' per-storey rule,
+ * `obliqueReserveLabelSeatId` - and only that seat's empty console draws the
+ * label.
+ */
+describe("mission control painters: fixup 6 rule 4 - one reserve label per tier, not one per empty console", () => {
+  const EMPTY_CONSOLE_STATE: OfficeDeskState = {
+    agentId: null,
+    name: null,
+    status: "idle",
+    sheeted: false,
+    openRequests: 0,
+    screenFrame: 0,
+    harnessId: null,
+    modelTier: "medium",
+    accentId: null,
+  };
+
+  /**
+   * GROUPED BY ROW, not by a re-derived tier index: every console on one
+   * tier shares its `deskTile.row` by construction (`buildSlots`'s
+   * `consoleRow = TIERS_ORIGIN_ROW + tier * ROWS_PER_TIER` depends only on
+   * the tier, never on a seat's position within it - the same fact
+   * `aisleIndexOf` above already leans on), so distinct rows among console
+   * seats already are distinct tiers.
+   */
+  function consoleSeatsByRow(
+    layout: OfficeLayout,
+  ): ReadonlyMap<number, OfficeSeat[]> {
+    const byRow = new Map<number, OfficeSeat[]>();
+    for (const seat of layout.seats.values()) {
+      if (seat.kind !== "console") continue;
+      const bucket = byRow.get(seat.deskTile.row);
+      if (bucket === undefined) byRow.set(seat.deskTile.row, [seat]);
+      else bucket.push(seat);
+    }
+    return byRow;
+  }
+
+  it("letters at most one console a tier, and exactly one on a tier with a free console", () => {
+    const epic = makeTestEpic("triage", 309, 1);
+    const { layout } = planFresh(epic, VIEWPORT_WIDE);
+    const assignedSeatIds = new Set(
+      [...layout.desks.values()].map((desk) => desk.seatId),
+    );
+    const byRow = consoleSeatsByRow(layout);
+    // Multiple tiers really are in play here, not one lucky bank.
+    expect(byRow.size).toBeGreaterThan(1);
+    let tiersWithFreeConsole = 0;
+    let tiersWithExactlyOneLabel = 0;
+    for (const seatsInTier of byRow.values()) {
+      const free = seatsInTier.filter(
+        (seat) => !assignedSeatIds.has(seat.seatId),
+      );
+      const labelled = seatsInTier.filter((seat) =>
+        missionControlLettersReserve(layout, seat.seatId),
+      );
+      // AT MOST ONE, whether or not the tier has any vacancy at all.
+      expect(labelled.length).toBeLessThanOrEqual(1);
+      if (free.length === 0) {
+        // A FULL tier has nothing to nominate a spokesman for.
+        expect(labelled.length).toBe(0);
+        continue;
+      }
+      tiersWithFreeConsole += 1;
+      // EXACTLY ONE: a tier with any vacancy always nominates a spokesman.
+      expect(labelled.length).toBe(1);
+      if (labelled.length === 1) tiersWithExactlyOneLabel += 1;
+    }
+    // Not vacuous: at least one tier actually had a vacancy, and every one
+    // that did was counted as exactly one above rather than the loop finding
+    // nothing to walk.
+    expect(tiersWithFreeConsole).toBeGreaterThan(0);
+    expect(tiersWithExactlyOneLabel).toBe(tiersWithFreeConsole);
+  });
+
+  it("letters the reserve label clear of the console's own bottom edge, not across its face (feedback round 1: labels were unreadable on the console art)", () => {
+    const epic = makeTestEpic("triage", 309, 1);
+    const { layout } = planFresh(epic, VIEWPORT_WIDE);
+    const painter = MISSION_CONTROL_VIEW.painter;
+    const assignedSeatIds = new Set(
+      [...layout.desks.values()].map((desk) => desk.seatId),
+    );
+    const consoleHeight = officeSpriteSize({ name: "console" }).height;
+    let checked = 0;
+    for (const seat of layout.seats.values()) {
+      if (seat.kind !== "console") continue;
+      if (assignedSeatIds.has(seat.seatId)) continue;
+      if (!missionControlLettersReserve(layout, seat.seatId)) continue;
+      const props = painter.seatProps(layout, seat, EMPTY_CONSOLE_STATE, 2);
+      const consoleSprite = props.find(
+        (item) =>
+          item.drawable.kind === "sprite" &&
+          item.drawable.sprite.name === "console",
+      );
+      const label = props.find(
+        (item) =>
+          item.drawable.kind === "label" && item.drawable.text === "reserve",
+      );
+      if (
+        consoleSprite === undefined ||
+        consoleSprite.drawable.kind !== "sprite"
+      ) {
+        throw new Error("expected this tier's spokesman to draw a console");
+      }
+      if (label === undefined || label.drawable.kind !== "label") {
+        throw new Error("expected this tier's spokesman to carry the label");
+      }
+      expect(consoleSprite.drawable.y).toBe(seat.deskTile.row * OFFICE_TILE);
+      const consoleBottom = consoleSprite.drawable.y + consoleHeight;
+      // ON THE FLOOR UNDER THE CHAIR - the seated agents' own name-tag line,
+      // read straight off the seat's own chair-tile geometry - not the
+      // console's bottom edge, which is where `deskY + OFFICE_TILE` used to
+      // land it (feedback round 1: grey-on-grey, unreadable against the
+      // console art).
+      expect(label.drawable.y).toBe(
+        (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,
+      );
+      // CLEAR OF THE FURNITURE either way: at or below the console sprite's
+      // own bottom edge.
+      expect(label.drawable.y).toBeGreaterThanOrEqual(consoleBottom);
+      checked += 1;
+    }
+    // Not vacuous: at least one tier's spokesman seat was actually walked.
+    expect(checked).toBeGreaterThan(0);
   });
 });

@@ -301,6 +301,9 @@ function sessionsState(
     errorMessage: null,
     retry: () => undefined,
     openTab: () => Promise.reject(new Error("not used in this test")),
+    prepareOpenTab: () => {
+      throw new Error("not used in this test");
+    },
     closeTab: () => Promise.reject(new Error("not used in this test")),
     attachTab: () => Promise.reject(new Error("not used in this test")),
     moveTab: () => Promise.reject(new Error("not used in this test")),

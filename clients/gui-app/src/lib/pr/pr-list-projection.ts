@@ -149,15 +149,6 @@ export function groupPrItemsByRepo(
   });
 }
 
-/** The newest per-item `observedAt` across a frame, or `null` if none observed yet. */
-export function newestObservedAt(items: readonly PrLightItem[]): number | null {
-  return items.reduce<number | null>((newest, item) => {
-    if (item.observedAt === null) return newest;
-    if (newest === null) return item.observedAt;
-    return Math.max(newest, item.observedAt);
-  }, null);
-}
-
 /**
  * A row is "fully identified" (tile-able) only when BOTH its base
  * coordinates and its `githubHost` are known - the two are derived together

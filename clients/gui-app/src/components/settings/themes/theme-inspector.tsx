@@ -169,7 +169,7 @@ export function ThemeInspector({
   return createPortal(
     <div
       data-theme-inspector
-      className="pointer-events-none fixed inset-0 z-[109]"
+      className="pointer-events-none fixed inset-0 z-109"
     >
       {highlights.map(({ id, ...rect }) => (
         <div

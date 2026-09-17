@@ -1,4 +1,5 @@
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import { BrowserSessionRow } from "./segments/browser-session-row";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import {
@@ -1001,6 +1002,14 @@ function AssistantSegment({
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
     case "text":
+      if (segment.browserSession !== undefined) {
+        return (
+          <BrowserSessionRow
+            session={segment.browserSession}
+            findUnitId={findUnitId}
+          />
+        );
+      }
       return (
         <TextSegment
           findUnitId={findUnitId}
@@ -1172,6 +1181,7 @@ function AssistantSegment({
         <ProviderNoticeSegment
           status={segment.status}
           noticeKind={segment.noticeKind}
+          presentation={segment.presentation}
           tone={segment.tone}
           title={segment.title}
           message={segment.message}
@@ -1210,6 +1220,10 @@ function AssistantSegment({
     case "imported-chat-marker":
       // Import provenance, same as the fork link above: synthesized system row
       // only. Listed here so the exhaustive switch stays complete.
+      return null;
+    case "auto-judge-unattended-denial":
+      // An auto-mode refusal nobody was asked about: synthesized system row
+      // only, like the two above. Listed here so the switch stays exhaustive.
       return null;
     default: {
       const _exhaustive: never = segment;

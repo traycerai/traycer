@@ -118,8 +118,9 @@ export function WorktreeBranchPickerContent(
       collisionPadding={8}
       role="dialog"
       aria-label={listboxLabel}
+      layout="panel"
       className={cn(
-        "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0 data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
+        "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
         contentClassName,
       )}
       ref={contentRef}
@@ -136,7 +137,7 @@ export function WorktreeBranchPickerContent(
       onCloseAutoFocus={handleCloseAutoFocus}
     >
       <div className="shrink-0 border-b p-2">
-        <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+        <InputGroup className="h-8!" variant="search">
           <InputGroupInput
             ref={inputRef}
             value={query}
@@ -147,7 +148,6 @@ export function WorktreeBranchPickerContent(
               idPrefix,
               effectiveActiveEntryId,
             )}
-            className="text-ui-sm"
             onChange={(event) => setQuery(event.target.value)}
           />
           <InputGroupAddon>

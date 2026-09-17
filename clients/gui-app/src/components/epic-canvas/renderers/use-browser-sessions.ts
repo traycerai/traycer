@@ -224,6 +224,9 @@ function unavailableBrowserSessionsState(
     errorMessage: null,
     retry: () => undefined,
     openTab: unavailable,
+    prepareOpenTab: () => {
+      throw new Error("Browser sessions stream is not ready.");
+    },
     closeTab: unavailable,
     attachTab: unavailable,
     moveTab: unavailable,

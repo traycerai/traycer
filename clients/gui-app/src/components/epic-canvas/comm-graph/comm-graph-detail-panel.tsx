@@ -138,9 +138,8 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
             <Button
               type="button"
               size="icon-xs"
-              variant="ghost"
+              variant="muted"
               aria-label="Close details"
-              className="text-muted-foreground hover:text-foreground"
               onClick={onClose}
             >
               <XIcon />

@@ -95,6 +95,8 @@ function renderButton(
           chatId: "chat-1",
         }}
         title="Imported task"
+        targetHostId={null}
+        presentation="icon"
         onTaskOpened={onTaskOpened}
         onBeforeTaskOpen={onBeforeTaskOpen}
       />

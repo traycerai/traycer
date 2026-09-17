@@ -568,9 +568,9 @@ function PreviewFooterStatus(props: {
       </span>
       {failed ? (
         <Button
+          size="inline-xs"
           type="button"
           variant="link"
-          className="h-auto p-0 text-ui-xs"
           onClick={onRetryPreview}
           data-testid="fallback-tier-preview-retry"
         >

@@ -271,7 +271,7 @@ function FolderLocationMenu(props: {
  * menu's typeahead, bridges vertical arrows into the filtered menu items, and
  * lets Escape reach Radix's dismissal handler.
  */
-function ExistingWorktreeList(props: {
+export function ExistingWorktreeList(props: {
   readonly rows: ReadonlyArray<UnifiedPickerWorktreeRow>;
   readonly promoteRowId: string | null;
   readonly uncommittedByPath: ReadonlyMap<string, number>;
@@ -348,13 +348,12 @@ function ExistingWorktreeList(props: {
     <FilePathRevealProvider>
       {showSearch ? (
         <div className="pb-1">
-          <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+          <InputGroup className="h-8!" variant="search">
             <InputGroupInput
               ref={inputRef}
               value={query}
               placeholder="Search worktrees"
               aria-label="Search worktrees"
-              className="text-ui-sm"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {

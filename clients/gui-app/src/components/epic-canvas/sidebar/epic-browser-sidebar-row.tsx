@@ -1,6 +1,7 @@
+import { measureProvisioningRow } from "@/lib/browser-view/sessions/browser-open-perf";
 import { useDraggable } from "@dnd-kit/core";
 import { Bot, Moon, TriangleAlert, X } from "lucide-react";
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo } from "react";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -28,8 +29,7 @@ import {
 } from "@/lib/browser-view/browser-tab-display";
 import { cn } from "@/lib/utils";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { findPaneById } from "@/stores/epics/canvas/tile-tree";
+import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { SIDEBAR_REVEAL_HIGHLIGHT_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 interface BrowserTabRowProps {
@@ -84,6 +84,12 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
     onOpenDrivingChat,
     onCloseTab,
   } = props;
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() =>
+      measureProvisioningRow(session.hostId, session.sessionId),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [session.hostId, session.sessionId]);
   const title = identity.title;
   const isFailed = tab.status === "crashed";
   const visibleDrivers = useCoalescedBrowserTabDrivers(tab.drivenBy);
@@ -113,16 +119,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
       }),
     [session.hostId, session.sessionId, tab.tabId],
   );
-  const isActive = useEpicCanvasStore((state) => {
-    const canvas = state.canvasByTabId[viewTabId];
-    if (canvas === undefined || canvas.activePaneId === null) return false;
-    const activeInstanceId =
-      findPaneById(canvas.root, canvas.activePaneId)?.activeTabId ?? null;
-    if (activeInstanceId === null) return false;
-    const active = canvas.tilesByInstanceId[activeInstanceId];
-    if (active?.hostId !== session.hostId) return false;
-    return active.id === tile.id;
-  });
+  const isActive = useIsActiveTile(viewTabId, tile.id, session.hostId);
   const dragTile = tile;
   const dragData = useMemo<EpicCanvasBrowserTileDragData>(
     () => ({
@@ -219,17 +216,16 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
         </span>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted-destructive"
           size="icon-xs"
           disabled={isClosing}
           aria-label={closeAriaLabel}
           data-testid={`epic-browser-sidebar-close-${tab.tabId}`}
           className={cn(
-            "size-6 cursor-pointer justify-self-center text-muted-foreground opacity-0 transition-opacity duration-100 pointer-events-none motion-reduce:transition-none",
+            "size-6 cursor-pointer justify-self-center opacity-0 transition-opacity duration-100 pointer-events-none motion-reduce:transition-none",
             "group-focus-within/browser-row:pointer-events-auto group-focus-within/browser-row:opacity-100",
             "group-hover/browser-row:pointer-events-auto group-hover/browser-row:opacity-100",
             "group-data-[active=true]/browser-row:pointer-events-auto group-data-[active=true]/browser-row:opacity-100",
-            "hover:bg-destructive/10 hover:text-destructive",
             "[@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
             (isFailed || isClosing) && "pointer-events-auto opacity-100",
           )}
@@ -237,9 +233,10 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
         >
           {isClosing ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId={undefined}
               variant={undefined}
+              tone="muted"
             />
           ) : (
             <X className="size-3.5" aria-hidden />
@@ -293,7 +290,7 @@ function BrowserTabStateSlot(props: {
         <button
           type="button"
           aria-label={`Open driving chat: ${names.join(", ")}`}
-          className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-blue-500 outline-none hover:bg-blue-500/10 focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex size-6 cursor-pointer items-center justify-center rounded-sm text-info-foreground outline-none hover:bg-info/10 focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => props.onOpenDrivingChat(driver)}
         >
           <Bot className="size-3.5" aria-hidden />

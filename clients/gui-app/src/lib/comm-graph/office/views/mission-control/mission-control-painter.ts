@@ -3,13 +3,22 @@
  * filled rect per console tier.
  */
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
-import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import {
+  OFFICE_CIVIC_GROUND_ALPHA,
+  OFFICE_LABEL_GAP,
+  OFFICE_TILE,
+} from "@/lib/comm-graph/office/office-types";
+import {
+  missionControlLettersReserve,
   originColFor,
   ROWS_PER_TIER,
   seatingWidth,
   TIERS_ORIGIN_ROW,
 } from "@/lib/comm-graph/office/views/mission-control/mission-control-plan";
+import {
+  officeMonitorAlphaFor,
+  OFFICE_UNCLAIMED_FURNITURE_ALPHA,
+} from "@/lib/comm-graph/office/views/office-seat-alpha";
 import type {
   OfficeDeskState,
   OfficePainter,
@@ -30,9 +39,6 @@ import type {
 
 const NAMEPLATE_Y_OFFSET = 4;
 const LOGO_Y_OFFSET = 1;
-const RESERVE_ALPHA = 0.55;
-const IDLE_MONITOR_ALPHA = 0.6;
-const ARCHIVED_ALPHA = 0.45;
 
 interface ScreenArt {
   readonly on: OfficeSpriteName;
@@ -329,8 +335,54 @@ function paintFloor(
       });
     }
   }
+  // BETWEEN THE HALL'S FLOOR AND WHAT STANDS ON IT. The tile loop above lays
+  // opaque floor sprites, so a tint before them is erased; `paintUnownedProps`
+  // below is the medbay's own furniture, so a tint after them recolours it.
+  drawables.push(...civicGround(layout, tiles));
   drawables.push(...paintUnownedProps(layout, tiles));
   return drawables;
+}
+
+/**
+ * THE GROUND A CIVIC ROOM STANDS ON, tinted so the room has an edge.
+ *
+ * The oblique views' `civicGround` one view over, for the same reason and with
+ * the same number: an amphitheatre's medbay, gallery and records are regions
+ * of an open hall with nothing but a sign to say where each one stops, so a
+ * reader cannot tell a seat inside one from a seat beside it. Feedback round 1
+ * asked that question about Building's waiting room; this is the same floor
+ * plan one view over, and fixing only the view somebody happened to screenshot
+ * is how the next round gets the same complaint about a different office.
+ *
+ * Pushed AFTER the hall's floor tiles and BEFORE its fixed props, which is the
+ * one position that is neither erased nor painted over the furniture.
+ * `ground: true` is what makes that ordering survive the static bake; without
+ * it the tint is composited over the medbay's own furniture on every host that
+ * can make an offscreen surface. See `officeBakesIntoStaticFloor`.
+ *
+ * The alpha is {@link OFFICE_CIVIC_GROUND_ALPHA}, shared by all six views.
+ */
+function civicGround(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): ReadonlyArray<OfficeDrawable> {
+  const out: OfficeDrawable[] = [];
+  for (const floor of layout.floors) {
+    for (const room of floor.civic) {
+      if (!tileRectsOverlap(room.bounds, tiles)) continue;
+      out.push({
+        kind: "block",
+        x: room.bounds.col * OFFICE_TILE,
+        y: room.bounds.row * OFFICE_TILE,
+        width: room.bounds.cols * OFFICE_TILE,
+        height: room.bounds.rows * OFFICE_TILE,
+        fill: "civic",
+        alpha: OFFICE_CIVIC_GROUND_ALPHA,
+        ground: true,
+      });
+    }
+  }
+  return out;
 }
 
 function monitorSpriteFor(state: OfficeDeskState): OfficeSpriteName {
@@ -343,12 +395,6 @@ function monitorSpriteFor(state: OfficeDeskState): OfficeSpriteName {
   return art.off;
 }
 
-function monitorAlphaFor(state: OfficeDeskState): number | undefined {
-  if (state.status === "archived") return ARCHIVED_ALPHA;
-  if (state.status === "idle") return IDLE_MONITOR_ALPHA;
-  return undefined;
-}
-
 function envelopeStackFor(openRequests: number): EnvelopeStackArt | null {
   if (openRequests <= 0) return null;
   if (openRequests === 1) return ENVELOPE_STACKS[0];
@@ -357,7 +403,7 @@ function envelopeStackFor(openRequests: number): EnvelopeStackArt | null {
 }
 
 function paintSeat(
-  _layout: OfficeLayout,
+  layout: OfficeLayout,
   seat: OfficeSeat,
   state: OfficeDeskState,
   lod: OfficeLod,
@@ -428,7 +474,7 @@ function paintSeat(
             sprite: { name: furniture },
             x: deskX,
             y: deskY,
-            alpha: RESERVE_ALPHA,
+            alpha: OFFICE_UNCLAIMED_FURNITURE_ALPHA,
           }
         : {
             kind: "sprite",
@@ -480,14 +526,26 @@ function paintSeat(
     return out;
   }
   if (reserve) {
-    if (lod === 2) {
+    // ONCE A TIER, not once a console - the oblique views' rule, which this
+    // view was missing. See `MissionControlFrozen.reserveLabelSeatIds`.
+    if (lod === 2 && missionControlLettersReserve(layout, seat.seatId)) {
       out.push(
         worldOf(
           {
             kind: "label",
             text: "reserve",
             x: deskX + OFFICE_TILE,
-            y: deskY + OFFICE_TILE,
+            // ON THE FLOOR UNDER THE CHAIR, on the same line the seated
+            // agents' name tags land on - `OFFICE_LABEL_GAP` below the foot,
+            // which is what the scene writes for a character.
+            //
+            // It used to be `deskY + OFFICE_TILE`, which is the console's
+            // BOTTOM EDGE: the glyphs sat entirely inside the console art, in
+            // a muted grey against the console's own grey, and read as a name
+            // with its lower half sliced off (feedback round 1: "lower half of
+            // labels on some agents are cut out"). Nothing was clipping it -
+            // it was lettering with no floor behind it.
+            y: (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,
             tone: "muted",
             ownerAgentId: null,
             // Nobody's name, so no seat to be fitted to.
@@ -503,7 +561,7 @@ function paintSeat(
   const art = SCREEN_ART[state.modelTier];
   const screen = monitorSpriteFor(state);
   const crashed = screen === "monitor-crash";
-  const alpha = monitorAlphaFor(state);
+  const alpha = officeMonitorAlphaFor(state);
   out.push(
     worldOf(
       {
