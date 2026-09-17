@@ -4027,6 +4027,53 @@ describe("<HarnessModelPicker />", () => {
     });
   });
 
+  // The end-to-end half of the Set up CLI destination, through the REAL
+  // `openProviderSettings`. The seam is asserted in
+  // `pickers/__tests__/harness-model-picker-empty-setup-cta.test.tsx`, but with
+  // a stand-in callback that honours the argument by construction - so a
+  // regression INSIDE this callback (the unconditional `setFocusTab("usage")`
+  // this replaced) would leave that file green, and the sibling test below,
+  // which asserts the "usage" destination, would stay green by definition.
+  // Only a click through the real picker can tell the two apart.
+  it("sends Set up CLI to General through the picker's own settings callback", async () => {
+    // Built on OpenRouter rather than OpenCode because an unavailable provider
+    // is only kept in the rail when it takes an API key - which is what the
+    // sibling test above is named for. An unavailable provider without
+    // `requiresApiKey` is filtered out, so its CTA is unreachable from here and
+    // the row can only be tested at the component level.
+    //
+    // `unavailableReason` still decides WHICH cta renders: "missing-binary"
+    // is checked before the API-key branch, so this row offers Set up CLI
+    // rather than Add API key even though it takes a key.
+    const missingBinary: HarnessOption = {
+      ...OPENROUTER_HARNESS,
+      error: "The resolver exhausted its candidates.",
+    };
+    queryMock.harnesses = [CODEX_HARNESS, missingBinary];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      {
+        ...catalogHarness(missingBinary, []),
+        unavailableReason: "missing-binary",
+      },
+    ];
+
+    renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "OpenRouter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set up CLI" }));
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "openrouter",
+      focusTab: "general",
+    });
+    expect(openSettingsMock).toHaveBeenCalledWith({
+      section: "providers",
+      resetToGeneral: false,
+    });
+  });
+
   it("opens settings on the picker's exact provider, profile, and host", async () => {
     queryMock.providerStates = [
       providerCliStateWithProfiles({

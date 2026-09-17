@@ -192,8 +192,16 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
   // cannot catch it: the callback has to actually WRITE the focus tab, the way
   // the picker's own `openProviderSettings` does, before "the CTA reaches
   // General" means anything. Under the original code - the CTA writing
-  // `setFocusTab("general")` itself and calling a no-argument callback - this
-  // test reads "usage" and fails.
+  // `setFocusTab("general")` itself and calling a no-argument callback - the
+  // stand-in below is passed nothing and writes `undefined`, so this fails.
+  //
+  // What it does NOT prove is that the real callback honours the argument:
+  // this stand-in honours it by construction. A regression inside
+  // `openProviderSettings` would leave this green. That half is asserted end
+  // to end in `home/__tests__/harness-model-picker.test.tsx`, which clicks Set
+  // up CLI in the real picker and reads the focus store afterwards. Both
+  // exist on purpose - the end-to-end test would not localise a regression,
+  // and this one would not detect one in the callback.
   it("lands on General once the picker's own callback has set the tab", () => {
     render(
       ModelRowsState({
