@@ -115,7 +115,7 @@ export function LoginImportAnnouncementController(): null {
         actionLabel="Import logins…"
         onAction={() => {
           useBrowserFocusStore.getState().requestImportLogins();
-          navigateToSettingsSection("general");
+          navigateToSettingsSection("browser");
         }}
         onLater={null}
       />,
