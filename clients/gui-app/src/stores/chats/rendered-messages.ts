@@ -314,6 +314,12 @@ function blockContentVersion(block: ContentBlock): number {
 function textBlockContentVersion(
   block: Extract<ContentBlock, { type: "text" }>,
 ): number {
+  if (block.browserSession !== undefined) {
+    return hashStringField(
+      TURN_SIGNATURE_HASH_OFFSET,
+      JSON.stringify(block.browserSession),
+    );
+  }
   const notice = block.providerNotice;
   if (notice === null) return block.text.length;
   let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, notice.noticeKind);
@@ -4272,6 +4278,9 @@ const BLOCK_HANDLERS: {
       : {
           kind: "text",
           markdown: block.text,
+          ...(block.browserSession === undefined
+            ? {}
+            : { browserSession: block.browserSession }),
           isStreaming: block.status === "streaming",
         };
   },

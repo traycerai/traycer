@@ -5,6 +5,7 @@ import {
   Bot,
   Boxes,
   GitBranch,
+  Globe,
   Keyboard,
   LineChart,
   Palette,
@@ -23,6 +24,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
+  | "browser"
   | "appearance"
   | "layout"
   | "opening-behavior"
@@ -165,9 +167,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Palette,
     group: "app",
   },
-  // Where a click LANDS - links, tile placement, and agent-opened browser
-  // tabs. One page rather than a control each in Browser, Appearance and
-  // General, because all three answer the same question.
+  {
+    id: "browser",
+    label: "Browser",
+    icon: Globe,
+    group: "app",
+  },
   {
     id: "opening-behavior",
     label: "Opening behavior",

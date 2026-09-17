@@ -281,6 +281,17 @@ export type ProviderNoticeMetadata = z.infer<
   typeof providerNoticeMetadataSchema
 >;
 
+export const browserSessionReferenceSchema = z.object({
+  hostId: z.string(),
+  sessionId: z.string(),
+  tabId: z.string(),
+  profile: z.enum(["primary", "isolated"]),
+  title: z.string().optional(),
+});
+export type BrowserSessionReference = z.infer<
+  typeof browserSessionReferenceSchema
+>;
+
 export const textBlockSchema = z.object({
   ...baseBlockFields,
   type: z.literal("text"),
@@ -295,6 +306,8 @@ export const textBlockSchema = z.object({
   // subscribers can be projected down to the fallback text (see
   // `chat-frame-projection.ts`).
   providerNotice: providerNoticeMetadataSchema.nullable().default(null),
+  // First browser use in a chat. Older readers retain the text fallback.
+  browserSession: browserSessionReferenceSchema.optional(),
 });
 export type TextBlock = z.infer<typeof textBlockSchema>;
 

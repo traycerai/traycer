@@ -233,6 +233,7 @@ function BrowserTileToolbarAddress(props: {
           // nothing can carry.
           disabled={disabled}
           aria-label="Browser address"
+          placeholder="Search or enter a website address"
           value={addressValue}
           onChange={(event) => {
             onAddressChange(event.target.value);

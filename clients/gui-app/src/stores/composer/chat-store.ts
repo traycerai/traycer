@@ -24,6 +24,7 @@ import type {
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
+  BrowserSessionReference,
   ContentBlock,
   DiffSource,
   FileEditReason,
@@ -381,6 +382,7 @@ export type MessageSegment =
       id: string;
       kind: "text";
       markdown: string;
+      browserSession?: BrowserSessionReference;
       isStreaming: boolean;
       assistantImageContext?: AssistantMarkdownImageContext;
     }

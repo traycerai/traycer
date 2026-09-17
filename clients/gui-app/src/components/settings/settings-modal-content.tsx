@@ -5,6 +5,7 @@ import {
   isSettingsSectionVisible,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
@@ -82,6 +83,7 @@ export function SettingsModalContent(
  */
 const SETTINGS_PANELS = {
   general: GeneralSettingsPanel,
+  browser: BrowserSettingsPanel,
   appearance: AppearanceSettingsPanel,
   layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,

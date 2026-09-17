@@ -27,6 +27,7 @@ import {
   agentMessageSendSchema,
   artifactOperationActionSchema,
   backgroundTaskOutputSchema,
+  browserSessionReferenceSchema,
   diffSourceSchema,
   fileEditReasonSchema,
   imageGenerationResultSchema,
@@ -385,6 +386,7 @@ export const textDeltaEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("text.delta"),
   delta: z.string(),
+  browserSession: browserSessionReferenceSchema.optional(),
 });
 export type TextDeltaEvent = z.infer<typeof textDeltaEventSchema>;
 
