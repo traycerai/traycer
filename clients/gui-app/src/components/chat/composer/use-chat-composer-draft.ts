@@ -32,7 +32,11 @@ interface UseChatComposerDraftArgs {
    * Display snapshots recorded on this chat's draft row so the drafts list
    * can name it once this composer is gone (the titles come from the
    * open-epic projector, which only exists while the epic is open). `null`
-   * before the projector has answered.
+   * before the projector has answered - and, on the mobile standalone chat
+   * view, for the whole lifetime of the mount, since this composer renders
+   * there with no `<EpicSessionProvider>` to read. The store treats a `null`
+   * as "not answered" and keeps whatever label it already has, so neither
+   * case blanks a row the drafts list can name.
    */
   readonly chatTitle: string | null;
   readonly epicTitle: string | null;

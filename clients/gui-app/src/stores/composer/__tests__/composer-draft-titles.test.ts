@@ -74,7 +74,50 @@ describe("setComposerDraftTitles", () => {
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]).toBeUndefined();
   });
 
-  it("clears a title back to null when the projector no longer has one", () => {
+  it("keeps a recorded title when the projector has not answered - a null never blanks one", () => {
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(CHAT_ID, typed("unsent"), { from: 1, to: 7 });
+    useComposerDraftStore
+      .getState()
+      .setComposerDraftTitles(CHAT_ID, "Fix the parser", "Compiler work");
+    const before = readRow();
+
+    // What the chat composer emits before the open-epic projector resolves -
+    // and, on the mobile standalone chat view, for its whole lifetime, since
+    // it mounts with no `<EpicSessionProvider>` to read. Writing that through
+    // left the drafts row reading `Chat` / `Epic`.
+    useComposerDraftStore
+      .getState()
+      .setComposerDraftTitles(CHAT_ID, null, null);
+
+    expect(readRow().chatTitle).toBe("Fix the parser");
+    expect(readRow().epicTitle).toBe("Compiler work");
+    // Nothing changed, so nothing re-renders.
+    expect(readRow()).toBe(before);
+  });
+
+  it("takes each title independently - the epic's answer lands while the chat's is still pending", () => {
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(CHAT_ID, typed("unsent"), { from: 1, to: 7 });
+
+    useComposerDraftStore
+      .getState()
+      .setComposerDraftTitles(CHAT_ID, null, "Compiler work");
+
+    expect(readRow().chatTitle).toBeNull();
+    expect(readRow().epicTitle).toBe("Compiler work");
+
+    useComposerDraftStore
+      .getState()
+      .setComposerDraftTitles(CHAT_ID, "Fix the parser", null);
+
+    expect(readRow().chatTitle).toBe("Fix the parser");
+    expect(readRow().epicTitle).toBe("Compiler work");
+  });
+
+  it("replaces a recorded title with a better one - a rename still lands", () => {
     useComposerDraftStore
       .getState()
       .setSnapshot(CHAT_ID, typed("unsent"), { from: 1, to: 7 });
@@ -84,9 +127,8 @@ describe("setComposerDraftTitles", () => {
 
     useComposerDraftStore
       .getState()
-      .setComposerDraftTitles(CHAT_ID, null, null);
+      .setComposerDraftTitles(CHAT_ID, "Fix the lexer", "Compiler work");
 
-    expect(readRow().chatTitle).toBeNull();
-    expect(readRow().epicTitle).toBeNull();
+    expect(readRow().chatTitle).toBe("Fix the lexer");
   });
 });

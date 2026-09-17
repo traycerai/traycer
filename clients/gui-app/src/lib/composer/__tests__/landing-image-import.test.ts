@@ -307,6 +307,28 @@ describe("importImagesIntoLanding", () => {
     expect(putSpy).not.toHaveBeenCalled();
   });
 
+  it("imports a node that declares no size at all - absence is not disagreement", async () => {
+    const bytes = bytesOf([1, 2, 3, 4, 5]);
+    const stashHash = await seedSourceImage(bytes);
+    // `atomFromAttrs` maps a missing `size` attribute to null. Rejecting that
+    // cost a stash conversion its images: the corrupt error is swallowed, the
+    // hash-only content is kept, and the stash database is then dropped.
+    const undeclared = { ...imageAttrs("n", stashHash, 0), size: null };
+
+    const result = requireDefined(
+      await importImagesIntoLanding(
+        importArgs(multiImageDoc([undeclared]), [stashHash], "draft-x"),
+      ),
+      "undeclared-size import",
+    );
+
+    const node = collectImageNodes(result.content)[0];
+    // `size` carries over untouched, as it does for every other attribute.
+    expect(node.attrs?.size).toBeNull();
+    expect(await getImageBytes(String(node.attrs?.hash))).toEqual(bytes);
+    result.reservation.release();
+  });
+
   it("rejects import when a node's declared mimeType disagrees with the verified blob", async () => {
     const bytes = bytesOf([1, 2, 3, 4, 5]);
     const stashHash = await seedSourceImage(bytes);

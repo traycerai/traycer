@@ -50,10 +50,17 @@ function canvasOf(
   };
 }
 
+// Every tab in the map is in the header strip unless a test overrides
+// `openTabOrder` on the result: that order, not the canvas map, is what makes
+// a tab visible, and it is what the selector walks.
 function stateWith(
   canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
 ): EpicCanvasStore {
-  return { ...useEpicCanvasStore.getState(), canvasByTabId };
+  return {
+    ...useEpicCanvasStore.getState(),
+    canvasByTabId,
+    openTabOrder: Object.keys(canvasByTabId),
+  };
 }
 
 describe("selectOpenChatIds", () => {
@@ -101,6 +108,22 @@ describe("selectOpenChatIds", () => {
     expect(selectOpenChatIds(stateWith({})).size).toBe(0);
   });
 
+  it("leaves out a chat whose tab was closed - the canvas outlives the strip", () => {
+    const visible = chatRef("chat-visible");
+    const hidden = chatRef("chat-hidden");
+    const base = stateWith({
+      "tab-1": canvasOf([visible], pane("p-1", [visible.instanceId])),
+      "tab-2": canvasOf([hidden], pane("p-2", [hidden.instanceId])),
+    });
+
+    // Exactly what `closeTab` leaves behind: the tab is gone from
+    // `openTabOrder` and `canvasByTabId["tab-2"]` is deliberately KEPT so
+    // reopening restores it. Walking the map badged that chat `Open`.
+    const ids = selectOpenChatIds({ ...base, openTabOrder: ["tab-1"] });
+
+    expect([...ids]).toEqual(["chat-visible"]);
+  });
+
   it("answers in a stable order regardless of where the walk met each tile", () => {
     const chatA = chatRef("chat-a");
     const chatB = chatRef("chat-b");
@@ -122,7 +145,7 @@ describe("selectOpenChatIds", () => {
 
 describe("useOpenChatIds", () => {
   afterEach(() => {
-    useEpicCanvasStore.setState({ canvasByTabId: {} });
+    useEpicCanvasStore.setState({ canvasByTabId: {}, openTabOrder: [] });
   });
 
   it("keeps the same Set across a pane reorder that changes no membership", () => {
@@ -136,6 +159,7 @@ describe("useOpenChatIds", () => {
           pane("p-1", [chatA.instanceId, chatB.instanceId]),
         ),
       },
+      openTabOrder: ["tab-1"],
     });
 
     const { result } = renderHook(() => useOpenChatIds());
@@ -154,6 +178,7 @@ describe("useOpenChatIds", () => {
             pane("p-1", [chatB.instanceId, chatA.instanceId]),
           ),
         },
+        openTabOrder: ["tab-1"],
       });
     });
 
@@ -166,6 +191,7 @@ describe("useOpenChatIds", () => {
       canvasByTabId: {
         "tab-1": canvasOf([chatA], pane("p-1", [chatA.instanceId])),
       },
+      openTabOrder: ["tab-1"],
     });
 
     const { result } = renderHook(() => useOpenChatIds());
@@ -180,6 +206,7 @@ describe("useOpenChatIds", () => {
             pane("p-1", [chatA.instanceId, chatB.instanceId]),
           ),
         },
+        openTabOrder: ["tab-1"],
       });
     });
 

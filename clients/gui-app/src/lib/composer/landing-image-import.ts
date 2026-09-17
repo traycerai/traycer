@@ -105,9 +105,18 @@ export async function importImagesIntoLanding(
     // The node's own declared MIME/size can diverge from what the verified
     // blob actually is. Metadata disagreement is corruption: preserve the
     // source rather than import mismatched content into the landing draft.
+    //
+    // A `null` size is NOT a disagreement - it is a node that never declared
+    // one. `atomFromAttrs` maps a missing `size` attribute to null, so an
+    // older image node claims no size at all, and comparing that to a real
+    // byte length rejected a perfectly good blob. It mattered: a stash
+    // conversion swallows `ImageBlobCorruptError` and falls back to the
+    // hash-only content, then records the conversion and lets the stash
+    // database be dropped - so the one durable copy of those bytes went with
+    // it. Only a size the node actually claims is checked.
     if (
       atom.mimeType !== blob.mimeType ||
-      atom.size !== blob.bytes.byteLength
+      (atom.size !== null && atom.size !== blob.bytes.byteLength)
     ) {
       throw new ImageBlobCorruptError();
     }

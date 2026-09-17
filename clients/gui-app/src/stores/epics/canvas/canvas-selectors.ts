@@ -512,10 +512,11 @@ export function useOpenTileContentIds(
 const EMPTY_CHAT_IDS: ReadonlySet<string> = new Set();
 
 /**
- * Chat ids open as a tile ANYWHERE in this window - every view tab's canvas,
- * every pane, background strip tabs included (a click away, not somewhere
- * else). The drafts list reads it to mark a row `Open`, which is a question
- * about the whole window rather than the tab the popover happens to be in.
+ * Chat ids open as a tile ANYWHERE in this window - every view tab IN THE
+ * HEADER STRIP, every pane, background strip tabs included (a click away, not
+ * somewhere else). The drafts list reads it to mark a row `Open`, which is a
+ * question about the whole window rather than the tab the popover happens to
+ * be in.
  *
  * Content ids, not instance ids: the same chat can be open in two tiles and
  * the caller wants one answer.
@@ -531,9 +532,15 @@ export function selectOpenChatIds(state: EpicCanvasStore): ReadonlySet<string> {
 // dragging a tab within its pane (or between panes) would otherwise hand the
 // shallow compare a permuted array with identical membership and mint a new
 // Set on a change the answer does not depend on.
+//
+// Driven by `openTabOrder`, NOT by the `canvasByTabId` map: `closeTab` drops
+// the tab from the order and deliberately keeps its canvas so reopening can
+// restore it, so a walk over the map badges chats in tabs the user closed.
+// Background tabs are unaffected - they are still in the order.
 function collectOpenChatIdList(state: EpicCanvasStore): ReadonlyArray<string> {
   const ids = new Set<string>();
-  for (const canvas of Object.values(state.canvasByTabId)) {
+  for (const tabId of state.openTabOrder) {
+    const canvas = state.canvasByTabId[tabId];
     if (canvas === undefined) continue;
     for (const pane of collectPanes(canvas.root)) {
       for (const instanceId of pane.tabInstanceIds) {

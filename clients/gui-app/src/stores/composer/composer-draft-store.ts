@@ -219,6 +219,13 @@ interface ComposerDraftStore {
    * nor `draftId` - a title write through `touchLocalComposerDraft` would
    * re-order the list and publish an untouched row on every tile mount.
    * No-op when this chat has no row yet; there is nothing to label.
+   *
+   * A `null` means "the projector has not answered", never "this draft has no
+   * title", so it PRESERVES whatever is recorded instead of blanking it. Both
+   * producers emit null while unresolved, and one of them emits null forever:
+   * the chat composer also mounts outside an `<EpicSessionProvider>` (the
+   * mobile standalone chat view), where the tolerant read has no store to ask.
+   * A recorded label is only ever replaced by a better one.
    */
   readonly setComposerDraftTitles: (
     chatId: string,
@@ -532,16 +539,26 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         set((state) => {
           const current = state.drafts[chatId];
           if (current === undefined) return state;
+          // An unanswered projector must not blank a label the list already
+          // has - see the interface doc. Each title is kept independently:
+          // the epic title resolves through a different read than the chat's
+          // and routinely arrives first.
+          const nextChatTitle = chatTitle ?? current.chatTitle;
+          const nextEpicTitle = epicTitle ?? current.epicTitle;
           if (
-            current.chatTitle === chatTitle &&
-            current.epicTitle === epicTitle
+            current.chatTitle === nextChatTitle &&
+            current.epicTitle === nextEpicTitle
           ) {
             return state;
           }
           return {
             drafts: {
               ...state.drafts,
-              [chatId]: { ...current, chatTitle, epicTitle },
+              [chatId]: {
+                ...current,
+                chatTitle: nextChatTitle,
+                epicTitle: nextEpicTitle,
+              },
             },
           };
         });

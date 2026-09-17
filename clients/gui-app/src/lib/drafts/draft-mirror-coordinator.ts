@@ -10,7 +10,6 @@ import {
   releasePendingIngestImageHashes,
 } from "@/lib/composer/pending-ingest-image-roots";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { landingDraftsReady } from "@/lib/composer/landing-image-gc";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
@@ -100,6 +99,7 @@ import {
 import type { ImageBlob } from "@/lib/attachments/image-bytes";
 import {
   convertStashEntry,
+  landingDraftsAreReady,
   type StashConversionOutcome,
 } from "./stash-migration";
 import {
@@ -263,8 +263,23 @@ async function convertStashDocument(
   // Not while the landing store may still be replaced wholesale: on desktop
   // the per-window projection is authoritative when it lands, so a row
   // installed before it would be dropped while the converted map recorded it
-  // as done. The next session lists this row again.
-  if (!landingDraftsReady()) return false;
+  // as done.
+  //
+  // WAITING rather than bailing, because nothing inside this session asks
+  // again. The mirror mount can acquire its host session before the async
+  // per-window projection marks landing drafts ready, and a `drafts.list`
+  // replays only on reconnect; the cloud path is worse, because
+  // `use-cloud-drafts-ingest` marks the head ingested BEFORE the apply and
+  // only an unmount or a thrown error releases that key - an abandoned apply
+  // is neither. So a stash row that arrived a moment early stayed invisible
+  // until the app restarted. This is the same bounded ~10s poll the local
+  // database migration already waits on.
+  if (!(await landingDraftsAreReady())) return false;
+  // Re-proved after that wait. It is an await like any other, and the owner
+  // check above is now the stale side of it: a sign-out or a user switch
+  // during the poll would otherwise convert account A's stash row into
+  // account B's landing draft.
+  if (currentDraftBlobOwnerId() !== applyOwner) return false;
   let outcome: StashConversionOutcome;
   try {
     outcome = await convertStashEntry({

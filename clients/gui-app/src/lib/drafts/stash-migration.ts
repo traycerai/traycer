@@ -380,8 +380,12 @@ async function runStashConversion(
  * one-shot gate `landing-image-gc` already keeps for the same question (it
  * has no subscription seam), and gives up after ~10s - the database is left
  * for the next launch.
+ *
+ * Exported for `convertStashDocument`, which converts the rows that arrive
+ * from a host or the cloud rather than from the local database and needs the
+ * same wait for the same reason.
  */
-async function landingDraftsAreReady(): Promise<boolean> {
+export async function landingDraftsAreReady(): Promise<boolean> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (landingDraftsReady()) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
