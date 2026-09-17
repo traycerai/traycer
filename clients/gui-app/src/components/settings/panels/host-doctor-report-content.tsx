@@ -16,6 +16,7 @@ interface HostDoctorReportContentProps {
   readonly recurrence: RecurrenceState;
   readonly reportFetching: boolean;
   readonly fixPendingCode: string | null;
+  readonly logTail: string | null;
   readonly freePortPrompt: FreePortAndRestartInput | null;
   readonly freePortPending: boolean;
   readonly onFix: (issue: HostDoctorIssue) => void;
@@ -47,15 +48,26 @@ export function HostDoctorReportContent(props: HostDoctorReportContentProps) {
         {issues.length === 1 ? "" : "s"}.
       </div>
       {issues.map((issue) => (
-        <HostDoctorIssueCard
-          key={issue.code}
-          issue={issue}
-          expanded={expandedCodes.has(issue.code)}
-          recurrenceLocked={recurrence.locked}
-          fixPendingCode={fixPendingCode}
-          onFix={onFix}
-          onToggle={onToggleIssue}
-        />
+        <div key={issue.code}>
+          <HostDoctorIssueCard
+            issue={issue}
+            expanded={expandedCodes.has(issue.code)}
+            recurrenceLocked={recurrence.locked}
+            fixPendingCode={fixPendingCode}
+            onFix={onFix}
+            onToggle={onToggleIssue}
+          />
+          {issue.fixAction === "host-logs" && props.logTail !== null ? (
+            <pre
+              className="mt-2 max-h-52 overflow-auto rounded-md bg-foreground/5 p-2 font-mono text-code-xs text-muted-foreground"
+              data-testid="host-doctor-log-tail"
+            >
+              {props.logTail.length === 0
+                ? "This host's log is empty or no longer there."
+                : props.logTail}
+            </pre>
+          ) : null}
+        </div>
       ))}
       <div className="flex flex-wrap items-center gap-2">
         {recurrence.locked ? (
