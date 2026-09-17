@@ -683,6 +683,55 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     });
   });
 
+  it("leaves a non-storable format INLINE and stores no bytes for it", async () => {
+    // The landing composer long carried its own copy of the pending-image
+    // ingest, and that copy had no notion of a storable format: it started a
+    // store job for any decodable image, so a pasted BMP was hashed here and
+    // then refused by the host's writer, while its budget reservation was taken
+    // and never released.
+    //
+    // The shared hook's rule - a format the host refuses stays INLINE, reserves
+    // nothing and starts no job - is what this asserts on the landing surface.
+    const bytes = bytesOf([7, 7, 7]);
+    const hash = await sha256Hex(bytes);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    pasteComposerContent(nonStorableContent(bytesToBase64(bytes)));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+
+    // The DISCRIMINATOR, and the reason this is not merely a same-tick read:
+    // an ingest job in flight holds the pending indicator true, and this test
+    // releases no gate, so a BMP job that wrongly started would hold it true
+    // until this `waitFor` gave up. Settling to "false" is therefore positive
+    // evidence that no job is outstanding - not just that none had registered
+    // yet when the assertion ran.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("false");
+    });
+
+    // And nothing reached the store under its hash. `setGates` records every
+    // `putImage` that got that far, so an entry here would mean a job ran.
+    expect(setGates.has(hash)).toBe(false);
+
+    // Inline is the ACCEPTED outcome, not a rejection: the draft still sends
+    // this image, just not hash-only.
+    const atoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
+    );
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.b64content).not.toBeNull();
+    expect(atoms[0]?.hash).toBeNull();
+  });
+
   // Seam 2 standalone (also covered above while pending): partialize + desktop.
   it("serialization seams strip pending b64 while the in-memory draft keeps it", async () => {
     const desktopPatches: DesktopPerWindowStatePatch[] = [];
@@ -1199,6 +1248,30 @@ function imageOnlyContent(b64: string, fileName: string): JsonContent {
               fileName,
               b64content: b64,
               mimeType: "image/png",
+              size: 3,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** A single non-storable (BMP) image node - a format the host's writer refuses. */
+function nonStorableContent(b64: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "src-bmp",
+              fileName: "shot.bmp",
+              b64content: b64,
+              mimeType: "image/bmp",
               size: 3,
             },
           },

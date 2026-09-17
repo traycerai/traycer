@@ -11,6 +11,8 @@ import {
 } from "@/lib/composer/pending-ingest-image-roots";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
+import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import {
   currentDraftBlobOwnerId,
   forgetBlobUnsupportedHost,
@@ -301,12 +303,49 @@ export async function consumeStashOnHost(
   await deleteStashEntryOnHost(bound, entryId);
 }
 
+/**
+ * Drop any image whose bytes do not sniff to the MIME it is labelled with.
+ *
+ * The stash's restore contract is stricter than the transport's. A stored blob
+ * is read back through `isValidStashBlobRecord`, which requires
+ * `sniffImageMimeType(bytes) === mimeType` and answers `corrupt` otherwise -
+ * while `readDraftBlobs`, which feeds the mirror path here, falls back to
+ * `"image/png"` for bytes that sniff to nothing. That fallback is right for the
+ * landing image partition, which holds bytes rather than records, and is
+ * exactly the pairing the stash predicate rejects.
+ *
+ * So a blob that fails this check could only ever be stored as a record that
+ * reads as corrupt. Leaving it out is strictly better: the entry restores its
+ * text with one image missing - the same outcome as a blob the host never had -
+ * instead of one the reader reports as damaged.
+ *
+ * Exported for its own test. Its live producer of a MISMATCHED blob is the
+ * mirror path's transport fallback, and the cloud fetch beside it cannot make
+ * one by construction - it sniffs the bytes and skips what will not answer -
+ * so the rejecting branch has no caller in this module's own tests to reach it
+ * through.
+ */
+export function stashBlobsThatCanRestore(
+  images: ReadonlyMap<string, PromptStashImageBlob>,
+): ReadonlyMap<string, PromptStashImageBlob> {
+  const restorable = new Map<string, PromptStashImageBlob>();
+  for (const [hash, blob] of images) {
+    if (sniffImageMimeType(blob.bytes) !== blob.mimeType) continue;
+    restorable.set(hash, blob);
+  }
+  return restorable;
+}
+
 async function ingestStashDocument(
   document: DraftDocument,
-  images: ReadonlyMap<string, PromptStashImageBlob>,
+  rawImages: ReadonlyMap<string, PromptStashImageBlob>,
   applyOwner: string | null,
 ): Promise<void> {
   if (document.kind !== "stash-entry") return;
+  // Filtered HERE rather than in either reader, because this is the one gate
+  // every stash ingest passes: the mirror path's prefetch arrives with the
+  // transport's fallback already applied, and so would any future caller.
+  const images = stashBlobsThatCanRestore(rawImages);
   stashHostById.set(document.draftId, document.ownerHostId);
   stashSeenOnHost.add(stashSeenKey(document.ownerHostId, document.draftId));
   try {
@@ -442,7 +481,7 @@ const sink: DraftMirrorSink = {
     // abandonment to, and `rememberIncomingSynced` already re-derives what it
     // needs from `held`. The boolean exists for the CLOUD ingest caller, which
     // writes bytes on the strength of the apply.
-    await applyHostDocument(document);
+    await applyHostDocument(document, null);
   },
   applyDelete(draftId) {
     rememberInheritableLandingTab(draftId);
@@ -722,7 +761,23 @@ async function prefetchDocumentBlobs(
  * recovering images for a document no row took leaves them resident with
  * nothing to release them.
  */
-async function applyHostDocument(document: DraftDocument): Promise<boolean> {
+async function applyHostDocument(
+  document: DraftDocument,
+  /**
+   * Bytes for a STASH document's hashes, already fetched, or `null` when the
+   * caller has none to offer.
+   *
+   * Non-null only on the cloud-ingest path, and the ordering is the whole
+   * point: a stash row's images live in the prompt-stash repository, not this
+   * window's image partition, and `ingestRemote` returns early once the row
+   * exists - so bytes fetched AFTER the apply have nowhere to go. The cloud
+   * caller therefore fetches first and hands them in here.
+   *
+   * The mirror path needs nothing: `prefetchDocumentBlobs` reads the owning
+   * host's blobs and ingests the row itself, answering `"ingested"` above.
+   */
+  stashImages: ReadonlyMap<string, PromptStashImageBlob> | null,
+): Promise<boolean> {
   if (document.kind === "landing") {
     knownLandingDraftIds.add(document.draftId);
     // The absence-sweep fence is reserved here, synchronously at the start
@@ -767,7 +822,7 @@ async function applyHostDocument(document: DraftDocument): Promise<boolean> {
   if (prefetched === "ingested") return true;
   if (!applyStillOwned(applyOwner, document)) return false;
   if (document.kind === "stash-entry") {
-    await ingestStashDocument(document, new Map(), applyOwner);
+    await ingestStashDocument(document, stashImages ?? new Map(), applyOwner);
     return true;
   }
   if (document.kind === "interview") {
@@ -1327,7 +1382,7 @@ export function collectDraftMirrorDirtyWrites(
 export async function applyIncomingDraftDocument(
   document: DraftDocument,
 ): Promise<void> {
-  await applyHostDocument(document);
+  await applyHostDocument(document, null);
 }
 
 export async function ingestCloudDraftSummary(input: {
@@ -1361,7 +1416,35 @@ export async function ingestCloudDraftSummary(input: {
   // every check agreeing.
   const ingestOwner = input.readOwner;
   if (currentDraftBlobOwnerId() !== ingestOwner) return;
-  const installed = await applyHostDocument(input.document);
+  // A stash row's bytes have to arrive WITH it. `ingestRemote` is idempotent
+  // by entry id and the images ride the same durable write as the row, so
+  // there is no second chance after the apply - which is why this fetch is
+  // here rather than beside the landing/new-chat recovery below.
+  //
+  // Never fatal to the apply. A stash row that lands without its images is
+  // exactly the status quo and still restores its text; a row that does not
+  // land at all because a blob read failed would be a regression, so the
+  // fetch answers with an empty map on every failure and the apply proceeds.
+  // The KIND is checked here, synchronously, rather than inside the fetch.
+  // `applyHostDocument` reserves the absence-sweep fence at its synchronous
+  // start, so any await between this point and that call hands a concurrent
+  // directory sweep a window in which the row is not yet fenced - and awaiting
+  // an async function that returns immediately still yields a microtask, which
+  // is enough. A landing or new-chat document therefore reaches the apply with
+  // no suspension at all, exactly as before.
+  //
+  // A stash document does suspend, and may: the fence is landing-only, and a
+  // stash row is not swept by the directory pass.
+  const fetchesStashImages = input.document.kind === "stash-entry";
+  const stashImages = fetchesStashImages
+    ? await recoverCloudStashImages(input)
+    : null;
+  // Keyed on whether this SUSPENDED, not on what came back. The fetch answers
+  // `null` for a stash document too - no hashes, no mounted client, a read that
+  // threw - and every one of those still awaited, so every one of them still
+  // needs the account re-asked before this document is applied.
+  if (fetchesStashImages && currentDraftBlobOwnerId() !== ingestOwner) return;
+  const installed = await applyHostDocument(input.document, stashImages);
   // No row took it, so this document roots nothing and there is nothing for
   // recovery to fetch FOR - whether it was retired, fenced by a pending
   // delete, beaten by a newer apply, refused as an older revision, or kept out
@@ -1400,6 +1483,72 @@ export async function ingestCloudDraftSummary(input: {
  * lands have nowhere to go. Recovering them means handing an images map to
  * `ingestStashDocument` BEFORE it applies, which is custody work of its own.
  */
+/**
+ * Fetch a cloud-ingested STASH document's images, for handing to the apply.
+ *
+ * The stash twin of {@link recoverIngestedCloudDraftImages}, and it runs on the
+ * other side of the apply for a reason the sibling's own comment gives: that
+ * one writes into this window's image partition, where the APPLIED row is what
+ * roots the hashes, so it must run after. A stash row's bytes go somewhere
+ * else entirely - the prompt-stash repository, in the same durable write as
+ * the row - so for this kind "after the apply" is not late, it is never.
+ *
+ * The bytes still pass through the partition on the way: the cloud transfer
+ * verifies each digest with `putImageBytesAtHash`, which is what makes a
+ * returned byte string trustworthy, and that write seeds a session entry which
+ * roots them meanwhile. Once the row is in the stash repository that partition
+ * copy is incidental, and the sweep reclaims it on its own schedule - the same
+ * disposition any unrooted transfer gets.
+ *
+ * Answers an EMPTY map for every failure, including a fetch that raises: the
+ * caller applies the document either way, and a stash entry whose images are
+ * missing is the behaviour this replaces, not a new one.
+ */
+async function recoverCloudStashImages(input: {
+  readonly hostId: string;
+  readonly summary: CloudChatSummary;
+  readonly document: DraftDocument;
+}): Promise<ReadonlyMap<string, PromptStashImageBlob> | null> {
+  const { document } = input;
+  if (document.kind !== "stash-entry") return null;
+  const hashes = blobHashesOfDocument(document);
+  if (hashes.length === 0) return null;
+  // The ingesting host's requester, for the reason the sibling states: the
+  // cloud read is a byte pipe through whatever host this device runs.
+  const client = sessionClients.get(input.hostId);
+  if (client === undefined) return null;
+  try {
+    await recoverCloudDraftImages({
+      identity: input.summary.identity,
+      hostId: input.hostId,
+      client,
+      hashes,
+    });
+  } catch (error: unknown) {
+    appLogger.warn("[draft-mirror] cloud stash image recovery failed", {
+      error: describeLogError(error),
+    });
+    return null;
+  }
+  const images = new Map<string, PromptStashImageBlob>();
+  for (const hash of hashes) {
+    const bytes = await getImageBytes(hash);
+    if (bytes === undefined) continue;
+    // Sniffed from the BYTES, never from the document's `mimeType` attr, and
+    // with NO fallback. The transport's readers answer `"image/png"` for bytes
+    // that sniff to nothing, which suits the landing partition - it holds bytes,
+    // not records - but the stash reads a blob back through
+    // `isValidStashBlobRecord`, which requires the sniff to equal the stored
+    // MIME and answers `corrupt` when it does not. A label this side cannot
+    // justify is therefore a record that reads as damaged later, so it is not
+    // minted at all.
+    const mimeType = sniffImageMimeType(bytes);
+    if (mimeType === null) continue;
+    images.set(hash, { bytes, mimeType });
+  }
+  return images;
+}
+
 async function recoverIngestedCloudDraftImages(input: {
   readonly hostId: string;
   readonly summary: CloudChatSummary;
