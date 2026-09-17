@@ -86,7 +86,6 @@ import {
 } from "@/components/epic-canvas/comm-graph/office/office-hover-follow";
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
-import { OfficeCatchingUpChip } from "@/components/epic-canvas/comm-graph/office/office-catching-up-chip";
 import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
 import {
   createOfficeStaticSurface,
@@ -115,7 +114,7 @@ import {
 } from "@/components/epic-canvas/comm-graph/office/office-logo-cache";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
-import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
+import { commGraphPlaybackPace } from "@/lib/comm-graph/comm-graph-transport";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import {
   drawOfficeSprite,
@@ -157,6 +156,7 @@ import {
   OFFICE_SIGN_MONOSPACE_STACK,
   OFFICE_SIGN_NARROW_PLATE_MAX_CHARS,
   OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PADDING_Y,
   OFFICE_SIGN_PLATE_MAX_CHARS,
   nameTagTextThatFits,
   officeFloorSignsToDraw,
@@ -170,9 +170,20 @@ import {
 } from "@/lib/comm-graph/office/office-signs";
 import {
   layoutNameTags,
-  NAME_TAG_LINE_HEIGHT,
   type OfficeNameTagCandidate,
 } from "@/components/epic-canvas/comm-graph/office/office-name-tags";
+import {
+  createLabelSpace,
+  officeScreenLabelBaseline,
+  officeScreenLabelBox,
+  officeScreenLabelLineHeight,
+  OFFICE_LABEL_FIXED,
+  OFFICE_LABEL_FONT_PX,
+  OFFICE_LABEL_HALO_PX,
+  placeOfficeLabel,
+  resetLabelSpace,
+  type OfficeLabelSpace,
+} from "@/components/epic-canvas/comm-graph/office/office-label-space";
 import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_LOGO_SIZE,
@@ -192,6 +203,7 @@ import {
   type OfficeRect,
   type OfficeSceneInput,
   type OfficeSign,
+  type OfficeSignKind,
   type OfficeSpriteName,
   type OfficeSize,
   type OfficeTheme,
@@ -227,12 +239,16 @@ const AUTO_PAN_MS = 250;
 const CLICK_SLOP_PX = 4;
 /** Coalesces a pan/zoom gesture into one persisted view write. */
 const VIEW_PERSIST_DEBOUNCE_MS = 150;
-const LABEL_FONT_PX = 10;
+/**
+ * The office's own small face. Taken from the label space rather than declared
+ * here, because the box a label reserves is built from it and a second copy of
+ * the number would be a copy that drifts.
+ */
+const LABEL_FONT_PX = OFFICE_LABEL_FONT_PX;
 const HOVER_LABEL_FONT_PX = 11;
 /** The name-tag font, prebuilt: the width cache keys on text alone only
  * because this never varies. */
 const LABEL_FONT = `${LABEL_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
-const SIGN_PADDING_Y = 2;
 const SIGN_PLATE_RADIUS = 3;
 /**
  * How solid a sign's plate is against the floor under it. See
@@ -287,6 +303,39 @@ const FLOATING_SIGN_GAP_PX = 2;
  */
 const FIGURE_OVERHANG = OFFICE_CHARACTER_HEIGHT - OFFICE_TILE;
 const SIGN_WIDTH_TILES = 2;
+/** A plate's own height on screen, fixed at every zoom. */
+const SIGN_PLATE_HEIGHT_PX = OFFICE_SIGN_FONT_PX + OFFICE_SIGN_PADDING_Y * 2;
+/**
+ * How far a plate with no board under it may climb to get out of the way.
+ *
+ * UP, because a floating plate hangs in the air over a room whose own first
+ * row it was already lifted clear of - the air is the only direction with
+ * nothing in it. A plate's height rather than a line of text, so two stacked
+ * plates sit flush the way a plate and its claim line do, and two attempts
+ * because a third would float a room's name three plates clear of the room,
+ * by which point it names the air rather than anything under it.
+ *
+ * A LIFTED PLATE USUALLY LOSES ITS CLAIM LINE, and that is the trade rather
+ * than an oversight: the claim hangs FIXED one plate below its own, which is
+ * precisely the box that forced the lift, so it finds that box taken and is
+ * dropped. A room keeps its name and gives up whose room it is - the right
+ * way round, since the name is the thing a reader is scanning for.
+ */
+const FLOATING_SIGN_LIFT = { dy: -SIGN_PLATE_HEIGHT_PX, max: 2 } as const;
+/** The same escape for a storey's name, in the face that name is set in. */
+const FLOOR_SIGN_LIFT = {
+  dy: -officeScreenLabelLineHeight(LABEL_FONT_PX),
+  max: 2,
+} as const;
+/**
+ * How far Find's own label may walk down before it gives up.
+ *
+ * Six lines against a name tag's two. The cluster this exists for - four
+ * agents at one desk row, three tags placed and the fourth dropped - has its
+ * anchor and the two tag shifts all taken before Find is reached, so a tag's
+ * budget would drop the one label the reader explicitly asked for.
+ */
+const FIND_LABEL_MAX_SHIFTS = 6;
 /** An overview pip, and the two marks that ride over it. */
 const PIP_RADIUS = 3;
 const PIP_RING_GAP = 2;
@@ -1046,12 +1095,18 @@ function seatBoundsFor(
  * foreground color), so a name is outlined rather than trusted to contrast
  * with whatever it happens to sit on. The backing's colour is the CALLER's,
  * because it has to contrast with the text rather than with the floor.
+ *
+ * THE OUTLINE IS INK THE LAYOUT HAS TO KNOW ABOUT, so its reach is
+ * {@link OFFICE_LABEL_HALO_PX} rather than a literal here: the box every
+ * caller reserves is built from the same constant, and an outline painted
+ * past a box that did not account for it is the overlap this pass exists to
+ * prevent, one pixel at a time.
  */
 const LABEL_BACKING_OFFSETS: ReadonlyArray<readonly [number, number]> = [
-  [-1, 0],
-  [1, 0],
-  [0, -1],
-  [0, 1],
+  [-OFFICE_LABEL_HALO_PX, 0],
+  [OFFICE_LABEL_HALO_PX, 0],
+  [0, -OFFICE_LABEL_HALO_PX],
+  [0, OFFICE_LABEL_HALO_PX],
 ];
 
 function drawScreenLabel(
@@ -1313,6 +1368,13 @@ function drawAnchoredSprite(
  * A floor's name over its stairwell. Only drawn when the building has more
  * than one floor: with a single host the building IS the epic, and a sign over
  * it would label the obvious.
+ *
+ * THE FIRST LETTERING ON THE FLOOR TO CLAIM ITS PIXELS. It goes down before
+ * any signage or name tag because it is the label a reader orients by - which
+ * building am I looking at - and there is one of it per host, against a
+ * hundred plates and however many tags the viewport holds. It is also
+ * lettering on bare floor rather than on a board, so unlike a wall plate it
+ * may lift a line out of a neighbour's way before it gives up.
  */
 function drawFloorSigns(args: {
   readonly ctx: CanvasRenderingContext2D;
@@ -1320,19 +1382,36 @@ function drawFloorSigns(args: {
   readonly signs: ReadonlyArray<OfficeFloorSignToDraw>;
   readonly color: string;
   readonly backing: string;
+  readonly space: OfficeLabelSpace;
 }): void {
-  const { backing, camera, color, ctx, signs } = args;
+  const { backing, camera, color, ctx, signs, space } = args;
+  ctx.save();
+  ctx.font = LABEL_FONT;
   for (const entry of signs) {
+    const screenX = entry.anchor.x * camera.zoom + camera.x;
+    const screenY = entry.anchor.y * camera.zoom + camera.y - 2;
+    const box = placeOfficeLabel(
+      space,
+      officeScreenLabelBox({
+        centerX: screenX,
+        baselineY: screenY,
+        width: measuredWidth(ctx, entry.text),
+        fontPx: LABEL_FONT_PX,
+      }),
+      FLOOR_SIGN_LIFT,
+    );
+    if (box === null) continue;
     drawScreenLabel(ctx, {
       text: entry.text,
-      screenX: entry.anchor.x * camera.zoom + camera.x,
-      screenY: entry.anchor.y * camera.zoom + camera.y - 2,
+      screenX,
+      screenY: officeScreenLabelBaseline(box),
       fontPx: LABEL_FONT_PX,
       color,
       backing,
       alpha: 1,
     });
   }
+  ctx.restore();
 }
 
 /**
@@ -1385,10 +1464,10 @@ function signPlateBox(
   screenY: number,
 ): { left: number; top: number; width: number; height: number } {
   const width = ctx.measureText(text).width + OFFICE_SIGN_PADDING_X * 2;
-  const height = OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2;
+  const height = OFFICE_SIGN_FONT_PX + OFFICE_SIGN_PADDING_Y * 2;
   return {
     left: screenX - width / 2,
-    top: screenY - OFFICE_SIGN_FONT_PX - SIGN_PADDING_Y,
+    top: screenY - OFFICE_SIGN_FONT_PX - OFFICE_SIGN_PADDING_Y,
     width,
     height,
   };
@@ -1460,6 +1539,8 @@ type OfficeQuadDrawable = Extract<OfficeDrawable, { kind: "quad" }>;
 const labelScratch: OfficeLabelDrawable[] = [];
 const clockScratch: OfficeClockDrawable[] = [];
 const nameTagScratch: OfficeNameTagCandidate[] = [];
+/** Every label already placed this frame. Same lifetime as the buffers above. */
+const labelSpaceScratch = createLabelSpace();
 
 function resetScratch<T>(buffer: T[]): T[] {
   buffer.length = 0;
@@ -1842,6 +1923,13 @@ function sirenPlacement(box: {
  * it hangs on is world art under the camera, and the text on it is screen-space
  * so it stays crisp at every zoom. Both hang off the anchor the resolver
  * projected, so neither has any tile arithmetic of its own.
+ *
+ * THE BOARD GOES DOWN WHETHER OR NOT ITS PLATE DOES. This pass runs before the
+ * lettering, under a transform the lettering has dropped, so it cannot know
+ * that the frame will later find no room for the words - and it should not
+ * wait to find out. A board with nothing on it is a blank plaque on a wall,
+ * which is the same thing `officeSignLetteredAt` already leaves behind at
+ * office zoom, and a wall with a board-shaped hole in it would be worse.
  */
 function drawSignArt(args: {
   readonly ctx: CanvasRenderingContext2D;
@@ -1865,6 +1953,29 @@ function drawSignArt(args: {
   }
 }
 
+/**
+ * WHICH SIGN KEEPS ITS PLATE when two of them want the same pixels.
+ *
+ * Signage is laid out in this order and a plate that finds no room is dropped,
+ * so the order is a statement about what a reader can least afford to lose: a
+ * host's building before a civic room before an area before a cabin, and the
+ * boards and pod plates - the smallest, most numerous lettering, and the only
+ * kind whose subject is also named by a name tag underneath it - last.
+ */
+const SIGN_PLATE_RANK: Readonly<Record<OfficeSignKind, number>> = {
+  host: 0,
+  civic: 1,
+  area: 2,
+  room: 3,
+  "hq-board": 4,
+  board: 5,
+  pod: 6,
+  plate: 7,
+};
+
+/** Signs in the order their plates claim space, cheapest stable tiebreak last. */
+const signOrderScratch: OfficeSignToDraw[] = [];
+
 function drawSignLabels(args: {
   readonly ctx: CanvasRenderingContext2D;
   readonly signs: ReadonlyArray<OfficeSignToDraw>;
@@ -1873,9 +1984,19 @@ function drawSignLabels(args: {
   readonly lod: OfficeLod;
   /** For the one sign that carries art in this pass: the ward's beacon. */
   readonly theme: OfficeTheme;
+  /** Everything already lettered this frame; see {@link OfficeLabelSpace}. */
+  readonly space: OfficeLabelSpace;
 }): void {
-  const { camera, ctx, lod, palette, signs, theme } = args;
-  for (const entry of signs) {
+  const { camera, ctx, lod, palette, signs, space, theme } = args;
+  const ordered = resetScratch(signOrderScratch);
+  for (const entry of signs) ordered.push(entry);
+  ordered.sort(
+    (a, b) =>
+      SIGN_PLATE_RANK[a.sign.kind] - SIGN_PLATE_RANK[b.sign.kind] ||
+      a.anchor.y - b.anchor.y ||
+      a.anchor.x - b.anchor.x,
+  );
+  for (const entry of ordered) {
     const name = signSpriteFor(entry.sign);
     const baseline =
       entry.anchor.y +
@@ -1896,29 +2017,53 @@ function drawSignLabels(args: {
     // MEASURED FROM THE MOUNT'S CLEARANCE, NOT THE ANCHOR. The resolver is
     // where the room's own bounds are known; a lift taken from the sign's tile
     // is a row short at every help desk. See {@link OfficeSignMount}.
-    const screenY =
+    const anchorY =
       entry.mount.kind === "floating"
         ? (entry.mount.clearWorldY - FIGURE_OVERHANG) * camera.zoom +
           camera.y -
           FLOATING_SIGN_GAP_PX -
-          SIGN_PADDING_Y
+          OFFICE_SIGN_PADDING_Y
         : baseline * camera.zoom + camera.y;
+    // WHERE THE PLATE ACTUALLY LANDS, once the rest of the frame's lettering
+    // is accounted for. A FLOATING plate may lift a line out of the way - it
+    // hangs in air over its room by construction, which is exactly what
+    // `OfficeSignMount` distinguishes - and a WALL plate may not, because the
+    // board sprite it sits on went down in the world pass and cannot follow.
+    // Either way a plate with nowhere to go is dropped rather than painted
+    // over the one already there.
+    ctx.save();
+    applySignPlateFont(ctx);
+    const offered = signPlateBox(ctx, plateText, screenX, anchorY);
+    ctx.restore();
+    const box = placeOfficeLabel(
+      space,
+      {
+        left: offered.left,
+        right: offered.left + offered.width,
+        top: offered.top,
+        bottom: offered.top + offered.height,
+      },
+      entry.mount.kind === "floating" ? FLOATING_SIGN_LIFT : OFFICE_LABEL_FIXED,
+    );
+    if (box === null) continue;
+    const screenY = anchorY + (box.top - offered.top);
     drawSignPlate(ctx, { text: plateText, screenX, screenY, palette });
     // THE WARD'S BEACON, where a ward has one: Mission control's medbay, which
     // has no street for an ambulance to come down (C6). Which frame is up is
     // the resolver's answer - it is the one place the room's occupancy and the
     // clock meet - and a sign that carries no beacon says `null`.
     //
-    // AFTER the plate, and measured from it, so the fill cannot paint over it.
+    // AFTER the plate, and measured from the box the space GAVE it rather than
+    // the one the camera asked for, so a lifted plate takes its lamp with it.
     if (entry.sirenFrame !== null) {
-      ctx.save();
-      applySignPlateFont(ctx);
-      const box = signPlateBox(ctx, plateText, screenX, screenY);
-      ctx.restore();
       drawOfficeSprite(
         ctx,
         { name: SIREN_FRAME_SPRITES[entry.sirenFrame] },
-        sirenPlacement(box),
+        sirenPlacement({
+          left: box.left,
+          top: box.top,
+          width: box.right - box.left,
+        }),
         theme,
       );
     }
@@ -1926,29 +2071,44 @@ function drawSignLabels(args: {
     // under it is a second plate's worth of pixels, and at office zoom it
     // would double the signage on a floor that is already mostly signage.
     if (lod < 2 || entry.subtext === null) continue;
-    drawSignPlate(ctx, {
-      text: truncateSign(
-        entry.subtext,
-        signMaxChars(entry.sign.widthTiles),
-      ).toUpperCase(),
-      screenX,
-      // A LINE UNDER THE PLATE ABOVE, and BOTH halves of that are screen-space.
-      //
-      // Measured from where the first plate actually landed rather than from
-      // `baseline`: the two agree for a wall sign and only the first is true
-      // for a floating one, which would otherwise sit its claim back down in
-      // the room the name was lifted out of.
-      //
-      // And the line height is NOT multiplied by the camera. `drawSignLabels`
-      // runs under `setTransform(dpr, 0, 0, dpr, 0, 0)` - the zoom is out of
-      // the transform by then, because a plate magnified by the camera is a
-      // blur at 4x - so `signPlateBox` returns a plate a fixed fourteen pixels
-      // tall at every zoom. Stacking a fixed-height plate under another one
-      // takes a fixed offset: scaled, it left a 28px hole at close-up and
-      // overlapped the name it belongs to below 1x.
-      screenY: screenY + OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2,
-      palette,
-    });
+    const subtext = truncateSign(
+      entry.subtext,
+      signMaxChars(entry.sign.widthTiles),
+    ).toUpperCase();
+    // A LINE UNDER THE PLATE ABOVE, and BOTH halves of that are screen-space.
+    //
+    // Measured from where the first plate actually landed rather than from
+    // `baseline`: the two agree for a wall sign and only the first is true
+    // for a floating one, which would otherwise sit its claim back down in
+    // the room the name was lifted out of.
+    //
+    // And the line height is NOT multiplied by the camera. `drawSignLabels`
+    // runs under `setTransform(dpr, 0, 0, dpr, 0, 0)` - the zoom is out of
+    // the transform by then, because a plate magnified by the camera is a
+    // blur at 4x - so `signPlateBox` returns a plate a fixed fourteen pixels
+    // tall at every zoom. Stacking a fixed-height plate under another one
+    // takes a fixed offset: scaled, it left a 28px hole at close-up and
+    // overlapped the name it belongs to below 1x.
+    const subY = screenY + OFFICE_SIGN_FONT_PX + OFFICE_SIGN_PADDING_Y * 2;
+    ctx.save();
+    applySignPlateFont(ctx);
+    const subOffered = signPlateBox(ctx, subtext, screenX, subY);
+    ctx.restore();
+    // FIXED, and dropped rather than moved. The claim reads as a second line of
+    // the plate above it, so a line of air between them would read as a label
+    // for whatever it had drifted onto instead.
+    const subBox = placeOfficeLabel(
+      space,
+      {
+        left: subOffered.left,
+        right: subOffered.left + subOffered.width,
+        top: subOffered.top,
+        bottom: subOffered.top + subOffered.height,
+      },
+      OFFICE_LABEL_FIXED,
+    );
+    if (subBox === null) continue;
+    drawSignPlate(ctx, { text: subtext, screenX, screenY: subY, palette });
   }
 }
 
@@ -2101,6 +2261,8 @@ function drawNameTags(args: {
   readonly selectedAgentId: string | null;
   readonly searchMatchIds: ReadonlySet<string>;
   readonly lod: OfficeLod;
+  /** Signage and storey names, already placed; a tag goes around them. */
+  readonly space: OfficeLabelSpace;
 }): ReadonlySet<string> {
   const {
     backings,
@@ -2112,6 +2274,7 @@ function drawNameTags(args: {
     palette,
     searchMatchIds,
     selectedAgentId,
+    space,
   } = args;
   const named = new Set<string>();
   // SEMANTIC ZOOM. At overview a name is a smear over a five-pixel pip, so
@@ -2165,7 +2328,7 @@ function drawNameTags(args: {
       width: measuredWidth(ctx, text),
     });
   }
-  for (const placed of layoutNameTags(candidates, NAME_TAG_LINE_HEIGHT)) {
+  for (const placed of layoutNameTags(candidates, space)) {
     drawScreenLabel(ctx, {
       text: placed.text,
       screenX: placed.centerX,
@@ -2333,7 +2496,22 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // which is the palette's own background and not the app's.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  drawSignLabels({ ctx, signs, camera, palette, lod, theme });
+  // ONE OCCUPANCY SET FOR THE WHOLE FRAME'S LETTERING, filled in priority
+  // order: the storey names a reader orients by, then the signage naming the
+  // rooms, then the tags naming the people in them, then whatever Find still
+  // owes a name. Each channel goes around everything already down, and a label
+  // with nowhere to go is dropped instead of painted over its neighbour -
+  // which is why the order IS the priority. See {@link OfficeLabelSpace}.
+  const space = resetLabelSpace(labelSpaceScratch);
+  drawFloorSigns({
+    ctx,
+    camera,
+    signs: floorSigns,
+    color: palette.text,
+    backing: labelBackings.default,
+    space,
+  });
+  drawSignLabels({ ctx, signs, camera, palette, lod, theme, space });
   const alreadyNamed = drawNameTags({
     ctx,
     labels,
@@ -2344,14 +2522,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     selectedAgentId,
     searchMatchIds,
     lod,
-  });
-
-  drawFloorSigns({
-    ctx,
-    camera,
-    signs: floorSigns,
-    color: palette.text,
-    backing: labelBackings.default,
+    space,
   });
   drawFindOverlay({
     ctx,
@@ -2364,6 +2535,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     searchMatchIds,
     lod,
     alreadyNamed,
+    space,
   });
 }
 
@@ -2405,6 +2577,8 @@ function drawFindOverlay(args: {
   readonly lod: OfficeLod;
   /** Agents the ordinary name-tag path has already put a name on screen for. */
   readonly alreadyNamed: ReadonlySet<string>;
+  /** The frame's lettering, already placed; Find's name goes around it. */
+  readonly space: OfficeLabelSpace;
 }): void {
   const {
     alreadyNamed,
@@ -2417,6 +2591,7 @@ function drawFindOverlay(args: {
     palette,
     regions,
     searchMatchIds,
+    space,
   } = args;
   if (searchMatchIds.size === 0) return;
   // One box an agent, grown to cover every part it owns, in draw order so two
@@ -2462,16 +2637,48 @@ function drawFindOverlay(args: {
     const name = nameById.get(agentId);
     if (name === undefined) continue;
     const anchor = anchors.get(agentId);
+    const screenX =
+      anchor === undefined
+        ? left + (rect.width * camera.zoom) / 2
+        : anchor.x * camera.zoom + camera.x;
+    const screenY =
+      anchor === undefined
+        ? top - HOVER_LABEL_FONT_PX / 2
+        : anchor.y * camera.zoom + camera.y;
+    // THROUGH THE SAME SPACE AS EVERY OTHER NAME. This path exists for matches
+    // the tag pass did not name, which most often means their tag was dropped
+    // for collision - so drawing this one unconditionally would put back the
+    // exact label the frame had already decided there was no room for.
+    //
+    // WITH A FAR LONGER RUN THAN A TAG GETS, and that is the point. A name tag
+    // that cannot fit in two lines is one of hundreds and costs a reading
+    // hovering still gives back. This one was ASKED FOR - somebody typed a
+    // query and is looking for this agent - and there are only ever as many of
+    // these as the search matched, so it is worth walking down the floor until
+    // it finds air. If even that fails the ring stays, which is already the
+    // only thing that says where a match is at overview zoom.
+    ctx.save();
+    ctx.font = `${HOVER_LABEL_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
+    const width = ctx.measureText(name).width;
+    ctx.restore();
+    const box = placeOfficeLabel(
+      space,
+      officeScreenLabelBox({
+        centerX: screenX,
+        baselineY: screenY,
+        width,
+        fontPx: HOVER_LABEL_FONT_PX,
+      }),
+      {
+        dy: officeScreenLabelLineHeight(HOVER_LABEL_FONT_PX),
+        max: FIND_LABEL_MAX_SHIFTS,
+      },
+    );
+    if (box === null) continue;
     drawScreenLabel(ctx, {
       text: name,
-      screenX:
-        anchor === undefined
-          ? left + (rect.width * camera.zoom) / 2
-          : anchor.x * camera.zoom + camera.x,
-      screenY:
-        anchor === undefined
-          ? top - HOVER_LABEL_FONT_PX / 2
-          : anchor.y * camera.zoom + camera.y,
+      screenX,
+      screenY: officeScreenLabelBaseline(box),
       fontPx: HOVER_LABEL_FONT_PX,
       color: palette.text,
       backing,
@@ -2560,27 +2767,6 @@ function OfficeChromeRow(props: {
         {props.viewPicker}
       </div>
       <div className="pointer-events-auto">{props.modeToggle}</div>
-    </div>
-  );
-}
-
-/** The moment a detached floor is showing; nothing while live. */
-function OfficeCursorChip(props: {
-  readonly cursorMs: number | null;
-  readonly playing: boolean;
-}) {
-  if (props.cursorMs === null) return null;
-  return (
-    <div
-      data-testid="comm-graph-office-cursor-chip"
-      // Read-only: it must not take the pan or the click a person aims at the
-      // floor underneath it.
-      className="pointer-events-none absolute top-2 left-2 z-10 rounded-md border border-border bg-popover px-1.5 py-0.5 text-ui-xs text-popover-foreground tabular-nums shadow-xs"
-    >
-      <span className="text-muted-foreground">
-        {props.playing ? "Replaying " : "Paused at "}
-      </span>
-      {new Date(props.cursorMs).toLocaleTimeString()}
     </div>
   );
 }
@@ -3164,7 +3350,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       pulseKey,
       // Envelope flights are sized to fit inside one playback step, so a faster
       // transport shortens the flight instead of queueing them up behind it.
-      stepMs: BASE_STEP_MS / speed,
+      // THE TICK, not `BASE_STEP_MS / speed`. Past the renderer's floor those
+      // two part company: playback keeps a ~90ms tick and advances several
+      // rows on it, and a scene told the shorter number would time its motion
+      // to a step the cursor is no longer taking.
+      stepMs: commGraphPlaybackPace(speed).tickMs,
       cursorMs,
       // A PLACEHOLDER while live: reading a clock during render is impure, so
       // the sync effect below stamps the real time and the frame loop advances
@@ -4719,14 +4909,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           viewPicker={viewPicker}
           modeToggle={modeToggle}
         />
-        {/*
-          A detached cursor has to be VISIBLE on the floor. Scrubbing back
-          changes little here - the same people sit at the same desks, only
-          their screens go dark and later arrivals vanish - so without a sign
-          the past reads as a live floor that stopped moving. The chip names
-          the moment being shown; the transport bar below owns moving it.
-        */}
-        <OfficeCursorChip cursorMs={cursorMs} playing={playing} />
         {hoverCard === null || hoveredAgent === null ? null : (
           <OfficeAgentHover
             epicId={epicId}
@@ -4775,85 +4957,61 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             </li>
           ))}
         </ul>
+        {/*
+          NOTHING BUT THE BUTTONS SITS HERE ANY MORE. Three chips have stood in
+          this corner and all three are gone: Auto's measurement and the zoom
+          band went in feedback round 1 ("the text at the bottom left is too
+          verbose - is it even needed", and a read-only band label stacked on
+          the buttons read as a fourth button), and the catching-up line went in
+          round 2, asked for by name. It said the feed was still replaying and
+          the statuses on screen might lag - true, and transient, and still a
+          sentence of chrome on a drawing whose whole point is that it is a
+          drawing. Nothing replaces it: a floor that is already drawn and
+          settling is not a state worth spending the corner on. Do not add a
+          fourth chip here without asking.
+        */}
         <div
           className={cn(
-            // pointer-events-none FRAME: the catching-up chip is read-only
-            // (its own root already carries pointer-events-none), but a
-            // wrapper left at the default auto would still catch a pan or
-            // double-click started over it and never pass it to the canvas.
-            // The zoom group re-enables pointer events for itself below.
-            "pointer-events-none absolute bottom-2 left-2 z-10 flex flex-col items-start gap-1",
-            // Capped against the tile: the catching-up chip is a sentence, and
-            // a sentence has no business being wider than the office it is
-            // about. The box is shrink-to-fit and absolutely positioned, so its
-            // width is already clamped to the space left of `left-2` - the
-            // tile-relative cap - and this only adds the sentence ceiling.
-            "max-w-sm",
+            "absolute bottom-2 left-2 z-10 flex flex-col gap-0.5",
+            "rounded-md border border-border bg-popover p-0.5 shadow-xs",
           )}
         >
-          {/*
-            Shown only while an office is actually ON SCREEN from a feed that
-            is behind - the chip itself decides, on these two facts, because
-            this component is at its complexity ceiling.
-
-            THE ONLY CHIP LEFT ON THE FLOOR, and deliberately: it reports a
-            TRANSIENT wait the reader cannot otherwise account for. The two
-            that used to sit here - Auto's measurement and the zoom band -
-            reported standing state instead, which the picker's Auto row and
-            the drawing itself already say. Feedback round 1: "the text at the
-            bottom left is too verbose - is it even needed", and a read-only
-            band label stacked on the zoom buttons read as a fourth button
-            ("what's the point of the close-up button?").
-          */}
-          <OfficeCatchingUpChip
-            officeDrawn={ready}
-            initialHistoryCaughtUp={initialHistoryCaughtUp}
-          />
-          <div
-            className={cn(
-              // The one interactive child, so it takes pointer events back from
-              // the pointer-events-none frame above.
-              "pointer-events-auto flex flex-col gap-0.5",
-              "rounded-md border border-border bg-popover p-0.5 shadow-xs",
-            )}
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label="Zoom in"
+            data-testid="comm-graph-office-zoom-in"
+            // Disabled while Auto measures: this mount's runtime is a throwaway
+            // the measuring->resolved remount discards, so a zoom would mutate
+            // a camera nobody keeps and silently do nothing.
+            disabled={measuring}
+            onClick={handleZoomIn}
           >
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="outline"
-              aria-label="Zoom in"
-              data-testid="comm-graph-office-zoom-in"
-              // Disabled while Auto measures: this mount's runtime is a throwaway
-              // the measuring->resolved remount discards, so a zoom would mutate
-              // a camera nobody keeps and silently do nothing.
-              disabled={measuring}
-              onClick={handleZoomIn}
-            >
-              <Plus aria-hidden />
-            </Button>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="outline"
-              aria-label="Zoom out"
-              data-testid="comm-graph-office-zoom-out"
-              disabled={measuring}
-              onClick={handleZoomOut}
-            >
-              <Minus aria-hidden />
-            </Button>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="outline"
-              aria-label="Fit the office floor"
-              data-testid="comm-graph-office-fit"
-              disabled={measuring}
-              onClick={handleFit}
-            >
-              <Maximize aria-hidden />
-            </Button>
-          </div>
+            <Plus aria-hidden />
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label="Zoom out"
+            data-testid="comm-graph-office-zoom-out"
+            disabled={measuring}
+            onClick={handleZoomOut}
+          >
+            <Minus aria-hidden />
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label="Fit the office floor"
+            data-testid="comm-graph-office-fit"
+            disabled={measuring}
+            onClick={handleFit}
+          >
+            <Maximize aria-hidden />
+          </Button>
         </div>
       </div>
       {selectedEdge === null ? null : (

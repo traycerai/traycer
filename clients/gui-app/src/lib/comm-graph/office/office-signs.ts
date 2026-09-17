@@ -193,6 +193,18 @@ function plateMaxChars(widthTiles: number): number {
  */
 export const OFFICE_SIGN_FONT_PX = 10;
 export const OFFICE_SIGN_PADDING_X = 4;
+/**
+ * The plate's own padding ABOVE and BELOW its letters.
+ *
+ * Here beside the horizontal one rather than in the renderer, for the same
+ * reason: a plate's BOX - not only its width - is read by things that are not
+ * the code that paints it. The frame's shared occupancy set reserves it, and
+ * the suite that pins "no two readings on the same pixels" reconstructs it
+ * from the recorded calls; a private copy in any of the three is a copy that
+ * drifts, and the drift would be labels declared clear of each other by one
+ * number and drawn overlapping by another.
+ */
+export const OFFICE_SIGN_PADDING_Y = 2;
 export const OFFICE_SIGN_LETTER_SPACING_EM = 0.08;
 export const OFFICE_SIGN_MONOSPACE_STACK =
   "ui-monospace, SFMono-Regular, Menlo, monospace";
