@@ -299,6 +299,8 @@ export function useGuiHarnessesQueryForClient(
       enabled: activity.enabled,
       subscribed: activity.subscribed,
       staleTime: HARNESS_AVAILABILITY_REFRESH_MS,
+      // Negative verdicts must outlive the equally persistent model cache.
+      gcTime: Infinity,
     },
   });
 }

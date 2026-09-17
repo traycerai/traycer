@@ -1964,4 +1964,99 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
     expect(result.current.harnesses[0]?.models).toHaveLength(0);
     expect(modelCalls).toBe(0);
   });
+
+  it("keeps a settled negative verdict across a long observer-absence gap: gcTime: Infinity on the harnesses query means a later ambiguous-pending remount still reads the retained negative instead of resurrecting", async () => {
+    // Unlike the rest of this describe block, this test needs to fast-forward
+    // past the window a FINITE gcTime would have evicted the harnesses
+    // query's cache entry in (TanStack Query's default is 5 minutes, cleared
+    // once the last observer unmounts) - real wall-clock time isn't
+    // affordable here, so this one test uses fake timers. The mock messenger
+    // (`MockHostMessenger`) resolves purely via promises with no
+    // `setTimeout` of its own, and `vi.waitFor` advances fake timers on every
+    // poll tick (confirmed against vitest's own implementation), so the two
+    // combine cleanly.
+    vi.useFakeTimers();
+    try {
+      let next: ListGuiHarnessesResponse = {
+        harnesses: [
+          claudeHarnessRow({
+            available: false,
+            availabilityPending: false,
+            error: "provider CLI not found",
+          }),
+        ],
+      };
+      let modelCalls = 0;
+      const fixture = createCatalogFixture({
+        "agent.gui.listHarnesses": () => next,
+        "agent.gui.listModels": () => {
+          modelCalls += 1;
+          return claudeModelsResponse(2);
+        },
+      });
+
+      const first = renderHook(
+        () =>
+          useGuiHarnessCatalog(null, {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          }),
+        { wrapper: fixture.Wrapper },
+      );
+      await vi.waitFor(() => {
+        expect(first.result.current.harnesses[0]?.available).toBe(false);
+      });
+      expect(first.result.current.harnesses[0]?.models).toHaveLength(0);
+      expect(modelCalls).toBe(0);
+
+      // Drop every observer of the harnesses query - the only thing that
+      // schedules its cache-clear at gcTime - then advance well past the
+      // 5-minute default.
+      first.unmount();
+      cleanup();
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(harnessesQuery(fixture.queryClient).state.data).toBeDefined();
+
+      // A fresh mount, now ambiguously pending (ties the resurrection
+      // guard's history fallback instead of a known verdict). If the cache
+      // entry above had actually been evicted, `mapResponse` would find no
+      // `previous` row, `lastSettledAvailable` would fall back to `null`
+      // (not `false`), the pending-model fan-out's `!== false` gate would
+      // admit this harness, and the resulting retained models would
+      // resurrect `available` to `true` - exactly what gcTime: Infinity
+      // exists to prevent.
+      next = {
+        harnesses: [
+          claudeHarnessRow({
+            available: false,
+            availabilityPending: true,
+            error: null,
+          }),
+        ],
+      };
+      const second = renderHook(
+        () =>
+          useGuiHarnessCatalog(null, {
+            enabled: true,
+            subscribed: true,
+            modelsFetch: "all-harnesses",
+          }),
+        { wrapper: fixture.Wrapper },
+      );
+      await vi.waitFor(() => {
+        expect(second.result.current.harnesses[0]).toBeDefined();
+      });
+      // Give the (absent) pending-model fetch a beat, the same way "a cold
+      // harness ... issues no model request" above does, then assert the
+      // negative stayed put.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(second.result.current.harnesses[0]?.available).toBe(false);
+      expect(second.result.current.harnesses[0]?.models).toHaveLength(0);
+      expect(modelCalls).toBe(0);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
 });

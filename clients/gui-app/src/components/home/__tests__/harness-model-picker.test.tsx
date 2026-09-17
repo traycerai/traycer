@@ -1512,6 +1512,45 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.queryByRole("button", { name: "Add API key" })).toBeNull();
   });
 
+  it("shows the Add API key CTA - not the loading spinner - for a still-pending provider that already carries an error", async () => {
+    // Same unsettled shape as the previous test (`availabilityPending: true`,
+    // `available: false`), but this probe has already come back with a
+    // reason. `ModelRowsState`'s pending-loading branch now requires
+    // `provider.error === null`, so a pending row that already carries an
+    // error must fall through to `unavailableProviderState`'s CTA instead of
+    // spinning forever on a verdict that already arrived.
+    const pendingWithError: HarnessOption = {
+      ...OPENROUTER_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: "OpenRouter needs an API key",
+    };
+    queryMock.harnesses = [CODEX_HARNESS, CLAUDE_HARNESS, pendingWithError];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+      catalogHarness(pendingWithError, []),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codexModels()],
+      ["claude", claudeModels()],
+      ["openrouter", []],
+    ]);
+
+    renderPicker({
+      selection: { harnessId: "openrouter", modelSlug: "", profileId: null },
+    });
+    await openPickerByTriggerName("Select model");
+
+    expect(
+      screen
+        .getByRole("tab", { name: /^OpenRouter/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.queryByText("Loading models")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add API key" })).not.toBeNull();
+  });
+
   it("targeted-fetches a cold provider that reports available while still revalidating (no cached models yet), but skips the fetch for one that already carries retained warm models", async () => {
     // `useBrowsedProviderCatalogEntry`'s fetch gate: `entry.available &&
     // (!entry.availabilityPending || entry.models.length === 0)`. A
