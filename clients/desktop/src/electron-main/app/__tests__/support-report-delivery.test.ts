@@ -145,11 +145,59 @@ const diagnosticsMock = vi.hoisted(() => ({
 
 vi.mock("../diagnostics", () => diagnosticsMock);
 
+/**
+ * The process-wide `sentryReportRateLimitWindow` replaced by a REAL window
+ * with a per-test lifetime.
+ *
+ * Everything under test stays real: the object below delegates to an actual
+ * `createSentryRateLimitWindow()` instance, so core's own header parsing and
+ * its per-data-category semantics decide every answer - a limit naming
+ * `error` still does not limit a report, because `isRateLimited` says so and
+ * not because a stub said so. Only the LIFETIME changes, from process-wide to
+ * per test, and that is what lets these tests drive a window at all: the real
+ * singleton has no reset hook, so the one pre-existing test that fed it a
+ * limit had to sleep past a 5-second window to avoid stranding every later
+ * test in the file. It no longer does.
+ *
+ * `observe`'s `nowMs` is the test's lever for expiry - observing at a
+ * back-dated timestamp makes a window that is already closed when
+ * `submitReport` reads it, with no clock control and no waiting.
+ */
+const rateLimitWindowMock = vi.hoisted(() => {
+  const state: { inner: SentryRateLimitWindow | null } = { inner: null };
+  return {
+    state,
+    window: {
+      observe: (
+        response: TransportMakeRequestResponse,
+        nowMs: number,
+      ): void => {
+        if (state.inner === null) throw new Error("window not installed");
+        state.inner.observe(response, nowMs);
+      },
+      current: (nowMs: number): SentryReportRateLimit => {
+        if (state.inner === null) throw new Error("window not installed");
+        return state.inner.current(nowMs);
+      },
+    },
+  };
+});
+
+vi.mock("../sentry-delivery-observer", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../sentry-delivery-observer")>();
+  return { ...actual, sentryReportRateLimitWindow: rateLimitWindowMock.window };
+});
+
 import { DesktopSupportService } from "../support";
 import {
+  createSentryRateLimitWindow,
   sentryOfflineQueuePath,
   sentryReportRateLimitWindow,
+  type SentryRateLimitWindow,
+  type SentryReportRateLimit,
 } from "../sentry-delivery-observer";
+import type { TransportMakeRequestResponse } from "@sentry/core";
 import type { HostFsLayout } from "../../host/host-paths";
 import type { SupportSubmitReportRequest } from "../../../ipc-contracts/window-types";
 
@@ -326,6 +374,7 @@ beforeEach(async () => {
     return true;
   });
   diagnosticsMock.handleGetMetrics.mockResolvedValue(FAKE_PROCESS_METRICS);
+  rateLimitWindowMock.state.inner = createSentryRateLimitWindow();
 });
 
 afterEach(async () => {
@@ -897,27 +946,131 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
       },
       observedAt,
     );
-    try {
-      // Our own event gets no HTTP response at all (network failure, or the
-      // SDK's client-side drop under the very limit just observed) -
-      // `resolveDeliveryOutcome` must still recognize the still-active
-      // window and not fall through to `unconfirmed`.
-      mockFlushWithSendOutcome({});
+    // Our own event gets no HTTP response at all (network failure, or the
+    // SDK's client-side drop under the very limit just observed) -
+    // `resolveDeliveryOutcome` must still recognize the still-active window
+    // and not fall through to `unconfirmed`. No cleanup and no sleeping: the
+    // window is installed fresh per test (see `rateLimitWindowMock`), so a
+    // limit fed here cannot reach any other test.
+    mockFlushWithSendOutcome({});
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result.status).toBe("failed");
+    expect(result.status === "failed" && result.reason).toBe("rate-limited");
+  });
+
+  // --- Cold review P2: a 2xx is a fact about the envelope that was SENT ---
+  //
+  // `createTransport.send` filters envelope ITEMS independently by data
+  // category (`@sentry/core` `transports/base.js`: `isRateLimited(rateLimits,
+  // dataCategory)` per item, then it sends whatever survived), and
+  // `Client.sendEvent` appends each attachment as its own item before
+  // forwarding that ONE transport response to every `afterSendEvent`
+  // listener. Under a window naming `feedback` only, a report therefore goes
+  // out as its log attachments MINUS the feedback item, and the 2xx those
+  // attachments earned is what reaches the hook. Every report carries log
+  // attachments, so this is that window's ordinary shape, not a corner of it.
+  it("a 2xx earned while a feedback-category limit was already in force is rate-limited, not delivered, and files no report", async () => {
+    // The limit a PRIOR response established - the crash-reporter observer's
+    // job, simulated directly as in the test above.
+    sentryReportRateLimitWindow.observe(
+      {
+        statusCode: 429,
+        headers: responseHeaders({
+          rateLimits: "60:feedback",
+          retryAfter: null,
+        }),
+      },
+      Date.now(),
+    );
+    mockFlushWithSendOutcome({ statusCode: 200 });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result).toEqual({
+      status: "failed",
+      reason: "rate-limited",
+      retryAfterSeconds: 60,
+    });
+    // The half that made this a P2 rather than a copy bug: a filed-report
+    // ledger entry for a report Sentry never received inflates every later
+    // router count and fixed-in query.
+    expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
+  });
+
+  it.each([["60:error"], ["60:default"], ["60:error;default:organization"]])(
+    "a 2xx under a limit naming only %s is delivered - a limit that does not name feedback must not stop a report",
+    async (rateLimits) => {
+      sentryReportRateLimitWindow.observe(
+        {
+          statusCode: 429,
+          headers: responseHeaders({ rateLimits, retryAfter: null }),
+        },
+        Date.now(),
+      );
+      mockFlushWithSendOutcome({ statusCode: 200 });
 
       const result = await freezeAndSubmit(buildService(null));
 
-      expect(result.status).toBe("failed");
-      expect(result.status === "failed" && result.reason).toBe("rate-limited");
-    } finally {
-      // The window is real, process-wide module state with no reset hook -
-      // leaving it "limited" would strand every later test in this file
-      // (and this process) that expects the default happy path or an
-      // `unconfirmed`/`queued` outcome. Advancing past the 5s window here,
-      // using the SAME real clock every later test's `Date.now()` call will
-      // read, is what keeps that isolated to this one test.
-      await new Promise((resolve) => setTimeout(resolve, 5_050));
-    }
-  }, 10_000);
+      expect(result.status).toBe("delivered");
+    },
+  );
+
+  it("a 2xx under an EXPIRED feedback limit is delivered", async () => {
+    // Observed two minutes ago with a 60s window, so it is closed by the time
+    // `submitReport` reads it. Back-dating `observe`'s own `nowMs` is what
+    // makes expiry testable with no clock control and no waiting.
+    sentryReportRateLimitWindow.observe(
+      {
+        statusCode: 429,
+        headers: responseHeaders({
+          rateLimits: "60:feedback",
+          retryAfter: null,
+        }),
+      },
+      Date.now() - 120_000,
+    );
+    mockFlushWithSendOutcome({ statusCode: 200 });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result.status).toBe("delivered");
+  });
+
+  it("a 2xx whose OWN response opens the feedback window is still delivered - the limit did not exist when our item was sent", async () => {
+    // Not in the review's list, and the reason the gate reads a pre-send
+    // SNAPSHOT rather than the live window. Sentry's usual way of opening a
+    // window is the very response that accepted the event, and
+    // `crash-reporter.ts`'s observer is registered at `init` while
+    // `support.ts` subscribes per submit - `Client.on` keeps hooks in a `Set`
+    // that `emit` walks in insertion order, so the observer has already
+    // folded this response's headers in before our hook runs. A live read
+    // here would call a report that LANDED rate-limited and send the user
+    // back to retry it.
+    const client = makeFakeSentryClient();
+    sentryMock.getClient.mockReturnValue(client);
+    sentryMock.flush.mockImplementationOnce(async () => {
+      const accepted: TransportMakeRequestResponse = {
+        statusCode: 200,
+        headers: responseHeaders({
+          rateLimits: "60:feedback",
+          retryAfter: null,
+        }),
+      };
+      // Observer first, exactly as insertion order dictates in production.
+      sentryReportRateLimitWindow.observe(accepted, Date.now());
+      client.emitAfterSendEvent({ event_id: lastHint().event_id }, accepted);
+      return true;
+    });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result.status).toBe("delivered");
+    // ...and the window really is limited now, so the assertion above is not
+    // passing because the header was ignored.
+    expect(sentryReportRateLimitWindow.current(Date.now()).limited).toBe(true);
+  });
 
   it("an undefined status, no rate limit, and the offline queue confirmed holding this envelope maps to queued", async () => {
     mockFlushWithSendOutcome({});

@@ -28,6 +28,7 @@ import {
   sentryOfflineQueuePath,
   sentryReportRateLimitWindow,
   wasEventQueuedOffline,
+  type SentryReportRateLimit,
 } from "./sentry-delivery-observer";
 import { handleGetMetrics } from "./diagnostics";
 import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
@@ -482,6 +483,12 @@ export class DesktopSupportService {
     // covered by the `finally` below. `afterSendEvent` carries the transport's
     // real response, which `flush` alone cannot distinguish from rejection.
     const sendOutcome = watchSentrySendOutcome(eventId);
+    // The reports rate-limit window AS OF THIS SEND, read before the envelope
+    // is built. The transport filters items against the limits it holds at
+    // send time, so this is the only reading that can answer whether our
+    // feedback item was in the request a later 2xx belongs to - see
+    // `resolveDeliveryOutcome`, which explains why a live read cannot.
+    const limitAtSend = sentryReportRateLimitWindow.current(Date.now());
     try {
       try {
         Sentry.captureFeedback(
@@ -619,6 +626,7 @@ export class DesktopSupportService {
         outcome,
         eventId,
         frozen.reportId,
+        limitAtSend,
       );
       if (delivery.status !== "delivered") return delivery;
       // Only confirmed deliveries land in the filed-report half of the
@@ -1227,11 +1235,35 @@ interface SentrySendOutcome {
  * never firing inside the grace window) fell through to `delivered` for all
  * four. The order below is the order the evidence is trustworthy in:
  *
- * 1. A real HTTP status is the strongest fact there is. 2xx is the only
- *    thing that earns `delivered`; a 429 is `rate-limited`, with the seconds
- *    taken from THIS response's `retry-after` and nowhere else (the window
- *    below would answer 60 for any bare 429, which is the SDK's default
- *    guess, not something the server said); any other status is `error`.
+ * 1. A real HTTP status is the strongest fact there is - but a 2xx is a fact
+ *    about the ENVELOPE THAT WAS SENT, which is not necessarily the one that
+ *    was handed over. `createTransport.send` filters envelope ITEMS
+ *    independently by data category (`@sentry/core` `transports/base.js`),
+ *    and `Client.sendEvent` appends each attachment as its own item before
+ *    forwarding that one transport response to every `afterSendEvent`
+ *    listener. So under a rate-limit window naming `feedback` only, a report
+ *    goes out as its log and screenshot attachments MINUS the feedback item,
+ *    and the 2xx for those attachments is what arrives here. Every report
+ *    carries log attachments, so this is the ordinary shape of that window,
+ *    not a corner of it. `limitAtSend` is therefore consulted before any 2xx
+ *    is believed: a 2xx earned while reports were already limited is
+ *    `rate-limited`, and `submitReport` must not file a ledger entry for it.
+ *    A 429 is `rate-limited` too, with the seconds taken from THIS response's
+ *    `retry-after` and nowhere else (the window would answer 60 for any bare
+ *    429, which is the SDK's default guess, not something the server said);
+ *    any other status is `error`.
+ *
+ *    `limitAtSend` is a SNAPSHOT taken before `captureFeedback`, and the
+ *    asymmetry with step 2's live read is load-bearing in both directions.
+ *    The transport filters against the limits it held when the envelope was
+ *    sent, so only a pre-send reading answers "was our item in there". A live
+ *    read cannot: the client-wide observer in `crash-reporter.ts` is
+ *    registered at `init` and `Client.on` stores hooks in a `Set` that
+ *    `emit` walks in insertion order, so by the time this hook runs the
+ *    observer has ALREADY folded this very response's `x-sentry-rate-limits`
+ *    into the window - and a response that both accepts our report and opens
+ *    a fresh window (Sentry's usual way of opening one) would then read as
+ *    `rate-limited`, telling the user to retry a report that landed.
  * 2. No status, but a rate limit is in force for reports - including one
  *    earned by a different event entirely - means the SDK dropped this
  *    envelope client-side and will keep dropping it until the window lifts.
@@ -1255,11 +1287,31 @@ async function resolveDeliveryOutcome(
   outcome: SentrySendOutcome | null,
   eventId: string,
   reportId: string,
+  limitAtSend: SentryReportRateLimit,
 ): Promise<SupportSubmitReportResult> {
   const statusCode = outcome?.statusCode;
   if (statusCode !== undefined) {
     if (statusCode >= 200 && statusCode < 300) {
-      return { status: "delivered", reportId };
+      if (!limitAtSend.limited) {
+        return { status: "delivered", reportId };
+      }
+      // The 2xx belongs to whatever items survived the filter - our feedback
+      // item was not among them. Seconds come from a fresh read while the
+      // window is still open, so the quoted wait is not inflated by however
+      // long the send itself took (up to the 10 s flush budget).
+      const now = sentryReportRateLimitWindow.current(Date.now());
+      const retryAfterSeconds = now.limited
+        ? now.retryAfterSeconds
+        : limitAtSend.retryAfterSeconds;
+      log.warn(
+        "[support] report item filtered out under a reports-only rate limit",
+        {
+          reportId,
+          statusCode,
+          retryAfterSeconds,
+        },
+      );
+      return { status: "failed", reason: "rate-limited", retryAfterSeconds };
     }
     if (statusCode === 429) {
       const retryAfterSeconds = retryAfterSecondsFromHeader(
