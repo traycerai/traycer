@@ -24,6 +24,7 @@ import {
   setActiveTab,
   splitPaneAtEdge,
   splitPaneEmpty,
+  rebindPendingBrowserTile,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
   updateBrowserTileViewportPreset,
@@ -1153,6 +1154,98 @@ describe("updateBrowserTileViewportPreset", () => {
     expect(
       updateBrowserTileViewportPreset(next, pointer.instanceId, "mobile"),
     ).toBe(next);
+  });
+});
+
+describe("rebindPendingBrowserTile", () => {
+  function pendingPointer(requestId: string): BrowserSessionTileRef {
+    return {
+      id: `browser-session:pending:${requestId}`,
+      instanceId: `inst-${requestId}`,
+      type: "browser-session",
+      name: "Browser",
+      hostId: TEST_HOST_ID,
+      sessionId: null,
+      tabId: null,
+      viewportPreset: "responsive",
+      pending: {
+        requestId,
+        hostId: TEST_HOST_ID,
+        scope: { kind: "epic", epicId: "epic-1" },
+        requestedUrl: "about:blank",
+        clickedAt: 0,
+      },
+    };
+  }
+
+  it("rebinds the matching pending tile in place, preserving id/instanceId/pane", () => {
+    const pointer = pendingPointer("req-1");
+    const state = openPinned(createEmptyCanvas(), pointer);
+    const paneBefore = collectPanes(state.root).find((pane) =>
+      pane.tabInstanceIds.includes(pointer.instanceId),
+    );
+
+    const next = rebindPendingBrowserTile(state, "req-1", {
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+
+    expect(next.tilesByInstanceId[pointer.instanceId]).toEqual({
+      ...pointer,
+      sessionId: "sess-1",
+      tabId: "tab-1",
+      pending: undefined,
+    });
+    const paneAfter = collectPanes(next.root).find((pane) =>
+      pane.tabInstanceIds.includes(pointer.instanceId),
+    );
+    expect(paneAfter?.id).toBe(paneBefore?.id);
+    expect(next.tilesByInstanceId[pointer.instanceId]?.id).toBe(pointer.id);
+    expectCanvasInvariants(next);
+  });
+
+  it("only rebinds the tile whose requestId matches - a second pending tile is untouched", () => {
+    const first = pendingPointer("req-1");
+    const second = pendingPointer("req-2");
+    let state = openPinned(createEmptyCanvas(), first);
+    state = openPinned(state, second);
+
+    const next = rebindPendingBrowserTile(state, "req-1", {
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+
+    expect(next.tilesByInstanceId[first.instanceId]).toMatchObject({
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+    // The other pending tile's own request never resolved, so it must stay
+    // exactly as it was - not dropped, not rebound onto the wrong tab.
+    expect(next.tilesByInstanceId[second.instanceId]).toEqual(second);
+  });
+
+  it("no-ops when no tile is waiting on that requestId", () => {
+    const pointer = pendingPointer("req-1");
+    const state = openPinned(createEmptyCanvas(), pointer);
+
+    expect(
+      rebindPendingBrowserTile(state, "req-does-not-exist", {
+        sessionId: "sess-1",
+        tabId: "tab-1",
+      }),
+    ).toBe(state);
+    // Already-rebound tile: calling rebind again on the same requestId (the
+    // late-result-after-dismiss race) must not re-match by coincidence.
+    const rebound = rebindPendingBrowserTile(state, "req-1", {
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+    expect(
+      rebindPendingBrowserTile(rebound, "req-1", {
+        sessionId: "sess-2",
+        tabId: "tab-2",
+      }),
+    ).toBe(rebound);
   });
 });
 

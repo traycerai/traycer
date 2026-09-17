@@ -26,7 +26,10 @@ import {
   useManagedCommandStopAllIsPending,
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
+import {
+  localManagedCommandDoor,
+  useManagedCommandDoor,
+} from "@/lib/managed-commands/use-managed-command-door";
 import {
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
   getManagedCommandOutputDragId,
@@ -710,7 +713,9 @@ export function BackgroundItemsPanel(props: {
   const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
     props.chatId,
   );
-  const openManagedCommand = useManagedCommandDoor();
+  // The panel lists the shells this host runs for the chat, never a
+  // remote one, so its doors open on the tab's host.
+  const openManagedCommand = localManagedCommandDoor(useManagedCommandDoor());
   const stopAllManagedCommands = useManagedCommandStopAll(props.chatId);
   // Cross-instance: the same chat can be open in two tiles, and each panel
   // owns its own mutation observer - the shared read is what keeps the second
@@ -794,14 +799,15 @@ export function BackgroundItemsPanel(props: {
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className={cn(
-        "bg-muted/30",
-        props.separated ? "border-t border-border/50" : null,
-      )}
+      className={cn(props.separated ? "border-t border-border/50" : null)}
       data-testid="background-items-panel"
+      variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger className="group/background flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        <CollapsibleTrigger
+          className="group/background flex min-w-0 flex-1 items-center text-left"
+          variant="panel"
+        >
           <ChevronDown
             aria-hidden
             className={cn(

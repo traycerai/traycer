@@ -33,6 +33,7 @@ import {
   worktreeHoldersChangedErrorDetailsSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
+  worktreeListHoldersResponseSchemaV11,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   worktreeDeleteByPathOpenRequestSchema,
@@ -41,6 +42,7 @@ import {
   worktreeDeleteByPathServerFrameSchema,
   worktreeDeleteByPathServerFrameSchemaV11,
   worktreeDeleteByPathServerFrameSchemaV12,
+  worktreeDeleteByPathServerFrameSchemaV13,
 } from "@traycer/protocol/host/worktree-delete-stream";
 
 const V10 = { major: 1, minor: 0 } as const;
@@ -56,6 +58,11 @@ const holder = {
   holdKind: "chat-turn" as const,
   activity: "working" as const,
   label: "Chat is mid-turn",
+};
+
+const holderWithChatTier = {
+  ...holder,
+  chatTier: "turn" as const,
 };
 
 const HOLDERS_REVISION_DIGEST = "a".repeat(64);
@@ -397,9 +404,9 @@ describe("worktree.delete@1.2 expectedHoldersRevision", () => {
 });
 
 describe("worktree.deleteByPath@1.1 stopOwners + failed holders", () => {
-  it("is registered as latest minor 2", () => {
+  it("is registered as latest minor 3", () => {
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
-      2,
+      3,
     );
   });
 
@@ -606,17 +613,68 @@ describe("worktree.deleteByPath@1.2 expectedHoldersRevision", () => {
       expect(parsed).not.toHaveProperty("code");
     }
   });
+
+  it("frozen 1.2 failed frame strips chatTier (old-client degrade)", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV12.parse({
+      kind: "failed",
+      reason: "in use",
+      holders: [holderWithChatTier],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed.holders).toHaveLength(1);
+      expect(parsed.holders?.[0]).not.toHaveProperty("chatTier");
+    }
+  });
+});
+
+describe("worktree.deleteByPath@1.3 chatTier", () => {
+  it("1.3 failed frame keeps chatTier on chat-turn holders", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV13.parse({
+      kind: "failed",
+      reason: "in use",
+      holders: [holderWithChatTier],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed.holders).toEqual([holderWithChatTier]);
+      expect(parsed.holders?.[0]?.chatTier).toBe("turn");
+    }
+  });
+
+  it("1.3 failed frame sanitizes an unknown chatTier by dropping holders, keeping reason", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV13.safeParse({
+      kind: "failed",
+      reason: "in use",
+      holders: [{ ...holder, chatTier: "bogus" }],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.kind).toBe("failed");
+      if (parsed.data.kind === "failed") {
+        expect(parsed.data.reason).toBe("in use");
+        expect(parsed.data.holders).toBeUndefined();
+      }
+    }
+  });
 });
 
 describe("worktree.listHolders@1.0", () => {
   const listHoldersRegistry = hostRpcRegistry["worktree.listHolders"];
 
-  it("is registered as latest minor 0 with unsupported degrade", () => {
+  it("is registered as latest minor 1 with unsupported degrade", () => {
     expect(listHoldersRegistry.degrade).toEqual({ kind: "unsupported" });
-    expect(listHoldersRegistry[1].latestMinor).toBe(0);
+    expect(listHoldersRegistry[1].latestMinor).toBe(1);
     expect(listHoldersRegistry[1].versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
+    });
+    expect(listHoldersRegistry[1].versions[1].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
     });
   });
 
@@ -672,6 +730,31 @@ describe("worktree.listHolders@1.0", () => {
     const parsed = worktreeListHoldersResponseSchema.safeParse({
       holders: [holder],
       holdersRevision: "rev-abc",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("frozen response schema strips chatTier (old-client degrade)", () => {
+    const parsed = worktreeListHoldersResponseSchema.parse({
+      holders: [holderWithChatTier],
+    });
+    expect(parsed.holders).toHaveLength(1);
+    expect(parsed.holders[0]).not.toHaveProperty("chatTier");
+  });
+});
+
+describe("worktree.listHolders@1.1 chatTier", () => {
+  it("response keeps chatTier on chat-turn holders", () => {
+    const parsed = worktreeListHoldersResponseSchemaV11.parse({
+      holders: [holderWithChatTier],
+    });
+    expect(parsed.holders).toEqual([holderWithChatTier]);
+    expect(parsed.holders[0]?.chatTier).toBe("turn");
+  });
+
+  it("response rejects an unknown chatTier value", () => {
+    const parsed = worktreeListHoldersResponseSchemaV11.safeParse({
+      holders: [{ ...holder, chatTier: "bogus" }],
     });
     expect(parsed.success).toBe(false);
   });

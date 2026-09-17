@@ -43,9 +43,9 @@ export function DiffBundleFileSectionFrame(
           <Button
             type="button"
             variant="ghost"
-            size="sm"
+            size="xs"
             onClick={props.onOpenFileTile}
-            className="h-7 shrink-0 gap-1 px-2 text-ui-xs"
+            className="h-7 shrink-0"
           >
             <ExternalLink className="size-3.5" />
             File

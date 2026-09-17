@@ -96,7 +96,7 @@ export function TerminalAgentArgsSection({
         <Input
           ref={inputRef}
           id={inputId}
-          className="w-full font-mono text-ui-sm"
+          className="w-full"
           placeholder={terminalAgentArgsPlaceholder(providerId)}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -104,6 +104,8 @@ export function TerminalAgentArgsSection({
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur();
           }}
+          font="mono"
+          size="sm"
         />
         {setArgs.isPending ? <MutedAgentSpinner /> : null}
       </div>

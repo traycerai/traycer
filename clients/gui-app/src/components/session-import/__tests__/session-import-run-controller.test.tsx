@@ -87,8 +87,32 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 }));
 
 const invalidateQueriesMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+/**
+ * A `getQueryData` seam that the `auto` gate no longer uses, kept deliberately
+ * as a TRIPWIRE rather than deleted with the read it once served. The real
+ * module is mocked wholesale below for `invalidateQueries` already, so this is
+ * a second mocked member on the same seam rather than a real `QueryClient`.
+ *
+ * `value` is answered to EVERY read regardless of key, so a gate that consults
+ * the cache for anything finds a catalog row saying `auto`. `keys` records
+ * what was asked for, and "demotes auto when the negotiated version is below
+ * the auto line, and never reads the query cache to decide it" asserts it
+ * stays EMPTY - which is how the removal of the cross-method catalog read
+ * stays removed. Without that assertion this harness would be inert: nothing
+ * reads it, and re-adding a cache read would redden nothing.
+ */
+const queryDataHarness = vi.hoisted(() => ({
+  value: undefined as ListGuiHarnessesResponse | undefined,
+  keys: [] as unknown[],
+}));
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries: invalidateQueriesMock }),
+  useQueryClient: () => ({
+    invalidateQueries: invalidateQueriesMock,
+    getQueryData: (queryKey: unknown) => {
+      queryDataHarness.keys.push(queryKey);
+      return queryDataHarness.value;
+    },
+  }),
 }));
 
 import { SessionImportRunController } from "@/components/session-import/session-import-run-controller";
@@ -104,6 +128,9 @@ import {
   type SessionImportRunState,
 } from "@/stores/session-import/session-import-run-store";
 import { sessionImportQueryKeys } from "@/lib/query-keys";
+import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
+import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const SELECTION: SessionImportSelection = {
   harness: "claude",
@@ -156,9 +183,36 @@ function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
 }
 
 function createStreamBinding(hostId: string): StreamBindingRecord {
+  return createStreamBindingWithWsClient(hostId, fakeWsStreamClient());
+}
+
+/**
+ * A stream binding whose `sessionImport.run` version is `version` rather than
+ * the honest-stub's always-`null`.
+ *
+ * This is the ONLY seam the gate reads. Both of its facts - a live session's
+ * negotiated line, and the line the host advertised in its stream handshake -
+ * arrive through `getMethodSchemaVersion`, so a fixture cannot tell them
+ * apart and does not need to. The unary negotiated manifest is deliberately
+ * not used: `sessionImport.run` is a stream method and never appears in it.
+ */
+function createStreamBindingWithSchemaVersion(
+  hostId: string,
+  version: { readonly major: number; readonly minor: number },
+): StreamBindingRecord {
+  return createStreamBindingWithWsClient(hostId, {
+    ...fakeWsStreamClient(),
+    getMethodSchemaVersion: () => version,
+  });
+}
+
+function createStreamBindingWithWsClient(
+  hostId: string,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+): StreamBindingRecord {
   const releases: Array<Mock<() => void>> = [];
   const binding: StreamRuntimeBinding = {
-    wsStreamClient: fakeWsStreamClient(),
+    wsStreamClient,
     hostId,
     retain: () => {
       const release = vi.fn<() => void>();
@@ -221,12 +275,19 @@ beforeEach(() => {
   streamBinding.current = createStreamBinding("host-a");
   runClientHarness.instances = [];
   invalidateQueriesMock.mockClear();
+  queryDataHarness.value = undefined;
+  queryDataHarness.keys = [];
   useSessionImportRunStore.setState({ runs: new Map() });
 });
 
 afterEach(() => {
   cleanup();
   useSessionImportRunStore.setState({ runs: new Map() });
+  // `negotiated-manifest-registry` is MODULE-LEVEL state shared across every
+  // test in the process, not something `vi.mock` resets between cases - a
+  // manifest recorded by one "auto permission-mode gate" case would otherwise
+  // leak into the next one keyed by the same host id.
+  resetNegotiatedManifests();
 });
 
 describe("<SessionImportRunController />", () => {
@@ -774,5 +835,453 @@ describe("<SessionImportRunController />", () => {
 
     expect(probe.close).toHaveBeenCalledTimes(1);
     expect(requireRelease(currentBindingRecord(), 0)).toHaveBeenCalledTimes(1);
+  });
+
+  describe("the auto permission-mode gate", () => {
+    it("demotes a sticky auto default to auto_accept_edits when the host has proven nothing", () => {
+      streamBinding.current = createStreamBinding("host-auto-unproven");
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+    });
+
+    it("sends auto unchanged when the negotiated sessionImport.run version proves the host knows it", () => {
+      streamBinding.current = createStreamBindingWithSchemaVersion(
+        "host-auto-negotiated",
+        sessionImportRunV12.schemaVersion,
+      );
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto");
+    });
+
+    it("sends auto unchanged when the host's ADVERTISED sessionImport.run line proves it, with no live session", () => {
+      // The advertised line, which reaches this gate through the SAME
+      // accessor the live session does: `WsStreamClient.applyHostManifest`
+      // caches what a subscribe would declare for every method in the peer
+      // manifest, and `getMethodSchemaVersion` falls through to that cache.
+      //
+      // This used to pin `recordNegotiatedHostManifest` instead, and that was
+      // the defect wearing a test: the unary manifest is derived from the
+      // unary registry alone, `sessionImport.run` is a stream method, so the
+      // key this wrote by hand is one no host can ever publish. The assertion
+      // passed while production read `null` and demoted every import.
+      streamBinding.current = createStreamBindingWithSchemaVersion(
+        "host-auto-cached",
+        sessionImportRunV12.schemaVersion,
+      );
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto");
+    });
+
+    // A remote host needs no live `sessionImport.run` session for this to
+    // answer: `getMethodSchemaVersion` reports the line the host ADVERTISED
+    // in its stream handshake when no session has negotiated one, and both
+    // transports supply that - `WsStreamClient` caches a declarable version
+    // for every method in the peer manifest, and `RemoteSession` installs the
+    // peer manifest from its own `openAck`. What opens a stream here before
+    // any import is the wizard's `sessionImport.scan` subscription, on this
+    // same binding's client.
+    //
+    // These two cases pin that for a host shaped like the wizard's remote
+    // import target rather than the ambient one this controller otherwise
+    // runs against. No RPC, no catalog and no unary manifest is involved.
+    it("opens with permissionMode 'auto' for a remote-shaped host whose advertised sessionImport.run line proves it", () => {
+      streamBinding.current = createStreamBindingWithSchemaVersion(
+        "host-remote-import-target",
+        sessionImportRunV12.schemaVersion,
+      );
+      useSettingsStore.setState({ defaultPermission: "auto" });
+
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto");
+    });
+
+    it("demotes to 'auto_accept_edits' for a remote-shaped host with no sessionImport.run line known", () => {
+      streamBinding.current = createStreamBinding(
+        "host-remote-import-target-empty",
+      );
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      // `createStreamBinding`'s stub answers `null` for every method, which is
+      // a host whose stream handshake has not happened or did not come back -
+      // the same answer as a host too old to advertise the line at all.
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+    });
+
+    it("never touches a non-auto default even when the host has proven nothing", () => {
+      streamBinding.current = createStreamBinding("host-auto-not-relevant");
+      useSettingsStore.setState({ defaultPermission: "full_access" });
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("full_access");
+    });
+
+    // `hostUnderstandsAutoPermissionMode` reads ONE accessor,
+    // `getMethodSchemaVersion`, which answers from a live session's negotiated
+    // line when one exists and from the host's advertised line otherwise. The
+    // cases below vary that single answer: at the required line, above it,
+    // below it, on a higher major, and absent.
+    //
+    // The comparison requires an EXACT major match with `minor >=` inside it,
+    // so a HIGHER major demotes exactly like a lower one - it is a line this
+    // build cannot reason about, not evidence of support.
+    //
+    // This is what replaced `handshakeProvesPreAutoCatalog`, a veto that sat
+    // in front of a cached `agent.gui.listHarnesses` row. Both are gone: a
+    // catalog fact is a different method's fact, which is the rule the
+    // catalog broke.
+    describe("the sessionImport.run line the gate reads", () => {
+      it("sends auto for an advertised sessionImport.run manifest at or above the required minor", () => {
+        // A higher minor within the same major, not the exact required
+        // version - proves the `>=` half of the comparison independently of
+        // the exact-match case covered by "host-auto-cached" above.
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-manifest-at-line",
+          {
+            major: sessionImportRunV12.schemaVersion.major,
+            minor: sessionImportRunV12.schemaVersion.minor + 3,
+          },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        // FALSIFICATION: change the version check's minor comparison from
+        // `>=` to `===` and this goes red - a host that has moved past the
+        // required minor within the same major still understands `auto`.
+        expect(requireInstance(1).permissionMode).toBe("auto");
+        // The cache tripwire on the FALL-THROUGH path. Its sibling in "never
+        // reads the query cache to decide it" cannot cover this: that case's
+        // negotiated version is below the line, so the gate returns before it
+        // ever reaches the manifest branch - which is precisely where the
+        // removed `agent.gui.listHarnesses` read used to sit. This case has a
+        // `null` negotiated version, so it runs the whole function.
+        expect(queryDataHarness.keys).toEqual([]);
+      });
+
+      it("demotes when the advertised sessionImport.run manifest is below the required minor", () => {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-manifest-below",
+          {
+            major: sessionImportRunV12.schemaVersion.major,
+            minor: sessionImportRunV12.schemaVersion.minor - 1,
+          },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+      });
+
+      it("demotes when no sessionImport.run manifest has been recorded for this host", () => {
+        streamBinding.current = createStreamBinding(
+          "host-auto-manifest-missing",
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        // The stub answers `null`, so neither a live session nor an advertised
+        // line proves anything here and the gate must fail closed rather than
+        // assume support.
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+      });
+    });
+
+    // RPC versions are negotiated PER METHOD (root AGENTS.md): a completed
+    // `sessionImport.run` handshake is authoritative on `sessionImport.run`
+    // in both directions, and no other method's fact may override it.
+    //
+    // This started as "a cached `agent.gui.listHarnesses` row must not
+    // override the negotiated version". That framing is now obsolete in the
+    // strongest possible way: the gate does not consult the catalog - or the
+    // query cache at all - on this path any more, so there is no override
+    // left to lose to. The catalog row below is therefore a NEGATIVE control,
+    // seeded to say `auto` precisely so it can be shown to change nothing,
+    // and the recorded-keys assertion is what turns "the catalog is not
+    // evidence" from a comment into something that can fail.
+    describe("the negotiated sessionImport.run version is authoritative", () => {
+      it("demotes auto when the negotiated version is below the auto line, and never reads the query cache to decide it", () => {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-negotiated-below-cached-auto",
+          { major: 1, minor: 1 },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        const response: ListGuiHarnessesResponse = {
+          harnesses: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              enabled: true,
+              available: true,
+              error: null,
+              modes: ["gui", "tui"],
+              requiresApiKey: false,
+              supportedPermissionModes: [
+                "supervised",
+                "auto_accept_edits",
+                "auto",
+                "full_access",
+              ],
+              nativeAutoJudge: false,
+              availabilityPending: false,
+            },
+          ],
+        };
+        queryDataHarness.value = response;
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        // FALSIFICATION: delete the
+        // `if (versionIsBelow(negotiated, required)) return false;` line and
+        // this goes red - a negotiated `1.1` that cannot parse `auto` would
+        // fall through to the manifest and send it anyway.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+        // The catalog row seeded above is answered to EVERY `getQueryData`
+        // key, so if the gate read the cache at all it would find an `auto`
+        // row. It reads nothing: the decision comes from `sessionImport.run`'s
+        // own line, through `getMethodSchemaVersion` and nothing else.
+        //
+        // FALSIFICATION: restore any `queryClient.getQueryData(...)` read to
+        // `hostUnderstandsAutoPermissionMode` and this goes red even if the
+        // demotion above still holds - which is the point, since that is the
+        // cross-method inference the round removed and nothing else notices
+        // its return.
+        expect(queryDataHarness.keys).toEqual([]);
+      });
+
+      // Control for the case above: at the `auto` line itself, negotiated
+      // proof still wins outright.  Already covered by "sends auto unchanged
+      // when the negotiated sessionImport.run version proves the host knows
+      // it" above (negotiated === sessionImportRunV12.schemaVersion, i.e.
+      // {major:1,minor:2}) - not duplicated here.
+
+      // A HIGHER major on `sessionImport.run` is not evidence of support.
+      //
+      // This case used to assert the opposite: that a live session on a higher
+      // major fell through to an advertised manifest pinned at the required
+      // major, and still sent `auto`. That state cannot exist. Both facts
+      // describe one host's one `sessionImport.run` line, so a host on major 2
+      // does not simultaneously advertise major 1 - the fixture could only
+      // build it because its second fact came from a registry no host writes.
+      //
+      // With both facts arriving through the same accessor, a higher major is
+      // simply a line this build cannot reason about, and the gate demotes.
+      // That is the safe direction and the one the comparison already
+      // encodes: `advertised.major === required.major` was never true for it.
+      it("demotes when the sessionImport.run line is on a higher major this build cannot reason about", () => {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-negotiated-higher-major",
+          { major: sessionImportRunV12.schemaVersion.major + 1, minor: 0 },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        // FALSIFICATION: make the same-major check a `>=` on major alone and
+        // this goes red with 'auto' - a host on the next major would then be
+        // credited with understanding a mode nothing has proven it parses.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+      });
+
+      // The LIVE-session half of the exact-major rule, which the case above
+      // cannot pin: there the manifest answers `true` regardless, so relaxing
+      // `negotiated.major === required.major` to `>=` changes nothing. Here
+      // there is no manifest at all, so the negotiated read is the only thing
+      // that could return `true` - and it must not, because a higher major is
+      // a DIFFERENT wire contract, not a newer one.
+      //
+      // The minor deliberately clears the required floor. With `minor: 0` a
+      // relaxed `>=` would still fail the minor comparison and demote anyway,
+      // so the case would assert against its own input and pin nothing - the
+      // same trap the higher-major manifest fixture fell into.
+      it("demotes when the negotiated sessionImport.run version is on a higher major and no manifest proves it", () => {
+        streamBinding.current = createStreamBindingWithSchemaVersion(
+          "host-auto-negotiated-higher-major-unproven",
+          {
+            major: sessionImportRunV12.schemaVersion.major + 1,
+            minor: sessionImportRunV12.schemaVersion.minor + 1,
+          },
+        );
+        useSettingsStore.setState({ defaultPermission: "auto" });
+        render(<SessionImportRunController />);
+        const handle = getSessionImportStartHandle();
+        if (handle === null) {
+          throw new Error("Expected a session import start handle.");
+        }
+
+        act(() => {
+          handle.start(
+            {
+              selections: [SELECTION],
+              titles: new Map([["claude:s1", "My session"]]),
+            },
+            startTarget(),
+          );
+        });
+
+        // FALSIFICATION: relax the live-session check to
+        // `negotiated.major >= required.major` and this goes red with 'auto' -
+        // the import would ride a major this client has never negotiated.
+        expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+      });
+    });
   });
 });

@@ -92,6 +92,7 @@ function entry(id: string, createdAt: number, text: string): PromptStashEntry {
     createdAt,
     content: textDoc(text),
     blobHashes: [],
+    annotations: [],
   };
 }
 
@@ -189,6 +190,7 @@ describe("usePromptStashStore", () => {
     const snapshot: PromptStashSnapshot = {
       entry: entry("new", 2, "new"),
       imagesByHash: new Map(),
+      droppedAnnotations: 0,
     };
     repoMocks.savePromptStashSnapshot.mockResolvedValueOnce(
       manifest(nextEntries, 2),
@@ -203,6 +205,7 @@ describe("usePromptStashStore", () => {
       usePromptStashStore.getState().save({
         entry: entry("fail", 3, "fail"),
         imagesByHash: new Map(),
+        droppedAnnotations: 0,
       }),
     ).rejects.toThrow(/quota/);
     // Local store keeps the last durable entries; failed save must not invent state.
@@ -246,6 +249,7 @@ describe("usePromptStashStore", () => {
     await usePromptStashStore.getState().save({
       entry: entry("b", 2, "b"),
       imagesByHash: new Map(),
+      droppedAnnotations: 0,
     });
     expect(received).toEqual([{ type: "changed", revision: 2 }]);
 
@@ -372,6 +376,7 @@ describe("usePromptStashStore", () => {
     await usePromptStashStore.getState().save({
       entry: entry("b", 2, "b"),
       imagesByHash: new Map(),
+      droppedAnnotations: 0,
     });
     expect(usePromptStashStore.getState().rows).toEqual(asRows(afterSave));
 
@@ -409,6 +414,7 @@ describe("usePromptStashStore", () => {
     const savePromise = usePromptStashStore.getState().save({
       entry: entry("b", 2, "b"),
       imagesByHash: new Map(),
+      droppedAnnotations: 0,
     });
 
     // While save is in flight, another window's broadcast issues a reload
@@ -458,6 +464,7 @@ describe("usePromptStashStore", () => {
     const savePromise = usePromptStashStore.getState().save({
       entry: entry("local", 2, "local"),
       imagesByHash: new Map(),
+      droppedAnnotations: 0,
     });
 
     const peer = new FakeBroadcastChannel(PROMPT_STASH_CHANNEL);
@@ -543,6 +550,7 @@ describe("usePromptStashStore", () => {
     const snapshot: PromptStashSnapshot = {
       entry: entry("c", 3, "c"),
       imagesByHash: new Map(),
+      droppedAnnotations: 0,
     };
     repoMocks.savePromptStashSnapshot.mockResolvedValueOnce(
       manifest(afterUnrelatedSave, 2),

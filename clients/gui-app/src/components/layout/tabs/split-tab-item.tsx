@@ -234,15 +234,12 @@ function SplitQuickActions(props: {
         <Button
           type="button"
           size="icon-sm"
-          variant="ghost"
+          variant={props.engaged ? "info-ghost" : "muted"}
           aria-label={`Split view actions, ${props.focusedSide} view focused`}
           data-testid={`split-quick-actions-${props.splitId}`}
           className={cn(
             SPLIT_TAB_CONTROL_CLASS,
-            "hover:bg-accent/60 [-webkit-app-region:no-drag]",
-            props.engaged
-              ? "text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200"
-              : "text-muted-foreground hover:text-foreground",
+            "[-webkit-app-region:no-drag]",
           )}
         >
           <SplitFocusIcon

@@ -9,10 +9,21 @@ export function Menubar(props: ComponentProps<typeof Primitive.Root>) {
 export function MenubarMenu(props: ComponentProps<typeof Primitive.Menu>) {
   return <Primitive.Menu {...props} />;
 }
+// The app's one menubar draws the hover, open and focus treatments on a span
+// INSIDE the trigger, because the trigger is full-height and the pill is not.
+// What the trigger itself owns is the type step, the resting label colour and
+// the outline it hands to that span - which is exactly what the single call
+// site was writing back on.
+const TRIGGER_CLASS =
+  "group inline-flex h-full items-center text-ui-xs text-canvas-foreground/70 outline-none select-none";
+
 export function MenubarTrigger(
   props: ComponentProps<typeof Primitive.Trigger>,
 ) {
-  return <Primitive.Trigger {...props} />;
+  const { className, ...rest } = props;
+  return (
+    <Primitive.Trigger className={cn(TRIGGER_CLASS, className)} {...rest} />
+  );
 }
 const CONTENT_CLASS =
   "z-50 max-h-(--radix-menubar-content-available-height) max-w-safe-dvw min-w-48 overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 [-webkit-app-region:no-drag]";

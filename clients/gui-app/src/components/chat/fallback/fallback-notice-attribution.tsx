@@ -26,9 +26,9 @@ export function FallbackNoticeSettingsLink() {
   const openFallbackSettings = useOpenFallbackSettings(useTabHostId());
   return (
     <Button
-      size="sm"
-      variant="ghost"
-      className="h-auto self-start px-1 py-0 text-ui-xs text-muted-foreground"
+      size="xs"
+      variant="muted"
+      className="h-auto self-start"
       onClick={openFallbackSettings}
     >
       {FALLBACK_SETTINGS_LABEL}

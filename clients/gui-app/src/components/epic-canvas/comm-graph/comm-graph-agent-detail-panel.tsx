@@ -98,10 +98,9 @@ export function CommGraphAgentDetailPanel(
           <Button
             type="button"
             size="icon-xs"
-            variant="ghost"
+            variant="muted"
             aria-label="Open agent"
             data-testid="comm-graph-agent-panel-open"
-            className="text-muted-foreground hover:text-foreground"
             onClick={() => onOpenAgent(agent)}
           >
             <ExternalLinkIcon />

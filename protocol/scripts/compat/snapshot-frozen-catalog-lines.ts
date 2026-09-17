@@ -34,17 +34,22 @@ import {
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV71,
+  listGuiHarnessesResponseSchemaV80,
+  listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
+  getChatRunSettingsResponseSchemaV20,
 } from "../../src/host/epic/chat-records";
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV90,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -83,9 +88,16 @@ const FIXTURES = {
   // grows an enum over its predecessor - so no minor of major 7 can carry an id
   // 7.0 lacks, released or not. Its dump is unchanged by that freeze.
   "agent.gui.listHarnesses@7.1": dump(listGuiHarnessesResponseSchemaV71),
-  // The head line, pinned for the same reason `providers.list@8.0` is: growth
+  // Two separate freezes, one line apart, and they are not the same event.
+  // 8.0 froze when 9.0 opened for Antigravity: `cli-v1.3.0` / `host-v1.3.0`
+  // shipped 8.0, so it must keep serving the twenty-id row those peers
+  // negotiate. 9.0 then froze when 9.1 opened for the `auto` permission mode
+  // and the `nativeAutoJudge` row field. Neither dump changed by its freeze.
+  "agent.gui.listHarnesses@8.0": dump(listGuiHarnessesResponseSchemaV80),
+  "agent.gui.listHarnesses@9.0": dump(listGuiHarnessesResponseSchemaV90),
+  // The head line, pinned for the same reason `providers.list@9.1` is: growth
   // of the live row now has nothing else to fail against.
-  "agent.gui.listHarnesses@8.0": dump(listGuiHarnessesResponseSchema),
+  "agent.gui.listHarnesses@9.1": dump(listGuiHarnessesResponseSchema),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),
@@ -136,11 +148,19 @@ const FIXTURES = {
   // this snapshot. When that happens, hand-freeze the sub-schema that grew (the
   // `*V70Preimage` shapes are the precedent); do not regenerate to green.
   "providers.list@7.0": dump(providersListResponseSchemaV70),
-  // The head line. It dumps the LIVE schema,
-  // so the FIRST attempt to grow the live shape goes red on this row rather
-  // than on the release that ships the growth. Same response then applies -
-  // freeze the line that stopped being head, open the next one.
-  "providers.list@8.0": dump(providersListResponseSchema),
+  // Two freezes here too, in the same order as `agent.gui.listHarnesses`
+  // above: 8.0 froze when 9.0 opened (it bound the live schema while it was
+  // the unreleased head, which is how `antigravity` and `profiles[].apiKey`
+  // reached a wire already in the field), and 9.0 froze at the pre-`autoJudge`
+  // provider state when 9.1 opened to publish the per-provider judge. Neither
+  // dump is changed by its freeze.
+  "providers.list@8.0": dump(providersListResponseSchemaV80),
+  "providers.list@9.0": dump(providersListResponseSchemaV90),
+  // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
+  // live shape goes red on this row rather than on the release that ships the
+  // growth. Same response then applies - freeze the line that stopped being
+  // head, open the next one.
+  "providers.list@9.1": dump(providersListResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was
@@ -153,12 +173,17 @@ const FIXTURES = {
   // test stayed green while it silently absorbed `reasonix`. Only the tag-based
   // `protocol-compat` gate caught it.
   //
-  // These two rows are what make that class fail locally from now on: 1.0 is
-  // the frozen released line, 2.0 dumps LIVE so the next growth attempt goes
-  // red here first. The lesson generalizes - "the three id-carrying methods" was
-  // never the real boundary; grep RESPONSES for id enums.
+  // These THREE rows are what make that class fail locally from now on. `1.0`
+  // and `2.0` are both FROZEN released lines - `2.0` stopped being the live one
+  // when `auto` opened `3.0` - and `3.0` dumps LIVE, so the next growth attempt
+  // goes red here first. Regenerate the live row when a growth is intended;
+  // never regenerate a frozen one, which is the mistake this comment previously
+  // invited by naming `2.0` as the live dump. The lesson generalizes - "the
+  // three id-carrying methods" was never the real boundary; grep RESPONSES for
+  // id enums.
   "epic.getChatRunSettings@1.0": dump(getChatRunSettingsResponseSchemaV10),
-  "epic.getChatRunSettings@2.0": dump(getChatRunSettingsResponseSchema),
+  "epic.getChatRunSettings@2.0": dump(getChatRunSettingsResponseSchemaV20),
+  "epic.getChatRunSettings@3.0": dump(getChatRunSettingsResponseSchema),
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
   // This row DOES get regenerated when a provider id is added, and it is the
   // one row here where that is the right answer rather than the forbidden one.

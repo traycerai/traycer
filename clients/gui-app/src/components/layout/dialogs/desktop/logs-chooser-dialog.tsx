@@ -124,7 +124,7 @@ function LogsChooserDialogContent(
             source: "Logs",
           })}
           presentation="link"
-          className="h-auto p-0 text-current"
+          className={undefined}
         />
       </div>
     );
@@ -160,7 +160,7 @@ function LogsChooserDialogContent(
               source: "Logs",
             })}
             presentation="link"
-            className="h-auto p-0 text-current"
+            className={undefined}
           />
         </div>
       )}
@@ -370,7 +370,7 @@ function LogTailView(props: { readonly state: LogTailState }): ReactNode {
             source: "Logs",
           })}
           presentation="link"
-          className="h-auto p-0 text-current"
+          className={undefined}
         />
       </div>
     );

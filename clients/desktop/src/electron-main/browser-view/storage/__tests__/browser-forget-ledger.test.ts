@@ -54,6 +54,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../../../app/logger", () => ({
+  isDebugEnabled: () => true,
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   sanitizeLogFields: (fields: Record<string, unknown>) => fields,
   describeLogError: (error: unknown) => String(error),
@@ -1406,6 +1407,7 @@ describe("in-flight observation across a local clear", () => {
         isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
         isHeadlessOriginKey: isHeadlessOriginCookieKey,
         claimHeadlessOriginKeys: recordHeadlessOriginCookieKeys,
+        noteAppliedKeys: (_key) => undefined,
         releaseHeadlessOriginKeys: releaseHeadlessOriginCookieKeys,
         getTargetJar: () => ({ session: { cookies: jar }, durableJar: true }),
         serializeOnDomain: (domain, action) =>

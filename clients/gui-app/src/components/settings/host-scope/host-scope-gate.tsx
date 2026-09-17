@@ -261,7 +261,7 @@ function HostScopeNotice(props: {
       <div
         className={cn(
           "font-medium text-ui-sm",
-          props.tone === "warn" ? "text-amber-500" : "text-foreground",
+          props.tone === "warn" ? "text-warning-foreground" : "text-foreground",
         )}
       >
         {props.title}
@@ -288,7 +288,8 @@ export function HostScopeConnecting(props: {
       <AgentSpinningDots
         testId={undefined}
         variant="orbit"
-        className="text-muted-foreground"
+        className={undefined}
+        tone="muted"
       />
       Connecting to {props.hostName}…
     </div>

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import {
   useCallback,
   useEffect,
@@ -177,7 +178,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
   const terminalAgentIconColor = artifactIconColors["terminal-agent"];
   const terminalAgentIconStyle =
     artifactIconColorMode === "byType"
-      ? { color: terminalAgentIconColor }
+      ? ({ "--swatch": terminalAgentIconColor } as CSSProperties)
       : undefined;
 
   return (
@@ -197,7 +198,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
           const iconColor = artifactIconColors[type];
           const iconStyle =
             artifactIconColorMode === "byType"
-              ? { color: iconColor }
+              ? ({ "--swatch": iconColor } as CSSProperties)
               : undefined;
           return (
             <DropdownMenuItem
@@ -211,6 +212,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
               <OptionIcon
                 className={cn(
                   "size-3.5",
+                  artifactIconColorMode === "byType" && "text-[var(--swatch)]",
                   artifactIconColorMode === "none" && "text-muted-foreground",
                 )}
                 style={iconStyle}
@@ -228,6 +230,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
               <TerminalAgentIcon
                 className={cn(
                   "size-3.5",
+                  artifactIconColorMode === "byType" && "text-[var(--swatch)]",
                   artifactIconColorMode === "none" && "text-muted-foreground",
                 )}
                 style={terminalAgentIconStyle}
@@ -236,7 +239,8 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               ref={terminalAgentSubRef}
-              className="flex w-[min(92vw,32rem)] flex-col gap-3 p-2"
+              layout="panel"
+              className="flex w-[min(92vw,32rem)] flex-col gap-3"
               data-testid={`${menuTestId}-terminal-agent-sub`}
               // The host Select + folder picker open portaled overlays; treat
               // clicks inside them (stacked above this submenu) as inside it so
@@ -321,6 +325,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     hostClient: launchHostClient,
     hostId: memoryHostId,
     tuiOnly: true,
+    chatLineCarriesAutoMode: null,
   });
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;
@@ -420,14 +425,13 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         data-testid="terminal-agent-harness-section"
         className="flex min-w-0 flex-col gap-2"
       >
-        <DropdownMenuLabel className="px-1 pb-0.5 pt-0 text-overline uppercase text-muted-foreground/70">
-          Harness
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Harness</DropdownMenuLabel>
         <div className="flex min-w-0 items-center gap-2 px-1">
           <HarnessModelPicker
             labelDisplay="responsive"
             store={toolbarStore}
             withServiceTier={false}
+            withReasoning
             tuiOnly
             lockedHarnessId={null}
             disabled={tuiAgentPending}
@@ -451,12 +455,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         data-testid="terminal-agent-args-section"
         className="flex min-w-0 flex-col gap-2"
       >
-        <DropdownMenuLabel className="px-1 pb-0.5 pt-0 text-overline uppercase text-muted-foreground/70">
-          Additional arguments
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Additional arguments</DropdownMenuLabel>
         <Input
           aria-label="Terminal interface CLI arguments"
-          className="h-8 min-w-0 font-mono text-ui-xs"
+          className="h-8 min-w-0"
           placeholder="Additional arguments (optional)"
           value={argsDraft}
           disabled={tuiAgentPending}
@@ -469,6 +471,8 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             event.preventDefault();
             start();
           }}
+          font="mono"
+          size="xs"
         />
       </section>
       {/* Host list + Folders section (file-tree-style), staged here and read
@@ -492,7 +496,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         >
           {tuiAgentPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId={undefined}
               variant={undefined}
             />

@@ -26,6 +26,7 @@ export function mutationDisabledHint(
   action: string,
 ): string | null {
   if (isDisconnected) return "Reconnect to make changes.";
+  if (role === null) return "Task permissions are not available yet.";
   if (!isEditableRole(role)) return `Viewers cannot ${action}.`;
   return null;
 }

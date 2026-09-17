@@ -310,7 +310,8 @@ function PageNumberField(props: PageNumberFieldProps): ReactNode {
         }}
         inputMode="numeric"
         aria-label="Page number"
-        className="h-6 w-10 px-1 text-center text-ui-xs"
+        className="h-6 w-10 text-center"
+        size="xs"
       />
       <span className="whitespace-nowrap">
         / {props.pageCount > 0 ? props.pageCount : "–"}

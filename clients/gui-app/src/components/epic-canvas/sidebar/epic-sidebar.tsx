@@ -654,7 +654,7 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
-  // Match the PR panel's per-tab pin, including its canvas-host fallback.
+  // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
     tabSurfaceKey("pull-requests", tabId),
@@ -719,15 +719,13 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  // Resolve the same PR host before and after the session loads.
+  // Share the PR resolver; task-agent hosts become available with the session.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
     tabSurfaceKey("pull-requests", tabId),
     canvasHostId,
   );
-  // The persisted PR baseline is readable before the epic's Y.doc resolves, so
-  // the loading rail already shows the same set of panels the live one will -
-  // no icon appears or disappears as the epic finishes opening.
+  // The persisted PR baseline is readable before the epic's Y.doc resolves.
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
@@ -2101,15 +2099,12 @@ function TreePanelActions(props: TreePanelActionsProps) {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label={props.addLabel}
         aria-disabled={artifactsPresentation.ariaDisabled ? true : undefined}
         data-testid={props.triggerTestId}
-        className={cn(
-          "text-muted-foreground hover:text-foreground",
-          ARIA_DISABLED_TRIGGER_CLASS,
-        )}
+        className={cn(ARIA_DISABLED_TRIGGER_CLASS)}
         disabled={artifactsPresentation.nativeDisabled}
       >
         {addIsPending ? (
@@ -2177,10 +2172,10 @@ function PanelHeaderMoreMenuTrigger(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={props.label}
-          className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+          className="shrink-0"
           data-testid={props.testId}
         >
           <MoreHorizontal className="size-4" />
@@ -2563,7 +2558,7 @@ function SidebarBulkSelectionActions() {
       />
       <Button
         type="button"
-        variant="ghost"
+        variant="destructive-ghost"
         size="icon-sm"
         aria-label={
           selection.selectedCount > 0
@@ -2577,7 +2572,6 @@ function SidebarBulkSelectionActions() {
           selection.deletePending ||
           chatArchive.pending
         }
-        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={selection.requestDeleteSelected}
       >
         <Trash2 className="size-4" />
@@ -2591,11 +2585,10 @@ function CommentsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label="Close comments"
       data-testid="epic-sidebar-comments-close"
-      className="text-muted-foreground hover:text-foreground"
       onClick={() => setActivePanelId(props.tabId, DEFAULT_LEFT_PANEL_ID)}
     >
       <X className="size-4" />

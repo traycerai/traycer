@@ -214,9 +214,13 @@ function DigitBindingDisplay(props: DigitBindingDisplayProps) {
   if (actionId === "tab.switch.byDigit") {
     return (
       <span className="inline-flex items-center gap-1 text-ui-xs">
-        <Kbd className="font-mono tabular-nums">{first}</Kbd>
+        <Kbd className="tabular-nums" variant="mono">
+          {first}
+        </Kbd>
         <span className="text-muted-foreground">–</span>
-        <Kbd className="font-mono tabular-nums">{last}</Kbd>
+        <Kbd className="tabular-nums" variant="mono">
+          {last}
+        </Kbd>
       </span>
     );
   }
@@ -226,11 +230,17 @@ function DigitBindingDisplay(props: DigitBindingDisplayProps) {
   );
   return (
     <span className="inline-flex items-center gap-1 text-ui-xs">
-      <Kbd className="font-mono tabular-nums">{first}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {first}
+      </Kbd>
       <span className="text-muted-foreground">–</span>
-      <Kbd className="font-mono tabular-nums">{last}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {last}
+      </Kbd>
       <span className="text-muted-foreground">·</span>
-      <Kbd className="font-mono tabular-nums">{overflow}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {overflow}
+      </Kbd>
     </span>
   );
 }

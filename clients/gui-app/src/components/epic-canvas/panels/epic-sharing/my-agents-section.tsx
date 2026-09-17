@@ -87,7 +87,8 @@ function MyAgentsSharingSectionBody(props: {
         <div className="flex min-w-0 items-center gap-1.5">
           <Label
             htmlFor="epic-sharing-my-agents-switch"
-            className="truncate text-ui-sm font-normal text-muted-foreground"
+            className="truncate"
+            variant="muted"
           >
             Share my agents
           </Label>
@@ -209,15 +210,14 @@ function SharingDefaultConfirmDialog(props: {
       onOpenChange={props.isPending ? undefined : props.onOpenChange}
     >
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
         data-testid="epic-sharing-my-agents-confirm"
       >
         <div className="flex min-w-0 flex-col gap-1.5 p-5">
-          <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-            {props.title}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+          <DialogTitle className="wrap-anywhere">{props.title}</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
             {props.description}
           </DialogDescription>
         </div>

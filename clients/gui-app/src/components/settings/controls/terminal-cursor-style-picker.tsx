@@ -21,8 +21,8 @@ const STYLES: ReadonlyArray<{ id: TerminalCursorStyle; label: string }> = [
 // the active glyph brightens with the surrounding foreground.
 const SHAPE_CLASS: Record<TerminalCursorStyle, string> = {
   block: "inset-[2px_1px]",
-  bar: "top-[2px] bottom-[2px] left-0 w-[2px]",
-  underline: "right-[1px] bottom-[2px] left-0 h-[2px]",
+  bar: "top-[2px] bottom-[2px] left-0 w-0.5",
+  underline: "right-[1px] bottom-[2px] left-0 h-0.5",
 };
 
 export function TerminalCursorStylePicker(
@@ -62,7 +62,7 @@ export function TerminalCursorStylePicker(
                 <span
                   aria-hidden="true"
                   className={cn(
-                    "absolute rounded-[1px] bg-current",
+                    "absolute rounded-xs bg-current",
                     SHAPE_CLASS[style.id],
                   )}
                 />

@@ -20,4 +20,5 @@ export const configMutationKeys = {
   // one still live - a rename silently becoming two active variables.
   envRename: () => ["config.env.rename"] as const,
   logLevelsSet: () => ["config.logLevels.set"] as const,
+  browserSet: () => ["config.browser.set"] as const,
 };

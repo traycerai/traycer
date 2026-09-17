@@ -28,15 +28,16 @@ export function SwitcherRenameDialog(props: {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         // Capped and split into header / scroller / footer like every other
         // dialog that holds a text field: a soft keyboard shrinks the layout
         // viewport in both mobile shells, so `dvh` resolves against the
         // uncovered strip and Save stays above the keyboard rather than under
         // it.
-        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0"
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         data-testid="switcher-rename-dialog"
       >
-        <DialogHeader className="px-4 pt-4 pr-12 pb-2">
+        <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         {/* Radix unmounts closed content, so the form re-seeds from the current
@@ -87,7 +88,7 @@ function SwitcherRenameForm(props: {
       </div>
       {/* `mx-0 mb-0`: the footer's own negative margins bleed it into a `p-4`
           content, and this one is `p-0`. */}
-      <DialogFooter className="mx-0 mb-0 px-4 py-3">
+      <DialogFooter>
         <Button
           type="submit"
           disabled={!canSubmit}

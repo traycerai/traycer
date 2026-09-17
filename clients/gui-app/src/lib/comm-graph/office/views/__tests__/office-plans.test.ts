@@ -494,7 +494,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
               widthTiles,
               zoom: OFFICE_LOD_CLOSEUP_ZOOM,
               measure: plateMeasure,
-            });
+            }).text;
           expect(readingAt(plate.widthTiles)).toBe(readingAt(GENEROUS_TILES));
         } else if (room.kind === "archive") {
           // WIDER THAN THE ROOM, on purpose: C5's archive is a DOOR, one tile,
@@ -668,7 +668,16 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             bottom: baseline + SIGN_PADDING_Y,
           };
         });
-        expect(boxes.some((box) => box.civic)).toBe(true);
+        // CLOSE-UP ONLY. At office zoom a civic sign is fixture lettering
+        // unless its own counter fits or it carries a beacon
+        // (`officeSignLetteredAt`), so a small population or a narrow room
+        // can legitimately draw none there - that is the feedback-round-1
+        // fix, not a gap in this sweep. Close-up still letters every civic
+        // room unconditionally, which is what keeps the sweep from going
+        // vacuous on the one plate kind it exists to catch.
+        if (lod === 2) {
+          expect(boxes.some((box) => box.civic)).toBe(true);
+        }
 
         for (let i = 0; i < boxes.length; i += 1) {
           for (let j = i + 1; j < boxes.length; j += 1) {

@@ -44,7 +44,7 @@ export function WorktreeFolderListBody(props: WorktreeFolderListBodyProps) {
             source: "Workspaces",
           })}
           presentation="icon"
-          className="text-current"
+          className={undefined}
         />
       </div>
     );

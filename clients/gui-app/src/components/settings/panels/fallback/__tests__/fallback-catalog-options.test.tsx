@@ -86,6 +86,7 @@ function harness(
     modes: ["gui"],
     requiresApiKey: false,
     supportedPermissionModes: ["full_access"],
+    nativeAutoJudge: false,
     availabilityPending: false,
     authStatus: undefined,
   };

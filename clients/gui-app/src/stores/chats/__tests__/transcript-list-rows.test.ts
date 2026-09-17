@@ -1832,6 +1832,38 @@ describe("transcriptListRows", () => {
   });
 });
 
+describe("Codex retry row suppression", () => {
+  it("withholds a settled retry slice without losing the canonical answer part", () => {
+    const part0 = assistantSliceRowId("turn-retry-sparse", 0, true);
+    const steer = queueSteerRowId("queue-retry-sparse");
+    const part1 = assistantSliceRowId("turn-retry-sparse", 1, true);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [span(0, [part0, steer, part1])],
+        skeleton: [
+          skeletonEntry(part0),
+          skeletonEntry(steer),
+          skeletonEntry(part1),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+      }),
+      // The renderer has already withheld the settled retry-only part:0 row.
+      rendered: [modelWithoutPersistentMessageId(steer), model(part1)],
+    });
+
+    expect(
+      rows.map((row) => (row.kind === "hydrated" ? row.model.id : row.key)),
+    ).toEqual([steer, part1]);
+    expect(rows.some((row) => row.key === part0)).toBe(false);
+    expect(
+      rows.find((row) => row.kind === "hydrated" && row.model.id === part1)
+        ?.ordinal,
+    ).toBe(2);
+  });
+});
+
 describe("tier-parameterized backing", () => {
   it("a Pending model the skeleton names with no live record behind it seats at its ordinal", () => {
     // BACKING_CHANNELS' status-label channel is live-only, and seatLiveRecords
