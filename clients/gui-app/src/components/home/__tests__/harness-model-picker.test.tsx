@@ -691,6 +691,7 @@ const CODEX_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -703,6 +704,7 @@ const CLAUDE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -715,6 +717,7 @@ const OPENCODE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -727,6 +730,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -739,6 +743,7 @@ const DROID_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -751,6 +756,7 @@ const CURSOR_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -980,6 +986,7 @@ interface RenderPickerInput {
    */
   readonly storeModels?: ReadonlyArray<ModelOption>;
   readonly withServiceTier?: boolean;
+  readonly withReasoning?: boolean;
   readonly tuiOnly?: boolean;
   readonly lockedHarnessId?: ProviderId | null;
   readonly disabled?: boolean;
@@ -1015,6 +1022,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
+    chatLineCarriesAutoMode: null,
     hostId: TEST_HOST_ID,
   });
   if (resolvedInput.storeModels !== undefined) {
@@ -1025,6 +1033,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       models: resolvedInput.storeModels,
       modelsLoaded: true,
       tuiOnly: resolvedInput.tuiOnly ?? false,
+      chatLineCarriesAutoMode: null,
     });
   }
   const selections: HarnessModelSelection[] = [];
@@ -1053,6 +1062,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
+          withReasoning={resolvedInput.withReasoning ?? true}
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}
@@ -1369,6 +1379,7 @@ describe("<HarnessModelPicker />", () => {
         models,
         modelsLoaded: true,
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       });
     });
   }
@@ -1444,6 +1455,159 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(claudeRail);
     expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
     expect(claudeRail.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("shows 'Loading models' - never the Add API key CTA - for a cold, still-pending API-key provider with no settled verdict yet", async () => {
+    // Unlike `OPENROUTER_HARNESS`'s default fixture (settled unavailable, an
+    // attached error), this provider has never settled: still probing, no
+    // error yet. `ModelRowsState` must resolve this as "loading", not
+    // "unavailable" - the CTA is for a settled negative, and showing it here
+    // would send the user to add a key for a provider that might turn out to
+    // be available a moment later.
+    //
+    // A harness this unsettled (`availabilityPending && !available`) renders
+    // its rail tab INERT (`harnessAvailabilityUnsettled` in
+    // `harness-rail-providers.ts`) - a spinner, an accessible name suffixed
+    // "— loading…", and no click that switches/browses it - so this lands on
+    // it via the composer's OWN initial selection instead of opening
+    // elsewhere and clicking its tab. `resolveActiveProviderId` still lands
+    // there because a keyless `requiresApiKey` provider counts as "degraded"
+    // (browsable without committing) independent of `availabilityPending`.
+    const pendingOpenRouter: HarnessOption = {
+      ...OPENROUTER_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: null,
+    };
+    queryMock.harnesses = [CODEX_HARNESS, CLAUDE_HARNESS, pendingOpenRouter];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+      catalogHarness(pendingOpenRouter, []),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codexModels()],
+      ["claude", claudeModels()],
+      ["openrouter", []],
+    ]);
+
+    renderPicker({
+      selection: { harnessId: "openrouter", modelSlug: "", profileId: null },
+    });
+    // No model resolves for the cold selection, so the trigger falls back to
+    // its generic label - the same one "falls back to a RUNNABLE provider
+    // rather than the first degraded one" above opens through.
+    await openPickerByTriggerName("Select model");
+
+    // The unsettled tab's accessible name is suffixed ("OpenRouter —
+    // loading…"), not the plain label - match the start rather than the
+    // full string.
+    expect(
+      screen
+        .getByRole("tab", { name: /^OpenRouter/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByText("Loading models")).not.toBeNull();
+    expect(screen.queryByText("Connect OpenRouter")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add API key" })).toBeNull();
+  });
+
+  it("shows the Add API key CTA - not the loading spinner - for a still-pending provider that already carries an error", async () => {
+    // Same unsettled shape as the previous test (`availabilityPending: true`,
+    // `available: false`), but this probe has already come back with a
+    // reason. `ModelRowsState`'s pending-loading branch now requires
+    // `provider.error === null`, so a pending row that already carries an
+    // error must fall through to `unavailableProviderState`'s CTA instead of
+    // spinning forever on a verdict that already arrived.
+    const pendingWithError: HarnessOption = {
+      ...OPENROUTER_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: "OpenRouter needs an API key",
+    };
+    queryMock.harnesses = [CODEX_HARNESS, CLAUDE_HARNESS, pendingWithError];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+      catalogHarness(pendingWithError, []),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codexModels()],
+      ["claude", claudeModels()],
+      ["openrouter", []],
+    ]);
+
+    renderPicker({
+      selection: { harnessId: "openrouter", modelSlug: "", profileId: null },
+    });
+    await openPickerByTriggerName("Select model");
+
+    expect(
+      screen
+        .getByRole("tab", { name: /^OpenRouter/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.queryByText("Loading models")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add API key" })).not.toBeNull();
+  });
+
+  it("targeted-fetches a cold provider that reports available while still revalidating (no cached models yet), but skips the fetch for one that already carries retained warm models", async () => {
+    // `useBrowsedProviderCatalogEntry`'s fetch gate: `entry.available &&
+    // (!entry.availabilityPending || entry.models.length === 0)`. A
+    // synthesized positive from pending-retention (models already cached)
+    // must not re-fetch; a genuine positive verdict with nothing cached yet
+    // (e.g. the host's FIRST probe already reports available while still
+    // finishing up) still needs this targeted cold-cache load, or the row
+    // would sit "available" with an empty list forever.
+    const coldPendingPositive: HarnessOption = {
+      ...DROID_HARNESS,
+      availabilityPending: true,
+    };
+    const warmPendingPositive: HarnessOption = {
+      ...CURSOR_HARNESS,
+      availabilityPending: true,
+    };
+    const cursorModels = [
+      model({
+        harnessId: "cursor",
+        slug: "cursor-fast",
+        label: "Cursor Fast",
+      }),
+    ];
+    queryMock.harnesses = [
+      CODEX_HARNESS,
+      CLAUDE_HARNESS,
+      coldPendingPositive,
+      warmPendingPositive,
+    ];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+      catalogHarness(coldPendingPositive, []),
+      catalogHarness(warmPendingPositive, cursorModels),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codexModels()],
+      ["claude", claudeModels()],
+      ["droid", []],
+      ["cursor", cursorModels],
+    ]);
+
+    renderPicker(undefined);
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Droid" }));
+    expect(
+      queryMock.calls.models.filter((call) => call.harnessId === "droid").at(-1)
+        ?.enabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Cursor" }));
+    expect(
+      queryMock.calls.models
+        .filter((call) => call.harnessId === "cursor")
+        .at(-1)?.enabled,
+    ).toBe(false);
   });
 
   it("shows a deprecated-model badge with its notice as a tooltip", async () => {
@@ -2704,14 +2868,18 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("button", { name: "Codex profile: Personal" }),
     ).toBeDefined();
+    // `--swatch`, not `background-color`: the profile dot carries its colour as
+    // a custom property and paints with `bg-[var(--swatch)]` (ticket 02's
+    // inline-style migration), so a `background-color` selector matches nothing
+    // and this assertion passed on an empty list.
     const swatchStyles = Array.from(
-      container.querySelectorAll<HTMLElement>(
-        'span[style*="background-color"]',
-      ),
+      container.querySelectorAll<HTMLElement>('span[style*="--swatch"]'),
     ).map((element) => element.getAttribute("style") ?? "");
-    expect(swatchStyles.some((style) => style.includes("16, 185, 129"))).toBe(
-      true,
-    );
+    // The hex as written, not jsdom's `rgb(16, 185, 129)`: a custom property
+    // is serialized verbatim, unlike the `background-color` this used to read.
+    expect(
+      swatchStyles.some((style) => style.toLowerCase().includes("#10b981")),
+    ).toBe(true);
   });
 
   it("closes the picker and opens the global add-profile flow from the dropdown's create-new-profile row", async () => {

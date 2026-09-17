@@ -19,6 +19,7 @@ import {
   cleanSubagentNotificationText,
 } from "@/components/chat/segments/subagent-display";
 import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
+import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
@@ -464,6 +465,18 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
           }),
         ),
       ];
+    case "auto-judge-unattended-denial":
+      // The one line the row paints, through the row's own formatter - the
+      // rule and reason are IN that string, so indexing them separately would
+      // count matches the highlighter has no text to paint.
+      return [
+        normalizeSearchableText(
+          autoJudgeUnattendedDenialText({
+            rule: segment.rule,
+            reason: segment.reason,
+          }),
+        ),
+      ];
     case "setup-card":
       return [
         normalizeSearchableText(
@@ -600,6 +613,10 @@ function commandSegmentSearchText(
 function providerNoticeSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "provider_notice" }>,
 ): ReadonlyArray<string> {
+  // Retry diagnostics are optional disclosure content, outside the Find unit.
+  if (segment.presentation === "retry") {
+    return [normalizeSearchableText(segment.title)];
+  }
   return [
     normalizeSearchableText(
       [

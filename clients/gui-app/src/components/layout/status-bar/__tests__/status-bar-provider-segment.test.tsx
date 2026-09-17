@@ -574,7 +574,7 @@ describe("<StatusBarProviderSegment />", () => {
       renderSegment({ segment, detail: "full", showBar: true });
 
       const fill = screen.getByTestId("status-bar-provider-mini-bar-fill");
-      expect(fill.className).toContain("bg-red-500");
+      expect(fill.className).toContain("bg-destructive");
       expect(fill.style.width).toBe("92%");
     });
 
@@ -635,8 +635,8 @@ describe("<StatusBarProviderSegment />", () => {
         expect(fills.map((fill) => fill.style.width)).toEqual(["30%", "92%"]);
         // The severity is the WINDOW's, so two bars under one icon can - and
         // here do - read as two different states.
-        expect(fills[0].className).toContain("bg-blue-500");
-        expect(fills[1].className).toContain("bg-red-500");
+        expect(fills[0].className).toContain("bg-info");
+        expect(fills[1].className).toContain("bg-destructive");
       });
 
       it("puts each bar immediately before the reading it measures", () => {
@@ -1081,7 +1081,7 @@ describe("<StatusBarProviderSegment />", () => {
       const dot = screen
         .getByTestId("status-bar-provider-account-dot")
         .querySelector<HTMLElement>("span[style]");
-      expect(dot?.style.backgroundColor).toBe("rgb(255, 0, 0)");
+      expect(dot?.style.getPropertyValue("--swatch")).toBe("#ff0000");
       const name = screen.getByTestId("status-bar-provider-account");
       expect(name.textContent).toBe("Work");
       // Name, then the reading.

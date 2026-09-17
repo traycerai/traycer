@@ -15,6 +15,7 @@ import {
 import { basePersistOptions, worktreeIntentStagingKey } from "@/lib/persist";
 import {
   worktreeFolderIntentReferencesRemoved,
+  type RemovedBranchRepo,
   type RemovedWorktreeRefs,
 } from "@/lib/worktree/removed-worktree-refs";
 
@@ -345,6 +346,26 @@ interface WorktreeIntentStagingStore {
   readonly sweptRefsByKey: Readonly<
     Record<string, RemovedWorktreeRefs | undefined>
   >;
+  /**
+   * Everything this session has seen swept, per HOST, and never cleared.
+   *
+   * `sweptRefsByKey` above cannot answer for a reader whose question outlives
+   * a slot. It is recorded only against slots with a live dispatch mark, and
+   * dropped by every mutation that resolves one - so three ordinary sequences
+   * lose the evidence entirely: a sweep AFTER the dispatch's ack has restored
+   * staging (no mark left to record against); a partial sweep whose survivors
+   * are restaged (the restage drops it); and any reader holding a captured
+   * copy when a later sweep replaces the record.
+   *
+   * A hand-back that has to state "the worktree you staged is gone" asks a
+   * question about a FROZEN ref, minutes after the fact. That question needs a
+   * source no staging mutation can take back, so this one only ever grows.
+   * Bounded by the number of worktrees actually removed while the app is
+   * open, which is small - and it is session state, not persisted.
+   */
+  readonly sessionSweptRefsByHost: Readonly<
+    Record<string, RemovedWorktreeRefs | undefined>
+  >;
   /** Take the staged intent for a dispatch, marking the slot as consumed. */
   readonly consumeForDispatch: (
     key: WorktreeStagingKey,
@@ -643,6 +664,179 @@ export interface SweptIntentPartition {
   readonly swept: WorktreeIntent | null;
 }
 
+/**
+ * The sweep evidence recorded for one consumed slot, or `null` when none is.
+ *
+ * Exposed because this record has a SHORTER lifetime than some of its readers.
+ * It is dropped by every mutation that resolves the slot - the user staging a
+ * new folder included - so a hand-back that has to survive an arbitrary wait
+ * (a silent send recovery, which may be awaiting an inlining round trip while
+ * the user stages something else) cannot read it at the moment it speaks. Such
+ * a reader snapshots it, keeps folding later evidence in, and partitions with
+ * {@link partitionIntentAgainstSweptRefs} against what it accumulated.
+ */
+/**
+ * Everything swept on this host since the app started - the source a frozen
+ * ref is tested against. See `sessionSweptRefsByHost`.
+ */
+/**
+ * Un-mark the paths a fresh staging names.
+ *
+ * `sessionSweptRefsByHost` only ever grows, which is what lets a frozen ref be
+ * asked about long after the fact. The cost is that a worktree REMOVED and
+ * then RECREATED at the same path stays marked gone forever, so the next send
+ * staged against it is told to re-pick a directory that is sitting right
+ * there. Staging a path is the user asserting it exists - better evidence than
+ * a remembered deletion - so it clears that path's mark, and only that path's.
+ * Other removals in the same record are untouched.
+ */
+function withoutStagedPaths(
+  swept: RemovedWorktreeRefs | undefined,
+  entries: ReadonlyArray<WorktreeFolderIntent>,
+): RemovedWorktreeRefs | undefined {
+  if (swept === undefined) return undefined;
+  const staged = new Set<string>();
+  for (const entry of entries) {
+    staged.add(entry.workspacePath);
+    if ("worktreePath" in entry && typeof entry.worktreePath === "string") {
+      staged.add(entry.worktreePath);
+    }
+  }
+  const branchKeys = new Set<string>();
+  for (const entry of entries) {
+    // An existing-branch checkout re-staged is the same assertion about a
+    // BRANCH that staging a path is about a directory. Leaving branch records
+    // behind meant a recreated existing-branch selection stayed marked swept
+    // forever, which is the same defect the path clearing exists to fix, one
+    // field over.
+    //
+    // The shape is the one `worktreeFolderIntentReferencesRemoved` reads, not
+    // a bare string: a `kind: "worktree"` entry carries
+    // `branch: {type: "existing", name} | {type: "new", source}`. An earlier
+    // version tested `typeof entry.branch === "string"`, which matches NO
+    // entry in this union, so the branch half of this clearing never ran at
+    // all - it read as implemented and did nothing.
+    const branchName = stagedBranchName(entry);
+    if (branchName !== null) {
+      branchKeys.add(branchRecordKey(entry.repoIdentifier, branchName));
+    }
+  }
+  const kept = [...swept.worktreePaths].filter((path) => !staged.has(path));
+  const keptBranches = swept.branches.filter(
+    (ref) => !branchKeys.has(branchRecordKey(ref.repoIdentifier, ref.branch)),
+  );
+  if (
+    kept.length === swept.worktreePaths.size &&
+    keptBranches.length === swept.branches.length
+  ) {
+    return swept;
+  }
+  return { worktreePaths: new Set(kept), branches: keptBranches };
+}
+
+/**
+ * The branch a staged entry asserts exists, or `null` for one that names none.
+ *
+ * Mirrors `worktreeFolderIntentReferencesRemoved`'s own read so the two cannot
+ * disagree about which branch an entry is about: an existing-branch checkout
+ * asserts its `name`, and a new-branch fork asserts its `source` (the branch
+ * it forks FROM must exist for the fork to be materializable).
+ */
+function stagedBranchName(entry: WorktreeFolderIntent): string | null {
+  if (entry.kind !== "worktree") return null;
+  return entry.branch.type === "existing"
+    ? entry.branch.name
+    : entry.branch.source;
+}
+
+/** Repo-qualified identity for a branch record, so `feat/x` in two repos differ. */
+function branchRecordKey(
+  repoIdentifier: RemovedBranchRepo | null,
+  branch: string,
+): string {
+  const repo =
+    repoIdentifier === null
+      ? "\u0000unknown"
+      : `${repoIdentifier.owner}/${repoIdentifier.repo}`;
+  return `${repo}\u0000${branch}`;
+}
+
+/** {@link withoutStagedPaths} applied to one host's record; a null host has none. */
+function withStagedPathsCleared(
+  byHost: Readonly<Record<string, RemovedWorktreeRefs | undefined>>,
+  hostId: string | null,
+  entries: ReadonlyArray<WorktreeFolderIntent>,
+): Readonly<Record<string, RemovedWorktreeRefs | undefined>> {
+  if (hostId === null) return byHost;
+  const next = withoutStagedPaths(byHost[hostId], entries);
+  if (next === byHost[hostId]) return byHost;
+  return { ...byHost, [hostId]: next };
+}
+
+export function sessionSweptRefsForHost(
+  hostId: string,
+): RemovedWorktreeRefs | null {
+  return (
+    useWorktreeIntentStagingStore.getState().sessionSweptRefsByHost[hostId] ??
+    null
+  );
+}
+
+export function sweptRefsForKey(
+  key: WorktreeStagingKey,
+): RemovedWorktreeRefs | null {
+  return (
+    useWorktreeIntentStagingStore.getState().sweptRefsByKey[
+      worktreeStagingKeyString(key)
+    ] ?? null
+  );
+}
+
+/**
+ * Fold newly observed sweep evidence into evidence already held, so a reader
+ * accumulating across a slot's lifetime never loses an earlier removal to a
+ * later drop. Returns `held` unchanged when `observed` adds nothing, so a
+ * subscriber can use identity to decide whether to write.
+ */
+export function mergeRemovedWorktreeRefs(
+  held: RemovedWorktreeRefs | null,
+  observed: RemovedWorktreeRefs | null,
+): RemovedWorktreeRefs | null {
+  if (observed === null) return held;
+  if (held === null) return observed;
+  const paths = new Set([...held.worktreePaths, ...observed.worktreePaths]);
+  // DEDUPED by repo-qualified identity. Plain concatenation made this grow
+  // without bound for a caller that folds the same observation repeatedly -
+  // 101 identical records after 101 unchanged observations - and identity, not
+  // arrival count, is what every reader of this list asks about.
+  const branches = [...held.branches];
+  const seen = new Set(
+    held.branches.map((ref) => branchRecordKey(ref.repoIdentifier, ref.branch)),
+  );
+  for (const ref of observed.branches) {
+    const key = branchRecordKey(ref.repoIdentifier, ref.branch);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    branches.push(ref);
+  }
+  if (
+    paths.size === held.worktreePaths.size &&
+    branches.length === held.branches.length
+  ) {
+    return held;
+  }
+  return { worktreePaths: paths, branches };
+}
+
+/** {@link partitionSweptIntent} against refs the caller already holds. */
+export function partitionIntentAgainstSweptRefs(
+  intent: WorktreeIntent,
+  swept: RemovedWorktreeRefs | null,
+): SweptIntentPartition {
+  if (swept === null) return { survivors: intent, swept: null };
+  return partitionIntentBySweep(intent, swept);
+}
+
 export function partitionSweptIntent(
   key: WorktreeStagingKey,
   intent: WorktreeIntent,
@@ -652,6 +846,13 @@ export function partitionSweptIntent(
       worktreeStagingKeyString(key)
     ];
   if (swept === undefined) return { survivors: intent, swept: null };
+  return partitionIntentBySweep(intent, swept);
+}
+
+function partitionIntentBySweep(
+  intent: WorktreeIntent,
+  swept: RemovedWorktreeRefs,
+): SweptIntentPartition {
   const gone = intent.entries.filter((entry) =>
     worktreeFolderIntentReferencesRemoved(entry, swept),
   );
@@ -771,6 +972,7 @@ export const useWorktreeIntentStagingStore =
         revisionByKey: {},
         consumedForDispatchByKey: {},
         sweptRefsByKey: {},
+        sessionSweptRefsByHost: {},
         stageEntry: (key, entry) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -786,6 +988,11 @@ export const useWorktreeIntentStagingStore =
                 id,
               ),
               sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
+              sessionSweptRefsByHost: withStagedPathsCleared(
+                state.sessionSweptRefsByHost,
+                key.hostId,
+                [entry],
+              ),
             };
           }),
         stageIntent: (key, intent) =>
@@ -796,6 +1003,17 @@ export const useWorktreeIntentStagingStore =
               (acc, entry) => mergeWorktreeIntentEntry(acc, entry),
               existing ?? { entries: [] },
             );
+            // `sessionSweptRefsByHost` is deliberately NOT cleared here, and
+            // that asymmetry with `stageEntry` is the point. Clearing a swept
+            // mark says "this path was recreated", and only a per-entry stage
+            // carries that assertion. This action's one caller re-stages the
+            // WHOLE captured intent to restamp `isPrimary` after a primary
+            // switch, so it re-stages entries the user never touched: doing it
+            // here would make picking a different primary folder erase the
+            // deletion evidence for every other staged path on the host - and a
+            // recovery that had not yet observed those facts would then qualify
+            // its stashed prompt as if the worktree still existed, sending the
+            // user back into a directory that is gone.
             return {
               intentByKey: { ...state.intentByKey, [id]: merged },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
@@ -1187,12 +1405,32 @@ export const useWorktreeIntentStagingStore =
               removed,
             );
             if (sweptRefsByKey !== state.sweptRefsByKey) changed = true;
-            return changed
+            // And the same removals again, against the HOST rather than a
+            // slot - see `sessionSweptRefsByHost`.
+            const priorForHost = state.sessionSweptRefsByHost[hostId];
+            // Through the shared merge, which dedupes branch records by
+            // repo-qualified identity and returns the PRIOR object unchanged
+            // when an observation adds nothing. The hand-rolled union here did
+            // neither: the live sweep folds after every sweep, so repeats
+            // accumulated identical branch records, and a new object every time
+            // made the `!==` below true on a purge that changed nothing - so
+            // every subscriber, including each recovery's sweep-evidence
+            // listener, re-ran for no reason. `removed` is never null, so the
+            // fallback is unreachable and present only to keep the type honest.
+            const mergedForHost: RemovedWorktreeRefs =
+              mergeRemovedWorktreeRefs(priorForHost ?? null, removed) ??
+              removed;
+            const sessionSweptRefsByHost = {
+              ...state.sessionSweptRefsByHost,
+              [hostId]: mergedForHost,
+            };
+            return changed || mergedForHost !== priorForHost
               ? {
                   intentByKey,
                   suspendedWorkspacePathsByKey,
                   revisionByKey,
                   sweptRefsByKey,
+                  sessionSweptRefsByHost,
                 }
               : state;
           }),
@@ -1203,6 +1441,7 @@ export const useWorktreeIntentStagingStore =
             revisionByKey: {},
             consumedForDispatchByKey: {},
             sweptRefsByKey: {},
+            sessionSweptRefsByHost: {},
           }),
       }),
       {

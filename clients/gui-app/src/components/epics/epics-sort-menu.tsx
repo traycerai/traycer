@@ -36,20 +36,13 @@ export function EpicsSortMenu(props: EpicsSortMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="gap-1.5 text-ui-sm text-muted-foreground hover:text-foreground"
-        >
+        <Button type="button" variant="muted" size="sm">
           <ArrowDownUp className="size-4" />
           {currentLabel}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          Sort by
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup
           value={value}

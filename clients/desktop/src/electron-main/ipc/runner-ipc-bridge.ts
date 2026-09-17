@@ -882,6 +882,10 @@ export class RunnerIpcBridge {
     await this.browserSessions?.captureFinalPrimaryProfiles(null);
   }
 
+  notifySystemResumed(): void {
+    this.browserSessions?.notifySystemResumed();
+  }
+
   /** The native-teardown gate: this window owns guests that are about to die. */
   needsFinalBrowserCaptureForWindow(windowId: string): boolean {
     return (

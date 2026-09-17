@@ -213,10 +213,25 @@ async function runTransaction<T>(
   storeNames: readonly string[],
   mode: IDBTransactionMode,
   work: (tx: IDBTransaction) => Promise<T>,
+  abortable: boolean,
 ): Promise<T> {
   const db = await openDb();
   const tx = db.transaction(storeNames, mode);
   const done = transactionDone(tx);
+  if (abortable) {
+    liveFencedTransactions.add(tx);
+    // Released when the TRANSACTION settles, not when `work` returns. Those
+    // are different moments: `work` finishing only means the last request was
+    // issued, and the transaction commits afterwards. Releasing at the end of
+    // the body left a window in which a retirement found nothing to abort and
+    // the entry committed anyway - which is the same "the check and the commit
+    // are not the same instant" mistake one level further in.
+    void done
+      .catch(() => undefined)
+      .finally(() => {
+        liveFencedTransactions.delete(tx);
+      });
+  }
   let outcome:
     | { readonly ok: true; readonly value: T }
     | { readonly ok: false; readonly error: unknown };
@@ -283,6 +298,7 @@ export function loadPromptStashSnapshot(): Promise<PromptStashManifest> {
         .toSorted(newestFirstRow);
       return { rows, revision };
     },
+    false,
   );
 }
 
@@ -293,125 +309,226 @@ export function loadPromptStashSnapshot(): Promise<PromptStashManifest> {
  * budget with no mutation at all, then writes only the blobs missing from
  * the store plus the entry and bumped revision atomically.
  */
+/**
+ * Thrown INSIDE the transaction when a caller's precondition stopped holding
+ * before the write committed. `runTransaction` aborts on a throw, so every
+ * queued write rolls back and nothing is published.
+ */
+export class PromptStashWriteNoLongerCurrentError extends Error {
+  constructor() {
+    super("The prompt stash write is no longer current and was abandoned.");
+    this.name = "PromptStashWriteNoLongerCurrentError";
+  }
+}
+
+const ALWAYS_CURRENT = (): boolean => true;
+
+/**
+ * Fenced writes whose transaction is OPEN right now.
+ *
+ * The in-transaction predicate is sampled once, and a transaction is not
+ * atomic with the check that admitted it: the writes after that sample are
+ * each awaited, so an identity change landing on any of them still commits.
+ * Sampling again only narrows the interval - it cannot close it, because
+ * there is always a last sample and always something after it.
+ *
+ * So the retirement has to reach the transaction itself. Anything still open
+ * is registered here, and `abortLiveFencedPromptStashWrites` aborts it -
+ * IndexedDB rolls the whole transaction back, writes already queued included.
+ * That is the difference between refusing to START and stopping what is
+ * RUNNING, and only the second is a fence.
+ */
+const liveFencedTransactions = new Set<IDBTransaction>();
+
+/**
+ * Abort every fenced write still in flight, rolling each back in full.
+ *
+ * Called by an identity teardown AFTER it bumps the generation: a write merely
+ * queued is then refused by the predicate, and one already running is torn
+ * down here. Safe when nothing is open.
+ */
+export function abortLiveFencedPromptStashWrites(): void {
+  for (const tx of [...liveFencedTransactions]) {
+    try {
+      tx.abort();
+    } catch {
+      // Committed or aborted between the snapshot and this line.
+    }
+  }
+  liveFencedTransactions.clear();
+}
+
 export function savePromptStashSnapshot(
   snapshot: PromptStashSnapshot,
+): Promise<PromptStashManifest> {
+  // NOT abortable. An ordinary save is a write someone is waiting on - the
+  // composer's own stash capture awaits it before treating a prompt as
+  // durable - so a teardown must never tear it down. This used to delegate to
+  // the fenced variant, which registered unconditionally, so an identity
+  // teardown could reject an active ordinary save with `TransactionInactive`
+  // or a queued one with `AbortError`. The two paths share one transaction
+  // implementation and differ only here, in whether the retirement may reach
+  // them.
+  return saveSnapshotTransaction(snapshot, ALWAYS_CURRENT, false);
+}
+
+/**
+ * {@link savePromptStashSnapshot}, abandoned if `stillCurrent()` stops holding
+ * before the writes are queued.
+ *
+ * The check has to live INSIDE the transaction, and that is the whole point of
+ * this overload existing. A caller checking before the call - even twice,
+ * either side of an `await` - is still only checking before
+ * `runTransaction` opens a transaction that can QUEUE behind another one and
+ * commit arbitrarily later. The unrecorded-prompt handoff is the caller this
+ * exists for: it must not commit the outgoing account's prompt into the
+ * shared, unpartitioned stash after an identity change, and no amount of
+ * awaiting-then-checking outside can prevent a durable write that is already
+ * queued.
+ */
+export function savePromptStashSnapshotWhile(
+  snapshot: PromptStashSnapshot,
+  stillCurrent: () => boolean,
+): Promise<PromptStashManifest> {
+  return saveSnapshotTransaction(snapshot, stillCurrent, true);
+}
+
+function saveSnapshotTransaction(
+  snapshot: PromptStashSnapshot,
+  stillCurrent: () => boolean,
+  abortable: boolean,
 ): Promise<PromptStashManifest> {
   return runTransaction(
     [ENTRIES_STORE, BLOBS_STORE, META_STORE],
     "readwrite",
     async (tx) => {
-      const entriesStore = tx.objectStore(ENTRIES_STORE);
-      const blobsStore = tx.objectStore(BLOBS_STORE);
-      const metaStore = tx.objectStore(META_STORE);
+      {
+        const entriesStore = tx.objectStore(ENTRIES_STORE);
+        const blobsStore = tx.objectStore(BLOBS_STORE);
+        const metaStore = tx.objectStore(META_STORE);
 
-      // Tolerant of a corrupt sibling record: a malformed field on an
-      // UNRELATED existing entry must never abort this save. Its
-      // best-effort `blobHashes` still protects whatever blobs it can
-      // identify; a record this repository can't even parse an id from
-      // contributes nothing to `referenced` and is dropped (nothing to
-      // display or delete by).
-      const rawEntries = await requestToPromise<unknown[]>(
-        entriesStore.getAll(),
-      );
-      const otherInfos = rawEntries
-        .map(inspectRawStashRecord)
-        .filter(
-          (info): info is RawStashRecordInfo =>
-            info !== null && info.id !== snapshot.entry.id,
+        // Tolerant of a corrupt sibling record: a malformed field on an
+        // UNRELATED existing entry must never abort this save. Its
+        // best-effort `blobHashes` still protects whatever blobs it can
+        // identify; a record this repository can't even parse an id from
+        // contributes nothing to `referenced` and is dropped (nothing to
+        // display or delete by).
+        const rawEntries = await requestToPromise<unknown[]>(
+          entriesStore.getAll(),
         );
-      const referenced = new Set<string>(snapshot.entry.blobHashes);
-      for (const info of otherInfos) {
-        for (const hash of info.blobHashes) referenced.add(hash);
-      }
-
-      // The current snapshot's own bytes are always authoritative for any
-      // hash it references - never whatever happens to already be stored
-      // there. A save cannot verify an existing record's content against
-      // its key without hashing inside the transaction, so a typed
-      // Uint8Array record with the wrong bytes under a colliding/reused
-      // key would otherwise look "already present" and silently shadow
-      // the snapshot's correct bytes forever.
-      const ownBlobHashes = new Set<string>(snapshot.entry.blobHashes);
-
-      // Reclaim orphans and derive kept usage in the same pass, BEFORE
-      // admitting any new blob - usage is always summed from what the
-      // store actually holds, never a maintained counter. Sum the actual
-      // stored byte view's length, not the `byteLength` metadata field -
-      // that field is redundant, cached data that could drift from the
-      // real bytes and would otherwise weaken the physical-byte budget.
-      let keptBytes = 0;
-      const existingBlobHashes = new Set<string>();
-      await iterateCursor(blobsStore.openCursor(), (cursor) => {
-        const record = cursor.value as StashBlobRecord;
-        if (!referenced.has(record.hash)) {
-          cursor.delete();
-          return;
-        }
-        if (ownBlobHashes.has(record.hash)) {
-          // The snapshot itself supplies this hash's canonical bytes below
-          // - delete whatever is here now (malformed, or a well-typed
-          // record whose content happens to be wrong under this key) so
-          // the insertion pass unconditionally repairs it with verified
-          // bytes, counted exactly once as incoming. A sibling that also
-          // references this hash benefits from the same repair.
-          cursor.delete();
-          return;
-        }
-        // A malformed retained blob (e.g. `null`/a plain array in `bytes`,
-        // from corruption) must be runtime-validated before it feeds
-        // arithmetic, and must never be left in place uncounted: doing so
-        // would let it occupy real storage outside the physical budget
-        // forever. Deleting a sibling-only malformed record here is safe -
-        // that sibling's row/restore already surfaces as
-        // unavailable/missing without this blob.
-        if (!isUint8ArrayBytes(record.bytes)) {
-          cursor.delete();
-          return;
-        }
-        existingBlobHashes.add(record.hash);
-        keptBytes += record.bytes.byteLength;
-      });
-
-      const missingRecords: StashBlobRecord[] = [];
-      let incomingBytes = 0;
-      for (const hash of snapshot.entry.blobHashes) {
-        if (existingBlobHashes.has(hash)) continue;
-        const blob = snapshot.imagesByHash.get(hash);
-        if (blob === undefined) {
-          throw new Error(
-            "A stashed image is missing its bytes and cannot be saved.",
+        const otherInfos = rawEntries
+          .map(inspectRawStashRecord)
+          .filter(
+            (info): info is RawStashRecordInfo =>
+              info !== null && info.id !== snapshot.entry.id,
           );
+        const referenced = new Set<string>(snapshot.entry.blobHashes);
+        for (const info of otherInfos) {
+          for (const hash of info.blobHashes) referenced.add(hash);
         }
-        incomingBytes += blob.bytes.byteLength;
-        missingRecords.push({
-          hash,
-          bytes: blob.bytes,
-          byteLength: blob.bytes.byteLength,
-          mimeType: blob.mimeType,
+
+        // The current snapshot's own bytes are always authoritative for any
+        // hash it references - never whatever happens to already be stored
+        // there. A save cannot verify an existing record's content against
+        // its key without hashing inside the transaction, so a typed
+        // Uint8Array record with the wrong bytes under a colliding/reused
+        // key would otherwise look "already present" and silently shadow
+        // the snapshot's correct bytes forever.
+        const ownBlobHashes = new Set<string>(snapshot.entry.blobHashes);
+
+        // Reclaim orphans and derive kept usage in the same pass, BEFORE
+        // admitting any new blob - usage is always summed from what the
+        // store actually holds, never a maintained counter. Sum the actual
+        // stored byte view's length, not the `byteLength` metadata field -
+        // that field is redundant, cached data that could drift from the
+        // real bytes and would otherwise weaken the physical-byte budget.
+        let keptBytes = 0;
+        const existingBlobHashes = new Set<string>();
+        await iterateCursor(blobsStore.openCursor(), (cursor) => {
+          const record = cursor.value as StashBlobRecord;
+          if (!referenced.has(record.hash)) {
+            cursor.delete();
+            return;
+          }
+          if (ownBlobHashes.has(record.hash)) {
+            // The snapshot itself supplies this hash's canonical bytes below
+            // - delete whatever is here now (malformed, or a well-typed
+            // record whose content happens to be wrong under this key) so
+            // the insertion pass unconditionally repairs it with verified
+            // bytes, counted exactly once as incoming. A sibling that also
+            // references this hash benefits from the same repair.
+            cursor.delete();
+            return;
+          }
+          // A malformed retained blob (e.g. `null`/a plain array in `bytes`,
+          // from corruption) must be runtime-validated before it feeds
+          // arithmetic, and must never be left in place uncounted: doing so
+          // would let it occupy real storage outside the physical budget
+          // forever. Deleting a sibling-only malformed record here is safe -
+          // that sibling's row/restore already surfaces as
+          // unavailable/missing without this blob.
+          if (!isUint8ArrayBytes(record.bytes)) {
+            cursor.delete();
+            return;
+          }
+          existingBlobHashes.add(record.hash);
+          keptBytes += record.bytes.byteLength;
         });
-      }
 
-      if (keptBytes + incomingBytes > PROMPT_STASH_BUDGET_BYTES) {
-        throw new PromptStashCapacityExceededError();
-      }
+        const missingRecords: StashBlobRecord[] = [];
+        let incomingBytes = 0;
+        for (const hash of snapshot.entry.blobHashes) {
+          if (existingBlobHashes.has(hash)) continue;
+          const blob = snapshot.imagesByHash.get(hash);
+          if (blob === undefined) {
+            throw new Error(
+              "A stashed image is missing its bytes and cannot be saved.",
+            );
+          }
+          incomingBytes += blob.bytes.byteLength;
+          missingRecords.push({
+            hash,
+            bytes: blob.bytes,
+            byteLength: blob.bytes.byteLength,
+            mimeType: blob.mimeType,
+          });
+        }
 
-      for (const record of missingRecords) {
-        await requestToPromise(blobsStore.put(record));
-      }
-      await requestToPromise(entriesStore.put(snapshot.entry));
-      const revision = await bumpRevision(metaStore);
+        if (keptBytes + incomingBytes > PROMPT_STASH_BUDGET_BYTES) {
+          throw new PromptStashCapacityExceededError();
+        }
 
-      const presentAfterSave = new Set(existingBlobHashes);
-      for (const record of missingRecords) {
-        presentAfterSave.add(record.hash);
-      }
-      const rows = [
-        { kind: "entry" as const, entry: snapshot.entry },
-        ...otherInfos.map((info) => toPromptStashRow(info, presentAfterSave)),
-      ].toSorted(newestFirstRow);
+        // The last point before the ENTRY itself is written. Not "nothing has
+        // been written yet" - an earlier version said that and it was wrong:
+        // the reclamation above issues cursor deletes. What makes aborting
+        // here safe is not that the transaction is clean, it is that an abort
+        // rolls back everything, those deletes included.
+        //
+        // This check alone is also not the whole fence: it samples once, and
+        // the writes below are each awaited, so a change landing on any of
+        // them still commits. `abortLiveFencedPromptStashWrites` is the other
+        // half - see `liveFencedTransactions`.
+        if (!stillCurrent()) throw new PromptStashWriteNoLongerCurrentError();
 
-      return { rows, revision };
+        for (const record of missingRecords) {
+          await requestToPromise(blobsStore.put(record));
+        }
+        await requestToPromise(entriesStore.put(snapshot.entry));
+        const revision = await bumpRevision(metaStore);
+
+        const presentAfterSave = new Set(existingBlobHashes);
+        for (const record of missingRecords) {
+          presentAfterSave.add(record.hash);
+        }
+        const rows = [
+          { kind: "entry" as const, entry: snapshot.entry },
+          ...otherInfos.map((info) => toPromptStashRow(info, presentAfterSave)),
+        ].toSorted(newestFirstRow);
+
+        return { rows, revision };
+      }
     },
+    abortable,
   );
 }
 
@@ -476,6 +593,7 @@ export function deletePromptStashEntry(
         .toSorted(newestFirstRow);
       return { rows, revision };
     },
+    false,
   );
 }
 
@@ -508,6 +626,7 @@ export async function readPromptStashRestoreBlobs(
       }
       return found;
     },
+    false,
   );
   if (records === null) return { status: "missing" };
   // Validation runs AFTER the transaction resolves, deliberately: SHA-256

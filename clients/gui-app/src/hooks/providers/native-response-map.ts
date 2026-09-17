@@ -28,8 +28,12 @@ export type ProvidersMcpAuthWireResponse = ResponseOfMethod<
   "providers.mcpAuth"
 >;
 
-/** External list shapes preserved for tab consumers. */
-export type McpListData = { readonly servers: readonly ProviderMcpServer[] };
+/** Cached list shapes for tab consumers. */
+export type McpListData = {
+  readonly servers: readonly ProviderMcpServer[];
+  /** A failed full-list refresh retained when other responses update rows. */
+  readonly refreshError: HostRpcError | null;
+};
 export type PluginsListData = { readonly plugins: readonly ProviderPlugin[] };
 export type SkillsListData = { readonly skills: readonly ProviderSkill[] };
 export type McpDiscoverData = { readonly server: ProviderMcpServer };
@@ -114,9 +118,16 @@ export function mapProvidersListToMcpServers(args: {
   const native = args.response.native;
   throwIfNativeError(native, "providers.list");
   if (native === null || native.kind !== "mcp") {
-    return { servers: [] };
+    return completeMcpList([]);
   }
-  return { servers: native.servers };
+  return completeMcpList(native.servers);
+}
+
+function completeMcpList(servers: readonly ProviderMcpServer[]): McpListData {
+  return {
+    servers,
+    refreshError: null,
+  };
 }
 
 export function mapProvidersListToPlugins(args: {
@@ -190,7 +201,7 @@ export function mapNativeMutateToMcpMutate(args: {
       method: "providers.nativeMutate",
     });
   }
-  return { servers: result.servers };
+  return completeMcpList(result.servers);
 }
 
 export function mapNativeMutateToPluginsMutate(args: {

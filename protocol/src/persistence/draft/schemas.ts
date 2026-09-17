@@ -2,6 +2,7 @@ import { z } from "zod";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { chatRunSettingsStrictSchema } from "@traycer/protocol/persistence/epic/foundation";
+import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import {
   DRAFT_HEAD_DIALECT,
@@ -121,6 +122,20 @@ export const draftStashPortableSchema = z.object({
   content: jsonContentSchema,
   blobHashes: z.array(sha256HexSchema),
   createdAt: z.number().int().nonnegative(),
+  /**
+   * Browser-annotation sidecar records captured with the prompt.
+   *
+   * A crop's provenance - the page, the comment, the elements it marked -
+   * lives beside the content, not in it: the image node carries only a hash.
+   * Stashing the prompt without these keeps the picture and loses everything
+   * that made it evidence, so they travel with the entry. Their `imageHash`
+   * is always one of `blobHashes`, including for a crop the content itself no
+   * longer references.
+   *
+   * `.default([])` so entries written before this field parse cleanly, same as
+   * `droppedElementCount` inside the record.
+   */
+  annotations: z.array(browserAnnotationRecordSchema).default([]),
 });
 export type DraftStashPortable = z.infer<typeof draftStashPortableSchema>;
 

@@ -11,6 +11,7 @@ import {
   applyBrowserObservedProfile,
   BrowserObservedConnectionGovernor,
   traceBrowserObservedProfile,
+  type BrowserObservedProfileDependencies,
   type BrowserObservedProfileResult,
 } from "../browser-observed-profile";
 import { BrowserJarSerializer } from "../browser-jar-serializer";
@@ -19,7 +20,7 @@ import {
   BROWSER_COOKIE_DELTA_WINDOW_MS,
   BrowserCookieChangeObserver,
 } from "../browser-cookie-change-observer";
-import { log } from "../../../app/logger";
+import { isDebugEnabled, log, sanitizeLogFields } from "../../../app/logger";
 import { FakeCookieJar } from "./cookie-jar-fixture";
 
 /**
@@ -37,10 +38,17 @@ import { FakeCookieJar } from "./cookie-jar-fixture";
  */
 
 vi.mock("../../../app/logger", () => ({
+  // Defaults to enabled: the existing decision-log assertions in this file
+  // depend on the diagnostic actually running. The S2 gate tests below flip
+  // it off with `mockReturnValueOnce`.
+  isDebugEnabled: vi.fn(() => true),
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   // The real one, near enough for these assertions: what matters is that the
-  // trace passes its fields through a truncating redactor at all.
-  sanitizeLogFields: (fields: Record<string, unknown>) => fields,
+  // trace passes its fields through a truncating redactor at all. Wrapped in
+  // `vi.fn` (identical behaviour) so the S2 gate tests can prove the decision
+  // batch's OWN sanitize calls are skipped, not merely that the final log line
+  // never lands.
+  sanitizeLogFields: vi.fn((fields: Record<string, unknown>) => fields),
   describeLogError: (error: unknown) => String(error),
 }));
 
@@ -89,6 +97,43 @@ function pastSeconds(): number {
   return Date.now() / 1_000 - 60;
 }
 
+/** One entry of the ticket-04 per-cookie decision batch. */
+interface ObservedCookieDecision {
+  readonly domain: string;
+  readonly name: string;
+  readonly path: string;
+  readonly outcome: string;
+  readonly valueChanged: boolean | null;
+  readonly expiryChanged: boolean | null;
+  readonly attributesChanged: boolean | null;
+}
+
+interface ObservedCookieDecisionsLog {
+  readonly source: string;
+  readonly hostId: string;
+  readonly domain: string;
+  readonly decisions: readonly ObservedCookieDecision[];
+  readonly omitted: number;
+}
+
+/**
+ * The most recent `[browser-view] observed cookie decisions` batch this test
+ * logged, decoded from the JSON string `applyBrowserObservedProfile` writes
+ * exactly once per call, in its `finally` block, on every path through it.
+ */
+function lastDecisionsLog(): ObservedCookieDecisionsLog {
+  const calls = vi
+    .mocked(log.debug)
+    .mock.calls.filter(
+      ([message]) => message === "[browser-view] observed cookie decisions",
+    );
+  const body = calls.at(-1)?.[1];
+  if (typeof body !== "string") {
+    throw new Error("expected a decisions log with a JSON string body");
+  }
+  return JSON.parse(body) as ObservedCookieDecisionsLog;
+}
+
 /**
  * One desktop's worth of the apply path: the jar, the per-connection governor,
  * and the serial queue every jar write goes through. `apply` mirrors the IPC
@@ -113,7 +158,7 @@ class ObservedApplyHarness {
    * module's own suite.
    */
   readonly headlessOriginKeyIds = new Set<string>();
-  /** Keys the applier announced to the observer before writing them. */
+  /** Keys the applier armed an observer insert mark for, before writing them. */
   readonly announcedKeys: BrowserCookieKey[] = [];
   /** Keys the applier handed back after the jar refused the write. */
   readonly releasedKeys: BrowserCookieKey[] = [];
@@ -142,19 +187,13 @@ class ObservedApplyHarness {
     flushStore: (): Promise<void> => this.jar.flushStore(),
   };
 
-  apply(input: {
-    readonly domain: string;
-    readonly cookies: readonly BrowserStorageCookie[];
-    readonly connectionId: string;
-  }): Promise<BrowserObservedProfileResult> {
-    const observed = {
-      source: "observed" as const,
-      connectionId: input.connectionId,
-      hostId: "host-1",
-      domain: input.domain,
-      cookies: input.cookies,
-    };
-    return applyBrowserObservedProfile(observed, {
+  /**
+   * Both doors below merge through the same dependencies; `source` on the
+   * frame is the only thing that differs. Kept in one place so a change to
+   * one door cannot silently leave the other on the old behaviour.
+   */
+  private dependencies(): BrowserObservedProfileDependencies {
+    return {
       now: () => Date.now(),
       isForgottenPendingAck: (gate) =>
         this.forgottenPendingAck.has(`${gate.connectionId} ${gate.domain}`),
@@ -162,10 +201,12 @@ class ObservedApplyHarness {
         !this.ownershipRuleEnabled || this.headlessOriginKeyIds.has(keyId),
       claimHeadlessOriginKeys: (keys) => {
         for (const key of keys) {
-          this.announcedKeys.push(key);
           this.headlessOriginKeyIds.add(cookieKeyId(key));
         }
         return Promise.resolve();
+      },
+      noteAppliedKeys: (keys) => {
+        this.announcedKeys.push(...keys);
       },
       releaseHeadlessOriginKeys: (keys) => {
         for (const key of keys) {
@@ -181,15 +222,32 @@ class ObservedApplyHarness {
       serializeOnDomain: (domain, action) =>
         this.serializer.runOnDomain(domain, action),
       governor: this.governor,
-    }).then((result) => {
-      traceBrowserObservedProfile(result, {
-        source: observed.source,
-        hostId: observed.hostId,
-        connectionId: observed.connectionId,
-        governor: this.governor,
-      });
-      return result;
-    });
+    };
+  }
+
+  apply(input: {
+    readonly domain: string;
+    readonly cookies: readonly BrowserStorageCookie[];
+    readonly connectionId: string;
+  }): Promise<BrowserObservedProfileResult> {
+    const observed = {
+      source: "observed" as const,
+      connectionId: input.connectionId,
+      hostId: "host-1",
+      domain: input.domain,
+      cookies: input.cookies,
+    };
+    return applyBrowserObservedProfile(observed, this.dependencies()).then(
+      (result) => {
+        traceBrowserObservedProfile(result, {
+          source: observed.source,
+          hostId: observed.hostId,
+          connectionId: observed.connectionId,
+          governor: this.governor,
+        });
+        return result;
+      },
+    );
   }
 
   /** One frame for `example.com` on this harness's default connection. */
@@ -220,34 +278,7 @@ class ObservedApplyHarness {
       domain: input.domain,
       cookies: input.cookies,
     };
-    return applyBrowserObservedProfile(observed, {
-      now: () => Date.now(),
-      isForgottenPendingAck: (gate) =>
-        this.forgottenPendingAck.has(`${gate.connectionId} ${gate.domain}`),
-      isHeadlessOriginKey: (keyId) =>
-        !this.ownershipRuleEnabled || this.headlessOriginKeyIds.has(keyId),
-      claimHeadlessOriginKeys: (keys) => {
-        for (const key of keys) {
-          this.announcedKeys.push(key);
-          this.headlessOriginKeyIds.add(cookieKeyId(key));
-        }
-        return Promise.resolve();
-      },
-      releaseHeadlessOriginKeys: (keys) => {
-        for (const key of keys) {
-          this.releasedKeys.push(key);
-          this.headlessOriginKeyIds.delete(cookieKeyId(key));
-        }
-        return Promise.resolve();
-      },
-      getTargetJar: () => ({
-        session: { cookies: this.gatedJar },
-        durableJar: this.durableJar,
-      }),
-      serializeOnDomain: (domain, action) =>
-        this.serializer.runOnDomain(domain, action),
-      governor: this.governor,
-    });
+    return applyBrowserObservedProfile(observed, this.dependencies());
   }
 }
 
@@ -1082,6 +1113,107 @@ describe("observed sign-in ownership rule", () => {
   });
 });
 
+describe("observed sign-in compare-before-set (ticket 03)", () => {
+  /**
+   * `mergeObservedProfileCookies` (`browser-storage-state.ts`) now compares a
+   * survivor against its live jar counterpart before writing it, so an
+   * unchanged echo of a cookie this desktop already contributed produces no
+   * `cookies.set` call and no `cookie-changed` event - only the count that
+   * gates seeded origins.
+   */
+  it("skips cookies.set for a survivor identical to its jar counterpart, and still counts it as applied", async () => {
+    const harness = new ObservedApplyHarness();
+    const original = observedCookie({
+      name: "sid",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    await harness.applyFrame([original]);
+    const setSpy = vi.spyOn(harness.jar, "set");
+
+    const result = await harness.applyFrame([original]);
+
+    expect(result.outcome).toBe("applied");
+    expect(result.appliedCookies).toBe(1);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("sets exactly the survivor whose value differs, leaving an identical sibling untouched", async () => {
+    const harness = new ObservedApplyHarness();
+    const unchanged = observedCookie({
+      name: "csrf",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    const original = observedCookie({
+      name: "sid",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    await harness.applyFrame([unchanged, original]);
+    const setSpy = vi.spyOn(harness.jar, "set");
+    const rotated = { ...original, value: "rotated" };
+
+    const result = await harness.applyFrame([unchanged, rotated]);
+
+    expect(result.appliedCookies).toBe(2);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    expect(harness.jar.find("sid")?.value).toBe("rotated");
+    expect(harness.jar.find("csrf")?.value).toBe("csrf-value");
+  });
+
+  it("re-reads the live jar on every apply, so a value that changes and then reverts is written both times", async () => {
+    const harness = new ObservedApplyHarness();
+    const original = observedCookie({
+      name: "sid",
+      domain: "example.com",
+      expires: futureSeconds(),
+    });
+    await harness.applyFrame([original]);
+    const setSpy = vi.spyOn(harness.jar, "set");
+
+    const rotated = { ...original, value: "rotated" };
+    const changedResult = await harness.applyFrame([rotated]);
+    expect(changedResult.appliedCookies).toBe(1);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+
+    // A stale, first-seen comparison would keep comparing against the
+    // ORIGINAL value forever and never see this as a change either.
+    const revertedResult = await harness.applyFrame([original]);
+    expect(revertedResult.appliedCookies).toBe(1);
+    expect(setSpy).toHaveBeenCalledTimes(2);
+    expect(harness.jar.find("sid")?.value).toBe("sid-value");
+  });
+
+  it("refuses an identical value for a desktop-owned key rather than treating the match as satisfied", async () => {
+    // The comparison only ever runs on what SURVIVES ownership - a desktop-
+    // owned name is refused before the applier ever asks whether its value
+    // matches, so an attacker cannot use an unchanged-looking echo to slip
+    // past `owned-by-desktop`.
+    const harness = new ObservedApplyHarness();
+    harness.jar.seed(
+      seededCookie({
+        name: "sid",
+        value: "sid-value",
+        domain: "example.com",
+      }),
+    );
+    const setSpy = vi.spyOn(harness.jar, "set");
+
+    const result = await harness.applyFrame([
+      observedCookie({
+        name: "sid",
+        domain: "example.com",
+        expires: futureSeconds(),
+      }),
+    ]);
+
+    expect(result.ownedByDesktopCookies).toBe(1);
+    expect(result.appliedCookies).toBe(0);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("observed rejection trace sampling", () => {
   const REFUSED: BrowserObservedProfileResult = {
     domain: "example.com",
@@ -1199,5 +1331,385 @@ describe("observed sign-in echo", () => {
     expect(deltas).toHaveLength(1);
 
     observer.dispose();
+  });
+});
+
+describe("observed sign-in debug drop (ticket 04)", () => {
+  afterEach(() => {
+    delete process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS;
+  });
+
+  it("drops an observed frame for a domain named in TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS", async () => {
+    // Comma-separated, trimmed, and case-folded through the same
+    // `registrableDomain` the frame's own claim goes through - so a dev
+    // pointing the list at "Example.COM" still matches "example.com".
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS =
+      "other.test, Example.COM";
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("debug-dropped");
+    expect(harness.jar.names()).toEqual([]);
+    expect(harness.jar.flushes).toBe(0);
+    // Not a real refusal a support log's aggregate trace should carry.
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+    // The jar was never read, so the decision batch carries no verdict on any
+    // of the three change flags - only the refusal.
+    expect(lastDecisionsLog().decisions).toEqual([
+      {
+        domain: "example.com",
+        name: "sid",
+        path: "/",
+        outcome: "refused:debug-dropped",
+        valueChanged: null,
+        expiryChanged: null,
+        attributesChanged: null,
+      },
+    ]);
+  });
+
+  it("still drops the frame when the drop list matches, even with the log level below debug (S2)", async () => {
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS = "example.com";
+    const harness = new ObservedApplyHarness();
+
+    vi.mocked(isDebugEnabled).mockReturnValueOnce(false);
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("debug-dropped");
+    expect(harness.jar.names()).toEqual([]);
+  });
+
+  it("leaves a frame alone when its domain is not named in the drop list", async () => {
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS = "other.test";
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("applied");
+    expect(harness.jar.names()).toEqual(["sid"]);
+  });
+
+  it("does not drop a seed even when its domain is named in the drop list - only the observed door is gated", async () => {
+    process.env.TRAYCER_DEBUG_DROP_HOST_OBSERVATIONS = "example.com";
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.applySeed({
+      domain: "example.com",
+      cookies: [
+        observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+      ],
+      connectionId: "connection-1",
+    });
+
+    expect(result.outcome).toBe("applied");
+    expect(harness.jar.names()).toEqual(["sid"]);
+  });
+});
+
+describe("observed sign-in decision log (ticket 04 instrumentation)", () => {
+  it("emits one decision per cookie: identical, value/expiry/attributes-only changes, a brand-new key, and an owned refusal", async () => {
+    const harness = new ObservedApplyHarness();
+    // Seeded directly into the jar, not through an apply - so no observation
+    // ever claimed it, and it is desktop-owned exactly like a real sign-in
+    // performed on this machine.
+    harness.jar.seed(
+      seededCookie({
+        name: "owned",
+        value: "desktop-owns-it",
+        domain: "example.com",
+      }),
+    );
+    const expiresSoon = Math.floor(Date.now() / 1_000) + 3_600;
+    const expiresLater = expiresSoon + 3_600;
+
+    // Establishes the baseline every "changed" case in the next frame is
+    // compared against.
+    await harness.applyFrame([
+      observedCookie({
+        name: "unchanged",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "will-change-value",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "will-change-expiry",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "will-change-attrs",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+    ]);
+
+    await harness.applyFrame([
+      observedCookie({
+        name: "unchanged",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      {
+        ...observedCookie({
+          name: "will-change-value",
+          domain: "example.com",
+          expires: expiresSoon,
+        }),
+        value: "rotated",
+      },
+      observedCookie({
+        name: "will-change-expiry",
+        domain: "example.com",
+        expires: expiresLater,
+      }),
+      {
+        ...observedCookie({
+          name: "will-change-attrs",
+          domain: "example.com",
+          expires: expiresSoon,
+        }),
+        httpOnly: true,
+      },
+      observedCookie({
+        name: "brand-new",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+      observedCookie({
+        name: "owned",
+        domain: "example.com",
+        expires: expiresSoon,
+      }),
+    ]);
+
+    // Exactly one decision batch per apply call - the baseline frame and the
+    // mixed frame above - never one per cookie and never skipped.
+    expect(
+      vi
+        .mocked(log.debug)
+        .mock.calls.filter(
+          ([message]) => message === "[browser-view] observed cookie decisions",
+        ),
+    ).toHaveLength(2);
+
+    const decisionsLog = lastDecisionsLog();
+    expect(decisionsLog.decisions).toHaveLength(6);
+    expect(decisionsLog.omitted).toBe(0);
+    const byName = new Map(
+      decisionsLog.decisions.map((decision) => [decision.name, decision]),
+    );
+
+    expect(byName.get("unchanged")).toMatchObject({
+      outcome: "identical",
+      valueChanged: false,
+      expiryChanged: false,
+      attributesChanged: false,
+    });
+    expect(byName.get("will-change-value")).toMatchObject({
+      outcome: "applied",
+      valueChanged: true,
+      expiryChanged: false,
+      attributesChanged: false,
+    });
+    expect(byName.get("will-change-expiry")).toMatchObject({
+      outcome: "applied",
+      valueChanged: false,
+      expiryChanged: true,
+      attributesChanged: false,
+    });
+    expect(byName.get("will-change-attrs")).toMatchObject({
+      outcome: "applied",
+      valueChanged: false,
+      expiryChanged: false,
+      attributesChanged: true,
+    });
+    // Never seen before: absent from the jar snapshot means every flag reads
+    // "changed", per contract.
+    expect(byName.get("brand-new")).toMatchObject({
+      outcome: "applied",
+      valueChanged: true,
+      expiryChanged: true,
+      attributesChanged: true,
+    });
+    const owned = byName.get("owned");
+    expect(owned?.outcome).toBe("refused:owned-by-desktop");
+    // The jar WAS read for this cookie (it lost to the ownership rule, not to
+    // an early whole-frame refusal), so its flags are real booleans, not null.
+    expect(owned?.valueChanged).not.toBeNull();
+
+    // No cookie value ever reaches the log line - only the seven documented
+    // keys per decision.
+    for (const decision of decisionsLog.decisions) {
+      expect(Object.keys(decision).sort()).toEqual([
+        "attributesChanged",
+        "domain",
+        "expiryChanged",
+        "name",
+        "outcome",
+        "path",
+        "valueChanged",
+      ]);
+    }
+  });
+
+  it("caps the decision batch at 64 entries and reports the rest as omitted", async () => {
+    const harness = new ObservedApplyHarness();
+    const cookies = Array.from({ length: 70 }, (_unused, index) =>
+      observedCookie({
+        name: `sid-${index}`,
+        domain: "example.com",
+        expires: -1,
+      }),
+    );
+
+    await harness.applyFrame(cookies);
+
+    const decisionsLog = lastDecisionsLog();
+    expect(decisionsLog.decisions).toHaveLength(64);
+    expect(decisionsLog.omitted).toBe(6);
+    expect(decisionsLog.decisions[63]?.name).toBe("sid-63");
+  });
+
+  it("leaves every decision's change flags null when the whole frame is refused before the jar is read", async () => {
+    const harness = new ObservedApplyHarness();
+
+    const result = await harness.apply({
+      domain: ".",
+      cookies: [observedCookie({ name: "sid", domain: ".", expires: -1 })],
+      connectionId: "connection-1",
+    });
+
+    expect(result.outcome).toBe("domain-mismatch");
+    expect(lastDecisionsLog().decisions).toEqual([
+      {
+        domain: ".",
+        name: "sid",
+        path: "/",
+        outcome: "refused:domain-mismatch",
+        valueChanged: null,
+        expiryChanged: null,
+        attributesChanged: null,
+      },
+    ]);
+  });
+
+  it("leaves flags null for a ledger-unacked refusal too, even though that check runs inside the domain's queue", async () => {
+    const harness = new ObservedApplyHarness();
+    harness.forgottenPendingAck.add("connection-1 example.com");
+
+    const result = await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+
+    expect(result.outcome).toBe("ledger-unacked");
+    expect(lastDecisionsLog().decisions).toEqual([
+      {
+        domain: "example.com",
+        name: "sid",
+        path: "/",
+        outcome: "refused:ledger-unacked",
+        valueChanged: null,
+        expiryChanged: null,
+        attributesChanged: null,
+      },
+    ]);
+  });
+});
+
+describe("observed sign-in decision log gate (S2)", () => {
+  // `sanitizeLogFields` also runs for the always-on aggregate INFO/WARN trace
+  // (`traceBrowserObservedProfile`), so "not called at all" would be the wrong
+  // assertion - these filter to the shape only the gated decision batch
+  // produces: a per-cookie decision object carries `valueChanged`, which
+  // nothing else this module sanitizes or stringifies does.
+  const isDecisionSanitizeCall = (call: unknown[]): boolean => {
+    const [value] = call;
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "valueChanged" in (value as Record<string, unknown>)
+    );
+  };
+  const isDecisionStringifyCall = (call: unknown[]): boolean => {
+    const [value] = call;
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "decisions" in (value as Record<string, unknown>) &&
+      "omitted" in (value as Record<string, unknown>)
+    );
+  };
+
+  it("skips the decision batch's own formatting (sanitize + JSON.stringify) and its log line when the log level is below debug, without changing the apply outcome", async () => {
+    const harness = new ObservedApplyHarness();
+    // Baseline through an observed apply (not a direct jar seed, which would
+    // make the key desktop-owned and refuse the rotation below).
+    await harness.applyFrame([
+      observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+    ]);
+    vi.mocked(log.debug).mockClear();
+    vi.mocked(sanitizeLogFields).mockClear();
+
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      vi.mocked(isDebugEnabled).mockReturnValueOnce(false);
+      const result = await harness.applyFrame([
+        {
+          ...observedCookie({
+            name: "sid",
+            domain: "example.com",
+            expires: -1,
+          }),
+          value: "rotated",
+        },
+      ]);
+
+      expect(result.outcome).toBe("applied");
+      expect(result.appliedCookies).toBe(1);
+      expect(harness.jar.names()).toEqual(["sid"]);
+      expect(
+        vi
+          .mocked(log.debug)
+          .mock.calls.filter(
+            ([message]) =>
+              message === "[browser-view] observed cookie decisions",
+          ),
+      ).toHaveLength(0);
+      expect(
+        vi.mocked(sanitizeLogFields).mock.calls.filter(isDecisionSanitizeCall),
+      ).toHaveLength(0);
+      expect(
+        stringifySpy.mock.calls.filter(isDecisionStringifyCall),
+      ).toHaveLength(0);
+
+      // The gate reads the level fresh on every call rather than latching
+      // off: the very next apply, with debug back on, still formats and logs
+      // a decision batch.
+      stringifySpy.mockClear();
+      await harness.applyFrame([
+        observedCookie({ name: "sid", domain: "example.com", expires: -1 }),
+      ]);
+      expect(lastDecisionsLog().decisions).toHaveLength(1);
+      expect(
+        vi.mocked(sanitizeLogFields).mock.calls.filter(isDecisionSanitizeCall),
+      ).toHaveLength(1);
+      expect(
+        stringifySpy.mock.calls.filter(isDecisionStringifyCall),
+      ).toHaveLength(1);
+    } finally {
+      stringifySpy.mockRestore();
+    }
   });
 });

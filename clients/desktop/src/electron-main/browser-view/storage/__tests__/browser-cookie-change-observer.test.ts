@@ -5,12 +5,13 @@ import type {
   BrowserPrimaryProfileDelta,
 } from "@traycer/protocol/host/browser/contracts";
 import {
+  BROWSER_COOKIE_DELTA_MAX_WAIT_MS,
   BROWSER_COOKIE_DELTA_WINDOW_MS,
   BROWSER_COOKIE_REMOVAL_GRACE_MS,
   BrowserCookieChangeObserver,
   type BrowserCookieChangeSource,
 } from "../browser-cookie-change-observer";
-import { log } from "../../../app/logger";
+import { isDebugEnabled, log, sanitizeLogFields } from "../../../app/logger";
 import { browserStorageCookies } from "../browser-storage-state";
 import {
   makeCookie,
@@ -20,10 +21,16 @@ import {
 } from "./cookie-jar-fixture";
 
 vi.mock("../../../app/logger", () => ({
+  // Defaults to enabled: the existing witnessed-removal log assertions in
+  // this file depend on the diagnostic actually running.
+  isDebugEnabled: vi.fn(() => true),
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   // The real one, near enough for these assertions: what matters is that the
-  // trace passes its fields through a truncating redactor at all.
-  sanitizeLogFields: (fields: Record<string, unknown>) => fields,
+  // trace passes its fields through a truncating redactor at all. Wrapped in
+  // `vi.fn` (identical behaviour) so the S2 gate test can prove the witnessed-
+  // removal call's OWN sanitize is skipped, not merely that the log line
+  // never lands.
+  sanitizeLogFields: vi.fn((fields: Record<string, unknown>) => fields),
   describeLogError: (error: unknown) => String(error),
 }));
 
@@ -219,7 +226,10 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     // Still inside the window: nothing has flushed yet.
     expect(deltas).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS - 900);
+    // The quiet timer is re-armed on every change, so the flush lands
+    // BROWSER_COOKIE_DELTA_WINDOW_MS after the LAST change (cookieC, at
+    // t=900), not BROWSER_COOKIE_DELTA_WINDOW_MS after the window opened.
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
 
     expect(deltas).toHaveLength(1);
     const delta = deltas[0];
@@ -321,6 +331,110 @@ describe("BrowserCookieChangeObserver coalescing", () => {
       "example.com",
       "other.test",
     ]);
+
+    observer.dispose();
+  });
+});
+
+describe("BrowserCookieChangeObserver quiet timer and max-wait cap", () => {
+  it("flushes once, 2s after the LAST event of a burst - the quiet timer is re-armed on every change", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.set(makeCookie({ name: "a", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(1_500);
+    source.set(makeCookie({ name: "b", domain: "example.com" }));
+    // Still within the quiet window re-armed by "b": only 1.5s of the
+    // required 2s of silence since it landed have passed.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(deltas).toHaveLength(0);
+
+    // The remaining 0.5s of quiet since "b" closes the window.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.cookies.map((cookie) => cookie.name).sort()).toEqual([
+      "a",
+      "b",
+    ]);
+
+    observer.dispose();
+  });
+
+  it("caps a continuous 1 Hz writer at the max-wait timer: it never goes quiet, so it flushes at 10s and again at 20s", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    const openedAt = Date.now();
+
+    // A change every second never leaves the quiet timer's 2s of silence, so
+    // only the max-wait timer - armed on each window's first event - can ever
+    // close a window here.
+    for (let second = 0; second < 20; second += 1) {
+      source.set(makeCookie({ name: `sid-${second}`, domain: "example.com" }));
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    const perWindow = BROWSER_COOKIE_DELTA_MAX_WAIT_MS / 1_000;
+    expect(deltas).toHaveLength(2);
+    expect(deltas[0]?.issuedAt).toBe(openedAt);
+    expect(deltas[0]?.cookies).toHaveLength(perWindow);
+    expect(deltas[1]?.issuedAt).toBe(
+      openedAt + BROWSER_COOKIE_DELTA_MAX_WAIT_MS,
+    );
+    expect(deltas[1]?.cookies).toHaveLength(2 * perWindow);
+
+    observer.dispose();
+  });
+
+  it("includes a change that lands mid-churn in the window's next flush, within the 10s cap", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    for (let second = 0; second < 10; second += 1) {
+      // A login arrives mid-churn, amid a steady stream of unrelated writes
+      // that alone would keep this window open past its quiet timer.
+      source.set(
+        second === 5
+          ? makeCookie({ name: "sid", domain: "example.com" })
+          : makeCookie({ name: `noise-${second}`, domain: "example.com" }),
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    // The max-wait timer, armed on the window's first event, closes it at 10s
+    // regardless of the continuous churn - the login is not left waiting
+    // behind an indefinitely-extended quiet window.
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.cookies.map((cookie) => cookie.name)).toContain("sid");
+
+    observer.dispose();
+  });
+
+  it("removal claims survive the timer change: an unrelated re-arming change does not erase a genuine removal", async () => {
+    const source = new FakeCookieChangeSource();
+    const goneCookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(goneCookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(goneCookie);
+    // An unrelated change re-arms the quiet timer before the removal's own
+    // quiet window would otherwise have closed.
+    await vi.advanceTimersByTimeAsync(1_000);
+    source.set(makeCookie({ name: "fresh", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    expect(delta.removedKeys).toEqual([
+      { domain: "example.com", name: "sid", path: "/" },
+    ]);
+    expect(delta.cookies.map((cookie) => cookie.name)).toEqual(["fresh"]);
 
     observer.dispose();
   });
@@ -887,6 +1001,94 @@ describe("BrowserCookieChangeObserver write attribution", () => {
     await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
 
     expect(localWrites).toEqual([]);
+    observer.dispose();
+  });
+});
+
+describe("BrowserCookieChangeObserver witnessed-removal event log (ticket 04 instrumentation)", () => {
+  it("logs a witnessed removal's key and cause at DEBUG, and nowhere else", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(cookie);
+
+    // Fired at the moment the removal is WITNESSED, not deferred to the
+    // window's flush - so this assertion runs before any flush timer.
+    expect(log.debug).toHaveBeenCalledWith(
+      "[browser-view] witnessed cookie removal",
+      { domain: "example.com", name: "sid", path: "/", cause: "explicit" },
+    );
+    expect(log.debug).toHaveBeenCalledTimes(1);
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    observer.dispose();
+  });
+
+  it("never logs a removal event for a suppressed removal (housekeeping cause)", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    // `evicted` is Chromium's own housekeeping cause - suppressed before the
+    // event ever reaches the witnessed-removal log line.
+    source.removeWithCause(cookie, "evicted");
+
+    expect(log.debug).not.toHaveBeenCalledWith(
+      "[browser-view] witnessed cookie removal",
+      expect.anything(),
+    );
+
+    // The flush's own aggregate suppression trace fires under a DIFFERENT
+    // message; it must not be mistaken for the removal event this describes.
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    expect(log.debug).not.toHaveBeenCalledWith(
+      "[browser-view] witnessed cookie removal",
+      expect.anything(),
+    );
+
+    observer.dispose();
+  });
+
+  it("never logs a witnessed removal, or sanitizes its fields, when the log level is below debug (S2)", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+    vi.mocked(sanitizeLogFields).mockClear();
+    // The witnessed-removal call's shape (`domain`, `name`, `path`, `cause`)
+    // is unique to it - the flush's own aggregate suppression trace sanitizes
+    // a `reason`/`removals` shape with no per-cookie `name` or `path`.
+    const isWitnessedRemovalSanitizeCall = (call: unknown[]): boolean => {
+      const [value] = call;
+      return (
+        typeof value === "object" &&
+        value !== null &&
+        "path" in (value as Record<string, unknown>)
+      );
+    };
+
+    vi.mocked(isDebugEnabled).mockReturnValueOnce(false);
+    source.remove(cookie);
+
+    expect(log.debug).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(sanitizeLogFields)
+        .mock.calls.filter(isWitnessedRemovalSanitizeCall),
+    ).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
     observer.dispose();
   });
 });

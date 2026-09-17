@@ -764,7 +764,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     <SidebarSortContext.Provider value={comparator}>
       <SidebarFilterVisibilityContext.Provider value={visibleIds}>
         <ArtifactPanelSearchShell epicId={epicId} tabId={tabId}>
-          <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+          <SidebarGroup className="min-h-0 flex-1">
             <SidebarGroupContent
               ref={treeRegionRef}
               className="flex min-h-0 flex-1 flex-col"
@@ -791,9 +791,10 @@ function PendingCreateRow({ depth, name }: { depth: number; name: string }) {
       >
         <TreeChevronSpacer />
         <AgentSpinningDots
-          className="shrink-0 text-muted-foreground/70"
+          className="shrink-0"
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
         <span>{name}</span>
       </div>
@@ -1916,9 +1917,7 @@ function ArtifactUnreadMarker(props: {
           data-unread-marker={props.variant}
           className={cn(
             "h-4 w-0.5 shrink-0 rounded-full",
-            props.variant === "self"
-              ? "bg-blue-500 dark:bg-blue-400"
-              : "bg-blue-500/50 dark:bg-blue-400/50",
+            props.variant === "self" ? "bg-info" : "bg-info/50",
           )}
         />
       </TooltipTrigger>
@@ -1942,7 +1941,7 @@ function ArtifactStatusDot(props: ArtifactStatusDotProps) {
         <span
           className={cn(
             "size-2 shrink-0 rounded-full",
-            STATUS_DOT_CLASSES[statusValue] ?? "bg-slate-400",
+            STATUS_DOT_CLASSES[statusValue] ?? "bg-muted-foreground",
           )}
           data-testid={`epic-sidebar-status-dot-${nodeId}`}
           aria-hidden

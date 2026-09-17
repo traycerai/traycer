@@ -1,6 +1,9 @@
 import { useMemo, type RefObject } from "react";
 
-import { appendPromptStashContent } from "@/lib/composer/prompt-stash-content";
+import {
+  appendPromptStashContent,
+  restorePromptStashAnnotationCrops,
+} from "@/lib/composer/prompt-stash-content";
 import type {
   PromptStashDestinationAdapter,
   PromptStashDestinationIdentity,
@@ -29,6 +32,7 @@ export function useChatPromptStashSource(
         const draft = readComposerDraftSnapshot(taskId);
         return {
           content: draft.content,
+          annotations: draft.browserAnnotations,
           token: {
             surface: "chat",
             identity: taskId,
@@ -78,30 +82,41 @@ export function useChatPromptStashDestination(
           editorIncarnation,
         };
       },
-      importAndInsert: (args) => {
-        const handle = editorRef.current;
-        const editorIncarnation =
-          handle !== null && handle.isReady()
-            ? handle.getEditorIncarnation()
-            : null;
-        if (
-          args.identity.surface !== "chat" ||
-          args.identity.identity !== taskId ||
-          handle === null ||
-          editorIncarnation === null ||
-          args.identity.editorIncarnation !== editorIncarnation
-        ) {
-          return Promise.resolve({ status: "stale" });
-        }
+      importAndInsert: async (args) => {
+        const stale = (): boolean => {
+          const handle = editorRef.current;
+          const editorIncarnation =
+            handle !== null && handle.isReady()
+              ? handle.getEditorIncarnation()
+              : null;
+          return (
+            args.identity.surface !== "chat" ||
+            args.identity.identity !== taskId ||
+            handle === null ||
+            editorIncarnation === null ||
+            args.identity.editorIncarnation !== editorIncarnation
+          );
+        };
+        if (stale()) return { status: "stale" };
+        // The crops first, and only then the records that name them: the hook
+        // deletes the entry's blobs as soon as this resolves accepted, so this
+        // is the last moment those bytes exist anywhere.
+        await restorePromptStashAnnotationCrops(args.entry.annotations);
+        // Re-checked after the await, because the destination can be switched,
+        // remounted or closed while the blobs are read - the same reason the
+        // hook re-reads the adapter before calling this at all.
+        if (stale()) return { status: "stale" };
         const latest = readComposerDraftSnapshot(taskId);
         const nextContent = appendPromptStashContent(
           latest.content,
           args.content,
         );
-        useComposerDraftStore
-          .getState()
-          .replaceDraft(taskId, nextContent, null);
-        return Promise.resolve({ status: "accepted" });
+        const store = useComposerDraftStore.getState();
+        store.replaceDraft(taskId, nextContent, null);
+        // Merge semantics, not replace: the user may have attached an
+        // annotation of their own while this restore was reading.
+        store.restoreBrowserAnnotations(taskId, args.entry.annotations);
+        return { status: "accepted" };
       },
     }),
     [editorRef, taskId],

@@ -419,13 +419,11 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
-      0,
-    );
-    expect(container.querySelectorAll(".bg-amber-500").length).toBeGreaterThan(
-      0,
-    );
-    expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-info").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-warning").length).toBeGreaterThan(0);
+    expect(
+      container.querySelectorAll(".bg-destructive").length,
+    ).toBeGreaterThan(0);
   });
 
   it("keeps bars Healthy below their duration-aware warning thresholds", () => {
@@ -439,11 +437,9 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
-    expect(container.querySelectorAll(".bg-red-500").length).toBe(0);
-    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
-      0,
-    );
+    expect(container.querySelectorAll(".bg-warning").length).toBe(0);
+    expect(container.querySelectorAll(".bg-destructive").length).toBe(0);
+    expect(container.querySelectorAll(".bg-info").length).toBeGreaterThan(0);
   });
 
   it("renders the Codex rate-limit detail once loaded", () => {

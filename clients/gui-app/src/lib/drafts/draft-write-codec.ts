@@ -1,4 +1,5 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type {
   DraftDocument,
   DraftKind,
@@ -186,6 +187,7 @@ export function stashDraftWrite(input: {
   readonly content: JsonContent;
   readonly blobHashes: ReadonlyArray<string>;
   readonly createdAt: number;
+  readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
 }): DraftWrite {
   return {
     draftId: input.draftId,
@@ -199,6 +201,7 @@ export function stashDraftWrite(input: {
       content: input.content,
       blobHashes: [...input.blobHashes],
       createdAt: input.createdAt,
+      annotations: [...input.annotations],
     },
   };
 }

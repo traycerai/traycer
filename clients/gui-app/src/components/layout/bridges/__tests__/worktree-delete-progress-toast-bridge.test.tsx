@@ -153,6 +153,27 @@ describe("<WorktreeDeleteProgressToastBridge />", () => {
     screen.getByText("5/6 deleted, 1 failed");
   });
 
+  it("replaces the running spinner with an error icon when a batch finishes with failures", async () => {
+    const view = renderBridge();
+    await screen.findByText("0/6 deleted");
+    rerenderWithSummary(
+      view,
+      progressSummary({
+        scopeKeys: ["batch-a"],
+        total: 6,
+        deleted: 5,
+        failed: 1,
+        active: 0,
+      }),
+    );
+    await screen.findByText("Deleted 5 of 6 worktrees");
+    await waitFor(() => {
+      expect(
+        document.querySelector("[data-sonner-toast] [data-icon] svg"),
+      ).not.toBeNull();
+    });
+  });
+
   it("shows progress again when a new batch joins the active scope", async () => {
     const view = renderBridge();
 

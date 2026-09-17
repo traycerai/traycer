@@ -88,7 +88,7 @@ describe("<ChatDockCompactChip />", () => {
     const chip = screen.getByTestId("chip");
     expect(chip.textContent).toBe("3+12−4");
     expect(screen.getByText("+12").getAttribute("class")).toContain(
-      "text-emerald-600",
+      "text-success-foreground",
     );
     expect(screen.getByText("−4").getAttribute("class")).toContain(
       "text-destructive",

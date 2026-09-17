@@ -2381,7 +2381,7 @@ function LandingTerminalPanelToggle(props: {
       // while the panel is open (1px panel border + an icon-sm button
       // centered in the h-9 header row, inset by the header's px-2), so
       // toggling the panel never moves the control under the pointer.
-      className="absolute top-[5px] right-2 z-10"
+      className="absolute top-1.25 right-2 z-10"
       onClick={props.onOpenPanel}
     >
       <PanelRightOpen className="size-4" />
@@ -2417,13 +2417,13 @@ function LandingTerminalHeaderToggle(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label={panelOpen ? "Collapse panel" : "Open panel"}
       data-testid={
         panelOpen ? "landing-terminal-collapse" : "landing-terminal-toggle"
       }
-      className="shrink-0 text-muted-foreground hover:text-foreground"
+      className="shrink-0"
       onClick={() => {
         setPanelOpen(props.landingPageId, !panelOpen);
       }}

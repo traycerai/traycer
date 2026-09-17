@@ -16,7 +16,11 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
-import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  permissionModeSchema,
+  permissionModeSchemaPreAuto,
+  type PermissionMode,
+} from "@traycer/protocol/persistence/epic/foundation";
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
   providerIdSchema,
@@ -1504,7 +1508,7 @@ export const agentConfigureSettingsSchemaV1 = z.object({
   profileSelection: concreteProfileSelectionSchema,
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean(),
-  permissionMode: permissionModeSchema,
+  permissionMode: permissionModeSchemaPreAuto,
   agentMode: agentModeSchema,
 });
 export type AgentConfigureSettingsV1 = z.infer<
@@ -1548,7 +1552,7 @@ export const agentConfigureSettingsSchemaV2 = z.object({
   profileSelection: concreteProfileSelectionSchema,
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean(),
-  permissionMode: permissionModeSchema,
+  permissionMode: permissionModeSchemaPreAuto,
   agentMode: agentModeSchema,
 });
 export type AgentConfigureSettingsV2 = z.infer<
@@ -1594,7 +1598,7 @@ export const agentConfigureSettingsSchemaV3 = z.object({
   profileSelection: concreteProfileSelectionSchema,
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean(),
-  permissionMode: permissionModeSchema,
+  permissionMode: permissionModeSchemaPreAuto,
   agentMode: agentModeSchema,
 });
 export type AgentConfigureSettingsV3 = z.infer<
@@ -1633,6 +1637,15 @@ export const agentConfigureV30 = defineRpcContract({
  * harness enum because the request is a client→host slot: a released client
  * simply never sends `reasonix`, and widening what the host accepts breaks
  * nobody.
+ *
+ * `permissionMode` is pinned pre-`auto` on all four frozen response shapes for
+ * the same asymmetry, one dimension over. The REQUEST keeps the live mode enum
+ * deliberately: an A2A caller asking for `auto` against a host too old to know
+ * it gets a clean validation error, which is the documented behaviour (the tool
+ * catalog is host-generated, so a child agent is never offered a literal its
+ * own host lacks). The RESPONSE cannot afford the same generosity - it states
+ * what the agent is now configured to, and a released caller decodes it
+ * strictly.
  */
 export const agentConfigureSettingsSchemaV4 = z.object({
   harnessId: guiHarnessIdSchemaV70,
@@ -1640,7 +1653,7 @@ export const agentConfigureSettingsSchemaV4 = z.object({
   profileSelection: concreteProfileSelectionSchema,
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean(),
-  permissionMode: permissionModeSchema,
+  permissionMode: permissionModeSchemaPreAuto,
   agentMode: agentModeSchema,
 });
 export type AgentConfigureSettingsV4 = z.infer<
@@ -1679,7 +1692,12 @@ export const agentConfigureSettingsSchemaV5 = z.object({
   profileSelection: concreteProfileSelectionSchema,
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean(),
-  permissionMode: permissionModeSchema,
+  // Pinned pre-`auto` on the same asymmetry as the four freezes above: 5.0 is
+  // RELEASED, and its caller decodes this response strictly. The REQUEST keeps
+  // the live mode enum deliberately - an A2A caller asking for `auto` against
+  // a host too old to know it gets a clean validation error, which is the
+  // documented behaviour.
+  permissionMode: permissionModeSchemaPreAuto,
   agentMode: agentModeSchema,
 });
 export type AgentConfigureSettingsV5 = z.infer<
@@ -1792,6 +1810,83 @@ export const agentConfigureDowngradeV60ToV30 = defineDowngradePath<
   },
 });
 
+/**
+ * Whether the negotiated `agent.configure` line's RESPONSE can carry `mode`.
+ *
+ * ## Why this exists, and why it is a pre-flight rather than a projection
+ *
+ * A caller below the live major sends no permission mode at all; the upgrade
+ * paths supply `permissionMode: null`, which means PRESERVE. The host is
+ * therefore free to apply the mutation - the request is representable - and
+ * only the RESPONSE discovers the problem: it echoes the whole settings tuple,
+ * the frozen response schema's `permissionMode` is `permissionModeSchemaPreAuto`
+ * on every line below the live one, and an agent already in `auto` fails the
+ * reparse. The bridge then answers `DOWNGRADE_UNSUPPORTED` AFTER the agent has
+ * changed, so the caller reads a failed configure over a successful mutation
+ * and has no way to learn what the agent now is.
+ *
+ * The other remedy - projecting `auto` down to `auto_accept_edits` so the
+ * response parses - is deliberately NOT taken, for the reason
+ * `chat-frame-compat.ts` gives for refusing rather than projecting on
+ * `chat.subscribe`, and it is stronger here: this response is the WHOLE
+ * settings tuple, so a caller that echoes it back on its next configure would
+ * silently end auto mode on an agent someone set to it. Reporting a mode the
+ * agent is not in is a lie about a permission-relevant field.
+ *
+ * So the host calls this BEFORE mutating and refuses the configure, leaving the
+ * agent untouched and the caller correct about it.
+ *
+ * ## Derived, not restated
+ *
+ * The answer comes from parsing `mode` against the very schema the downgrade
+ * will use, so a line that later widens its enum starts answering `true` here
+ * with no edit.
+ *
+ * ## The table's completeness is MANUAL
+ *
+ * `AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR` is keyed `Record<number, ...>`, so
+ * TypeScript does not require a row per declared major, and the miss is silent
+ * in the unsafe direction: a new frozen major added without a row looks up
+ * `undefined`, takes the branch below, and returns `true`, letting the
+ * pre-flight admit a mode that major's downgrade schema cannot carry.
+ * `profile-selection-compat.test.ts` exercises majors 1 through 6 but asserts
+ * nothing about coverage - its unknown-major case deliberately expects the
+ * `undefined` lookup to answer `true` - so nothing catches the omission today.
+ * Add the row when you freeze a major; a literal-union key would enforce it,
+ * at the cost of a cast at the `number`-typed call site.
+ */
+export function agentConfigureResponseCanCarryPermissionMode(
+  negotiatedMajor: number,
+  mode: PermissionMode,
+): boolean {
+  const settings = AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR[negotiatedMajor];
+  // An unknown major is not a line this client negotiated; treat it as capable
+  // rather than refusing a configure for a version we cannot reason about. The
+  // downgrade bridge is still the backstop.
+  if (settings === undefined) return true;
+  return settings.shape.permissionMode.safeParse(mode).success;
+}
+
+const AGENT_CONFIGURE_SETTINGS_SCHEMA_BY_MAJOR: Readonly<
+  Record<
+    number,
+    | typeof agentConfigureSettingsSchemaV1
+    | typeof agentConfigureSettingsSchemaV2
+    | typeof agentConfigureSettingsSchemaV3
+    | typeof agentConfigureSettingsSchemaV4
+    | typeof agentConfigureSettingsSchemaV5
+    | typeof agentConfigureSettingsSchema
+    | undefined
+  >
+> = {
+  1: agentConfigureSettingsSchemaV1,
+  2: agentConfigureSettingsSchemaV2,
+  3: agentConfigureSettingsSchemaV3,
+  4: agentConfigureSettingsSchemaV4,
+  5: agentConfigureSettingsSchemaV5,
+  6: agentConfigureSettingsSchema,
+};
+
 export const agentConfigureUpgradeV10ToV20 = defineUpgradePath<
   typeof agentConfigureV10,
   typeof agentConfigureV20
@@ -1831,8 +1926,7 @@ export const agentConfigureDowngradeV20ToV10 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -1875,8 +1969,7 @@ export const agentConfigureDowngradeV30ToV20 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -1921,8 +2014,7 @@ export const agentConfigureDowngradeV40ToV30 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -1946,8 +2038,7 @@ export const agentConfigureDowngradeV40ToV20 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -1979,8 +2070,7 @@ export const agentConfigureDowngradeV40ToV10 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -2017,15 +2107,16 @@ export const agentConfigureDowngradeV50ToV40 = defineDowngradePath<
     // harness (unreachable from a v4.0 REQUEST today, but this bridge must
     // still hold if that ever changes) cannot be represented on the frozen
     // v4.0 wire, so this fails closed instead of silently mis-decoding it. The
-    // message names no harness so it stays honest as the enum grows.
+    // message names neither the harness nor the mode, so it stays honest as
+    // either enum grows - and both now do: the frozen response also pins
+    // `permissionMode` pre-`auto`, so an auto-mode agent refuses here too.
     const parsed = agentConfigureResponseSchemaV4.safeParse(response);
     if (!parsed.success) {
       return {
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -2049,8 +2140,7 @@ export const agentConfigureDowngradeV50ToV30 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -2128,8 +2218,7 @@ export const agentConfigureDowngradeV50ToV20 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -2163,8 +2252,7 @@ export const agentConfigureDowngradeV50ToV10 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }
@@ -2197,8 +2285,7 @@ export const agentConfigureDowngradeV30ToV10 = defineDowngradePath<
         ok: false,
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Configuring an agent on this harness requires a newer Traycer client.",
+          message: "Configuring this agent requires a newer Traycer client.",
         },
       };
     }

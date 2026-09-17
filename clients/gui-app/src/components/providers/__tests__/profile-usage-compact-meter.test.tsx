@@ -54,7 +54,7 @@ describe("ProfileUsageCompactMeter", () => {
     expect(track.className).not.toContain("opacity-50");
     const fill = track.firstElementChild;
     expect(fill?.getAttribute("style")).toContain("84%");
-    expect(fill?.className).toContain("bg-amber-500");
+    expect(fill?.className).toContain("bg-warning");
   });
 
   it("dims the retained bar for a stale projection without dropping it", () => {
@@ -74,7 +74,7 @@ describe("ProfileUsageCompactMeter", () => {
     expect(track.className).toContain("opacity-50");
     const fill = track.firstElementChild;
     expect(fill?.getAttribute("style")).toContain("97%");
-    expect(fill?.className).toContain("bg-red-500");
+    expect(fill?.className).toContain("bg-destructive");
   });
 
   it("renders an empty, dimmed track for unavailable - never a fabricated fill", () => {
@@ -109,7 +109,7 @@ describe("ProfileUsageCompactMeter", () => {
       />,
     );
     const track = getByTestId("profile-usage-bar-p-a");
-    expect(track.className).toContain("bg-red-500/25");
+    expect(track.className).toContain("bg-destructive/25");
     expect(track.className).not.toContain("opacity-50");
     expect(track.children.length).toBe(0);
   });

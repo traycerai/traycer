@@ -169,7 +169,7 @@ function AgentReferenceButton(props: {
       onClick={openAgent}
       onAuxClick={onMiddleClick(openAgent)}
       className={cn(
-        "mx-[1px] inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
+        "mx-0.25 inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
         "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
       )}
       data-agent-reference={props.agent.id}

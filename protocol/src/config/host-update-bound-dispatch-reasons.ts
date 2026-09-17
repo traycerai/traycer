@@ -59,10 +59,11 @@ import { baseDispatchAckReason } from "./host-update-ack-reason";
  *
  * `refused-unverifiable` is ONE STRING WITH TWO MEANINGS. The host mints it
  * when the record cannot be decoded at all; the CLI mints it at three CONSENT
- * failures (`update-run.ts:1282`, a claim-less activation park; `:1298`, a
- * claim-less park that is not an upgrade over the live install; `:1316`, a park
- * whose baseline shows neither `allowDowngrade` nor a strict upgrade). The
- * CLI's undecodable case is `record-fail-closed` (`:931`), not this one.
+ * failures in `selectBoundResume`: a claim-less activation park; a claim-less
+ * park that is not an upgrade over the live install; or a claimed work park
+ * without downgrade consent whose target is neither a strict upgrade nor a
+ * valid release replacing an incomparable installed version. The CLI's
+ * undecodable case is `record-fail-closed`, not this one.
  *
  * `nothing-to-do` is ABSENT ON PURPOSE. Its three sites (`update-run.ts:958`,
  * `:991`, `:1044`) all sit below the `install` marker at `:945`, which a bound

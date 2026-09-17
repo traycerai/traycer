@@ -39,6 +39,7 @@ const AVAILABLE_CLAUDE: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: ["supervised", "full_access"],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -68,6 +69,7 @@ function catalogWithLoadedModels(): ComposerToolbarCatalog {
     ],
     modelsLoaded: true,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
   };
 }
 
@@ -87,6 +89,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: HOST_ID,
     });
     store.getState().setCatalog(catalogWithLoadedModels());
@@ -127,6 +130,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: HOST_ID,
     });
     store.getState().setCatalog({
@@ -136,6 +140,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       models: [],
       modelsLoaded: true,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
     });
 
     // No eligible harness at all: `effectiveSelectionFromHarnesses` returns

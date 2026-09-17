@@ -997,24 +997,28 @@ function WorkspaceFileSettingsMenu(props: {
         >
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="File view settings"
             data-testid="workspace-file-settings"
-            className="shrink-0 text-muted-foreground hover:text-foreground"
+            className="shrink-0"
           >
             <Settings2 className="size-4" />
           </Button>
         </TooltipWrapper>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[min(80vw,15rem)] gap-0 p-1">
-        <Label className="cursor-pointer justify-between gap-3 rounded-md px-2 py-1.5 font-normal transition-colors hover:bg-accent">
-          <span>Word wrap</span>
-          <Switch
-            checked={props.wordWrap}
-            onCheckedChange={props.onWordWrapChange}
-          />
-        </Label>
+      <PopoverContent layout="bare" align="end" className="w-[min(80vw,15rem)]">
+        {/* The gutter belongs to the LIST, not to the plate: the row paints its
+            own hover and would otherwise run into the plate's corner. */}
+        <div className="p-1">
+          <Label variant="row" className="cursor-pointer justify-between">
+            <span>Word wrap</span>
+            <Switch
+              checked={props.wordWrap}
+              onCheckedChange={props.onWordWrapChange}
+            />
+          </Label>
+        </div>
       </PopoverContent>
     </Popover>
   );
@@ -1205,7 +1209,7 @@ function MarkdownViewModeToggle(props: {
                 aria-pressed={active}
                 disabled={disabled}
                 className={cn(
-                  "inline-flex h-6 items-center rounded-[3px] px-1.5 text-ui-xs leading-none font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  "inline-flex h-6 items-center rounded-xs px-1.5 text-ui-xs leading-none font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
                   disabled &&
                     "cursor-not-allowed opacity-45 hover:text-muted-foreground",
                   // muted-fill-ok: toolbar row on bg-canvas, never inside this file's popover; --canvas never equals --muted
@@ -1241,7 +1245,7 @@ function MarkdownFilePreview(props: {
   return (
     <section
       ref={handleRootChange}
-      className="min-size-full bg-canvas px-6 py-5"
+      className="min-h-full bg-canvas px-6 py-5"
       aria-label={`${fileName} markdown preview`}
     >
       <TraycerMarkdown

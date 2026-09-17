@@ -125,6 +125,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/link-phone": "Settings - Link mobile app",
   "/settings/notifications": "Settings - Notifications",
   "/settings/opening-behavior": "Settings - Opening behavior",
+  "/settings/permissions": "Settings - Permissions",
   "/settings/providers": "Settings - Providers",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Shell",
@@ -850,7 +851,7 @@ export function ReportIssueDialog(
           </div>
         ) : null}
 
-        <DialogFooter className="flex-wrap gap-2">
+        <DialogFooter className="flex-wrap">
           <ReportIssueDialogFooter
             screen={screen}
             deliveryResult={effectiveDeliveryResult}
@@ -1103,10 +1104,7 @@ function CaptureScreenBody({
             }}
             disabled={isPending}
             aria-invalid={showGateError}
-            className={cn(
-              "min-h-20 resize-none",
-              showGateError && "border-destructive",
-            )}
+            className="min-h-20 resize-none"
           />
           <IntentFieldHint
             showGateError={showGateError}
@@ -1463,9 +1461,9 @@ function EvidenceStrip({
 
   if (!expanded) {
     return (
-      <div className="flex items-start justify-between gap-2 rounded-md border border-emerald-800/40 bg-emerald-950/10 px-3 py-2 text-ui-xs">
+      <div className="flex items-start justify-between gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-ui-xs">
         <span>
-          <span className="font-medium text-emerald-600 dark:text-emerald-400">
+          <span className="font-medium text-success-foreground">
             ✓ Captured
           </span>{" "}
           {summaryParts.join(" · ")}
@@ -1484,9 +1482,7 @@ function EvidenceStrip({
   return (
     <div className="grid max-h-64 gap-2 overflow-y-auto rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-emerald-600 dark:text-emerald-400">
-          ✓ Captured
-        </span>
+        <span className="font-medium text-success-foreground">✓ Captured</span>
         <button
           type="button"
           onClick={onToggleExpanded}
@@ -1734,7 +1730,7 @@ function AttachmentThumbnail({
   readonly onRemove: () => void;
 }): ReactNode {
   return (
-    <div className="relative h-[38px] w-14 shrink-0 overflow-hidden rounded border border-border bg-foreground/8">
+    <div className="relative h-9.5 w-14 shrink-0 overflow-hidden rounded border border-border bg-foreground/8">
       <img
         src={image.previewUrl}
         alt={image.fileName}
@@ -1809,7 +1805,8 @@ function ConsentPanel(props: {
       <div className="flex items-center justify-between gap-2">
         <Label
           htmlFor="report-issue-diagnostics-toggle"
-          className="text-ui-xs font-normal"
+          size="xs"
+          variant="option"
         >
           Diagnostics (crash context, versions, provider info)
         </Label>
@@ -1843,7 +1840,9 @@ function ConsentLogToggleRow(props: {
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-ui-xs font-normal">{props.label}</Label>
+        <Label size="xs" variant="option">
+          {props.label}
+        </Label>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1890,7 +1889,9 @@ function ConsentBrowserDiagnosticsRow(props: {
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-ui-xs font-normal">Browser diagnostics</Label>
+        <Label size="xs" variant="option">
+          Browser diagnostics
+        </Label>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1997,8 +1998,8 @@ function ConfirmationScreen({
   readonly reportId: string;
 }): ReactNode {
   return (
-    <div className="grid gap-2 rounded-md border border-emerald-800/40 bg-emerald-950/10 px-3 py-3 text-ui-sm">
-      <p className="font-medium text-emerald-600 dark:text-emerald-400">
+    <div className="grid gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-3 text-ui-sm">
+      <p className="font-medium text-success-foreground">
         Sent privately to the Traycer team.
       </p>
       <p className="flex items-center gap-2 font-mono text-code-xs text-muted-foreground">
@@ -2249,7 +2250,6 @@ function Field({
       <Label
         htmlFor={htmlFor}
         className={cn(
-          "text-ui-sm",
           required && "after:ml-0.5 after:text-destructive after:content-['*']",
         )}
       >

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 // why a shared variant must not assert a press color, and why the scrim is
 // opted into per variant rather than declared on the base.
 const badgeVariants = cva(
-  "group/badge inline-flex h-5 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border border-transparent px-2 py-0.5 text-ui-xs font-medium whitespace-nowrap transition-all aria-disabled:active:bg-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!",
+  "group/badge inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border border-transparent font-medium whitespace-nowrap transition-all aria-disabled:active:bg-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!",
   {
     variants: {
       variant: {
@@ -26,10 +26,37 @@ const badgeVariants = cva(
         // No scrim, for the same reason as the Button link variant: no box to
         // tint, so the underline carries the press.
         link: "text-primary underline-offset-4 hover:underline active:underline",
+        // The quiet tag: a metadata chip beside a name (a provider's auth
+        // mode, a PR's owner, a worktree's origin). It is the single biggest
+        // thing call sites were hand-writing - `font-normal` plus
+        // `text-muted-foreground` plus a thinned border, 12 times over.
+        muted:
+          "border-border/60 text-muted-foreground font-normal active:press-scrim",
+        // The three status roles `destructive` did not already cover, on the
+        // recipe gui-app's AGENTS.md documents for all four:
+        // `border-<role>/30 bg-<role>/10 text-<role>-foreground`. Added as a
+        // family rather than one at a time, exactly as Button's status
+        // variants were - a badge is where a status is most often stated, and
+        // a role missing from the set is how a palette hue gets reached for.
+        success:
+          "border-success/30 bg-success/10 text-success-foreground active:press-scrim",
+        warning:
+          "border-warning/30 bg-warning/10 text-warning-foreground active:press-scrim",
+        info: "border-info/30 bg-info/10 text-info-foreground active:press-scrim",
+      },
+      // One height, three type steps - the same shape `Input` takes. `xs` is
+      // the dense metadata chip the settings panels and the pickers are full
+      // of (and squares its corners, because a 16px pill reads as a button);
+      // `sm` is the ALL-CAPS-ish overline tag on a list row.
+      size: {
+        default: "h-5 px-2 py-0.5 text-ui-xs",
+        sm: "h-5 px-1.5 py-0 text-overline",
+        xs: "h-4 rounded-sm px-1.5 py-0 text-micro leading-none",
       },
     },
     defaultVariants: {
       variant: "default",
+      size: "default",
     },
   },
 );
@@ -37,6 +64,7 @@ const badgeVariants = cva(
 function Badge({
   className,
   variant = "default",
+  size = "default",
   asChild = false,
   ...props
 }: React.ComponentProps<"span"> &
@@ -47,7 +75,8 @@ function Badge({
     <Comp
       data-slot="badge"
       data-variant={variant}
-      className={cn(badgeVariants({ variant }), className)}
+      data-size={size}
+      className={cn(badgeVariants({ variant, size }), className)}
       {...props}
     />
   );
