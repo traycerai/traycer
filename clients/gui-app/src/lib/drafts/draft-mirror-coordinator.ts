@@ -318,8 +318,14 @@ export async function consumeStashOnHost(
  * reads as corrupt. Leaving it out is strictly better: the entry restores its
  * text with one image missing - the same outcome as a blob the host never had -
  * instead of one the reader reports as damaged.
+ *
+ * Exported for its own test. Its live producer of a MISMATCHED blob is the
+ * mirror path's transport fallback, and the cloud fetch beside it cannot make
+ * one by construction - it sniffs the bytes and skips what will not answer -
+ * so the rejecting branch has no caller in this module's own tests to reach it
+ * through.
  */
-function stashBlobsThatCanRestore(
+export function stashBlobsThatCanRestore(
   images: ReadonlyMap<string, PromptStashImageBlob>,
 ): ReadonlyMap<string, PromptStashImageBlob> {
   const restorable = new Map<string, PromptStashImageBlob>();

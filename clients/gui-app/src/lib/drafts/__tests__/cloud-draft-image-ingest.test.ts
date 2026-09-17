@@ -15,6 +15,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import {
   acquireDraftMirrorSession,
   ingestCloudDraftSummary,
+  stashBlobsThatCanRestore,
   releaseDraftMirrorSession,
   resetDraftMirrorCoordinatorForTests,
 } from "@/lib/drafts/draft-mirror-coordinator";
@@ -386,6 +387,77 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
 
     // The row was still ingested - with an empty map, which is the pre-existing
     // behaviour for a stash entry whose bytes cannot be found.
+    expect(handed).toHaveLength(1);
+    expect(handed[0]?.size).toBe(0);
+  });
+
+  it("drops a stash blob whose bytes disagree with their label", () => {
+    // The REJECTING half of the ingest gate, which nothing else here reaches.
+    // Its live producer is the MIRROR path: `readDraftBlobs` labels bytes that
+    // sniff to nothing as `"image/png"`, which suits the landing partition and
+    // is exactly what the stash's `isValidStashBlobRecord` calls corrupt. The
+    // cloud fetch cannot produce such a pair by construction - it sniffs and
+    // skips what will not answer - so this exercises the gate directly.
+    const gif = new Uint8Array([
+      0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01, 0x00,
+    ]);
+    const unsniffable = new Uint8Array([1, 2, 3, 4]);
+
+    const kept = stashBlobsThatCanRestore(
+      new Map([
+        // Agrees with its bytes: survives.
+        ["hash-gif", { bytes: gif, mimeType: "image/gif" }],
+        // The transport's fallback over bytes that sniff to nothing: dropped,
+        // because it could only ever be stored as a record that reads back as
+        // damaged.
+        ["hash-mislabelled", { bytes: unsniffable, mimeType: "image/png" }],
+        // A real image under the WRONG canonical type - the same disagreement,
+        // and the one a shape check alone would miss.
+        ["hash-wrong-type", { bytes: gif, mimeType: "image/png" }],
+      ]),
+    );
+
+    expect([...kept.keys()]).toEqual(["hash-gif"]);
+  });
+
+  it("hands over nothing when the cloud's bytes are not a decodable image", async () => {
+    // The other side of the same rule, on the path this PR adds: the fetch
+    // itself refuses to mint a label it cannot justify, so a stash row whose
+    // cloud bytes sniff to nothing arrives with an EMPTY map rather than a
+    // mislabelled blob for the gate to catch later.
+    const junk = new Uint8Array([1, 2, 3, 4]);
+    const junkHash = await sha256HexOf(junk);
+    const handed: Array<ReadonlyMap<string, unknown>> = [];
+    usePromptStashStore.setState({
+      ingestRemote: (_entry, imagesByHash) => {
+        handed.push(imagesByHash);
+        return Promise.resolve();
+      },
+    });
+
+    mountIngestingHostSession((method) => {
+      if (method === "epic.readCloudChatPayload") {
+        return Promise.resolve({
+          outcome: {
+            status: "ok" as const,
+            bytesBase64: toBase64(junk),
+            byteLength: junk.byteLength,
+          },
+        });
+      }
+      throw new Error(`unexpected ${String(method)}`);
+    });
+    await Promise.resolve();
+
+    const cloudSummary = summary();
+    await ingestCloudDraftSummary({
+      hostId: INGESTING_HOST,
+      // Captured where the head read was issued.
+      readOwner: OWNER,
+      summary: cloudSummary,
+      document: stashDocument(cloudSummary, [junkHash]),
+    });
+
     expect(handed).toHaveLength(1);
     expect(handed[0]?.size).toBe(0);
   });
