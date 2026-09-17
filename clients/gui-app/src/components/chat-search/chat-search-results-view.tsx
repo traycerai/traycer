@@ -186,6 +186,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
       {loadingMore ? (
         <div className="flex justify-center py-2">
           <AgentSpinningDots
+            className={undefined}
             tone="muted"
             testId={undefined}
             variant={undefined}

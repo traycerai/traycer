@@ -41,6 +41,7 @@ export function ChatSearchExpandedRows(props: {
     return (
       <div className="flex py-1.5 pl-7">
         <AgentSpinningDots
+          className={undefined}
           tone="muted"
           testId={undefined}
           variant={undefined}
