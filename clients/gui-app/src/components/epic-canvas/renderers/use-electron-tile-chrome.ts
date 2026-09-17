@@ -1,3 +1,4 @@
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { toast } from "sonner";
 import type {
@@ -163,7 +164,12 @@ export function useElectronTabChrome(
     event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
   ): void => {
     event.preventDefault();
-    navigateToUrl(normalizeBrowserAddressInput(addressValue));
+    navigateToUrl(
+      normalizeBrowserAddressInput(
+        addressValue,
+        useSettingsStore.getState().browserSearchEngine,
+      ),
+    );
   };
 
   const reload = (): void => {

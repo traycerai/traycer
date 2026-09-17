@@ -429,8 +429,14 @@ describe("the one sanctioned full-bleed surface", () => {
     // Matched as "the same class list carries all of them", order-independent:
     // the Tailwind class sorter owns the order and would otherwise decide
     // whether this passes.
-    const contentLayer = (source.match(/"[^"\n]*"/g) ?? []).find((literal) =>
-      literal.includes("--onboarding-shell-rows"),
+    const contentLayer = (source.match(/className="[^"\n]*"/g) ?? []).find(
+      (literal) =>
+        [
+          "pt-safe-top",
+          "pr-safe-right",
+          "pb-safe-bottom",
+          "pl-safe-left",
+        ].every((token) => literal.includes(token)),
     );
     expect(contentLayer, "onboarding content grid class list").toBeDefined();
     // Four, not three: the bottom is not one of the reservations the shell

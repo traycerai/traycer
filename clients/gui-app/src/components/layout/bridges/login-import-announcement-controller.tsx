@@ -27,15 +27,14 @@ const LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID = "traycer-login-import-announcement";
  *
  * The toast shows on the first launch where ALL of these hold, and showing
  * it claims the `login-import` announcement (`feature-announcements-store`)
- * so it never shows again - in this window or another - and the tour act
- * never follows it:
+ * so it never shows again - in this window or another:
  *
  * - the import is available here: a desktop with a browser bridge and saved
  *   logins ON (web and mobile have no jar to import into; with saving off
  *   the Settings row is disabled, and a toast leading to a disabled row is
  *   worse than none);
  * - the user is signed in and has COMPLETED onboarding - a fresh user meets
- *   the feature as an act in the tour instead, which consumes the same id;
+ *   feature in Getting started instead; first-run onboarding consumes the same id;
  * - the tour is not on screen (a replay from Settings), for the reason the
  *   session-import progress toast holds: a toast over the stage is noise;
  * - the window narrator does not own the frame with the app gated behind
@@ -89,8 +88,7 @@ export function LoginImportAnnouncementController(): null {
   useEffect(() => {
     // The toast is permanent, so a gate that closes after it is up takes it
     // down: saving turned off (the row its action leads to is disabled),
-    // a sign-out, or the tour opening (a replay from Settings, which shows
-    // the same feature as an act, and a toast over the stage is noise). Not
+    // a sign-out, or the tour opening (a replay from Settings, where a toast over the stage is noise). Not
     // the narrator: that gate is transient, and a toast under its dialog is
     // inert rather than wrong - it comes back live when the dialog goes, the
     // same standing the app-update toast has. Gone is gone: the id is

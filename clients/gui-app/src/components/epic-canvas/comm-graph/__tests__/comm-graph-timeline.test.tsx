@@ -113,7 +113,10 @@ import {
   __commGraphSubscriptionRefCountForTests,
   __resetCommGraphRegistryForTests,
 } from "@/lib/comm-graph/comm-graph-registry";
-import { useCommGraphTimelineStore } from "@/stores/epics/comm-graph-timeline-store";
+import {
+  COMM_GRAPH_PLAYBACK_SPEEDS,
+  useCommGraphTimelineStore,
+} from "@/stores/epics/comm-graph-timeline-store";
 import { useCommGraphRowOpenStore } from "@/stores/epics/comm-graph-row-open-store";
 import type {
   CommGraphSubscriptionHandlers,
@@ -1482,16 +1485,40 @@ describe("comm-graph transport", () => {
     ).toBe("Pause playback");
   });
 
-  it("cycles playback speed", async () => {
+  it("cycles playback speed through the whole ladder and back to the start", async () => {
+    // IT USED TO ASSERT ONE PRESS, 1x to 2x - which is green for any ladder
+    // that starts the same way, including the one that stopped at 4x and made
+    // a long replay unwatchable. Walking the whole cycle is what makes this a
+    // test of the control rather than of its first step.
     await renderWithEvents(2);
-    const speed = screen.getByTestId("comm-graph-transport-speed");
-    expect(speed.textContent).toBe("1×");
-    fireEvent.click(speed);
-    await waitFor(() => {
-      expect(screen.getByTestId("comm-graph-transport-speed").textContent).toBe(
-        "2×",
-      );
-    });
+    const readSpeed = (): string =>
+      screen.getByTestId("comm-graph-transport-speed").textContent;
+    expect(readSpeed()).toBe("1×");
+
+    // From 1x forwards, wrapping, until it comes back: the label at every rung
+    // has to be that rung, in the ladder's own order.
+    const from = COMM_GRAPH_PLAYBACK_SPEEDS.indexOf(1);
+    expect(from).toBeGreaterThanOrEqual(0);
+    for (let step = 1; step <= COMM_GRAPH_PLAYBACK_SPEEDS.length; step += 1) {
+      const expected =
+        COMM_GRAPH_PLAYBACK_SPEEDS[
+          (from + step) % COMM_GRAPH_PLAYBACK_SPEEDS.length
+        ];
+      fireEvent.click(screen.getByTestId("comm-graph-transport-speed"));
+      await waitFor(() => {
+        expect(readSpeed()).toBe(`${expected}×`);
+      });
+    }
+    // A full cycle is a round trip, not a dead end at the top.
+    expect(readSpeed()).toBe("1×");
+  });
+
+  it("offers a rung fast enough to replay a long session", () => {
+    // The feedback this answers is about a NUMBER ("even at 4x, the graph is
+    // filling super slow"), so the number is what is pinned. Asserted on the
+    // ladder rather than through the control, because getting there is what
+    // the case above is for.
+    expect(Math.max(...COMM_GRAPH_PLAYBACK_SPEEDS)).toBeGreaterThanOrEqual(32);
   });
 
   it("offers no play control for an epic with nothing captured", async () => {
