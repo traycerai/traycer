@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { rateLimitCapableProviderIdSchema } from "@traycer/protocol/host/rate-limit";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { fixedProviderWindowKeys } from "@/lib/rate-limits/rate-limit-window-catalog";
@@ -1066,3 +1067,36 @@ export const useLayoutStore = create<LayoutStoreState>()(
     },
   ),
 );
+
+/**
+ * Whether the status bar strip is on screen: the ONE answer to that question,
+ * read by the shell that mounts it and by every control that only makes sense
+ * while it is mounted (the usage panel's per-account eye, the header glyph's
+ * account rule).
+ *
+ * A mobile VIEWPORT, not a mobile build: a narrow desktop window behaves the
+ * same way. Mobile ignores `placement` entirely and answers with its own
+ * switch, which is off by default. `placement` names which of two surfaces
+ * hosts the usage gauge and the resource monitor, and on a phone that question
+ * has no second answer: `MobileAppHeader` keeps both controls whatever the
+ * strip does, so a phone reading `placement` would be reading a preference
+ * about a surface it does not have. The footer still competes with the
+ * software keyboard and the nav drawer, which is what `MobileAppStatusBar`
+ * gates on and why it is off until asked for.
+ */
+export function selectStatusBarShown(
+  state: Pick<LayoutStoreState, "statusBar">,
+  isMobileViewport: boolean,
+): boolean {
+  return isMobileViewport
+    ? state.statusBar.mobileFooter
+    : state.statusBar.placement === "status-bar";
+}
+
+/** `selectStatusBarShown` over the live store and the live viewport. */
+export function useStatusBarShown(): boolean {
+  const isMobileViewport = useIsMobileViewport();
+  return useLayoutStore((state) =>
+    selectStatusBarShown(state, isMobileViewport),
+  );
+}

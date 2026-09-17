@@ -4,6 +4,7 @@ import {
   Bell,
   Bot,
   Boxes,
+  Gavel,
   GitBranch,
   ListChecks,
   Keyboard,
@@ -31,6 +32,7 @@ export type SettingsSectionId =
   | "app-notifications"
   | "providers"
   | "notifications"
+  | "permissions"
   | "agents"
   | "fallback"
   | "keybindings"
@@ -127,13 +129,14 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now eighteen. The whole
- * host group - Overview, Providers, Worktrees, the host's Notifications, Agent
- * selection, Fallback, Shell and Diagnostics - is the eleventh through
- * eighteenth and goes without. Overview is the newest to lose one, to Layout
- * taking the seventh Application slot. Fallback was added into the digit-less
- * tail and so moved no existing shortcut - it sits between Agent selection and
- * Shell, both already there.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now nineteen. The whole
+ * host group - Overview, Providers, Worktrees, the host's Notifications,
+ * Permissions, Agent selection, Fallback, Shell and Diagnostics - is the
+ * eleventh through nineteenth and goes without. Overview is the newest to lose
+ * one, to Layout taking the seventh Application slot. Permissions and Fallback
+ * were both added into the digit-less tail and so moved no existing shortcut -
+ * Permissions sits between Notifications and Agent selection, Fallback between
+ * Agent selection and Shell, all already there.
  *
  * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
@@ -288,6 +291,19 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "notifications",
     label: "Notifications",
     icon: Bell,
+    group: "host",
+  },
+  // What an agent may do on this machine without asking: the judge that
+  // reviews actions under the `auto` permission mode, the policy it follows
+  // and the rules that always apply. Its own page rather than rows on Agent
+  // selection - that page is about which agent gets CHOSEN for a task, and
+  // permissions are a different question. The app-wide DEFAULT permission
+  // mode stays on General: it is one preference for this app, not per machine
+  // (SETTINGS.md, "Scope: the organising idea").
+  {
+    id: "permissions",
+    label: "Permissions",
+    icon: Gavel,
     group: "host",
   },
   // "Agent selection", not "Agents": this section configures HOW a coding agent

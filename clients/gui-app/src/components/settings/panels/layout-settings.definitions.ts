@@ -334,7 +334,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     search: { contributesTo: "usageLimits" },
     label: "Display",
     description:
-      "What each reading spells out, before the strip runs out of room.",
+      "What each reading spells out. The strip scrolls when a window is short of room, so nothing here is dropped to fit.",
     breadcrumb: "Usage limits",
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["percentage", "label", "timer", "bar"],

@@ -22,16 +22,27 @@
  * single-flight, and the rewrite is by node id - so re-ingesting a node whose
  * bytes an aborted earlier job already stored just re-roots the same hash.
  *
- * ## Why this is a shared hook rather than three copies
+ * ## Why this is a shared hook rather than four copies
  *
- * `landing-composer.tsx` grew this logic first and still owns its own copy;
- * the difference between the two is one argument (`draftId`, which only names
- * the budget toast's wording). Landing is deliberately NOT repointed at this
- * hook in the ticket that introduced it - see the T4 report - because it is the
- * one composer already shipping the hash rewrite correctly, and it is the
- * control the three new surfaces are being compared against. Repointing it is
- * a worthwhile follow-up, not a thing to do in the same change that adds three
- * new callers.
+ * `landing-composer.tsx` grew this logic first and kept a private copy while
+ * this hook was extracted, because it was the control the three new callers
+ * were compared against. It is repointed here, and the copy is gone.
+ *
+ * The note this replaces said the two differed by "one argument (`draftId`)".
+ * That was true when it was written and false by the time it was acted on: the
+ * review that hardened this hook gave it FIVE behaviours the private copy never
+ * received - a deadline on the store write, a reconcile for a write that lands
+ * after that deadline, the format verdict running before budget admission,
+ * reservations keyed by image index rather than a running counter, and leaving
+ * a format the host refuses INLINE rather than hashing it. A pasted BMP on the
+ * landing composer was hashed, refused by the host's writer, and left its
+ * budget reservation held.
+ *
+ * The general point, recorded because the next extraction will face it: a
+ * duplicate left in place as a "reference" stops being one the moment its twin
+ * is fixed, and nothing tells you when that happened. The claim that two copies
+ * differ by one argument is a fact with a shelf life - re-derive it, do not
+ * carry it forward.
  */
 import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";

@@ -138,47 +138,10 @@ import { StatusBarPreview } from "@/components/settings/panels/layout/status-bar
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 
 /**
- * The harness's global `MockResizeObserver` never invokes its callback, so the
- * coupled-layout block at the bottom of this file - which has to deliver a
- * resize to the ladder's own observer - needs a controllable replacement.
- * Installed at MODULE LOAD, the technique `status-bar-rate-limit-cluster.test.tsx`
- * and `status-bar-density.test.tsx` use. Every other test here leaves it idle,
- * which is exactly how the global mock behaves.
- */
-class ControllableResizeObserver implements ResizeObserver {
-  readonly callback: ResizeObserverCallback;
-  readonly observed = new Set<Element>();
-
-  constructor(callback: ResizeObserverCallback) {
-    this.callback = callback;
-    resizeObserverInstances.push(this);
-  }
-
-  observe(target: Element): void {
-    this.observed.add(target);
-  }
-
-  unobserve(target: Element): void {
-    this.observed.delete(target);
-  }
-
-  disconnect(): void {
-    this.observed.clear();
-  }
-}
-
-let resizeObserverInstances: ControllableResizeObserver[] = [];
-
-Object.defineProperty(globalThis, "ResizeObserver", {
-  configurable: true,
-  writable: true,
-  value: ControllableResizeObserver,
-});
-
-/**
- * The same treatment for `IntersectionObserver`: the harness's global mock
- * never calls back, and the sticky block's `data-stuck` is written from exactly
- * one of those callbacks.
+ * The harness's global `IntersectionObserver` mock never calls back, and the
+ * sticky block's `data-stuck` is written from exactly one of those callbacks -
+ * so a controllable replacement is installed at MODULE LOAD, the technique
+ * `status-bar-rate-limit-cluster.test.tsx` uses for its own observers.
  */
 class ControllableIntersectionObserver implements IntersectionObserver {
   readonly root: Element | Document | null = null;
@@ -297,23 +260,8 @@ function resetAll(): void {
   mocks.envelopes = {};
   mocks.recordedEnabled = [];
   mocks.desktopSamplerSubscriptions = 0;
-  resizeObserverInstances = [];
   intersectionObserverInstances = [];
   vi.mocked(registerDynamicActionHandler).mockClear();
-}
-
-/** Deliver one measurement to the ladder's own observer over the room. */
-function fireRoomResize(): void {
-  const room = screen.getByTestId("status-bar-preview-usage");
-  const instance = resizeObserverInstances.find((candidate) =>
-    candidate.observed.has(room),
-  );
-  if (instance === undefined) {
-    throw new Error("no ResizeObserver is currently observing the room");
-  }
-  act(() => {
-    instance.callback([], instance);
-  });
 }
 
 beforeEach(resetAll);
@@ -351,9 +299,9 @@ describe("<StatusBarPreview />", () => {
     renderPreview(false);
 
     expect(registerDynamicActionHandler).not.toHaveBeenCalled();
-    // Queried by testid, not by role: everything in the frame is
-    // `aria-hidden`, so a role query skips it and would pass whether or not
-    // the control were there.
+    // Queried by testid, not by role: the frame's readings and its resource
+    // control are `aria-hidden`, so a role query skips them and would pass
+    // whether or not the control were there.
     expect(document.querySelector('[aria-label="Refresh usage"]')).toBeNull();
     expect(screen.queryByTestId("status-bar-rate-limit-trigger")).toBeNull();
   });
@@ -560,10 +508,10 @@ describe("<StatusBarPreview />", () => {
     });
   });
 
-  describe("notes outside the inert frame", () => {
-    // `inert` removes the frame from hit testing, so no tooltip inside it can
-    // ever open - and the states those tooltips exist for are the ones a
-    // preview reads as broken without them.
+  describe("notes outside the inert readings", () => {
+    // `inert` removes the readings from hit testing, so no tooltip inside
+    // them can ever open - and the states those tooltips exist for are the
+    // ones a preview reads as broken without them.
     it("carries the resource segment's unavailable reason, outside the frame", () => {
       mocks.providers = [];
 
@@ -670,17 +618,41 @@ describe("<StatusBarPreview />", () => {
   });
 
   describe("width control", () => {
-    it("defaults to Wide, the one option whose ceiling lets every Display switch show", () => {
-      // At the `compact` ceiling the ladder drops the mode word, the mini bar
-      // and the countdown whatever the store says, so opening at Normal would
-      // answer "this does nothing" to the first three Display switches a user
-      // tries.
+    it("defaults to Wide", () => {
       renderPreview(false);
       const frame = screen.getByTestId("status-bar-preview-frame");
 
       expect(frame.getAttribute("data-preview-width")).toBe("wide");
-      expect(frame.getAttribute("data-preview-density")).toBe("full");
       expect(frame.className).toContain("w-[920px]");
+    });
+
+    it("keeps the scroller live and puts inert on the readings and the resource control inside it", () => {
+      // A wheel or a swipe over the frame has to reach the scroller, so no
+      // ancestor of it may be inert; what is inert is the picture inside -
+      // the readings, and the resource control beside them.
+      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+      mocks.envelopes = {};
+
+      renderPreview(false);
+
+      const scroller = screen.getByTestId("status-bar-preview-usage");
+      for (
+        let node: HTMLElement | null = scroller;
+        node !== null;
+        node = node.parentElement
+      ) {
+        expect(node.hasAttribute("inert")).toBe(false);
+      }
+      const readings = screen.getByTestId("status-bar-preview-readings");
+      expect(scroller.contains(readings)).toBe(true);
+      expect(readings.hasAttribute("inert")).toBe(true);
+      expect(readings.getAttribute("aria-hidden")).toBe("true");
+      expect(
+        readings.contains(screen.getByTestId("status-bar-preview-content")),
+      ).toBe(true);
+      const resources = screen.getByTestId("status-bar-resource-segment");
+      expect(resources.hasAttribute("inert")).toBe(true);
+      expect(resources.getAttribute("aria-hidden")).toBe("true");
     });
 
     it("draws the frame at the option's nominal width, capped at the pane it sits in", () => {
@@ -707,12 +679,10 @@ describe("<StatusBarPreview />", () => {
       expect(frame().className).toContain("w-[920px]");
     });
 
-    it("reads density from the nominal width and never from the frame's measured box", () => {
-      // The bug this guards: inside the Settings modal the frame measures
-      // `min(pane, 1024) − chrome`, which is `compact` on any window under
-      // ~1560px, and a preview measuring itself there could never reach the
-      // rung at which the three Display switches do anything. No observer is
-      // delivered here at all - the density has to come from the control.
+    it("draws the same full reading at every width - the width changes the frame, never the reading", () => {
+      // The strip scrolls what does not fit rather than shortening it, so a
+      // narrower frame shows the same reading with less of the cluster in
+      // view. Nothing about the reading is allowed to move with the control.
       const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
       mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
       mocks.envelopes = {
@@ -722,38 +692,23 @@ describe("<StatusBarPreview />", () => {
       };
 
       renderPreview(false);
-      const frame = () => screen.getByTestId("status-bar-preview-frame");
-      const strip = screen.getByTestId("status-bar-preview");
-      expect(
-        resizeObserverInstances.some((instance) =>
-          instance.observed.has(strip),
-        ),
-      ).toBe(false);
 
-      expect(frame().getAttribute("data-preview-density")).toBe("full");
-      expect(windowText("codex:primary")).toBe("40% used 4h 15m");
-      expect(screen.getByTestId("status-bar-provider-mini-bar")).toBeTruthy();
-
-      // `compact` caps the ladder at `no-timers`: mode word, bar and countdown
-      // all go, with the store still asking for all three.
-      fireEvent.click(screen.getByRole("button", { name: "Normal" }));
-      expect(frame().getAttribute("data-preview-density")).toBe("compact");
-      expect(windowText("codex:primary")).toBe("40% 5h");
-      expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
-
-      // `icon-only`: the icon alone, still without a single resize delivered.
-      fireEvent.click(screen.getByRole("button", { name: "Narrow" }));
-      expect(frame().getAttribute("data-preview-density")).toBe("icon-only");
-      expect(
-        screen.getByTestId("status-bar-provider-segment-codex"),
-      ).toBeTruthy();
-      expect(
-        screen.queryByTestId("status-bar-window-codex:primary"),
-      ).toBeNull();
-
-      fireEvent.click(screen.getByRole("button", { name: "Wide" }));
-      expect(frame().getAttribute("data-preview-density")).toBe("full");
-      expect(windowText("codex:primary")).toBe("40% used 4h 15m");
+      for (const label of ["Narrow", "Normal", "Wide"]) {
+        fireEvent.click(screen.getByRole("button", { name: label }));
+        expect(
+          screen.getByTestId("status-bar-provider-segment-codex"),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
+        expect(windowText("codex:primary")).toBe("40% used 4h 15m");
+        expect(screen.getByTestId("status-bar-provider-mini-bar")).toBeTruthy();
+        // The readings sit inside the same scroller the strip uses, at
+        // every width.
+        expect(
+          screen
+            .getByTestId("status-bar-preview-usage")
+            .contains(screen.getByTestId("status-bar-preview-content")),
+        ).toBe(true);
+      }
     });
 
     it("at Wide, each of the three Display switches changes the rendered reading", () => {
@@ -862,8 +817,8 @@ describe("<StatusBarPreview />", () => {
 
     it("keeps every provider past the second, on its own cold track", () => {
       // The substitution walks the CLUSTER, not the two readings: provider
-      // count, icon set, order and the `+N` fold's arithmetic all have to be
-      // the ones the strip would have.
+      // count, icon set and order all have to be the ones the strip would
+      // have.
       mocks.providers = [
         configuredProvider("claude-code", "ephemeralProcess"),
         configuredProvider("codex", "ephemeralProcess"),
@@ -1008,26 +963,16 @@ describe("<StatusBarPreview />", () => {
       expect(screen.queryByTestId("status-bar-preview-sample-note")).toBeNull();
     });
 
-    it("still collapses at Narrow", () => {
+    it("still draws the sample in full at Narrow", () => {
       mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
       mocks.envelopes = {};
 
       renderPreview(false);
-      // Rendered first, so "collapsed" can be told apart from "never drawn" -
-      // an absence assertion alone passes on a tree with no sample at all.
       expect(windowText("codex:sample")).toBe("57% used 4h 15m");
 
       fireEvent.click(screen.getByRole("button", { name: "Narrow" }));
 
-      expect(
-        screen
-          .getByTestId("status-bar-preview-frame")
-          .getAttribute("data-preview-density"),
-      ).toBe("icon-only");
-      expect(
-        screen.getByTestId("status-bar-provider-segment-codex"),
-      ).toBeTruthy();
-      expect(screen.queryByTestId("status-bar-window-codex:sample")).toBeNull();
+      expect(windowText("codex:sample")).toBe("57% used 4h 15m");
       expect(screen.getByTestId("status-bar-preview-sample-note")).toBeTruthy();
     });
   });
@@ -1154,18 +1099,17 @@ describe("<StatusBarPreview />", () => {
       ).toBeNull();
     });
 
-    it("starts at the nominal width whose rung the phone's own strip draws", () => {
-      // The strip forces `compact` on a mobile viewport whatever it measures,
-      // and 880 is the nominal width inside that band - so a phone opening
-      // this group sees the rung its footer draws rather than one two steps
-      // more detailed. Only a STARTING width: the control still moves freely.
+    it("starts at Narrow, the closest picture of the phone's own footer", () => {
+      // A phone's footer is narrower than any option here, and its readings
+      // scroll - so the option whose readings scroll is the honest start.
+      // Only a STARTING width: the control still moves freely.
       mocks.providers = [];
 
       renderPreview(false);
 
       const frame = screen.getByTestId("status-bar-preview-frame");
-      expect(frame.getAttribute("data-preview-width")).toBe("normal");
-      expect(frame.getAttribute("data-preview-density")).toBe("compact");
+      expect(frame.getAttribute("data-preview-width")).toBe("narrow");
+      expect(frame.className).toContain("w-[480px]");
     });
 
     it("does not pin the block, which here is a dimmed picture of a strip that is not drawn", () => {
@@ -1248,65 +1192,16 @@ function fireSentinelIntersection(isIntersecting: boolean): void {
 }
 
 /**
- * The `+N` chip's tooltip, said outside the frame.
- *
- * Its own room stubs rather than the coupled block's: folding only starts once
- * the readings overflow at the LAST rung, which is a room narrower than any of
- * the three width options can produce against that block's content table.
+ * The notes explain a reading that is not live and nothing else: a segment
+ * the frame has no room for is a scroll away, not a state, so no line names
+ * providers as folded or hidden at any width.
  */
-describe("<StatusBarPreview /> folded providers", () => {
-  const originalScrollWidth = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "scrollWidth",
-  );
-  const originalClientWidth = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "clientWidth",
-  );
-
-  beforeEach(() => {
-    // A room nothing fits in, at any rung: the ladder walks to its last stop,
-    // which is one folded provider (the last one never folds - a chip alone
-    // would name no reading at all).
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-      configurable: true,
-      get(this: HTMLElement) {
-        return this.getAttribute("data-testid") === "status-bar-preview-usage"
-          ? 80
-          : 0;
-      },
-    });
-    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
-      configurable: true,
-      get(this: HTMLElement) {
-        return this.getAttribute("data-testid") === "status-bar-preview-content"
-          ? 400
-          : 0;
-      },
-    });
-  });
-
-  afterEach(() => {
-    if (originalScrollWidth !== undefined) {
-      Object.defineProperty(
-        HTMLElement.prototype,
-        "scrollWidth",
-        originalScrollWidth,
-      );
-    }
-    if (originalClientWidth !== undefined) {
-      Object.defineProperty(
-        HTMLElement.prototype,
-        "clientWidth",
-        originalClientWidth,
-      );
-    }
-  });
-
-  it("names the folded provider and its reading in the notes, outside the inert frame", () => {
+describe("<StatusBarPreview /> notes at every width", () => {
+  it("never names a folded or hidden provider, however many there are and however narrow the frame", () => {
     mocks.providers = [
       configuredProvider("codex", "ephemeralProcess"),
       configuredProvider("claude-code", "ephemeralProcess"),
+      configuredProvider("opencode", "httpFetch"),
     ];
     mocks.envelopes = {
       codex: envelopeFor(
@@ -1320,257 +1215,20 @@ describe("<StatusBarPreview /> folded providers", () => {
     };
 
     renderPreview(false);
-    // One rung per delivery, by design - walk the cascade out.
-    for (let index = 0; index < 8; index += 1) {
-      fireRoomResize();
+
+    for (const label of ["Narrow", "Normal", "Wide"]) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      // Every segment is drawn at every width.
+      expect(
+        screen
+          .getAllByTestId(/^status-bar-provider-segment-/)
+          .map((segment) => segment.getAttribute("data-provider-id")),
+      ).toEqual(["codex", "claude-code", "opencode"]);
+      expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
+      // The one note is the cold provider's, and it is the only one.
+      const notes = screen.getByTestId("status-bar-preview-notes");
+      expect(notes.textContent).toBe("OpenCode · no reading yet");
+      expect(notes.textContent).not.toMatch(/Folded|\+\d/);
     }
-
-    expect(screen.getByTestId("status-bar-folded-providers").textContent).toBe(
-      "+1",
-    );
-    const notes = screen.getByTestId("status-bar-preview-notes");
-    expect(notes.textContent).toContain("Folded: Claude Code 22% used");
-    expect(screen.getByTestId("status-bar-preview-frame").contains(notes)).toBe(
-      false,
-    );
-  });
-
-  it("marks the folded line as a sample when the number in it is an invented one", () => {
-    // The fold takes the sampled provider off the strip, so this line is the
-    // only place its reading still appears - and the caption that explains the
-    // invention is above a strip that no longer shows it.
-    mocks.providers = [
-      configuredProvider("codex", "ephemeralProcess"),
-      configuredProvider("claude-code", "ephemeralProcess"),
-    ];
-    mocks.envelopes = {};
-
-    renderPreview(false);
-    for (let index = 0; index < 8; index += 1) {
-      fireRoomResize();
-    }
-
-    expect(screen.getByTestId("status-bar-folded-providers").textContent).toBe(
-      "+1",
-    );
-    expect(
-      screen.getByTestId("status-bar-preview-notes").textContent,
-    ).toContain("Folded: Claude Code 82% used (sample)");
-  });
-});
-
-/**
- * The width control's return leg, against a fake layout whose two boxes are
- * genuinely coupled - the room reports the room, the readings report their own
- * natural width at whatever rung is currently rendered.
- *
- * This is the property a class assertion cannot reach and the one that broke
- * first: the ladder records the width at which it stepped down and only gives
- * that step back when the room beats it. Measure a shrink-to-fit box instead
- * and the recorded width can never be beaten, so Narrow is a one-way trip and
- * the preview stays collapsed until Settings is closed and reopened.
- *
- * The option sets BOTH the ceiling and the room here, as it does in the
- * preview, and the test asserts them separately: Narrow lands on `icon-only`
- * from the ceiling alone, before any measurement is delivered, and only then
- * does the room fold a provider away - the one step the ceiling can never
- * take, and the one the return leg has to give back.
- */
-describe("<StatusBarPreview /> ladder - coupled layout", () => {
-  const ROOM_TESTID = "status-bar-preview-usage";
-  const CONTENT_TESTID = "status-bar-preview-content";
-  const RESERVED_TESTID = "status-bar-preview-reserved";
-
-  /**
-   * The refresh control's box, which the preview reserves without drawing and
-   * the ladder subtracts from the room - `pl-1` plus the button's `size-5`,
-   * the two numbers the strip composes it from.
-   */
-  const RESERVED_WIDTH_PX = 24;
-
-  const originalScrollWidth = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "scrollWidth",
-  );
-  const originalClientWidth = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "clientWidth",
-  );
-  const originalOffsetWidth = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "offsetWidth",
-  );
-  function readOriginalWidth(
-    descriptor: PropertyDescriptor | undefined,
-    element: HTMLElement,
-  ): number {
-    const value: unknown = descriptor?.get?.call(element);
-    return typeof value === "number" ? value : 0;
-  }
-
-  /** What each option's frame leaves the room, once the row's padding is off. */
-  const ROOM_WIDTH_PX: Record<string, number> = {
-    narrow: 464,
-    normal: 864,
-    wide: 904,
-  };
-
-  /**
-   * A stand-in for real text metrics: how wide two providers' readings are at
-   * each rung. Not calibrated to any font - only the ORDERING is load-bearing,
-   * with one exception. `icon-only` sits between the Narrow room (464) and
-   * what the ladder actually measures against it (464 − 24), so it is the rung
-   * that can tell the reserved box apart from nothing at all: drop the
-   * placeholder and this width fits, and the preview keeps both providers where
-   * the strip has already folded one.
-   */
-  const DETAIL_CONTENT_WIDTH: Record<string, number> = {
-    full: 840,
-    "no-mode-word": 760,
-    "no-bars": 690,
-    "no-timers": 620,
-    "percent-only": 500,
-    "icon-only": 450,
-  };
-
-  function currentDetail(): string | null {
-    return (
-      document
-        .querySelector("[data-usage-detail]")
-        ?.getAttribute("data-usage-detail") ?? null
-    );
-  }
-
-  function currentContentWidth(): number {
-    const match = Object.entries(DETAIL_CONTENT_WIDTH).find(
-      ([name]) => name === currentDetail(),
-    );
-    return match === undefined ? DETAIL_CONTENT_WIDTH.full : match[1];
-  }
-
-  function roomWidth(): number {
-    const width = screen
-      .getByTestId("status-bar-preview-frame")
-      .getAttribute("data-preview-width");
-    const match = Object.entries(ROOM_WIDTH_PX).find(
-      ([name]) => name === width,
-    );
-    return match === undefined ? ROOM_WIDTH_PX.wide : match[1];
-  }
-
-  beforeEach(() => {
-    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (this.getAttribute("data-testid") === RESERVED_TESTID) {
-          return RESERVED_WIDTH_PX;
-        }
-        return readOriginalWidth(originalOffsetWidth, this);
-      },
-    });
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (this.getAttribute("data-testid") === ROOM_TESTID)
-          return roomWidth();
-        return readOriginalWidth(originalClientWidth, this);
-      },
-    });
-    Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (this.getAttribute("data-testid") === CONTENT_TESTID) {
-          return currentContentWidth();
-        }
-        return readOriginalWidth(originalScrollWidth, this);
-      },
-    });
-  });
-
-  afterEach(() => {
-    if (originalOffsetWidth !== undefined) {
-      Object.defineProperty(
-        HTMLElement.prototype,
-        "offsetWidth",
-        originalOffsetWidth,
-      );
-    }
-    if (originalScrollWidth !== undefined) {
-      Object.defineProperty(
-        HTMLElement.prototype,
-        "scrollWidth",
-        originalScrollWidth,
-      );
-    }
-    if (originalClientWidth !== undefined) {
-      Object.defineProperty(
-        HTMLElement.prototype,
-        "clientWidth",
-        originalClientWidth,
-      );
-    }
-  });
-
-  function pickWidth(label: string): void {
-    fireEvent.click(screen.getByRole("button", { name: label }));
-    // One rung per delivery, by design - walk the cascade out.
-    for (let index = 0; index < 6; index += 1) {
-      fireRoomResize();
-    }
-  }
-
-  it("folds a provider on Narrow and gives it back, all the way up to full, on Wide", () => {
-    mocks.providers = [
-      configuredProvider("codex", "ephemeralProcess"),
-      configuredProvider("claude-code", "ephemeralProcess"),
-    ];
-    mocks.envelopes = {
-      codex: envelopeFor(
-        codexRateLimits({
-          usedPercent: 40,
-          resetsAt: null,
-          durationMinutes: 300,
-        }),
-      ),
-      "claude-code": envelopeFor(claudeRateLimits(22)),
-    };
-
-    renderPreview(false);
-    expect(currentDetail()).toBe("full");
-    expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
-
-    // The CEILING half, before a single measurement is delivered: clicking
-    // Narrow puts the ladder on `icon-only` by itself, which is the half a
-    // room stub cannot produce and the half the old measured-frame preview
-    // could never reach inside the modal.
-    fireEvent.click(screen.getByRole("button", { name: "Narrow" }));
-    expect(
-      screen
-        .getByTestId("status-bar-preview-frame")
-        .getAttribute("data-preview-density"),
-    ).toBe("icon-only");
-    expect(currentDetail()).toBe("icon-only");
-    expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
-
-    // And the ROOM half: a fold rather than two bare icons, where the 24px
-    // reserved box is the whole difference - 450 fits the Narrow room and does
-    // not fit the room less the box the strip's `↻` occupies. A preview that
-    // reserved nothing would stop a step above the strip, at the one width the
-    // control exists to show what collapses first.
-    pickWidth("Narrow");
-    expect(currentDetail()).toBe("icon-only");
-    expect(screen.getByTestId("status-bar-folded-providers").textContent).toBe(
-      "+1",
-    );
-
-    // The return leg, and the whole point of measuring the room rather than
-    // the readings. Against a content-sized room this stays where it is: once
-    // the fold fits, a shrink-to-fit box reports its own content forever,
-    // which never beats the 440 recorded on the way down, so the step is never
-    // given back. Stubbing this block's room width as `Math.min(room,
-    // content)` - what such a box really reports - is what makes this fail.
-    pickWidth("Wide");
-    expect(currentDetail()).toBe("full");
-    expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
   });
 });

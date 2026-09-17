@@ -128,6 +128,19 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   }),
 }));
 
+// The wizard warms the TARGET host's harness catalog while the user is still
+// choosing sessions (it is what lets an `auto` default survive an import to a
+// remote host). Both hooks reach the host runtime, which this suite does not
+// stand up - and the warm is a side effect, not what any test here asserts, so
+// they are stubbed at the same seam as the stream binding above.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessesQueryForClient: () => ({ data: undefined }),
+}));
+
 vi.mock("@/components/session-import/session-import-run-handle", () => ({
   attachSessionImportRun: attachSessionImportRunMock,
   startSessionImportRun: startSessionImportRunMock,

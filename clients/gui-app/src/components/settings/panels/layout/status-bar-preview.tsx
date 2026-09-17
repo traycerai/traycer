@@ -2,28 +2,17 @@ import { useCallback, useRef, useState, type ReactNode } from "react";
 import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
-import {
-  statusBarDensityForWidth,
-  type StatusBarDensity,
-} from "@/components/layout/status-bar/status-bar-density";
 import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
 import {
-  statusBarUsageDetailCeiling,
-  statusBarUsageLadderLevels,
-  useStatusBarUsageLadder,
-  type StatusBarUsageLadder,
-  type StatusBarUsageStop,
-} from "@/components/layout/status-bar/status-bar-usage-ladder";
-import {
-  providerReadingText,
+  STATUS_BAR_USAGE_CONTENT_CLASS,
   statusBarClusterSegments,
   statusBarSegmentKey,
   statusBarSegmentTooltip,
-  statusBarUsageContentClass,
   useStatusBarUsageDisplay,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
 import { StatusBarUsageReadings } from "@/components/layout/status-bar/status-bar-usage-readings";
+import { StatusBarUsageScroller } from "@/components/layout/status-bar/status-bar-usage-scroller";
 import { useStatusBarResourceMetricViews } from "@/components/layout/status-bar/use-status-bar-resource-views";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
@@ -47,42 +36,27 @@ import { useLayoutStore } from "@/stores/settings/layout-store";
  *
  * Each option is a NOMINAL width, and the frame is drawn at exactly that width
  * whenever the settings pane has room for it. That is what makes the control
- * mean what it says. Density (`statusBarDensityForWidth`) is read from the
- * nominal width, never from the frame's measured box: inside the Settings
- * modal that box is `min(pane, 1024) − chrome`, which is `compact` on any
- * window under ~1560px, and at the `compact` ceiling the ladder drops the mode
- * word, the mini bar and the countdown whatever the store says. A preview
- * measuring itself there answered "these switches do nothing" to the first
- * three switches a user tries - in the modal only, since the promoted tab has
- * less padding and reached `full`.
+ * mean what it says: the strip draws every reading in full at every width and
+ * scrolls what does not fit, so what the width changes is how much of the
+ * cluster is in view before the fade - and Narrow is the option that shows
+ * the fade at all, on a strip that would need it.
  *
- * The three widths sit inside the strip's three density bands (`< 500`
- * icon-only, `< 900` compact, else full): 480 is a narrow window, 880 a normal
- * one just short of `full`, 920 a wide one. Wide is 920 rather than a number
- * that looks wide, because every Settings surface caps at `max-w-5xl` and
- * leaves the frame ~944px at most: a nominal the pane can never draw would put
- * the resource cluster off the right edge at the DEFAULT width, which is the
- * reported bug moved one cluster over. `wide` is the default, so the first
- * thing a reader sees is every switch doing something - except below `md`,
- * where `normal` is, because that is the band the strip's own forced `compact`
- * rung sits in and a phone should open on a picture of ITS strip.
+ * 480 is a narrow window, 880 a normal one, 920 a wide one. Wide is 920 rather
+ * than a number that looks wide, because every Settings surface caps at
+ * `max-w-5xl` and leaves the frame ~944px at most: a nominal the pane can
+ * never draw would put the resource cluster off the right edge at the DEFAULT
+ * width. `wide` is the default, so a reader starts from the most room the
+ * strip can have - the readings still scroll there when there are more than
+ * fit - except below `md`, where `narrow` is, because a phone's footer is
+ * narrower still and should open on the closest picture of ITS strip.
  */
 export type StatusBarPreviewWidth = "narrow" | "normal" | "wide";
 
-interface StatusBarPreviewWidthOption {
-  /** The width the strip is drawn at, and the one its density is read from. */
-  readonly widthPx: number;
-  /** `widthPx` as the frame's class. A pair, so the two cannot drift. */
-  readonly frameClass: string;
-}
-
-const PREVIEW_WIDTHS: Record<
-  StatusBarPreviewWidth,
-  StatusBarPreviewWidthOption
-> = {
-  narrow: { widthPx: 480, frameClass: "w-[480px]" },
-  normal: { widthPx: 880, frameClass: "w-[880px]" },
-  wide: { widthPx: 920, frameClass: "w-[920px]" },
+/** The frame's width per option, as a class the frame wears. */
+const PREVIEW_FRAME_CLASS: Record<StatusBarPreviewWidth, string> = {
+  narrow: "w-[480px]",
+  normal: "w-[880px]",
+  wide: "w-[920px]",
 };
 
 /**
@@ -144,18 +118,14 @@ export function StatusBarPreview(props: {
   // honesty the header-placement caption already owes.
   const narrowViewport = useIsMobileViewport();
   const stripDrawn = narrowViewport ? mobileFooter : placement === "status-bar";
-  // `normal` rather than `wide` below `md`, and only as the STARTING width: the
-  // strip forces the `compact` rung on a mobile viewport whatever it measures
-  // (`ScopedAppStatusBar`), and 880 is the nominal width inside that band. A
-  // phone opening this group therefore sees the rung its own footer draws
-  // rather than one two steps more detailed. The control still moves freely
+  // `narrow` rather than `wide` below `md`, and only as the STARTING width: a
+  // phone's footer is narrower than any option here, so the picture closest
+  // to it is the one whose readings scroll. The control still moves freely
   // from there - it is a way of looking at the strip, not a claim about it.
   const [width, setWidth] = useState<StatusBarPreviewWidth>(
-    narrowViewport ? "normal" : "wide",
+    narrowViewport ? "narrow" : "wide",
   );
   const { sentinelRef, stickyRef } = useStuckAttribute();
-  const widthOption = PREVIEW_WIDTHS[width];
-  const density = statusBarDensityForWidth(widthOption.widthPx);
   const display = useStatusBarUsageDisplay();
   const liveCluster = usePreviewCluster(props.scope.hostId);
   // The same 60s clock the countdowns read, so the sample's reset instants are
@@ -164,17 +134,6 @@ export function StatusBarPreview(props: {
   const now = useSampledNow();
   const sample = statusBarPreviewSample(liveCluster, now);
   const cluster = sample?.cluster ?? liveCluster;
-  const segments = statusBarClusterSegments(cluster);
-  // Stepped HERE rather than inside the frame, because both halves of the
-  // preview need the verdict: the frame draws the rung, and the notes outside
-  // it have to name the providers that rung FOLDED - the `+N` chip's tooltip is
-  // the one explanation `inert` puts out of reach.
-  const ladder = useStatusBarUsageLadder({
-    ceiling: statusBarUsageDetailCeiling(density),
-    levels: statusBarUsageLadderLevels(display),
-    segmentCount: segments.length,
-    enabled: segments.length > 0,
-  });
   return (
     <>
       {/*
@@ -206,8 +165,8 @@ export function StatusBarPreview(props: {
           // and watch the strip answer.
           //
           // From `md` up only, and the gate is the same breakpoint `AppShell`
-          // mounts the strip on. Below it this block is a dimmed, `inert`
-          // picture of a surface the shell does not draw, and it is tall - the
+          // mounts the strip on. Below it this block is a dimmed picture of
+          // a surface the shell does not draw, and it is tall - the
           // header row, the frame, the notes and two captions, all of which
           // wrap. Pinned on a landscape phone it would take most of the
           // scrollport, and a sticky box taller than its scrollport pins its
@@ -239,8 +198,8 @@ export function StatusBarPreview(props: {
           <div className="min-w-[50%] flex-1 space-y-1">
             <div className="font-medium text-foreground">Preview</div>
             <p className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground">
-              The strip as these settings draw it. Narrow it to see what
-              collapses first on a small window.
+              The strip as these settings draw it. Narrow it to see how the
+              readings scroll when a window is short of room.
             </p>
           </div>
           <div className="ml-auto flex max-w-full shrink-0 justify-end">
@@ -256,58 +215,14 @@ export function StatusBarPreview(props: {
             />
           </div>
         </div>
-        {/*
-          `aria-hidden` and `inert` together, because this is a picture of a
-          surface rather than the surface: every control in it is a real one
-          that would be a dead end here, and the rows below this are where each
-          of them is actually configured. `inert` takes them out of the tab
-          order and stops the tooltips inside from ever opening; `aria-hidden`
-          keeps a screen reader from reading the strip's contents a second time
-          under a control that does nothing. What those tooltips would have
-          said is in the caption below instead - see `StatusBarPreviewNotes`.
-
-          The frame is the SIMULATED VIEWPORT, so the option's width is on it:
-          the border hugs the strip the control named, and `max-w-full` is what
-          keeps that honest. Every Settings surface caps at `max-w-5xl`, so the
-          box this sits in is at most ~944px wide however large the window is -
-          a frame drawn wider than that would push the resource cluster off the
-          right edge with nothing on screen saying so, which is the reported
-          bug again one cluster to the right. Capped, the drawn strip is
-          narrower than the nominal width on a small pane and the ladder folds
-          against the room it can actually see.
-        */}
-        <div
-          inert
-          aria-hidden
-          data-testid="status-bar-preview-frame"
-          data-preview-width={width}
-          data-preview-density={density}
-          className={cn(
-            "max-w-full overflow-hidden rounded-md border border-border/70 bg-canvas text-canvas-foreground",
-            widthOption.frameClass,
-            // Greyed, not hidden: wherever the strip is not the surface currently
-            // drawn - header placement, or a window too narrow for it - these
-            // settings still describe a real strip, and a preview that vanished
-            // would read as the settings having no effect.
-            !stripDrawn && "opacity-50",
-          )}
-        >
-          {/*
-            The counterpart of the strip's own outer div, and no longer a
-            measured one: density is a fact about the width the control named,
-            and what the ladder measures is the usage slot inside this box.
-          */}
-          <div data-testid="status-bar-preview">
-            <StatusBarPreviewStrip
-              density={density}
-              scope={props.scope}
-              hasExplicitPick={props.hasExplicitPick}
-              cluster={cluster}
-              display={display}
-              ladder={ladder}
-            />
-          </div>
-        </div>
+        <StatusBarPreviewFrame
+          width={width}
+          dimmed={!stripDrawn}
+          scope={props.scope}
+          hasExplicitPick={props.hasExplicitPick}
+          cluster={cluster}
+          display={display}
+        />
         {sample === null ? null : (
           <p
             data-testid="status-bar-preview-sample-note"
@@ -323,14 +238,10 @@ export function StatusBarPreview(props: {
           disagreeing about which of them is live.
         */}
         <StatusBarPreviewNotes
-          density={density}
           scope={props.scope}
           hasExplicitPick={props.hasExplicitPick}
           liveCluster={liveCluster}
-          drawnCluster={cluster}
           sampledSegmentKeys={sample?.segmentKeys ?? NO_SAMPLED_SEGMENTS}
-          display={display}
-          stop={ladder.stop}
           dimmed={!stripDrawn}
         />
         {stripDrawn ? null : (
@@ -369,11 +280,10 @@ interface StuckAttribute {
  * correct while it is. Every other way to answer that question reads the
  * scroll position, which means a listener on a scrolling container writing
  * React state - a re-render of the whole preview per scrolled pixel, on the
- * one surface that is already re-rendering to a ladder and a 1 Hz sampler.
+ * one surface that is already re-rendering to a 60s clock and a 1 Hz sampler.
  *
- * So the verdict is a DOM WRITE from an observer callback, exactly as the
- * usage ladder keeps its measurement out of an effect: the sentinel is clipped
- * out of the settings scroll container at the moment the block pins, and
+ * So the verdict is a DOM WRITE from an observer callback: the sentinel is
+ * clipped out of the settings scroll container at the moment the block pins, and
  * `IntersectionObserver` computes intersection through every clipping
  * ancestor, so the default `root` answers about the scrollport without this
  * having to name it.
@@ -405,20 +315,88 @@ function useStuckAttribute(): StuckAttribute {
 }
 
 /**
- * The strip itself, at the same `h-6` and with the same two clusters.
+ * The frame the preview's strip is drawn in: the SIMULATED VIEWPORT.
  *
- * Its density arrives as a prop, read from the width the control named; what
- * the ladder measures is the usage slot inside THIS box, so it answers the
- * same question it answers in the real strip - "does what I am holding fit the
- * room I have" - against the room a strip that wide would actually have.
+ * The option's width is on it, so the border hugs the strip the control
+ * named, and `max-w-full` is what keeps that honest. Every Settings surface
+ * caps at `max-w-5xl`, so the box this sits in is at most ~944px wide however
+ * large the window is - a frame drawn wider than that would push the resource
+ * cluster off the right edge with nothing on screen saying so. Capped, the
+ * drawn strip is narrower than the nominal width on a small pane and its
+ * readings scroll against the room it can actually see.
+ *
+ * The frame itself is LIVE, not `inert`: the usage cluster inside it scrolls,
+ * and a wheel or a swipe over the frame has to reach the scroller, which an
+ * inert ancestor would swallow. What is inert is the CONTENT - the readings
+ * inside the scroller and the resource control beside it (see
+ * `StatusBarPreviewStrip`) - so nothing in the picture can be clicked,
+ * focused or hovered into a tooltip, while the picture itself still moves.
+ *
+ * Exported so a layout check can draw exactly this frame at exactly this
+ * width without the preview's host-bound hooks around it.
  */
-function StatusBarPreviewStrip(props: {
-  readonly density: StatusBarDensity;
+export function StatusBarPreviewFrame(props: {
+  readonly width: StatusBarPreviewWidth;
+  /**
+   * The strip is not the surface currently drawn - header placement, or a
+   * window too narrow for one.
+   */
+  readonly dimmed: boolean;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   readonly cluster: StatusBarRateLimitCluster;
   readonly display: StatusBarUsageDisplay;
-  readonly ladder: StatusBarUsageLadder;
+}): ReactNode {
+  return (
+    <div
+      data-testid="status-bar-preview-frame"
+      data-preview-width={props.width}
+      className={cn(
+        "max-w-full overflow-hidden rounded-md border border-border/70 bg-canvas text-canvas-foreground",
+        PREVIEW_FRAME_CLASS[props.width],
+        // Greyed, not hidden: wherever the strip is not the surface currently
+        // drawn - header placement, or a window too narrow for it - these
+        // settings still describe a real strip, and a preview that vanished
+        // would read as the settings having no effect.
+        props.dimmed && "opacity-50",
+      )}
+    >
+      {/* The counterpart of the strip's own outer div. */}
+      <div data-testid="status-bar-preview">
+        <StatusBarPreviewStrip
+          scope={props.scope}
+          hasExplicitPick={props.hasExplicitPick}
+          cluster={props.cluster}
+          display={props.display}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The strip itself, at the same `h-6` and with the same two clusters, the
+ * usage cluster in the same scroller the strip uses - so at the Narrow width
+ * the frame shows the fade the strip would show, over the readings the strip
+ * would draw, and scrolls them the way the strip would.
+ *
+ * `aria-hidden` and `inert` sit on the CONTENTS rather than on the strip,
+ * because this is a picture of a surface rather than the surface: every
+ * control in it is a real one that would be a dead end here, and the rows
+ * below are where each of them is actually configured. `inert` takes them out
+ * of the tab order and stops the tooltips inside from ever opening -
+ * what those tooltips would have said is in the caption below instead, see
+ * `StatusBarPreviewNotes` - and `aria-hidden` keeps a screen reader from
+ * reading the strip's contents a second time under a control that does
+ * nothing. The scroller around the readings stays live so the picture can be
+ * scrolled: an inert element is skipped by hit testing, so a wheel or a swipe
+ * over the readings lands on the scroller, which is exactly where it should.
+ */
+function StatusBarPreviewStrip(props: {
+  readonly scope: HostScope;
+  readonly hasExplicitPick: boolean;
+  readonly cluster: StatusBarRateLimitCluster;
+  readonly display: StatusBarUsageDisplay;
 }): ReactNode {
   const rateLimitsEnabled = useLayoutStore(
     (state) => state.statusBar.rateLimits.enabled,
@@ -427,75 +405,72 @@ function StatusBarPreviewStrip(props: {
     (state) => state.statusBar.resources.enabled,
   );
   const { cluster, display } = props;
-  const { stop, roomRef, reservedRef, contentRef } = props.ladder;
   return (
     <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
       {/*
-        The row's GROWER, exactly as the strip's usage slot is: the ladder
-        records how much ROOM the readings have, and a slot sized by its own
-        content would report the readings measuring themselves - a ladder that
-        can only ever go down. It is why there is no separate spacer here; the
-        spare room has to be absorbed by one box, and it may as well be the one
-        that needs to know how much of it there is.
+        The row's GROWER, exactly as the strip's usage slot is: the spare room
+        has to be absorbed by one box, and it is this one, so the scroller
+        inside has the room the strip's scroller would have and no more.
       */}
       <span className="flex min-w-0 flex-1 items-center gap-1">
         {rateLimitsEnabled ? (
-          <span
-            ref={roomRef}
-            data-testid="status-bar-preview-usage"
-            className="flex min-w-0 flex-1 items-center"
-          >
-            {/*
-              The strip's trigger without the trigger: same box, same overflow
-              rule, so the ladder measures what it measures there. A plain span
-              because a `PopoverTrigger` outside a `Popover` throws, and a
-              preview has nothing to open anyway.
-            */}
-            <span
-              data-usage-detail={stop.detail}
-              className="inline-flex h-6 min-w-0 items-center overflow-hidden text-muted-foreground"
+          <>
+            {/* Its own testid rather than the strip's: Settings can be open
+              while the real strip is mounted below it, and one id naming two
+              live boxes is a trap for the next test that queries it. */}
+            <StatusBarUsageScroller
+              hostId={props.scope.hostId}
+              cluster={cluster}
+              testId="status-bar-preview-usage"
             >
-              {/* Its own testid rather than the strip's: Settings can be open
-                while the real strip is mounted below it, and one id naming two
-                live boxes is a trap for the next test that queries it. */}
+              {/*
+                The strip's trigger without the trigger: same box, same
+                natural width, so the scroller has the same row to scroll. A
+                plain span because a `PopoverTrigger` outside a `Popover`
+                throws, and a preview has nothing to open anyway. This is the
+                inert boundary: everything from here down is picture.
+              */}
               <span
-                ref={contentRef}
-                data-testid="status-bar-preview-content"
-                className={statusBarUsageContentClass(cluster)}
+                inert
+                aria-hidden
+                data-testid="status-bar-preview-readings"
+                className="inline-flex h-6 shrink-0 items-center text-muted-foreground"
               >
-                <StatusBarUsageReadings
-                  cluster={cluster}
-                  stop={stop}
-                  display={display}
-                />
+                <span
+                  data-testid="status-bar-preview-content"
+                  className={STATUS_BAR_USAGE_CONTENT_CLASS}
+                >
+                  <StatusBarUsageReadings cluster={cluster} display={display} />
+                </span>
               </span>
-            </span>
+            </StatusBarUsageScroller>
             {/*
-              The refresh control's BOX without the control: the ladder
-              subtracts whatever shares the room with the readings, so a
-              preview that drew nothing here would measure ~24px more room than
-              the strip has and keep one rung of detail the strip has already
-              given up - at the Narrow width, which exists to show exactly
-              where that happens. Composed the way the strip composes it
-              (`pl-1` gap plus the button's `size-5`) rather than as one width,
-              so the two are read from the same two numbers. The real
-              `RefreshIconButton` would close it too, but it would render
-              disabled here - a passive reader has nothing to refresh - which
-              misrepresents a live control.
+              The refresh control's BOX without the control: the strip's
+              scroller has only the room that control leaves, so a preview
+              that drew nothing here would give its readings ~24px more than
+              the strip has and show no fade at a width where the strip
+              already scrolls - at Narrow, which exists to show exactly that.
+              Composed the way the strip composes it (`pl-1` gap plus the
+              button's `size-5`) rather than as one width, so the two are read
+              from the same two numbers. The real `RefreshIconButton` would
+              close it too, but it would render disabled here - a passive
+              reader has nothing to refresh - which misrepresents a live
+              control.
             */}
             <span
-              ref={reservedRef}
+              aria-hidden
               data-testid="status-bar-preview-reserved"
               className="flex shrink-0 items-center pl-1"
             >
               <span className="block size-5" />
             </span>
-          </span>
+          </>
         ) : null}
       </span>
       {resourcesEnabled ? (
         <StatusBarResourceSegment
-          density={props.density}
+          inert
+          aria-hidden
           hostId={props.scope.hostId}
           hostLabel={props.scope.hostLabel}
           hasExplicitPick={props.hasExplicitPick}
@@ -511,10 +486,9 @@ function StatusBarPreviewStrip(props: {
  * `inert` removes the frame from hit testing, so every `TooltipWrapper` in
  * there is unreachable by construction - and the states those tooltips exist
  * for are exactly the ones a preview reads as broken without them: three bare
- * dashes where the resource numbers should be, a dimmed reading behind a
- * warning glyph, or a `+2` chip with no way to see which two. One line each,
- * from the same builders the tooltips use, so the caption and the strip can
- * never word the same state differently.
+ * dashes where the resource numbers should be, or a dimmed reading behind a
+ * warning glyph. One line each, from the same builders the tooltips use, so
+ * the caption and the strip can never word the same state differently.
  *
  * Two siblings rather than one list, because the resource half has to be able
  * to not exist: reading it costs a hook that SUBSCRIBES (see
@@ -526,18 +500,12 @@ function StatusBarPreviewStrip(props: {
  * Silent when everything is reporting.
  */
 function StatusBarPreviewNotes(props: {
-  readonly density: StatusBarDensity;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   /** The host's own cluster - the one whose readings need explaining. */
   readonly liveCluster: StatusBarRateLimitCluster;
-  /** The cluster in the frame, which the sample may have stood in for. */
-  readonly drawnCluster: StatusBarRateLimitCluster;
   /** The segments whose reading in the frame is invented. Usually empty. */
   readonly sampledSegmentKeys: ReadonlyArray<string>;
-  readonly display: StatusBarUsageDisplay;
-  /** The rung the frame settled on, and with it which providers it folded. */
-  readonly stop: StatusBarUsageStop;
   /**
    * The strip is not the surface currently drawn - header placement, or a
    * window too narrow for one.
@@ -553,10 +521,7 @@ function StatusBarPreviewNotes(props: {
   const usageNotes = rateLimitsEnabled
     ? statusBarPreviewUsageNotes({
         liveCluster: props.liveCluster,
-        drawnCluster: props.drawnCluster,
         sampledSegmentKeys: props.sampledSegmentKeys,
-        stop: props.stop,
-        display: props.display,
       })
     : NO_NOTES;
   return (
@@ -573,7 +538,6 @@ function StatusBarPreviewNotes(props: {
       )}
       {resourcesEnabled ? (
         <StatusBarPreviewResourceNote
-          density={props.density}
           scope={props.scope}
           hasExplicitPick={props.hasExplicitPick}
           dimmed={props.dimmed}
@@ -584,55 +548,32 @@ function StatusBarPreviewNotes(props: {
 }
 
 /**
- * The usage half of the caption: why a reading is not live, then which
- * providers the current rung folded away.
+ * The usage half of the caption: why a reading is not live, one line per
+ * provider whose segment is cold, unavailable or degraded.
  *
- * The folded line is the `+N` chip's tooltip, said outside the frame. `+2` with
- * no way to see which two is at its worst at the Narrow width, which is the one
- * width a reader picks precisely to find out what folds - and it is built from
- * the chip's own `providerReadingText`, so the two can never disagree.
+ * It explains the HOST's readings, which are still cold or unavailable while
+ * the sample stands in for them. A provider the sample spoke for is left out:
+ * the caption above already says those readings were never fetched, and
+ * `Codex · no reading yet` under a frame showing `57% used` reads as the two
+ * disagreeing. A provider the sample did NOT speak for keeps its line - an
+ * `unavailable` one is drawing its own dash in there, and that dash is what
+ * the line explains.
  *
- * Two clusters because they can differ: the first half explains the HOST's
- * readings, which are still cold or unavailable while the sample stands in for
- * them, and the fold is a property of whatever the frame is actually drawing.
- *
- * A provider the sample spoke for is left out of the first half: the caption
- * above already says those readings were never fetched, and `Codex · no
- * reading yet` under a frame showing `57% used` reads as the two disagreeing.
- * A provider the sample did NOT speak for keeps its line - an `unavailable`
- * one is drawing its own dash in there, and that dash is what the line
- * explains.
+ * Nothing here about a reading being out of view: every segment is drawn in
+ * full, and one past the frame's edge is a scroll away rather than a state
+ * to explain.
  */
 function statusBarPreviewUsageNotes(input: {
   readonly liveCluster: StatusBarRateLimitCluster;
-  readonly drawnCluster: StatusBarRateLimitCluster;
   readonly sampledSegmentKeys: ReadonlyArray<string>;
-  readonly stop: StatusBarUsageStop;
-  readonly display: StatusBarUsageDisplay;
 }): ReadonlyArray<string> {
-  const notes = statusBarClusterSegments(input.liveCluster)
+  return statusBarClusterSegments(input.liveCluster)
     .filter(
       (segment) =>
         segment.state !== "live" &&
         !input.sampledSegmentKeys.includes(statusBarSegmentKey(segment)),
     )
     .map(statusBarSegmentTooltip);
-  if (input.stop.foldedCount === 0) return notes;
-  const drawn = statusBarClusterSegments(input.drawnCluster);
-  const folded = drawn.slice(drawn.length - input.stop.foldedCount);
-  const readings = folded.map((segment) =>
-    providerReadingText(segment, input.display.percentMode),
-  );
-  // Marked when one of the numbers in it is invented, since this line is the
-  // one place a folded reading appears and the caption above it names
-  // providers the fold has just taken off the strip.
-  const sampled = folded.some((segment) =>
-    input.sampledSegmentKeys.includes(statusBarSegmentKey(segment)),
-  );
-  return [
-    ...notes,
-    `Folded: ${readings.join(", ")}${sampled ? " (sample)" : ""}`,
-  ];
 }
 
 /** One empty list, for the usual case of a preview drawing real readings. */
@@ -660,13 +601,11 @@ const NOTE_CLASS = "text-ui-sm text-muted-foreground";
  * otherwise repeat the same sentence three times.
  */
 function StatusBarPreviewResourceNote(props: {
-  readonly density: StatusBarDensity;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   readonly dimmed: boolean;
 }): ReactNode {
   const views = useStatusBarResourceMetricViews({
-    density: props.density,
     hostId: props.scope.hostId,
     hostLabel: props.scope.hostLabel,
     hasExplicitPick: props.hasExplicitPick,
@@ -690,11 +629,8 @@ function StatusBarPreviewResourceNote(props: {
  *
  * Resolved ONCE, at the component both halves of the preview hang off, and
  * handed to each as a prop: the strip that draws the readings and the caption
- * that explains them have to agree about which providers the current rung
- * folded, and a fold is a property of the LADDER, which only one of them can
- * own. Two calls would still resolve to the same TanStack observers over the
- * same keys - the cost was never duplicate reads - but the ladder cannot be
- * stepped twice against two boxes and asked for one answer.
+ * that explains them have to describe one cluster, and the sample that may
+ * stand in for it is decided once, above both.
  */
 function usePreviewCluster(hostId: string | null): StatusBarRateLimitCluster {
   const providers = useStatusBarWindowedProviders();
@@ -768,8 +704,8 @@ interface StatusBarPreviewSample {
  *
  * Every segment is kept and every one stays in the strip's own order: the
  * substitution walks the cluster rather than the readings, so the provider
- * count, the icon set, each provider's own switches and the `+N` fold's
- * arithmetic are the ones the strip would have. `SAMPLE_READINGS` runs out
+ * count, the icon set and each provider's own switches are the ones the strip
+ * would have. `SAMPLE_READINGS` runs out
  * after two, and the cold providers past them keep their cold track - two
  * invented numbers are enough to answer every switch on this page, and a
  * strip of six identical ones would look like data.

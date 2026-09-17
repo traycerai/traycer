@@ -1,6 +1,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ComposerToolbarCatalogScope } from "@/components/home/hooks/use-composer-toolbar-store";
 import type { ComposerControls } from "@/lib/commands/composer-controls-registry";
@@ -189,6 +194,7 @@ function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
     hostClient: DEFAULT_TEST_HOST_CLIENT,
     hostId: TEST_HOST_ID,
     tuiOnly,
+    chatLineCarriesAutoMode: null,
   };
 }
 
@@ -255,6 +261,11 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // The harness-memory store is a module singleton written by the recording
     // wrapper; reset so write assertions don't leak between tests.
     useComposerHarnessMemoryStore.getState().resetForTests();
+    // The negotiated-manifest registry is ALSO module-level state (per-host,
+    // keyed independently of the QueryClient/Zustand fixtures above), so a
+    // manifest recorded for TEST_HOST_ID by one case would otherwise survive
+    // into the next.
+    resetNegotiatedManifests();
   });
 
   // Unmount each test's hook so a later `useSettingsStore.setState` can't
@@ -633,6 +644,56 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
     // The raw sticky preference survives for a later harness that honors it.
     expect(result.current.getState().values.permission).toBe("supervised");
+  });
+
+  // FIX 2 (P1): the HOST's own negotiated line, which no catalog ROW can
+  // answer - a pre-`auto` host serves unconstrained rows like any other, so
+  // without this a sticky `auto` survived the clamp on a machine whose
+  // `chat.subscribe` line cannot carry the enum.
+  it("clamps a sticky auto permission until the negotiated manifest proves this host knows auto, then keeps it", async () => {
+    useSettingsStore.setState({
+      defaultSelection: {
+        harnessId: "claude",
+        modelSlug: "sonnet",
+        profileId: null,
+      },
+      defaultPermission: "auto",
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "claude", available: true }],
+    };
+
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
+    );
+
+    // No handshake recorded for TEST_HOST_ID yet - the safe direction demotes.
+    await waitFor(() =>
+      expect(result.current.getState().permission).toBe("auto_accept_edits"),
+    );
+
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    // The registry write alone does not re-run `setCatalog` (the store reads
+    // it only when the catalog-sync effect fires) - a new harnesses object
+    // forces that effect's dependency array to actually change, the way a
+    // real catalog refetch would.
+    harnessesData.value = {
+      harnesses: [{ id: "claude", available: true }],
+    };
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.getState().permission).toBe("auto"),
+    );
+    // The raw sticky value was never touched by the clamp either way.
+    expect(result.current.getState().values.permission).toBe("auto");
   });
 
   it("emits the normalized reasoning for the selected model", () => {
@@ -1638,6 +1699,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostClient: hostBClient,
         hostId: "host-b",
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       }),
     );
 
@@ -1658,6 +1720,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostClient: null,
         hostId: null,
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       }),
     );
 
@@ -1686,6 +1749,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           hostClient: props.hostClient,
           hostId: props.hostId,
           tuiOnly: false,
+          chatLineCarriesAutoMode: null,
         }),
       { initialProps: { hostClient: hostAClient, hostId: "host-a" } },
     );

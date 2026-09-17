@@ -1,3 +1,5 @@
+import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { logBrowserOpenSpan } from "@/lib/browser-view/sessions/browser-open-perf";
 import {
   useCallback,
   useEffect,
@@ -98,6 +100,57 @@ export interface BrowserTabTileProps {
    */
   readonly onNativeTileFocused: (() => void) | null;
   readonly onConvertToPip: (() => void) | null;
+}
+
+/** Request-only chrome mounts no browser transport or native surface. */
+export function PendingBrowserTabTile(props: {
+  readonly request: PendingBrowserTabRequest;
+  readonly onRequestClose: () => void;
+}) {
+  const measured = useRef(false);
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (measured.current) return;
+      measured.current = true;
+      logBrowserOpenSpan(
+        "click-to-placeholder",
+        props.request,
+        props.request.clickedAt,
+      );
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [props.request]);
+  return (
+    <div
+      className="flex h-full min-h-0 flex-col"
+      aria-label="Opening browser tab"
+    >
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <span className="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground">
+          {props.request.requestedUrl}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close browser tab"
+          onClick={props.onRequestClose}
+        >
+          <X className="size-4" aria-hidden />
+        </Button>
+      </div>
+      <div
+        className="flex min-h-0 flex-1 items-center justify-center gap-2 text-muted-foreground"
+        role="status"
+      >
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+        <span>Opening browser tab…</span>
+      </div>
+    </div>
+  );
 }
 
 interface BrowserTabTileSurfaceProps extends BrowserTabTileProps {
