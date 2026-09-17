@@ -28,8 +28,25 @@ import {
 /**
  * Playback speeds, in the order the control cycles them. Event-paced, not
  * wall-clock-scaled - see the transport's tick.
+ *
+ * IT USED TO STOP AT 4x, which is one row every 175ms: a session with a couple
+ * of thousand rows in it - an ordinary afternoon for a busy epic - took six
+ * minutes to replay at the fastest setting the control offered, which is the
+ * "even at 4x, the graph is filling super slow" of round 2's feedback. The two
+ * rungs added here are worth having because the tick no longer shortens past
+ * the renderer's floor; it advances several rows instead
+ * (`commGraphPlaybackPace`), so 16x really is four times 4x.
+ *
+ * The top rung is 32x because that is where the number stops being the
+ * complaint: a row every 22ms replays two thousand of them in forty-odd
+ * seconds, where 4x took nearly six minutes. Seven rungs is already long for a
+ * CYCLING control - every rung is another click to come back around to 1x - so
+ * an eighth should replace the button with a menu rather than joining this
+ * list.
  */
-export const COMM_GRAPH_PLAYBACK_SPEEDS: ReadonlyArray<number> = [0.5, 1, 2, 4];
+export const COMM_GRAPH_PLAYBACK_SPEEDS: ReadonlyArray<number> = [
+  0.5, 1, 2, 4, 8, 16, 32,
+];
 
 const DEFAULT_SPEED = 1;
 

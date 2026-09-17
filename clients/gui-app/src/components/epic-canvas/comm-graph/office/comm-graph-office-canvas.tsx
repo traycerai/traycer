@@ -114,7 +114,7 @@ import {
 } from "@/components/epic-canvas/comm-graph/office/office-logo-cache";
 import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/comm-graph-find-adapter";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
-import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
+import { commGraphPlaybackPace } from "@/lib/comm-graph/comm-graph-transport";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import {
   drawOfficeSprite,
@@ -3348,7 +3348,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       pulseKey,
       // Envelope flights are sized to fit inside one playback step, so a faster
       // transport shortens the flight instead of queueing them up behind it.
-      stepMs: BASE_STEP_MS / speed,
+      // THE TICK, not `BASE_STEP_MS / speed`. Past the renderer's floor those
+      // two part company: playback keeps a ~90ms tick and advances several
+      // rows on it, and a scene told the shorter number would time its motion
+      // to a step the cursor is no longer taking.
+      stepMs: commGraphPlaybackPace(speed).tickMs,
       cursorMs,
       // A PLACEHOLDER while live: reading a clock during render is impure, so
       // the sync effect below stamps the real time and the frame loop advances

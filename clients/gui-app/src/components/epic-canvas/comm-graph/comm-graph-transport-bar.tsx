@@ -6,9 +6,12 @@
  * used to own playback is gone; the per-epic cursor store survived it, so the
  * graph still remembers where it was left when the tile is closed and reopened.
  *
- * THE TRACK IS THE LOG. Markers are the events themselves, one per row, at their
- * own timestamps - not buckets, not a sample. Crowding IS the information: a
- * burst of traffic should look like a burst.
+ * THE TRACK IS THE LOG. Markers are the events themselves, one per row - not
+ * buckets, not a sample. Crowding IS the information: a burst of traffic should
+ * look like a burst, which is also why the axis they sit on measures REPLAY
+ * time rather than wall time (see `comm-graph-transport.ts`): an idle hour that
+ * playback crosses in one step no longer takes half the bar away from the
+ * exchanges either side of it.
  *
  * LIVE IS THE RIGHT EDGE, not a mode. `cursor === null` puts the playhead at the
  * end of everything captured and lets new rows extend the track under it;
@@ -23,6 +26,7 @@
  * `lib/comm-graph/comm-graph-transport.ts` where it can be tested on numbers.
  */
 import {
+  memo,
   useCallback,
   useMemo,
   useRef,
@@ -40,8 +44,8 @@ import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import {
   commGraphEventAtFraction,
   commGraphPlayheadFraction,
-  commGraphTimeRange,
   commGraphTransportMarkers,
+  commGraphTransportTrack,
   type CommGraphTransportMarker,
 } from "@/lib/comm-graph/comm-graph-transport";
 import {
@@ -50,6 +54,19 @@ import {
 } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
 
 const MARKER_PREVIEW_MAX_CHARS = 120;
+
+/**
+ * Marker tooltips, by the row they describe.
+ *
+ * A title is a markdown parse and a single-line format, and the track renders
+ * ONE MARKER PER ROW - so an epic with a couple of thousand rows in it was
+ * parsing a couple of thousand messages every time the bar re-rendered, which
+ * during playback is every tick. The text is a pure function of a row and a row
+ * never changes, so it is computed once and kept for as long as the row is
+ * reachable. A `WeakMap` rather than a bounded cache because the key IS the
+ * lifetime: rows the log has dropped take their titles with them.
+ */
+const markerTitles = new WeakMap<CommGraphEvent, string>();
 
 export interface CommGraphTransportBarProps {
   readonly epicId: string;
@@ -62,6 +79,14 @@ export interface CommGraphTransportBarProps {
 }
 
 function markerTitle(event: CommGraphEvent): string {
+  const cached = markerTitles.get(event);
+  if (cached !== undefined) return cached;
+  const title = buildMarkerTitle(event);
+  markerTitles.set(event, title);
+  return title;
+}
+
+function buildMarkerTitle(event: CommGraphEvent): string {
   const when = new Date(event.timestamp).toLocaleTimeString();
   const text = event.messageText;
   if (text === null || text.length === 0) return when;
@@ -77,21 +102,24 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
   const { epicId, events } = props;
   const transport = useCommGraphTransport(epicId, events);
 
-  const range = useMemo(() => commGraphTimeRange(events), [events]);
+  // ONE MEMO FOR BOTH, from the same array: the markers index into the track's
+  // own offsets, so a track built from a different log than the markers were
+  // would place them by somebody else's arithmetic.
+  const track = useMemo(() => commGraphTransportTrack(events), [events]);
   const markers = useMemo(
-    () => (range === null ? [] : commGraphTransportMarkers(events, range)),
-    [events, range],
+    () => (track === null ? [] : commGraphTransportMarkers(events, track)),
+    [events, track],
   );
-  const playhead = commGraphPlayheadFraction(transport.cursor, range);
+  const playhead = commGraphPlayheadFraction(events, transport.cursor, track);
 
   const seekToFraction = useCallback(
     (fraction: number) => {
-      if (range === null) return;
-      const event = commGraphEventAtFraction(events, range, fraction);
+      if (track === null) return;
+      const event = commGraphEventAtFraction(events, track, fraction);
       if (event === null) return;
       transport.seekToEvent(event);
     },
-    [events, range, transport],
+    [events, track, transport],
   );
 
   return (
@@ -248,28 +276,7 @@ function CommGraphTransportTrack(props: {
         className="absolute inset-y-0 left-0 rounded-sm bg-primary/10"
         style={{ width: `${playhead * 100}%` }}
       />
-      {markers.map((marker) => (
-        <TooltipWrapper
-          key={marker.key}
-          label={markerTitle(marker.event)}
-          side="top"
-          sideOffset={4}
-          align="center"
-        >
-          <span
-            aria-hidden
-            data-testid={`comm-graph-transport-marker-${marker.key}`}
-            data-kind={marker.event.kind}
-            className={cn(
-              "absolute top-1 bottom-1 w-px -translate-x-1/2",
-              marker.event.kind === "a2a_notice"
-                ? "bg-warning/70"
-                : "bg-foreground/25",
-            )}
-            style={{ left: `${marker.fraction * 100}%` }}
-          />
-        </TooltipWrapper>
-      ))}
+      <CommGraphTransportMarkerLayer markers={markers} />
       <div
         aria-hidden
         data-testid="comm-graph-transport-playhead"
@@ -279,6 +286,54 @@ function CommGraphTransportTrack(props: {
     </div>
   );
 }
+
+/**
+ * THE TICKS, AND NOTHING THAT MOVES.
+ *
+ * Split out and memoized because the track around it re-renders on every step
+ * of playback - the playhead and the elapsed fill are what a step MOVES - and
+ * the markers are not among the things that moved. Left inline, a tick of
+ * playback reconciled one Radix tooltip per captured row, thirty times a
+ * second, for rows whose positions had not changed since the last frame; that
+ * is the same "even at 4x, the graph is filling super slow" the speed ladder
+ * answers from the other end, and raising the ladder without this would only
+ * have asked the bar to do it more often.
+ *
+ * `markers` comes from one memo over `events`, so this re-renders exactly when
+ * a row lands - which is also the only time a fraction can change.
+ */
+const CommGraphTransportMarkerLayer = memo(
+  function CommGraphTransportMarkerLayer(props: {
+    readonly markers: ReadonlyArray<CommGraphTransportMarker>;
+  }) {
+    return (
+      <>
+        {props.markers.map((marker) => (
+          <TooltipWrapper
+            key={marker.key}
+            label={markerTitle(marker.event)}
+            side="top"
+            sideOffset={4}
+            align="center"
+          >
+            <span
+              aria-hidden
+              data-testid={`comm-graph-transport-marker-${marker.key}`}
+              data-kind={marker.event.kind}
+              className={cn(
+                "absolute top-1 bottom-1 w-px -translate-x-1/2",
+                marker.event.kind === "a2a_notice"
+                  ? "bg-warning/70"
+                  : "bg-foreground/25",
+              )}
+              style={{ left: `${marker.fraction * 100}%` }}
+            />
+          </TooltipWrapper>
+        ))}
+      </>
+    );
+  },
+);
 
 /**
  * WITH NOTHING CAPTURED THERE IS NO SLIDER, not a slider that reports

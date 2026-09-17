@@ -10,11 +10,33 @@
  * FRACTIONS, NOT PIXELS. The track is fluid, so positions are 0..1 along it and
  * the DOM turns them into percentages. Nothing here knows the track's width.
  *
- * THE TRACK IS EVENT TIME, NOT WALL TIME. It spans the first captured row to
- * the last, so a quiet epic does not render as a single tick pinned to one end,
- * and a long idle gap does not push every real exchange into a sliver. A degenerate
- * range (one row, or several sharing a millisecond) collapses to a single point
- * and every marker sits at the right edge - see `commGraphFractionForTimestamp`.
+ * THE TRACK MEASURES REPLAY TIME, NOT WALL TIME - the time PLAYBACK will spend
+ * getting there, which is the only quantity a scrubber under a player is
+ * actually about.
+ *
+ * It used to be wall time normalized to the session, and the note here claimed
+ * "a long idle gap does not push every real exchange into a sliver", which was
+ * simply untrue of `(t - start) / (end - start)`: an epic worked in bursts over
+ * an afternoon rendered as five smears of unreadable ticks separated by half a
+ * track of nothing, which is what round 2's feedback asked about ("why do we
+ * have these big gaps in the timeline? it doesn't need the gaps").
+ *
+ * The transport has ALWAYS been event-paced: one row per tick, `BASE_STEP_MS`
+ * each, whatever the real interval was. So a two-hour idle costs exactly one
+ * step to cross and a two-hundred-millisecond reply costs the same step. An
+ * axis that gave the idle half the bar was measuring something the player does
+ * not spend. Each gap now contributes `min(gap, BASE_STEP_MS)`, which makes the
+ * track a picture of the replay: the playhead crosses it at a near-constant
+ * rate, and distance along it is proportional to how long you will wait.
+ *
+ * Bursts stay dense, which is the point of `commGraphTransportMarkers`'s
+ * refusal to bucket - sub-step gaps are still rendered PROPORTIONALLY, so four
+ * messages in the same second still pack tighter than four a second apart. It
+ * is only the part of a gap that playback refuses to replay that gets trimmed.
+ *
+ * A degenerate track (one row, or several sharing a millisecond) collapses to a
+ * single point and every marker sits at the right edge - see
+ * `commGraphTrackFraction`.
  */
 import {
   commGraphEventKey,
@@ -26,31 +48,100 @@ import {
 } from "@/lib/comm-graph/comm-graph-events";
 import type { CommGraphTimeCursor } from "@/lib/comm-graph/comm-graph-timeline";
 
-export interface CommGraphTimeRange {
-  readonly startMs: number;
-  readonly endMs: number;
+/**
+ * One playback step, in milliseconds - the tick the cursor advances a row on at
+ * 1x, and therefore the longest a single gap can be worth on the track.
+ *
+ * HERE RATHER THAN BESIDE THE TICK because it is now two things at once: the
+ * transport's pace and the axis's unit. A copy in each would be a copy that
+ * drifts, and the drift would be a scrubber that no longer described the
+ * playback it sits under.
+ *
+ * Exported onwards by the transport hook, because an animated renderer has to
+ * fit a per-row animation inside one step: reading the same constant is what
+ * keeps an envelope from still being in flight when the cursor has moved on.
+ */
+export const BASE_STEP_MS = 700;
+
+/**
+ * The shortest tick playback will schedule, however fast it is asked to go.
+ *
+ * A step is not just a cursor write: the renderer draws a row's motion inside
+ * it - an envelope crossing the floor, a character turning - and below about a
+ * tenth of a second that motion is a flicker rather than a thing you can see
+ * happen. Timers have a floor of their own near there too, so asking for a
+ * twenty-millisecond tick buys nothing but a backlog.
+ */
+const MIN_TICK_MS = 90;
+
+export interface CommGraphPlaybackPace {
+  /** Milliseconds between ticks. */
+  readonly tickMs: number;
+  /** How many rows the cursor advances on each tick. */
+  readonly rowsPerTick: number;
+}
+
+/**
+ * HOW FAST `speed` ACTUALLY PLAYS, once the tick floor is taken into account.
+ *
+ * Up to the floor, speed shortens the tick and the cursor still advances one
+ * row at a time. Past it the tick STOPS shrinking and speed buys rows per tick
+ * instead - so 16x really is four times 4x, rather than 4x with a shorter
+ * timer that the timer refuses to honour.
+ *
+ * The cost of a multi-row tick is that the rows in the middle of one are never
+ * drawn, so their envelopes never fly. That is the right trade at the speeds
+ * that reach it: at 16x a row is on screen for forty-odd milliseconds, which is
+ * already too short to watch anything cross a floor. What a reader is doing at
+ * that speed is skimming to somewhere, and the graph still lands on every state
+ * the moment they stop.
+ */
+export function commGraphPlaybackPace(speed: number): CommGraphPlaybackPace {
+  const perRow = BASE_STEP_MS / Math.max(speed, Number.EPSILON);
+  if (perRow >= MIN_TICK_MS) return { tickMs: perRow, rowsPerTick: 1 };
+  const rowsPerTick = Math.max(1, Math.round(MIN_TICK_MS / perRow));
+  return { tickMs: perRow * rowsPerTick, rowsPerTick };
+}
+
+/**
+ * Where every captured row sits along the track, in replay milliseconds.
+ *
+ * `offsets[i]` is how much replay time separates row `i` from row zero, so the
+ * array is non-decreasing and `totalMs` is its last entry. Built once per
+ * change to the log rather than derived per marker: it is a prefix sum, and the
+ * bar asks for a position n times a frame.
+ */
+export interface CommGraphTransportTrack {
+  readonly offsets: ReadonlyArray<number>;
+  readonly totalMs: number;
 }
 
 /**
  * `null` for an empty log - the caller renders a disabled track rather than
- * inventing a range, because "no events yet" and "events spanning zero time"
- * are different situations and only one of them is scrubbable.
+ * inventing one, because "no events yet" and "events spanning zero time" are
+ * different situations and only one of them is scrubbable.
  */
-export function commGraphTimeRange(
+export function commGraphTransportTrack(
   events: ReadonlyArray<CommGraphEvent>,
-): CommGraphTimeRange | null {
+): CommGraphTransportTrack | null {
   if (events.length === 0) return null;
-  // The array is sorted by `(timestamp, hostId, id)`, so the ends are the ends.
-  return {
-    startMs: events[0].timestamp,
-    endMs: events[events.length - 1].timestamp,
-  };
+  const offsets: number[] = [0];
+  let total = 0;
+  for (let i = 1; i < events.length; i += 1) {
+    // The array is sorted by `(timestamp, hostId, id)`, so a gap is never
+    // negative - but two rows CAN share a millisecond, and clamping at zero
+    // costs nothing and keeps the sum monotone whatever the merge produces.
+    const gap = events[i].timestamp - events[i - 1].timestamp;
+    total += Math.min(Math.max(gap, 0), BASE_STEP_MS);
+    offsets.push(total);
+  }
+  return { offsets, totalMs: total };
 }
 
 /**
- * 0 at the range start, 1 at its end, clamped outside.
+ * 0 at the track's start, 1 at its end, clamped outside.
  *
- * A ZERO-WIDTH RANGE RETURNS 1, deliberately: every row shares the newest
+ * A ZERO-LENGTH TRACK RETURNS 1, deliberately: every row shares the newest
  * instant, so they all belong at the live edge. Returning 0 would park the
  * playhead at the left while the graph showed the newest state, which reads as
  * a broken scrubber rather than as a short session.
@@ -61,16 +152,22 @@ function clampFraction(fraction: number): number {
   return fraction;
 }
 
-export function commGraphFractionForTimestamp(
-  timestampMs: number,
-  range: CommGraphTimeRange,
+/**
+ * The position of row `index`, as a fraction of the whole track.
+ *
+ * An index outside the log clamps to an end rather than throwing: the bar reads
+ * this with whatever `commGraphCursorIndex` returned, and that resolves a
+ * cursor naming an absent row rather than reporting one.
+ */
+export function commGraphTrackFraction(
+  track: CommGraphTransportTrack,
+  index: number,
 ): number {
-  const span = range.endMs - range.startMs;
-  if (span <= 0) return 1;
-  const fraction = (timestampMs - range.startMs) / span;
-  if (fraction <= 0) return 0;
-  if (fraction >= 1) return 1;
-  return fraction;
+  if (track.totalMs <= 0) return 1;
+  if (index <= 0) return 0;
+  const last = track.offsets.length - 1;
+  if (index >= last) return 1;
+  return clampFraction(track.offsets[index] / track.totalMs);
 }
 
 export interface CommGraphTransportMarker {
@@ -87,11 +184,11 @@ export interface CommGraphTransportMarker {
  */
 export function commGraphTransportMarkers(
   events: ReadonlyArray<CommGraphEvent>,
-  range: CommGraphTimeRange,
+  track: CommGraphTransportTrack,
 ): ReadonlyArray<CommGraphTransportMarker> {
-  return events.map((event) => ({
+  return events.map((event, index) => ({
     key: commGraphEventKey(event),
-    fraction: commGraphFractionForTimestamp(event.timestamp, range),
+    fraction: commGraphTrackFraction(track, index),
     event,
   }));
 }
@@ -100,14 +197,22 @@ export function commGraphTransportMarkers(
  * Where the playhead sits. LIVE (`cursor === null`) is pinned to the right edge
  * - live is not a separate rendering mode, it is the playhead being at the end
  * of everything captured so far.
+ *
+ * THROUGH THE CURSOR'S ROW, not its timestamp. On a trimmed axis a bare
+ * timestamp no longer locates anything: two rows an hour apart with nothing
+ * between them are one step apart on the track, and there is no arithmetic that
+ * recovers which of them a raw instant meant. `commGraphCursorIndex` already
+ * answers that question - including for a cursor naming a row that is no longer
+ * in the array - so the playhead asks it rather than inventing a second rule.
  */
 export function commGraphPlayheadFraction(
+  events: ReadonlyArray<CommGraphEvent>,
   cursor: CommGraphTimeCursor | null,
-  range: CommGraphTimeRange | null,
+  track: CommGraphTransportTrack | null,
 ): number {
-  if (range === null) return 1;
+  if (track === null) return 1;
   if (cursor === null) return 1;
-  return commGraphFractionForTimestamp(cursor.timestamp, range);
+  return commGraphTrackFraction(track, commGraphCursorIndex(events, cursor));
 }
 
 /**
@@ -121,25 +226,28 @@ export function commGraphPlayheadFraction(
  */
 export function commGraphEventAtFraction(
   events: ReadonlyArray<CommGraphEvent>,
-  range: CommGraphTimeRange,
+  track: CommGraphTransportTrack,
   fraction: number,
 ): CommGraphEvent | null {
   if (events.length === 0) return null;
-  const span = range.endMs - range.startMs;
-  const clamped = clampFraction(fraction);
-  const targetMs = range.startMs + span * clamped;
-  // Binary search on timestamp only: the cursor that comes out of this is built
-  // from a real row, so the `(timestamp, hostId, id)` tiebreak is inherited
-  // rather than guessed at.
+  const targetMs = track.totalMs * clampFraction(fraction);
+  // Binary search the OFFSETS, which is the same search the old wall-clock axis
+  // ran against timestamps - the axis moved, the rule did not. The cursor that
+  // comes out is built from a real row, so the `(timestamp, hostId, id)`
+  // tiebreak is inherited rather than guessed at.
+  const offsets = track.offsets;
   let low = 0;
-  let high = events.length;
+  let high = offsets.length;
   while (low < high) {
     const mid = (low + high) >>> 1;
-    if (events[mid].timestamp <= targetMs) low = mid + 1;
+    if (offsets[mid] <= targetMs) low = mid + 1;
     else high = mid;
   }
   if (low === 0) return events[0];
-  return events[low - 1];
+  // `offsets` is built from `events`, so an index into one indexes the other -
+  // unless a caller paired a stale track with a newer log, which the bar cannot
+  // do (it derives both from the same array in the same memo).
+  return events[Math.min(low - 1, events.length - 1)];
 }
 
 /**
