@@ -26,7 +26,7 @@ export const ONBOARDING_STEPS: ReadonlyArray<OnboardingStep> = [
     id: "session-import",
     label: "Import",
     title: "Pick up where you left off.",
-    subtitle: "Bring your Claude Code, Codex and OpenCode conversations.",
+    subtitle: "Bring your Claude Code, Codex and OpenCode chats.",
   },
 ];
 

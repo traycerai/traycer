@@ -204,9 +204,10 @@ export function stepDioramaChapter(index: number, delta: number): number {
 }
 
 /**
- * The autoplay clock. A rAF loop reads elapsed time off it rather than
- * chaining timeouts, so a pause freezes the progress fill exactly where it
- * stood and a resume costs nothing.
+ * The autoplay clock. A rAF loop reads elapsed time off it rather than chaining
+ * timeouts, so the one thing that pauses the tour - a hidden tab - can freeze it
+ * exactly where it stood and resume without losing or skipping time. Nothing
+ * the viewer does pauses it: hovering the diorama keeps it running.
  */
 export type DioramaClock = {
   /** When the chapter started, already shifted forward by any paused time. */
@@ -220,7 +221,11 @@ export function dioramaElapsedMs(clock: DioramaClock, now: number): number {
   return (clock.pausedAt ?? now) - clock.startedAt;
 }
 
-/** Freezes the clock, or resumes it by moving the start past the paused span. */
+/**
+ * Freezes the clock, or resumes it by moving the start past the paused span.
+ * `paused` is the tab's own hidden state, so a repeated event for the state the
+ * clock is already in must not move the freeze point.
+ */
 export function setDioramaPaused(
   clock: DioramaClock,
   paused: boolean,

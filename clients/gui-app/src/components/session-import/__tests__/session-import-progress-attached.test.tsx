@@ -116,7 +116,7 @@ describe("SessionImportProgress", () => {
     ).toBeNull();
   });
 
-  it("points both surfaces at the task list", () => {
+  it("points each surface at where the tasks actually are", () => {
     useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
@@ -132,7 +132,8 @@ describe("SessionImportProgress", () => {
         hostId={HOST}
       />,
     );
-    expect(screen.getByText("Ready in your task list.")).toBeTruthy();
+    // The tour's task list is several acts away, so it cannot be named yet.
+    expect(screen.getByText("Ready when you land in the app.")).toBeTruthy();
 
     cleanup();
     render(
@@ -163,6 +164,54 @@ describe("SessionImportProgress", () => {
 
     expect(screen.getByText("Nothing was imported")).toBeTruthy();
     expect(screen.queryByText("Ready in your task list.")).toBeNull();
+  });
+
+  it("tells the tour nothing was imported because it was all already there", () => {
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
+    useSessionImportRunStore
+      .getState()
+      .applyStarted(HOST, { runId: "run-1", total: 2, attached: false });
+    useSessionImportRunStore.getState().applyComplete(HOST, {
+      runId: "run-1",
+      counts: { imported: 0, skippedAlreadyImported: 2, failed: 0 },
+    });
+
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("onboarding")}
+        hostId={HOST}
+      />,
+    );
+
+    expect(screen.getByText("Nothing was imported")).toBeTruthy();
+    expect(
+      screen.getByText("Everything you picked is already in Traycer."),
+    ).toBeTruthy();
+    expect(screen.getByText("2 already in Traycer")).toBeTruthy();
+  });
+
+  it("puts the tour's misses in a chip once something did land", () => {
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
+    useSessionImportRunStore
+      .getState()
+      .applyStarted(HOST, { runId: "run-1", total: 3, attached: false });
+    useSessionImportRunStore.getState().applyComplete(HOST, {
+      runId: "run-1",
+      counts: { imported: 1, skippedAlreadyImported: 1, failed: 2 },
+    });
+
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("onboarding")}
+        hostId={HOST}
+      />,
+    );
+
+    expect(screen.getByText("Imported 1 task")).toBeTruthy();
+    expect(screen.getByTestId("session-import-not-imported").textContent).toBe(
+      "2 not imported",
+    );
+    expect(screen.getByText("1 already in Traycer")).toBeTruthy();
   });
 
   it("reports how many were already in Traycer", () => {

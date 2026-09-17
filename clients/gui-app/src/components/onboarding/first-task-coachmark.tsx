@@ -10,28 +10,33 @@ export type FirstTaskStep = FirstTaskHint;
 
 const STEPS = {
   folder: {
-    title: "Choose a project",
-    content: "Add the folder you want Traycer to work in.",
+    progress: { step: 1, total: 3 },
+    title: "Pick a project",
+    content: "Add the folder Traycer should work in.",
     action: "Add folder",
   },
   workspace: {
-    title: "Set up your workspace",
-    content: "Choose where to run this task.",
+    progress: { step: 2, total: 3 },
+    title: "Choose where it runs",
+    content: "Local, a new worktree, or an existing one.",
     action: "Choose location",
   },
   prompt: {
-    title: "Give your agent a task",
-    content: "Describe what to build or change, then send.",
+    progress: { step: 3, total: 3 },
+    title: "Give it a task",
+    content: "Describe what to build or debug, then press Enter.",
     action: "Write a task",
   },
   imported: {
-    title: "Your work is here",
-    content: "Open an imported task to continue.",
-    action: "Open first task",
+    progress: { step: 1, total: 2 },
+    title: "Your tasks are here",
+    content: "Open one to pick up where you left off.",
+    action: "Pick a task",
   },
   continue: {
-    title: "Continue your task",
-    content: "Send a message to continue the conversation.",
+    progress: { step: 2, total: 2 },
+    title: "Keep going",
+    content: "Send a message to continue this conversation.",
     action: "Write a message",
   },
 } as const;
@@ -91,8 +96,12 @@ export function FirstTaskCoachmark(props: {
     acknowledge,
   ]);
   const step = STEPS[props.step];
+  // `imported` joins the writing steps in only putting the user in front of
+  // the control: clicking the first task card would open a task they never
+  // chose. And it is the one step whose action does not settle it - opening a
+  // task is what acknowledges it, through the click listener above.
   const interact =
-    props.step === "prompt" || props.step === "continue"
+    writing || props.step === "imported"
       ? focusGuideTarget
       : interactWithGuideTarget;
   if (acknowledged) return null;
@@ -101,7 +110,7 @@ export function FirstTaskCoachmark(props: {
       id={props.step}
       title={step.title}
       content={step.content}
-      progress={null}
+      progress={step.progress}
       rootRef={props.rootRef}
       selector={props.selector}
       onClose={dismiss}
@@ -113,10 +122,10 @@ export function FirstTaskCoachmark(props: {
           const target = props.rootRef.current?.querySelector<HTMLElement>(
             props.selector,
           );
-          if (target) {
-            interact(target);
-            acknowledge(props.step);
-          }
+          // A press that found no enabled control did nothing, and retiring
+          // the step's guidance for it removes the card for good.
+          if (!target || !interact(target)) return;
+          if (props.step !== "imported") acknowledge(props.step);
         },
       }}
     />

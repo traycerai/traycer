@@ -15,11 +15,21 @@ import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-sto
 interface CoachmarkTestProps {
   readonly rootRef: RefObject<HTMLElement | null>;
   readonly selector: string;
+  readonly title: string;
+  readonly content: string;
+  readonly progress: { readonly step: number; readonly total: number } | null;
 }
 
 vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
   OnboardingCoachmark: (props: CoachmarkTestProps) => (
-    <div data-testid="coachmark" data-selector={props.selector} />
+    <div
+      data-testid="coachmark"
+      data-selector={props.selector}
+      data-title={props.title}
+      data-content={props.content}
+      data-progress-step={props.progress?.step}
+      data-progress-total={props.progress?.total}
+    />
   ),
 }));
 
@@ -114,9 +124,38 @@ describe("FirstTaskWorkspaceSetup", () => {
     );
 
     expect(screen.getByTestId("folder-location-trigger")).toBeTruthy();
-    expect(screen.getByTestId("coachmark")).toBeTruthy();
-    expect(screen.getByTestId("coachmark").getAttribute("data-selector")).toBe(
+    const coachmark = screen.getByTestId("coachmark");
+    expect(coachmark.getAttribute("data-selector")).toBe(
       '[data-testid="folder-location-trigger"]',
+    );
+    expect(coachmark.getAttribute("data-progress-step")).toBe("2");
+    expect(coachmark.getAttribute("data-progress-total")).toBe("3");
+    expect(coachmark.getAttribute("data-title")).toBe(
+      "Work here or in a fresh worktree",
+    );
+    expect(coachmark.getAttribute("data-content")).toBe(
+      "A worktree keeps your main branch clean.",
+    );
+  });
+
+  it("points a non-git folder at the chip and says the task runs there", () => {
+    render(
+      <WorkspaceHarness
+        items={[workspaceItem({ isGitRepo: false })]}
+        onContinue={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const coachmark = screen.getByTestId("coachmark");
+    expect(coachmark.getAttribute("data-selector")).toBe(
+      '[data-testid="folder-chip"]',
+    );
+    expect(coachmark.getAttribute("data-progress-step")).toBe("2");
+    expect(coachmark.getAttribute("data-progress-total")).toBe("3");
+    expect(coachmark.getAttribute("data-title")).toBe("This folder is ready");
+    expect(coachmark.getAttribute("data-content")).toBe(
+      "Your task will run right here.",
     );
   });
 

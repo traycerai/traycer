@@ -65,7 +65,12 @@ export const useFirstTaskGuideStore = create<FirstTaskGuideState>(
         hostId,
       );
       if (run.status === "idle") return;
-      set((state) => ({ imports: new Map(state.imports).set(hostId, run) }));
+      set((state) => ({
+        imports: new Map(state.imports).set(
+          hostId,
+          foldRememberedRun(state.imports.get(hostId), run),
+        ),
+      }));
     },
     observeImports: ({ runs }) => {
       const state = get();
@@ -75,7 +80,8 @@ export const useFirstTaskGuideStore = create<FirstTaskGuideState>(
         const run = runs.get(hostId);
         if (!run || run === previous || run.status === "idle") continue;
         if (previous.runId !== null && previous.runId !== run.runId) continue;
-        imports = new Map(imports).set(hostId, run);
+        const folded = foldRememberedRun(previous, run);
+        if (folded !== previous) imports = new Map(imports).set(hostId, folded);
       }
       if (imports !== state.imports) set({ imports });
     },
@@ -92,6 +98,42 @@ export const useFirstTaskGuideStore = create<FirstTaskGuideState>(
     },
   }),
 );
+
+/**
+ * A host's remembered run, with a newer run of that host folded into it.
+ * "Import more" starts a SECOND run on the same host, and the tasks the first
+ * one brought in still belong to the guide - so what is kept is the union
+ * keyed by selection key, the newer run winning a repeat.
+ *
+ * Returns the slice it was given when the fold changes nothing, so an
+ * unrelated frame of the import store re-renders no reader of this one.
+ */
+function foldRememberedRun(
+  previous: SessionImportRunState | undefined,
+  run: SessionImportRunState,
+): SessionImportRunState {
+  if (previous === undefined) return run;
+  const folded: SessionImportRunState = {
+    ...run,
+    outcomes: new Map([...previous.outcomes, ...run.outcomes]),
+    titles: new Map([...previous.titles, ...run.titles]),
+  };
+  return previous.status === folded.status &&
+    previous.runId === folded.runId &&
+    sameEntries(previous.outcomes, folded.outcomes) &&
+    sameEntries(previous.titles, folded.titles)
+    ? previous
+    : folded;
+}
+
+function sameEntries<T>(
+  a: ReadonlyMap<string, T>,
+  b: ReadonlyMap<string, T>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, value] of a) if (b.get(key) !== value) return false;
+  return true;
+}
 
 export function firstTaskImports(
   imports: ReadonlyMap<string, SessionImportRunState>,

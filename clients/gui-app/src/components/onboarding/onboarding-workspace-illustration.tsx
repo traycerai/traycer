@@ -95,8 +95,6 @@ function WorkspaceDiorama() {
   const active = DIORAMA_CHAPTERS[chapter.index] ?? DIORAMA_CHAPTERS[0];
   const beat = active.beats[beatIndex] ?? active.beats[0];
   const clock = useRef<DioramaClock>({ startedAt: 0, pausedAt: null });
-  /** Every live reason the tour is holding: hover, keyboard focus, hidden tab. */
-  const holds = useRef(new Set<string>());
   const fills = useRef<(HTMLSpanElement | null)[]>([]);
   const segments = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -112,29 +110,28 @@ function WorkspaceDiorama() {
     });
   }, []);
 
-  const hold = useCallback((reason: string, held: boolean) => {
-    if (held) holds.current.add(reason);
-    else holds.current.delete(reason);
-    clock.current = setDioramaPaused(
-      clock.current,
-      holds.current.size > 0,
-      performance.now(),
-    );
-  }, []);
-
   const select = useCallback((index: number) => {
     setChapter((current) => ({ index, run: current.run + 1 }));
   }, []);
 
+  // A hidden tab is the only thing that pauses the tour, and it has to: rAF
+  // stops firing while hidden but wall-clock time does not, so without this a
+  // return would land mid-chapter and skip the ones it slept through. Hover and
+  // focus deliberately do NOT pause - a tour that stops under the pointer for
+  // reasons the viewer cannot see reads as broken, not as considerate.
   useEffect(() => {
     const onVisibilityChange = () => {
-      hold("hidden", document.visibilityState === "hidden");
+      clock.current = setDioramaPaused(
+        clock.current,
+        document.hidden,
+        performance.now(),
+      );
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [hold]);
+  }, []);
 
   // One rAF loop per chapter, reading elapsed time off the clock rather than
   // counting frames, so a pause is exact and a resume loses nothing.
@@ -147,7 +144,7 @@ function WorkspaceDiorama() {
     const started = performance.now();
     clock.current = {
       startedAt: started,
-      pausedAt: holds.current.size > 0 ? started : null,
+      pausedAt: document.hidden ? started : null,
     };
     let frame = 0;
     const tick = () => {
@@ -182,15 +179,7 @@ function WorkspaceDiorama() {
         data-stage={beat.stage}
       >
         <div className="diorama-stage">
-          <div
-            className="diorama-frame"
-            onPointerEnter={() => {
-              hold("frame", true);
-            }}
-            onPointerLeave={() => {
-              hold("frame", false);
-            }}
-          >
+          <div className="diorama-frame">
             <DioramaWindow beat={beat} run={chapter.run} />
             {DIORAMA_CHAPTERS.map((entry, index) => (
               <DioramaCallout
@@ -206,21 +195,6 @@ function WorkspaceDiorama() {
           className="diorama-chapters"
           role="group"
           aria-label="Workspace chapters"
-          onPointerEnter={() => {
-            hold("strip", true);
-          }}
-          onPointerLeave={() => {
-            hold("strip", false);
-          }}
-          onFocus={(event) => {
-            // Only a keyboard landing holds the tour: a click already holds it
-            // by hover, and would otherwise keep holding it after the pointer
-            // has left the strip.
-            hold("focus", event.target.matches(":focus-visible"));
-          }}
-          onBlur={() => {
-            hold("focus", false);
-          }}
         >
           {DIORAMA_CHAPTERS.map((entry, index) => {
             const current = index === chapter.index;

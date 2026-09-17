@@ -276,7 +276,9 @@ describe("<SettingsSidebar /> leader hints", () => {
       name: "Getting started",
     });
     expect(progress.getAttribute("aria-valuenow")).toBe("0");
-    expect(progress.getAttribute("aria-valuemax")).toBe("4");
+    // Three, not four: this shell has no browser view, so the browser
+    // sign-ins guide is not offered and is left out of the count.
+    expect(progress.getAttribute("aria-valuemax")).toBe("3");
 
     useOnboardingStore.getState().complete();
 

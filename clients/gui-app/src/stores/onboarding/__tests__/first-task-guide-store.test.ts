@@ -139,6 +139,52 @@ describe("useFirstTaskGuideStore", () => {
     ]);
   });
 
+  it("keeps both runs' tasks when the host imports more after a completed run", () => {
+    startRun(HOST_A, "run-a1", "session-a");
+    addOutcome(HOST_A, "run-a1", "session-a", {
+      kind: "imported",
+      epicId: "epic-a",
+      chatId: "chat-a",
+    });
+    completeRun(HOST_A, "run-a1");
+    useFirstTaskGuideStore.getState().rememberImport(HOST_A);
+    useFirstTaskGuideStore.getState().activate();
+
+    // "Import more" on the summary card: the run store is retired and a second
+    // run starts on the same host.
+    useSessionImportRunStore.getState().reset(HOST_A);
+    startRun(HOST_A, "run-a2", "session-a2");
+    useFirstTaskGuideStore.getState().rememberImport(HOST_A);
+    addOutcome(HOST_A, "run-a2", "session-a2", {
+      kind: "imported",
+      epicId: "epic-a2",
+      chatId: "chat-a2",
+    });
+    completeRun(HOST_A, "run-a2");
+    useFirstTaskGuideStore
+      .getState()
+      .observeImports(useSessionImportRunStore.getState());
+
+    expect(
+      firstTaskImports(useFirstTaskGuideStore.getState().imports),
+    ).toMatchObject([
+      { chatId: "chat-a", title: "Title session-a" },
+      { chatId: "chat-a2", title: "Title session-a2" },
+    ]);
+    // Folding the same run again is the same slice: an unrelated frame of the
+    // import store must not mint a new map for this one's readers.
+    const folded = useFirstTaskGuideStore.getState().imports;
+    useFirstTaskGuideStore
+      .getState()
+      .observeImports(useSessionImportRunStore.getState());
+    expect(useFirstTaskGuideStore.getState().imports).toBe(folded);
+
+    // The first run's chats are still the guide's own, so continuing one of
+    // them still finishes the guide.
+    useFirstTaskGuideStore.getState().messageSubmitted(HOST_A, "chat-a");
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+  });
+
   it("keeps imported and skipped outcomes but omits failed outcomes", () => {
     startRun(HOST_A, "run-a", "imported-session");
     addOutcome(HOST_A, "run-a", "imported-session", {

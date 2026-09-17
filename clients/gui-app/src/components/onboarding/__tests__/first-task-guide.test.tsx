@@ -7,9 +7,18 @@ import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-sto
 const toastState = vi.hoisted(() => {
   let onDismiss: (() => void) | undefined;
   const toast = Object.assign(
-    vi.fn((_message: string, options: { readonly onDismiss?: () => void }) => {
-      onDismiss = options.onDismiss;
-    }),
+    vi.fn(
+      (
+        _message: string,
+        options: {
+          readonly description?: string;
+          readonly action?: { readonly label: string };
+          readonly onDismiss?: () => void;
+        },
+      ) => {
+        onDismiss = options.onDismiss;
+      },
+    ),
     {
       dismiss: vi.fn(() => onDismiss?.()),
       invokeDismiss: () => onDismiss?.(),
@@ -58,6 +67,12 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     );
 
     expect(toastState).toHaveBeenCalledOnce();
+    const [message, options] = toastState.mock.calls[0];
+    expect(message).toBe("You're all set");
+    expect(options.description).toBe(
+      "Optional setup lives in Settings › Getting started.",
+    );
+    expect(options.action?.label).toBe("Open");
     act(() => toastState.invokeDismiss());
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
 

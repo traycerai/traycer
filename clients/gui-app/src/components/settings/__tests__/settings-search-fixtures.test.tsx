@@ -12,6 +12,7 @@ import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-di
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
@@ -61,6 +62,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 const MOUNTS: {
   readonly [Section in SettingsSearchFixtureSection]: ReactNode;
 } = {
+  "getting-started": <GettingStartedSettingsPanel />,
   general: <GeneralSettingsPanel />,
   appearance: <AppearanceSettingsPanel />,
   layout: <LayoutSettingsPanel />,

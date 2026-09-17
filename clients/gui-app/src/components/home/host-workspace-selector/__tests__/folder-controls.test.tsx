@@ -92,6 +92,26 @@ vi.mock("@/components/ui/dropdown-menu", () => {
   };
 });
 
+// The guided first-task card is the coachmark engine's business; this file
+// covers the popover wiring around it, so render it as its action button.
+vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
+  OnboardingCoachmark: (props: {
+    readonly title: string;
+    readonly action: {
+      readonly label: string;
+      readonly onClick: () => void;
+    } | null;
+  }) => (
+    <div role="group" aria-label={props.title}>
+      {props.action === null ? null : (
+        <button type="button" onClick={props.action.onClick}>
+          {props.action.label}
+        </button>
+      )}
+    </div>
+  ),
+}));
+
 import { FolderBranchControl } from "../folder-branch-control";
 import { FolderLocationControl } from "../folder-location-control";
 import { FolderRow } from "../folder-row";
@@ -1537,69 +1557,36 @@ describe("WorkspaceFolderSummaryControl", () => {
     );
   }
 
-  it("shows guided workspace choices, selects Local, and manual Escape does not complete", async () => {
-    const onSelectMode = vi.fn();
+  it("does not complete guided setup when Escape closes the popover", async () => {
     const onComplete = vi.fn();
     useFirstTaskGuideStore.setState({ workspaceReviewed: false });
-    renderGuidedSummary(onComplete, { onSelectMode });
+    renderGuidedSummary(onComplete, {});
     fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-    const setup = await screen.findByRole("region", {
-      name: "Set up your first task",
-    });
-    const local = within(setup).getByRole("button", { name: /Local/ });
-    const worktree = within(setup).getByRole("button", {
-      name: /New worktree/,
-    });
-    local.focus();
-    fireEvent.keyDown(local, { key: "ArrowRight" });
-    expect(document.activeElement).toBe(worktree);
-    fireEvent.keyDown(worktree, { key: "ArrowLeft" });
-    expect(document.activeElement).toBe(local);
-    fireEvent.click(local);
-    expect(onSelectMode).toHaveBeenCalledWith("local");
+    await screen.findByRole("button", { name: "Use this setup" });
     fireEvent.keyDown(screen.getByTestId("workspace-rows-popover"), {
       key: "Escape",
     });
     await waitFor(() =>
       expect(
-        screen.queryByRole("region", { name: "Set up your first task" }),
+        screen.queryByRole("button", { name: "Use this setup" }),
       ).toBeNull(),
     );
     expect(onComplete).not.toHaveBeenCalled();
     expect(useFirstTaskGuideStore.getState().workspaceReviewed).toBe(false);
   });
 
-  it("completes guided setup once when Write a task closes the popover", async () => {
+  it("completes guided setup once when Use this setup closes the popover", async () => {
     const onComplete = vi.fn(() =>
       useFirstTaskGuideStore.getState().reviewWorkspace(),
     );
     useFirstTaskGuideStore.setState({ workspaceReviewed: false });
     renderGuidedSummary(onComplete, {});
     fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-    const setup = await screen.findByRole("region", {
-      name: "Set up your first task",
-    });
     fireEvent.click(
-      within(setup).getByRole("button", { name: "Write a task" }),
+      await screen.findByRole("button", { name: "Use this setup" }),
     );
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(useFirstTaskGuideStore.getState().workspaceReviewed).toBe(true);
-  });
-
-  it("disables Write a task while workspace metadata is pending", async () => {
-    const onComplete = vi.fn();
-    useFirstTaskGuideStore.setState({ workspaceReviewed: false });
-    renderGuidedSummary(onComplete, { metadataPending: true });
-    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-    const setup = await screen.findByRole("region", {
-      name: "Set up your first task",
-    });
-    const continueButton = within(setup).getByRole("button", {
-      name: "Write a task",
-    });
-    expect(continueButton.hasAttribute("disabled")).toBe(true);
-    fireEvent.click(continueButton);
-    expect(onComplete).not.toHaveBeenCalled();
   });
 
   it("uses the rich hover preview instead of a competing native title", () => {

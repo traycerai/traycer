@@ -253,6 +253,15 @@
   opacity: 0.45;
   pointer-events: none;
 }
+/* A thumb needs 44px. `pointer: coarse` is how this app scopes touch targets
+   everywhere else (`pointer-coarse:min-h-11` on the menu items,
+   `settings-touch-targets.css`), and it covers the installed mobile app
+   without a build flag - the tour renders the same buttons on both. */
+@media (pointer: coarse) {
+  .onboarding-button {
+    min-height: 2.75rem;
+  }
+}
 @media (hover: hover) and (pointer: fine) {
   .onboarding-button--primary:hover {
     opacity: 0.9;

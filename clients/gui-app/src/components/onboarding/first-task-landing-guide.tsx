@@ -57,7 +57,7 @@ export function FirstTaskLandingGuide(props: {
             className="mt-2 flex items-center gap-2 text-ui-xs text-muted-foreground"
           >
             <MutedAgentSpinner />
-            Importing remaining tasks…
+            Importing your tasks…
           </p>
         ) : null}
         <FirstTaskCoachmark
@@ -73,7 +73,7 @@ export function FirstTaskLandingGuide(props: {
       <div className="mt-5 flex items-center justify-between gap-3 text-ui-sm text-muted-foreground">
         <p role="status" className="flex items-center gap-2">
           <MutedAgentSpinner />
-          Importing tasks…
+          Importing your tasks…
         </p>
         <Button
           variant="ghost"
@@ -85,6 +85,11 @@ export function FirstTaskLandingGuide(props: {
       </div>
     );
 
+  // `reviewWorkspace()` can fire while the folder picker is still open (opening
+  // the location menu counts as reviewing), so `prompt` can become the current
+  // step a frame before the popover unmounts. There is no popover-open state on
+  // this side of the tree to gate on; the coachmark engine already withholds a
+  // card whose target sits outside an open overlay, which is the same gate.
   let step: "folder" | "workspace" | "prompt" = "folder";
   if (hasWorkspace) step = reviewed ? "prompt" : "workspace";
   const selector = {
@@ -93,18 +98,11 @@ export function FirstTaskLandingGuide(props: {
     prompt: "[data-composer-shell]",
   }[step];
   return (
-    <>
-      {imports.size > 0 ? (
-        <p role="status" className="mt-3 text-ui-xs text-muted-foreground">
-          No tasks imported. Start a new task.
-        </p>
-      ) : null}
-      <FirstTaskCoachmark
-        step={step}
-        rootRef={props.rootRef}
-        selector={selector}
-      />
-    </>
+    <FirstTaskCoachmark
+      step={step}
+      rootRef={props.rootRef}
+      selector={selector}
+    />
   );
 }
 

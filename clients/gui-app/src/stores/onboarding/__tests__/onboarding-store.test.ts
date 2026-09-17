@@ -4,12 +4,17 @@ import { ONBOARDING_STEPS } from "@/components/onboarding/onboarding-steps";
 import {
   clampOnboardingStep,
   isLastOnboardingStep,
-  ONBOARDING_GUIDE_COUNT,
   onboardingCompletedCount,
+  onboardingGuideCount,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
+import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
+/** The desktop, where every guide is on offer. */
+const DESKTOP = { browserView: true };
+/** The mobile app and the web build: no browser bridge, so no cookie guide. */
+const NO_BROWSER = { browserView: false };
 const STEP_COUNT = ONBOARDING_STEPS.length;
 const LAST_STEP = STEP_COUNT - 1;
 
@@ -41,28 +46,60 @@ describe("useOnboardingStore", () => {
   });
 
   it("counts only the completed tour and setup guides", () => {
-    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(0);
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(0);
 
     useOnboardingStore.setState({
-      setupProgress: { agents: 0, appearance: 2, cookies: 0 },
+      setupProgress: { agents: 2, appearance: 4, cookies: 1 },
     });
-    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(0);
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(0);
 
     useOnboardingStore.getState().complete();
     useOnboardingStore.getState().completeSetup("agents");
     useOnboardingStore.getState().completeSetup("cookies");
-    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(3);
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(3);
 
     useOnboardingStore.getState().completeSetup("appearance");
-    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(
-      ONBOARDING_GUIDE_COUNT,
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(onboardingGuideCount(DESKTOP));
+  });
+
+  it("leaves a guide this shell cannot offer out of both counts", () => {
+    // Without a browser bridge the cookie guide can never be finished, so a
+    // checklist that counted it would read one short for ever - and the
+    // reminder built on that difference would never go quiet.
+    expect(onboardingGuideCount(NO_BROWSER)).toBe(
+      onboardingGuideCount(DESKTOP) - 1,
     );
+
+    useOnboardingStore.getState().complete();
+    useOnboardingStore.getState().completeSetup("agents");
+    useOnboardingStore.getState().completeSetup("appearance");
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), NO_BROWSER),
+    ).toBe(onboardingGuideCount(NO_BROWSER));
+
+    // Progress recorded anyway - a shell that CAN offer it still counts it.
+    useOnboardingStore.getState().completeSetup("cookies");
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), NO_BROWSER),
+    ).toBe(onboardingGuideCount(NO_BROWSER));
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(onboardingGuideCount(DESKTOP));
   });
 
   it("preserves completion count when a completed setup guide is replayed", () => {
     useOnboardingStore.getState().completeSetup("appearance");
     const completedCount = onboardingCompletedCount(
       useOnboardingStore.getState(),
+      DESKTOP,
     );
 
     useOnboardingStore.getState().startSetup("appearance");
@@ -71,9 +108,9 @@ describe("useOnboardingStore", () => {
       id: "appearance",
       step: 0,
     });
-    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(
-      completedCount,
-    );
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(completedCount);
   });
 
   it("starts, pauses, and resumes appearance at its saved step", () => {
@@ -121,14 +158,15 @@ describe("useOnboardingStore", () => {
     });
   });
 
-  it("completes appearance after its third step and replays from the start without losing completion", () => {
+  it("completes appearance after its last step and replays from the start without losing completion", () => {
     useOnboardingStore.getState().startSetup("appearance");
-    useOnboardingStore.getState().advanceSetup();
-    useOnboardingStore.getState().advanceSetup();
-    useOnboardingStore.getState().advanceSetup();
+    for (let index = 0; index < setupGuideLength("appearance"); index += 1)
+      useOnboardingStore.getState().advanceSetup();
 
     expect(useOnboardingStore.getState().activeSetup).toBeNull();
-    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(3);
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
+      setupGuideLength("appearance"),
+    );
 
     useOnboardingStore.getState().startSetup("appearance");
 
@@ -136,23 +174,71 @@ describe("useOnboardingStore", () => {
       id: "appearance",
       step: 0,
     });
-    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(3);
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
+      setupGuideLength("appearance"),
+    );
   });
 
-  it("requires the cookie import result to complete the cookie guide", () => {
+  it("walks the cookie guide's steps but never completes it without the import result", () => {
     useOnboardingStore.getState().startSetup("cookies");
     useOnboardingStore.getState().advanceSetup();
 
     expect(useOnboardingStore.getState().activeSetup).toEqual({
       id: "cookies",
-      step: 0,
+      step: 1,
     });
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(0);
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(1);
+
+    useOnboardingStore.getState().advanceSetup();
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "cookies",
+      step: 1,
+    });
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(1);
 
     useOnboardingStore.getState().completeSetup("cookies");
 
     expect(useOnboardingStore.getState().activeSetup).toBeNull();
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(1);
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
+      setupGuideLength("cookies"),
+    );
+  });
+
+  it("routes product events to whichever guide step declares them", () => {
+    // The product reports what happened; the step table decides what that
+    // means. Enabling the switch IS the first step, so it auto-advances, and
+    // only the real import can end the guide.
+    useOnboardingStore.getState().startSetup("cookies");
+    useOnboardingStore.getState().notifySetupEvent("browser-save-enabled");
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "cookies",
+      step: 1,
+    });
+
+    // The same event on a step that does not declare it moves nothing.
+    useOnboardingStore.getState().notifySetupEvent("browser-save-enabled");
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "cookies",
+      step: 1,
+    });
+
+    useOnboardingStore.getState().notifySetupEvent("browser-logins-imported");
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
+      setupGuideLength("cookies"),
+    );
+  });
+
+  it("completes a guide from its event with no guide running", () => {
+    useOnboardingStore.getState().notifySetupEvent("browser-logins-imported");
+
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
+      setupGuideLength("cookies"),
+    );
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
   });
 
   it("complete marks the tour done with a timestamp", () => {
@@ -228,7 +314,9 @@ describe("useOnboardingStore", () => {
     expect(useOnboardingStore.getState().completedAt).toBeNull();
     expect(useOnboardingStore.getState().step).toBe(0);
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
-    expect(onboardingCompletedCount(useOnboardingStore.getState())).toBe(0);
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(0);
   });
 
   it("persists and rehydrates setup reminder dismissal", async () => {

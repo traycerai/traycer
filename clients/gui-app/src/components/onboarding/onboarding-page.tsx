@@ -169,10 +169,13 @@ function OnboardingTour(props: {
   >("welcome");
   useEffect(() => {
     if (welcomePhase === "ready") return;
-    const reducedMotionQuery = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
-    const duration = reducedMotionQuery
+    // Read the media query here rather than reuse `reducedMotion`: motion's
+    // `useReducedMotion` samples the query once per module and only updates
+    // through its own change listener, so the value at mount can lag a
+    // preference that changed since the app loaded. The timings are decided
+    // per phase, so they take the live answer.
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches
       ? { welcome: 300, leaving: 150 }[welcomePhase]
       : { welcome: 1800, leaving: 320 }[welcomePhase];
     const timer = window.setTimeout(

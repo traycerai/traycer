@@ -68,7 +68,9 @@ export function useLoginImportRun(
     retry: false,
     onSuccess: (result, _request, context) => {
       if (result.status === "imported" && result.importedCookies > 0) {
-        useOnboardingStore.getState().completeSetup("cookies");
+        useOnboardingStore
+          .getState()
+          .notifySetupEvent("browser-logins-imported");
       }
       if (!changedTheJar(result)) return;
       void queryClient.invalidateQueries({

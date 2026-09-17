@@ -1,7 +1,7 @@
 import {
   useOnboardingStore,
   onboardingCompletedCount,
-  ONBOARDING_GUIDE_COUNT,
+  onboardingGuideCount,
 } from "@/stores/onboarding/onboarding-store";
 import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 import { Fragment, useEffect, useMemo, type ReactNode } from "react";
@@ -35,6 +35,7 @@ import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -387,15 +388,22 @@ function SettingsSidebarRouteItem(props: {
 }
 
 function GettingStartedProgress() {
-  const complete = useOnboardingStore(onboardingCompletedCount);
+  // The same shell the checklist itself counts by: a guide this build cannot
+  // offer is no part of the ring's total either.
+  const browserView = useRunnerHostOrNull()?.browserView ?? null;
+  const shell = { browserView: browserView !== null };
+  const complete = useOnboardingStore((state) =>
+    onboardingCompletedCount(state, shell),
+  );
+  const total = onboardingGuideCount(shell);
   return (
     <svg
       role="progressbar"
       aria-label="Getting started"
       aria-valuemin={0}
-      aria-valuemax={ONBOARDING_GUIDE_COUNT}
+      aria-valuemax={total}
       aria-valuenow={complete}
-      aria-valuetext={`${complete} of ${ONBOARDING_GUIDE_COUNT} guides complete`}
+      aria-valuetext={`${complete} of ${total} guides complete`}
       viewBox="0 0 20 20"
       className="size-4 shrink-0 -rotate-90"
     >
@@ -416,7 +424,7 @@ function GettingStartedProgress() {
         stroke="currentColor"
         strokeWidth="2.5"
         pathLength="100"
-        strokeDasharray={`${(complete / ONBOARDING_GUIDE_COUNT) * 100} 100`}
+        strokeDasharray={`${(complete / total) * 100} 100`}
         strokeLinecap={complete === 0 ? "butt" : "round"}
         className="transition-[stroke-dasharray] duration-200 motion-reduce:transition-none"
       />

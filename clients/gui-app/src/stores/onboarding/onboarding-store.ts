@@ -2,23 +2,25 @@ import { z } from "zod";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  availableSetupGuideIds,
+  setupGuide,
+  setupGuideCompletedBy,
+  setupGuideLength,
+  type SetupGuideEvent,
+  type SetupGuideId,
+  type SetupGuideShell,
+} from "@/stores/onboarding/setup-guides";
 
-export const SETUP_GUIDE_LENGTHS = {
-  agents: 1,
-  appearance: 3,
-  cookies: 1,
-} as const;
-
-export type SetupGuideId = keyof typeof SETUP_GUIDE_LENGTHS;
 const setupProgressSchema = z.object({
-  agents: z.number().int().min(-1).max(SETUP_GUIDE_LENGTHS.agents).catch(-1),
+  agents: z.number().int().min(-1).max(setupGuideLength("agents")).catch(-1),
   appearance: z
     .number()
     .int()
     .min(-1)
-    .max(SETUP_GUIDE_LENGTHS.appearance)
+    .max(setupGuideLength("appearance"))
     .catch(-1),
-  cookies: z.number().int().min(-1).max(SETUP_GUIDE_LENGTHS.cookies).catch(-1),
+  cookies: z.number().int().min(-1).max(setupGuideLength("cookies")).catch(-1),
 });
 const emptySetupProgress = { agents: -1, appearance: -1, cookies: -1 };
 
@@ -53,6 +55,12 @@ interface OnboardingState {
   readonly advanceSetup: () => void;
   readonly retreatSetup: () => void;
   readonly completeSetup: (id: SetupGuideId) => void;
+  /**
+   * The product reporting something a guide may be waiting for. Whichever
+   * guide the step table says cares is advanced or completed; a call site
+   * names the event, never a guide.
+   */
+  readonly notifySetupEvent: (event: SetupGuideEvent) => void;
   readonly completedAt: number | null;
   readonly step: number;
   /** Next step, or complete the tour if already on the last one. */
@@ -73,16 +81,23 @@ interface OnboardingState {
   readonly reset: () => void;
 }
 
-export const ONBOARDING_GUIDE_COUNT =
-  1 + Object.keys(SETUP_GUIDE_LENGTHS).length;
+/**
+ * The tour plus the setup guides this shell can actually offer. A guide that
+ * can never be completed here is not a step the checklist is waiting for, so
+ * it is no part of the denominator either.
+ */
+export function onboardingGuideCount(shell: SetupGuideShell): number {
+  return 1 + availableSetupGuideIds(shell).length;
+}
 
 export function onboardingCompletedCount(
   state: Pick<OnboardingState, "completedAt" | "setupProgress">,
+  shell: SetupGuideShell,
 ): number {
   return (
     Number(state.completedAt !== null) +
-    Object.entries(SETUP_GUIDE_LENGTHS).filter(
-      ([id, length]) => state.setupProgress[id as SetupGuideId] >= length,
+    availableSetupGuideIds(shell).filter(
+      (id) => state.setupProgress[id] >= setupGuideLength(id),
     ).length
   );
 }
@@ -114,16 +129,19 @@ export const useOnboardingStore = create<OnboardingState>()(
           },
           activeSetup: {
             id,
-            step:
-              progress >= SETUP_GUIDE_LENGTHS[id] ? 0 : Math.max(0, progress),
+            step: progress >= setupGuideLength(id) ? 0 : Math.max(0, progress),
           },
         });
       },
       pauseSetup: () => set({ activeSetup: null }),
       advanceSetup: () => {
         const active = get().activeSetup;
-        // Cookie import is completed only by the native import result.
-        if (active === null || active.id === "cookies") return;
+        if (active === null) return;
+        // A step the product finishes is never walked off by Continue: the
+        // guide waits there until the real thing happens, so it may walk its
+        // steps and still never run off the end of them.
+        if (setupGuide(active.id).steps[active.step].completesOn !== undefined)
+          return;
         const step = active.step + 1;
         set({
           setupProgress: {
@@ -131,7 +149,7 @@ export const useOnboardingStore = create<OnboardingState>()(
             [active.id]: Math.max(step, get().setupProgress[active.id]),
           },
           activeSetup:
-            step >= SETUP_GUIDE_LENGTHS[active.id]
+            step >= setupGuideLength(active.id)
               ? null
               : { id: active.id, step },
         });
@@ -145,10 +163,23 @@ export const useOnboardingStore = create<OnboardingState>()(
         set({
           setupProgress: {
             ...get().setupProgress,
-            [id]: SETUP_GUIDE_LENGTHS[id],
+            [id]: setupGuideLength(id),
           },
           activeSetup: get().activeSetup?.id === id ? null : get().activeSetup,
         }),
+      notifySetupEvent: (event) => {
+        // Completion does not need the guide to be running: the user may have
+        // done the thing on their own, and the card is about the state of the
+        // account, not about a card being open.
+        const completed = setupGuideCompletedBy(event);
+        if (completed !== null) get().completeSetup(completed);
+        const active = get().activeSetup;
+        if (
+          active !== null &&
+          setupGuide(active.id).steps[active.step].advanceOn === event
+        )
+          get().advanceSetup();
+      },
       completedAt: null,
       step: 0,
       advance: (stepCount) => {

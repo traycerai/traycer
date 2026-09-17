@@ -118,17 +118,19 @@ describe("diorama chapters", () => {
     }
   });
 
-  it("freezes the clock on pause and resumes where it stopped", () => {
+  it("freezes the clock while the tab is hidden and resumes where it stopped", () => {
     const running = { startedAt: 1000, pausedAt: null };
     expect(dioramaElapsedMs(running, 2000)).toBe(1000);
 
-    const paused = setDioramaPaused(running, true, 2000);
-    expect(dioramaElapsedMs(paused, 9000)).toBe(1000);
-    // A second pause reason must not move the freeze point.
-    expect(setDioramaPaused(paused, true, 9000)).toBe(paused);
+    const hidden = setDioramaPaused(running, true, 2000);
+    expect(dioramaElapsedMs(hidden, 9000)).toBe(1000);
 
-    const resumed = setDioramaPaused(paused, false, 9000);
-    expect(dioramaElapsedMs(resumed, 9500)).toBe(1500);
-    expect(setDioramaPaused(resumed, false, 9600)).toBe(resumed);
+    const shown = setDioramaPaused(hidden, false, 9000);
+    expect(dioramaElapsedMs(shown, 9500)).toBe(1500);
+
+    // An event for the state the clock is already in changes nothing, so a
+    // repeat cannot move the freeze point or lose the paused span.
+    expect(setDioramaPaused(hidden, true, 9000)).toBe(hidden);
+    expect(setDioramaPaused(shown, false, 9600)).toBe(shown);
   });
 });

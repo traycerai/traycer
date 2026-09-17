@@ -107,6 +107,18 @@ describe("settings search", () => {
     expect(labelsFor("proxy", DESKTOP)).toContain("Shell");
   });
 
+  it("reaches the replay card by the words the old General row owned", () => {
+    // The tour's replay moved out of General, and its vocabulary moved with
+    // it: these queries appear in no label anywhere and must still land on
+    // the card, anchor included, rather than at the top of a page.
+    expect(landingFor("walkthrough", DESKTOP)).toBe(
+      "getting-started#getting-started-product-tour",
+    );
+    for (const query of ["product tour", "first run", "intro"]) {
+      expect(labelsFor(query, DESKTOP)).toContain("Initial tour");
+    }
+  });
+
   it("reaches a bespoke page through the vocabulary it is really about", () => {
     // Providers and Worktrees have no indexable rows — they are per-provider
     // and per-worktree at runtime — so their reachability IS their keywords.

@@ -52,6 +52,7 @@ import type {
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export function BrowserSettingsSection(): ReactNode {
@@ -341,6 +342,9 @@ function SavedLoginsToggleRow(props: {
             onCheckedChange={(next) => {
               if (next) {
                 props.saveLogins.setEnabled(true);
+                useOnboardingStore
+                  .getState()
+                  .notifySetupEvent("browser-save-enabled");
                 return;
               }
               setConfirming(true);
@@ -384,6 +388,7 @@ function ImportLoginsRow(props: {
           size="sm"
           disabled={!enabled}
           onClick={onOpen}
+          data-testid="settings-import-logins-trigger"
         >
           Choose source…
         </Button>

@@ -66,24 +66,53 @@ the set.
 ## Getting started
 
 `/settings/getting-started` is the persistent setup checklist for agent selection,
-appearance, and browser sign-ins. Cards launch guides over the existing controls
+appearance and layout, and browser sign-ins.
+Cards launch guides over the existing controls
 through `SettingsSetupGuide`, shared by the modal and routed settings surfaces.
-Joyride uses the same nonmodal coachmark as the first-task guide: no overlay or
+It uses the same nonmodal coachmark as the first-task guide: no overlay or
 focus trap, and nested pickers pause it. In a modal it portals inside that modal.
-An arrow joins the card to its target. While the card has focus, Right/Enter
+A halo marks the target; there is no arrow. While the card has focus, Right/Enter
 continues and Left goes back; Tab and Enter retain native button behavior.
-Action-required steps focus the real control instead of skipping it. Once focus
+Action-required steps press the real control when it is a button or link, and focus it when it is a field, instead of skipping it. Once focus
 moves into a control, the coachmark does not take it back. Text fields and pickers
 keep their own keys. Keyboard navigation reveals settings instantly.
 Escape pauses the guide before Settings can close and returns focus to its target.
 
+**Every step names its own section**, not the guide.
+The guide draws only while the mounted section is the one the current step points at, Continue navigates to the next step's section when it differs, and Back navigates to the previous step's.
+`setupGuideStepSection` is the same answer for a card: resuming lands on the section of the step it resumes at, not on a section hardcoded per guide.
+The engine's mount point survives a section change (`SettingsPanelForSection` swaps the panel beneath it), so crossing sections does not pause the guide.
+
+**The guides are a table, not four special cases.**
+`stores/onboarding/setup-guides.ts` holds every step - its section, its selector, its copy - and is React-free, so the store, the coachmark and the product code a step waits on all read the same rows.
+`SETUP_GUIDE_LENGTHS` is gone with it: `setupGuideLength(id)` is the step list's own length, never a number copied beside it.
+
+The three guides: agent selection is three steps on Agents (the editor shell, its Edit/Preview toggle, the Revert button).
+Appearance and layout is five, and it crosses surfaces: theme mode, wallpaper and interface font on Appearance, then the density preset and the sidebar panel arranger on Layout.
+Browser sign-ins is two steps on General: the "Save website sessions" switch, then the "Choose source…" button, which is action-required and is where the guide waits.
+It is also the one guide with a `requiresBrowserView` flag, because without the desktop browser bridge there is no way to finish it.
+
 Progress is local in `onboarding-store`: -1 means not started, intermediate steps
 resume, and the guide length means complete. Active guides are session-local;
 replaying a completed guide does not clear completion. Agent selection and
-appearance finish on Done, so keeping defaults is valid. Browser sign-ins finish
-only when the existing import mutation reports cookies successfully imported;
-cancelled, blocked, and empty imports leave the card unfinished. Import is offered
-only when the desktop browser bridge and host binding are present.
+appearance finish on Done, so keeping defaults is valid.
+
+**A step the product finishes says so in the table, and the product reports an event rather than a guide id.**
+A step carries `advanceOn` for an event that moves past it in place of Continue, and `completesOn` for the event that ends the guide from it.
+`SettingsSetupGuide` reads those flags: a step with `completesOn` offers no Done and waits, and `advanceSetup` refuses to walk off it, so the guide can only end with the real thing having happened.
+Both call sites go through `notifySetupEvent`: the "Save website sessions" switch reports `browser-save-enabled`, which auto-advances to the import step (the switch IS the step, so there is nothing to confirm), and the existing import mutation reports `browser-logins-imported` only when cookies were successfully imported.
+Cancelled, blocked, and empty imports leave the card unfinished, and neither `browser-settings-section.tsx` nor the mutation hook names a guide.
+Import is offered only when the desktop browser bridge and host binding are present.
+
+A started, unfinished card reads "Step n of total" and draws a thin meter along its bottom edge; a finished one keeps the green check and "Complete".
+The meter is a native `<progress>` filled with the steps already COMPLETED, styled through `getting-started-settings.css`: the last unfinished step draws a nearly-full bar, not a full one, and no table of width classes has to track the step counts.
+The header count is "n of m complete" over the guides this shell can OFFER - the tour plus the available ones.
+A guide gated out (`requiresBrowserView` on a build with no browser bridge) drops out of the numerator and the denominator alike, so the panel never reads one short for ever and the start page's reminder, which is that same difference, goes quiet once the reachable work is done.
+The sidebar's progress ring counts the same way.
+
+Each card's label and copy come from `getting-started-settings.definitions.ts`, like any other searchable setting.
+Only the replay card owns a search ENTRY and an anchor - it inherited the removed General "Product tour" row, keywords included, so "walkthrough" and "first run" still land on it.
+The three guide cards contribute their words to the page instead: each one names a settings page that already has an entry of its own, and a second result under the same label would outrank the page the person typing it wants.
 
 Getting started leads the sidebar in its own unlabeled Guide group, above
 Application. It uses the first settings leader digit; General uses the second.

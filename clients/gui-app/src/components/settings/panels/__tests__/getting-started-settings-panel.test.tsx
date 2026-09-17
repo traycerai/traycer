@@ -19,9 +19,20 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
 }));
 
+const setSectionMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
+  getSystemTabModalApi: () => ({
+    isOverlayActive: () => true,
+    setSection: setSectionMock,
+    openSettings: vi.fn(),
+  }),
+}));
+
 describe("GettingStartedSettingsPanel", () => {
   beforeEach(() => {
     navigateMock.mockReset();
+    setSectionMock.mockReset();
     useOnboardingStore.setState({
       completedAt: null,
       step: 0,
@@ -37,7 +48,9 @@ describe("GettingStartedSettingsPanel", () => {
   it("shows initial tour progress and replays a completed tour", () => {
     const { rerender } = render(<GettingStartedSettingsPanel />);
 
-    expect(screen.getByRole("status").textContent).toBe("0 of 4 complete");
+    // No runner host here, so the browser guide is not on offer and is no
+    // part of the denominator either.
+    expect(screen.getByRole("status").textContent).toBe("0 of 3 complete");
     expect(
       screen.getByRole("button", { name: "Initial tour, Not started" }),
     ).toBeTruthy();
@@ -45,7 +58,7 @@ describe("GettingStartedSettingsPanel", () => {
     useOnboardingStore.setState({ completedAt: 123, step: 4 });
     rerender(<GettingStartedSettingsPanel />);
 
-    expect(screen.getByRole("status").textContent).toBe("1 of 4 complete");
+    expect(screen.getByRole("status").textContent).toBe("1 of 3 complete");
     fireEvent.click(
       screen.getByRole("button", { name: "Initial tour, Complete" }),
     );
@@ -56,5 +69,40 @@ describe("GettingStartedSettingsPanel", () => {
     });
     expect(useOnboardingStore.getState().completedAt).toBe(123);
     expect(useOnboardingStore.getState().step).toBe(0);
+  });
+
+  it("meters the steps already completed, so the last one is not a full bar", () => {
+    useOnboardingStore.setState({
+      setupProgress: { agents: -1, appearance: 4, cookies: -1 },
+    });
+    const { container } = render(<GettingStartedSettingsPanel />);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Appearance and layout, Step 5 of 5",
+      }),
+    ).toBeTruthy();
+    const meter = container.querySelector("progress");
+    expect(meter?.getAttribute("value")).toBe("4");
+    expect(meter?.getAttribute("max")).toBe("5");
+  });
+
+  it("names the step a started guide is on and resumes it there", () => {
+    useOnboardingStore.setState({
+      setupProgress: { agents: -1, appearance: 3, cookies: -1 },
+    });
+    render(<GettingStartedSettingsPanel />);
+
+    const card = screen.getByRole("button", {
+      name: "Appearance and layout, Step 4 of 5",
+    });
+    fireEvent.click(card);
+
+    // The fourth appearance step lives on Layout, so a resume goes there.
+    expect(setSectionMock).toHaveBeenCalledWith("layout");
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 3,
+    });
   });
 });

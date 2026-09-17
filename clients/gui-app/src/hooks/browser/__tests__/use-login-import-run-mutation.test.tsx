@@ -12,6 +12,7 @@ import { useLoginImportRun } from "@/hooks/browser/use-login-import-run-mutation
 import { queryKeys } from "@/lib/query-keys";
 import { STORE_KEYS, persistKey } from "@/lib/persist";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 
 const runtime = vi.hoisted(() => ({ hostId: "host-a" }));
 
@@ -83,7 +84,9 @@ describe("useLoginImportRun setup completion", () => {
       await result.current.mutateAsync(REQUEST);
     });
 
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(1);
+    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
+      setupGuideLength("cookies"),
+    );
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: queryKeys.hostMethodScope(
         "host-a",

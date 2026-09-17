@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { History, Search } from "lucide-react";
+import { FolderSearch, History, Search } from "lucide-react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import type {
@@ -393,18 +393,27 @@ function SessionImportEmptyState(props: {
   readonly onShowImported: () => void;
 }) {
   const { state, view, tone, onShowImported } = props;
+  const onboarding = tone.surface === "onboarding";
   if (state.phase === "scanning" || view.groups.length > 0) return null;
   return (
     <div
       data-testid="session-import-empty"
       className={cn(
-        tone.surface === "onboarding"
+        onboarding
           ? "onboarding-import-card"
           : "mx-auto max-w-[26rem] px-1 py-10",
         "text-center text-ui-sm leading-relaxed text-pretty",
         tone.muted,
       )}
     >
+      {/* Neutral, not a status: nothing has gone wrong, there is just nothing
+          here. Same glyph anatomy as the running, summary and error cards so
+          the panel's states read as one family. */}
+      {onboarding ? (
+        <span className="onboarding-import-glyph border-foreground/10 bg-foreground/8 text-muted-foreground">
+          <FolderSearch aria-hidden className="size-5" />
+        </span>
+      ) : null}
       <p>{emptyMessage(state, view)}</p>
       {view.hiddenImportedCount > 0 && state.importedSupport === "supported" ? (
         <Button
@@ -949,7 +958,7 @@ function SessionImportSelectionToolbar(props: {
 }) {
   const { view, tone, dispatch } = props;
   return view.groups.length > 0 && view.selectableSessions > 0 ? (
-    <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 pt-2">
+    <div className="session-import-selection flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 pt-2">
       <SessionImportSelectAll
         view={view}
         tone={tone}
@@ -1025,7 +1034,7 @@ function SessionImportOnboardingToolbar(props: {
           onChange={props.onShowImportedChange}
         />
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 pb-2">
         <SessionImportSelectAll
           view={view}
           tone={tone}

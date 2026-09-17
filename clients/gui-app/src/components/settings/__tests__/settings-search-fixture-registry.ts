@@ -87,6 +87,19 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
+  // The checklist's cards always render - an unavailable guide is disabled in
+  // place, not withheld - so the replay card's anchor is there with and
+  // without a runner host, which is what these two shells assert.
+  {
+    section: "getting-started",
+    shells: [
+      { name: "no runner host", context: NO_BRIDGES },
+      {
+        name: "a runner host",
+        context: { ...NO_BRIDGES, runnerHost: createFakeRunnerHost({}) },
+      },
+    ],
+  },
   {
     section: "general",
     shells: [

@@ -25,7 +25,7 @@ describe("onboardingStepsFor", () => {
     expect(ONBOARDING_STEPS.map((step) => step.subtitle)).toEqual([
       "Tasks, agents, browsers and artifacts, side by side.",
       "Keep your accounts, skills and plugins.",
-      "Bring your Claude Code, Codex and OpenCode conversations.",
+      "Bring your Claude Code, Codex and OpenCode chats.",
     ]);
   });
 

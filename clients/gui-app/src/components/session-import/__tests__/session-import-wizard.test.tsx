@@ -1605,4 +1605,44 @@ describe("<SessionImportWizard />", () => {
         .getAttribute("aria-checked"),
     ).toBe("false");
   });
+
+  it("heads a fully-imported onboarding project with All imported, not a count of nothing", () => {
+    render(
+      <TestWizard
+        surface="onboarding"
+        onImportStarted={vi.fn()}
+        secondaryAction={null}
+      />,
+    );
+    act(() => {
+      const callbacks = requireCallbacks();
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/done",
+          sessions: [
+            alreadyInTraycerCandidate("claude", "s1", "Landed one"),
+            alreadyInTraycerCandidate("claude", "s2", "Landed two"),
+          ],
+        }),
+      );
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/unreadable",
+          sessions: [unreadableCandidate("claude", "s3", "Broken one")],
+        }),
+      );
+      callbacks.onImportedSupport("supported");
+    });
+    fireEvent.click(screen.getByTestId("session-import-show-imported"));
+    fireEvent.click(screen.getByRole("radio", { name: "By project" }));
+
+    expect(screen.getByText("All imported")).toBeTruthy();
+    // Not selectable either, but for a different reason - so not "All imported".
+    expect(screen.getByText("1 task")).toBeTruthy();
+    expect(
+      screen
+        .getAllByTestId("session-import-row")
+        .filter((row) => row.getAttribute("data-imported") === "true"),
+    ).toHaveLength(2);
+  });
 });

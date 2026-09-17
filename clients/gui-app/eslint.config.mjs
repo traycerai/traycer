@@ -2775,6 +2775,9 @@ export default tseslint.config(
             "onboarding-*", // a <style> element inside onboarding-page.tsx
             "diorama-*", // src/components/onboarding/onboarding-diorama.css
             "session-import-*", // src/components/onboarding/onboarding-import.css
+            // src/components/settings/panels/getting-started-settings.css -
+            // a <progress>, whose fill and track are pseudo-elements.
+            "settings-setup-meter",
 
             // Class names owned by a library, not by us.
             "not-prose", // @tailwindcss/typography, loaded via @plugin
@@ -2789,12 +2792,12 @@ export default tseslint.config(
             "status-ping",
             "tc-*",
             "traycer-md-*",
-            // Hooked by react-joyride's own `:has()` selector in
-            // first-task-guide.css, not by this component - the plugin only
-            // walks index.css's @import chain, and that stylesheet is
-            // imported from the guide's floater portal, not from a component
-            // this rule can see.
+            // Styled by first-task-guide.css, not by this component - the
+            // plugin only walks index.css's @import chain, and that
+            // stylesheet is imported from the guide's coachmark portal, not
+            // from a component this rule can see.
             "first-task-coachmark",
+            "first-task-coachmark-*",
           ],
         },
       ],

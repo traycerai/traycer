@@ -52,13 +52,17 @@ export function FirstTaskWorkspaceSetup(props: {
               ? '[data-testid="folder-location-trigger"]'
               : '[data-testid="folder-chip"]'
           }
-          title={hasGitFolder ? "Choose where to work" : "Your folder is ready"}
+          title={
+            hasGitFolder
+              ? "Work here or in a fresh worktree"
+              : "This folder is ready"
+          }
           content={
             hasGitFolder
-              ? "Use this menu to work locally, in a new worktree, or in an existing one."
-              : "Your task will run in this folder."
+              ? "A worktree keeps your main branch clean."
+              : "Your task will run right here."
           }
-          progress={null}
+          progress={{ step: 2, total: 3 }}
           onTarget={null}
           back={null}
           onClose={() => {

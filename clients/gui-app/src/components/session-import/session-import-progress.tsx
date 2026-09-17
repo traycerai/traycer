@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Check, CircleCheck, Info, TriangleAlert } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -244,16 +244,14 @@ function SessionImportSummary(props: {
   readonly hostId: string | null;
 }) {
   const { counts, failures, tone, onboarding, hostId } = props;
-  const glyph =
-    counts.imported > 0 ? (
-      <span className="onboarding-import-glyph border-success/30 bg-success/10 text-success-foreground">
-        <CircleCheck aria-hidden className="size-5" />
-      </span>
-    ) : (
-      <span className="onboarding-import-glyph border-info/30 bg-info/10 text-info-foreground">
-        <Info aria-hidden className="size-5" />
-      </span>
-    );
+  const notImportedLine =
+    failures.length > 0 ? sessionImportNotImportedLine(failures) : null;
+  // With something imported, the tour reads the misses as a tally beside the
+  // skips - two chips in a row - rather than as a second sentence of bad news.
+  // With nothing imported there is no headline explaining why, so the line
+  // becomes the explanation and carries the toggle under it.
+  const detailLine = onboarding && counts.imported > 0 ? null : notImportedLine;
+  const body = summaryBody(counts, onboarding, detailLine === null);
   return (
     <div
       data-testid="session-import-summary"
@@ -272,7 +270,7 @@ function SessionImportSummary(props: {
             : "m-auto flex w-full max-w-md flex-col items-center gap-4 text-center",
         )}
       >
-        {onboarding ? glyph : null}
+        {onboarding ? <SummaryGlyph imported={counts.imported > 0} /> : null}
         <div className="flex flex-col gap-1">
           <p
             className={cn(
@@ -282,29 +280,142 @@ function SessionImportSummary(props: {
               tone.strong,
             )}
           >
-            {counts.imported === 0
-              ? "Nothing was imported"
-              : `Imported ${counts.imported} ${counts.imported === 1 ? "task" : "tasks"}`}
+            {summaryHeadline(counts.imported)}
           </p>
-          {counts.imported > 0 ? (
-            <p className={cn("text-ui-xs", tone.muted)}>
-              Ready in your task list.
+          {body !== null ? (
+            <p
+              className={cn(
+                onboarding ? "text-ui-sm" : "text-ui-xs",
+                tone.muted,
+              )}
+            >
+              {body}
             </p>
           ) : null}
-          {counts.skippedAlreadyImported > 0 ? (
+          {!onboarding && counts.skippedAlreadyImported > 0 ? (
             <p className={cn("text-ui-xs", tone.muted)}>
               {counts.skippedAlreadyImported} already in Traycer
             </p>
           ) : null}
         </div>
-        {failures.length > 0 ? (
-          <NotImported groups={failures} tone={tone} />
-        ) : null}
-        {onboarding ? (
-          <SessionImportMoreButton hostId={hostId} label="Import more" />
-        ) : null}
+        <SummaryTail
+          counts={counts}
+          failures={failures}
+          tone={tone}
+          onboarding={onboarding}
+          detailLine={detailLine}
+          hostId={hostId}
+        />
       </div>
     </div>
+  );
+}
+
+function SummaryGlyph(props: { readonly imported: boolean }) {
+  if (props.imported)
+    return (
+      <span className="onboarding-import-glyph border-success/30 bg-success/10 text-success-foreground">
+        <CircleCheck aria-hidden className="size-5" />
+      </span>
+    );
+  return (
+    <span className="onboarding-import-glyph border-info/30 bg-info/10 text-info-foreground">
+      <Info aria-hidden className="size-5" />
+    </span>
+  );
+}
+
+/** Below the headline: the tallies, what did not land, and the way back. */
+function SummaryTail(props: {
+  readonly counts: SessionImportRunCounts;
+  readonly failures: ReadonlyArray<SessionImportFailureGroupView>;
+  readonly tone: SessionImportTone;
+  readonly onboarding: boolean;
+  readonly detailLine: string | null;
+  readonly hostId: string | null;
+}) {
+  const { counts, failures, tone, onboarding, detailLine, hostId } = props;
+  return (
+    <>
+      {onboarding ? (
+        <SummaryChips
+          skipped={counts.skippedAlreadyImported}
+          failed={detailLine === null ? counts.failed : 0}
+        />
+      ) : null}
+      {failures.length > 0 ? (
+        <NotImported groups={failures} tone={tone} line={detailLine} />
+      ) : null}
+      {onboarding ? (
+        <SessionImportMoreButton
+          hostId={hostId}
+          // Nothing landed, so there is nothing to add MORE to - the button
+          // is the way back to the list either way, and only the label of a
+          // run that imported something is an invitation to repeat it.
+          label={counts.imported > 0 ? "Import more" : "Back to tasks"}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function summaryHeadline(imported: number): string {
+  if (imported === 0) return "Nothing was imported";
+  return `Imported ${imported} ${imported === 1 ? "task" : "tasks"}`;
+}
+
+/**
+ * The line under the headline. With something imported it says where the
+ * tasks went - and during the tour the task list is several acts away. With
+ * nothing imported and nothing to explain it, the skips are the explanation.
+ */
+function summaryBody(
+  counts: SessionImportRunCounts,
+  onboarding: boolean,
+  noDetailLine: boolean,
+): string | null {
+  if (counts.imported > 0)
+    return onboarding
+      ? "Ready when you land in the app."
+      : "Ready in your task list.";
+  if (onboarding && noDetailLine && counts.skippedAlreadyImported > 0)
+    return "Everything you picked is already in Traycer.";
+  return null;
+}
+
+/** The tour's tallies as chips: skips beside misses, each only when nonzero. */
+function SummaryChips(props: {
+  readonly skipped: number;
+  readonly failed: number;
+}) {
+  const { skipped, failed } = props;
+  if (skipped === 0 && failed === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-1.5">
+      {skipped > 0 ? (
+        <SummaryChip testId={null}>{skipped} already in Traycer</SummaryChip>
+      ) : null}
+      {failed > 0 ? (
+        <SummaryChip testId="session-import-not-imported">
+          {failed} not imported
+        </SummaryChip>
+      ) : null}
+    </div>
+  );
+}
+
+/** One count, stated once: a quiet tally chip under the summary's headline. */
+function SummaryChip(props: {
+  readonly children: ReactNode;
+  readonly testId: string | null;
+}) {
+  return (
+    <span
+      data-testid={props.testId ?? undefined}
+      className="rounded-full bg-foreground/6 px-2 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
+    >
+      {props.children}
+    </span>
   );
 }
 
@@ -376,18 +487,30 @@ function SessionImportMoreButton(props: {
 function NotImported(props: {
   readonly groups: ReadonlyArray<SessionImportFailureGroupView>;
   readonly tone: SessionImportTone;
+  /** `null` when the caller already stated the count (the tour's chip). */
+  readonly line: string | null;
 }) {
-  const { groups, tone } = props;
+  const { groups, tone, line } = props;
+  const onboarding = tone.surface === "onboarding";
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="flex w-full min-h-0 flex-col items-center gap-2">
-      <div className="flex flex-wrap items-baseline justify-center gap-x-2">
-        <span
-          data-testid="session-import-not-imported"
-          className={cn("text-ui-xs", tone.muted)}
-        >
-          {sessionImportNotImportedLine(groups)}
-        </span>
+      <div
+        className={cn(
+          "flex flex-wrap items-baseline justify-center gap-x-2",
+          // On the tour the line IS the explanation, so the toggle sits under
+          // it rather than trailing it on the same baseline.
+          line !== null && onboarding && "flex-col items-center gap-y-1",
+        )}
+      >
+        {line !== null ? (
+          <span
+            data-testid="session-import-not-imported"
+            className={cn(onboarding ? "text-ui-sm" : "text-ui-xs", tone.muted)}
+          >
+            {line}
+          </span>
+        ) : null}
         <button
           type="button"
           data-testid="session-import-failure-toggle"
@@ -395,7 +518,7 @@ function NotImported(props: {
           onClick={() => setExpanded((current) => !current)}
           className={cn(
             "text-ui-xs underline-offset-2 hover:underline",
-            tone.faint,
+            onboarding ? tone.muted : tone.faint,
           )}
         >
           {expanded ? "Hide details" : "Show details"}
@@ -407,7 +530,12 @@ function NotImported(props: {
         // follows the window instead of a fixed rem.
         <div
           data-testid="session-import-failure-details"
-          className="flex max-h-[30vh] w-full flex-col gap-3 overflow-y-auto overscroll-contain text-left"
+          className={cn(
+            "flex max-h-[30vh] w-full flex-col gap-3 overflow-y-auto overscroll-contain text-left",
+            // A hairline to the left ties the reason sections to the line that
+            // opened them, instead of letting them read as a new card.
+            onboarding && "border-l border-foreground/10 pl-3",
+          )}
         >
           {groups.map((group) => (
             <section

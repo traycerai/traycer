@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Folder, Minus } from "lucide-react";
+import { Check, ChevronRight, CircleCheck, Folder, Minus } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { SessionImportOpenTaskButton } from "@/components/session-import/session-import-open-task-button";
@@ -70,6 +70,91 @@ function groupSelectionLabel(group: SessionImportGroupView): string {
   return `${group.selectedCount.toLocaleString()} of ${count} ${noun} selected`;
 }
 
+/**
+ * The count on the right edge of a tour group header. "All imported" is
+ * derived from the rows rather than from `selectableCount === 0`, which a
+ * folder of unreadable sessions also satisfies - and "n tasks" is the honest
+ * answer there.
+ */
+function groupCountLabel(group: SessionImportGroupView): string {
+  if (group.selectableCount > 0)
+    return `${group.selectedCount} of ${group.selectableCount} selected`;
+  const allImported =
+    group.rows.length > 0 &&
+    group.rows.every(
+      (row) => row.candidate.state.kind === "already_in_traycer",
+    );
+  if (allImported) return "All imported";
+  return `${group.totalCount} ${group.totalCount === 1 ? "task" : "tasks"}`;
+}
+
+/** A row whose task is already in Traycer: no checkbox, a way to open it. */
+function ImportedTaskRow(props: {
+  readonly row: SessionImportRowView;
+  readonly state: Extract<
+    SessionImportRowView["candidate"]["state"],
+    { kind: "already_in_traycer" }
+  >;
+  readonly tone: SessionImportTone;
+  readonly showFolder: boolean;
+  readonly onTaskOpened: () => void;
+  readonly onBeforeTaskOpen: (() => Promise<boolean>) | null;
+}) {
+  const { row, state, tone, showFolder, onTaskOpened } = props;
+  const { candidate } = row;
+  const onboarding = tone.surface === "onboarding";
+  return (
+    <div
+      data-testid="session-import-row"
+      data-selectable={false}
+      data-imported="true"
+      className={cn(
+        "flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left",
+        onboarding && "onboarding-import-task",
+      )}
+    >
+      {/* The tour's card says what this row IS with a glyph in the column
+          the checkbox occupies on every other row; the dialog keeps that
+          column empty so its rows stay a single flat list. */}
+      {onboarding ? (
+        <CircleCheck
+          aria-hidden
+          className="size-4 shrink-0 text-success-foreground"
+        />
+      ) : (
+        <span aria-hidden className="size-4 shrink-0" />
+      )}
+      <HarnessIcon
+        harnessId={candidate.harness}
+        className={cn("size-3.5 opacity-75", tone.muted)}
+      />
+      <SessionImportTaskLabel row={row} tone={tone} showFolder={showFolder} />
+      <span
+        className={cn(
+          "shrink-0 text-ui-xs",
+          tone.muted,
+          // A pill on a tinted card is a badge on a badge; the tour's row is
+          // already the whole statement.
+          !onboarding && "rounded bg-foreground/8 px-1.5 py-0.5",
+        )}
+      >
+        Imported
+      </span>
+      <SessionImportOpenTaskButton
+        targetHostId={null}
+        presentation="icon"
+        target={state}
+        title={row.title}
+        onTaskOpened={onTaskOpened}
+        onBeforeTaskOpen={props.onBeforeTaskOpen}
+      />
+      {onboarding ? null : (
+        <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
+      )}
+    </div>
+  );
+}
+
 export function SessionImportTaskRow(props: {
   readonly row: SessionImportRowView;
   readonly tone: SessionImportTone;
@@ -83,44 +168,17 @@ export function SessionImportTaskRow(props: {
   const { candidate } = row;
   const onboarding = tone.surface === "onboarding";
 
-  if (candidate.state.kind === "already_in_traycer") {
+  if (candidate.state.kind === "already_in_traycer")
     return (
-      <div
-        data-testid="session-import-row"
-        data-selectable={false}
-        className={cn(
-          "flex w-full min-w-0 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left",
-          onboarding && "onboarding-import-task",
-        )}
-      >
-        <span aria-hidden className="size-4 shrink-0" />
-        <HarnessIcon
-          harnessId={candidate.harness}
-          className={cn("size-3.5 opacity-75", tone.muted)}
-        />
-        <SessionImportTaskLabel row={row} tone={tone} showFolder={showFolder} />
-        <span
-          className={cn(
-            "shrink-0 rounded px-1.5 py-0.5 text-ui-xs bg-foreground/8",
-            tone.muted,
-          )}
-        >
-          Imported
-        </span>
-        <SessionImportOpenTaskButton
-          targetHostId={null}
-          presentation="icon"
-          target={candidate.state}
-          title={row.title}
-          onTaskOpened={onTaskOpened}
-          onBeforeTaskOpen={props.onBeforeTaskOpen}
-        />
-        {onboarding ? null : (
-          <SessionRowTimestamp updatedAt={candidate.updatedAt} tone={tone} />
-        )}
-      </div>
+      <ImportedTaskRow
+        row={row}
+        state={candidate.state}
+        tone={tone}
+        showFolder={showFolder}
+        onTaskOpened={onTaskOpened}
+        onBeforeTaskOpen={props.onBeforeTaskOpen}
+      />
     );
-  }
 
   return (
     <TooltipWrapper
@@ -269,7 +327,7 @@ export function SessionImportGroupItem(props: {
       <section
         data-testid="session-import-group"
         data-group-key={group.groupKey}
-        className="min-w-0"
+        className="onboarding-import-group min-w-0"
       >
         <div className="onboarding-import-group-header flex items-center gap-2">
           <button
@@ -310,10 +368,8 @@ export function SessionImportGroupItem(props: {
               {group.name}
             </h2>
           </TooltipWrapper>
-          <span className="text-ui-xs tabular-nums text-muted-foreground">
-            {group.selectableCount > 0
-              ? `${group.selectedCount} of ${group.selectableCount} selected`
-              : `${group.totalCount} ${group.totalCount === 1 ? "task" : "tasks"}`}
+          <span className="ml-auto shrink-0 text-ui-xs tabular-nums text-muted-foreground">
+            {groupCountLabel(group)}
           </span>
         </div>
         <div className="onboarding-import-list">{rows}</div>

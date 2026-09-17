@@ -3,8 +3,10 @@ import { toast } from "sonner";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
   useOnboardingStore,
-  SETUP_GUIDE_LENGTHS,
+  onboardingCompletedCount,
+  onboardingGuideCount,
 } from "@/stores/onboarding/onboarding-store";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
@@ -70,26 +72,31 @@ export function FirstTaskChatGuide(props: {
 
 function GettingStartedToast() {
   const completedAt = useOnboardingStore((state) => state.completedAt);
-  const progress = useOnboardingStore((state) => state.setupProgress);
   const dismissed = useOnboardingStore((state) => state.setupReminderDismissed);
   const dismiss = useOnboardingStore((state) => state.dismissSetupReminder);
-  const remaining = Object.entries(SETUP_GUIDE_LENGTHS).filter(
-    ([id, length]) => progress[id as keyof typeof progress] < length,
-  ).length;
+  // Availability, not just completion: a guide this build cannot offer would
+  // otherwise leave a nudge that can never be satisfied, pointing at a card
+  // that cannot be opened.
+  const browserView = useRunnerHostOrNull()?.browserView ?? null;
+  const shell = { browserView: browserView !== null };
+  const complete = useOnboardingStore((state) =>
+    onboardingCompletedCount(state, shell),
+  );
+  const remaining = onboardingGuideCount(shell) - complete;
   useEffect(() => {
     if (completedAt === null || remaining === 0 || dismissed) return;
     let mounted = true;
     const id = "traycer-getting-started";
-    toast("Make Traycer yours", {
+    toast("You're all set", {
       id,
-      description: "Explore optional setup guides.",
+      description: "Optional setup lives in Settings › Getting started.",
       duration: Infinity,
       closeButton: true,
       onDismiss: () => {
         if (mounted) dismiss();
       },
       action: {
-        label: "Open guide",
+        label: "Open",
         onClick: () => {
           dismiss();
           navigateToSettingsSection("getting-started");
