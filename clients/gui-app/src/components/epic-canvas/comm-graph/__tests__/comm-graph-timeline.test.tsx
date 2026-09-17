@@ -220,6 +220,7 @@ function message(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }
@@ -242,6 +243,7 @@ function created(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }

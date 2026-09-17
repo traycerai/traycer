@@ -571,6 +571,7 @@ const REQUEST_EVENT: CommGraphEvent = {
   originKind: null,
   originChatId: null,
   originRefId: null,
+  peerEpicId: null,
 };
 
 const REQUEST_PULSE: CommGraphPulse = {

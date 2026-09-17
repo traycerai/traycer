@@ -22,6 +22,7 @@
  *   its keyboard role.
  */
 import { memo } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
@@ -32,7 +33,12 @@ import {
   useEpicAgentRoleClaims,
   useEpicNodeHostId,
   useEpicNodeOwnerKind,
+  useRegisteredEpicTitle,
 } from "@/lib/epic-selectors";
+import {
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
 import type { CommGraphAgentKind } from "@/lib/comm-graph/comm-graph-model";
 import type { CommGraphHostStatus } from "@/lib/comm-graph/comm-graph-events";
 import type { AgentActivityTier } from "@/lib/epic-selectors";
@@ -48,7 +54,8 @@ export const COMM_GRAPH_AGENT_NODE_TYPE = "commGraphAgent";
  */
 export type CommGraphNodeHostStatus = CommGraphHostStatus | "host-unknown";
 
-export interface CommGraphAgentNodeData extends Record<string, unknown> {
+export interface CommGraphLocalAgentNodeData extends Record<string, unknown> {
+  readonly variant: "agent";
   readonly epicId: string;
   readonly agentId: string;
   readonly kind: CommGraphAgentKind;
@@ -70,6 +77,27 @@ export interface CommGraphAgentNodeData extends Record<string, unknown> {
   readonly onSelect: (agentId: string) => void;
 }
 
+/**
+ * The stand-in for an agent in ANOTHER task that a cross-task message reached
+ * (see `commGraphPeerTaskStubs`). Named by that task, not by the agent: this
+ * task has no record of the agent, only of where it lives.
+ */
+export interface CommGraphPeerTaskNodeData extends Record<string, unknown> {
+  readonly variant: "peer-task";
+  /** The foreign agent's id; the node id. */
+  readonly agentId: string;
+  readonly peerEpicId: string;
+  /** The id-prefix label, used whenever the task's title is not known here. */
+  readonly name: string;
+  readonly searchMatched: boolean;
+  readonly searchHighlightNonce: number;
+  readonly pulsing: boolean;
+}
+
+export type CommGraphAgentNodeData =
+  | CommGraphLocalAgentNodeData
+  | CommGraphPeerTaskNodeData;
+
 export type CommGraphAgentFlowNode = Node<
   CommGraphAgentNodeData,
   typeof COMM_GRAPH_AGENT_NODE_TYPE
@@ -78,6 +106,72 @@ export type CommGraphAgentFlowNode = Node<
 export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
   props: NodeProps<CommGraphAgentFlowNode>,
 ) {
+  const { data } = props;
+  return data.variant === "peer-task" ? (
+    <CommGraphPeerTaskNode data={data} />
+  ) : (
+    <CommGraphLocalAgentNode data={data} />
+  );
+});
+
+/**
+ * A task stand-in. The title comes from this client's open-epic registry when
+ * the task is open here; otherwise the id prefix. Clicking opens the task, and
+ * a task the user cannot open is refused by navigation itself.
+ */
+function CommGraphPeerTaskNode(props: {
+  readonly data: CommGraphPeerTaskNodeData;
+}) {
+  const { data } = props;
+  const navigate = useNavigate();
+  const title = useRegisteredEpicTitle(data.peerEpicId);
+  const label = title !== null && title.length > 0 ? title : data.name;
+  return (
+    <button
+      key={data.searchHighlightNonce}
+      type="button"
+      onClick={() =>
+        navigateToTabIntent(
+          navigate,
+          openOrFocusEpicIntent({ epicId: data.peerEpicId, focus: undefined }),
+          undefined,
+        )
+      }
+      data-testid={`comm-graph-peer-task-node-${data.agentId}`}
+      data-peer-epic-id={data.peerEpicId}
+      data-pulsing={data.pulsing ? "true" : "false"}
+      data-search-match={data.searchMatched ? "true" : "false"}
+      aria-label={`Agent in another task: ${label}`}
+      className={cn(
+        "flex w-full flex-col gap-1 rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-left text-ui-xs text-muted-foreground shadow-sm hover:border-primary/50",
+        data.pulsing && "animate-pulse border-primary ring-2 ring-primary/60",
+        data.searchMatched &&
+          "comm-graph-search-match border-primary ring-2 ring-primary/60",
+      )}
+    >
+      <Handle
+        type="target"
+        position={Position.Top}
+        isConnectable={false}
+        className="pointer-events-none opacity-0"
+      />
+      <span className="uppercase tracking-wide">Other task</span>
+      <span className="min-w-0 truncate font-medium text-foreground">
+        {label}
+      </span>
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+        className="pointer-events-none opacity-0"
+      />
+    </button>
+  );
+}
+
+function CommGraphLocalAgentNode(props: {
+  readonly data: CommGraphLocalAgentNodeData;
+}) {
   const { data } = props;
   // A node reports what is true of THIS AGENT, and nothing about a socket.
   //
@@ -205,4 +299,4 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
       side="top"
     />
   );
-});
+}
