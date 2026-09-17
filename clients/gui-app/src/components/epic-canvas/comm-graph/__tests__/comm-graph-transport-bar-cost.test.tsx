@@ -208,10 +208,49 @@ describe("the scrubber's own time readout", () => {
     });
 
     expect(reserved().textContent).toBe(live);
-    // And it is the NEWEST row it holds room for, not the one the cursor
-    // happens to name - that is what makes it independent of scrubbing.
-    expect(live).toBe(
-      new Date(EVENTS[EVENTS.length - 1].timestamp).toLocaleTimeString(),
-    );
+  });
+
+  it("reserves room for the widest hour, not for the newest row's", () => {
+    // A LOCALIZED TIME IS NOT ONE WIDTH. `9:05:09 AM` is a character shorter
+    // than `12:05:09 PM`, and which one an instant produces has nothing to do
+    // with how recent it is - so a box reserved from any particular row leaves
+    // some other row's reading overrunning it. The reading is absolutely
+    // positioned, so an overrun paints across the Live badge beside it rather
+    // than pushing it along.
+    //
+    // Swept over a full day rather than over one handpicked pair, because the
+    // pair that is wider depends on the locale the suite happens to run in -
+    // and in a 24-hour locale there is no such pair at all, which would leave
+    // a single-case version quietly proving nothing.
+    const at = (hour: number): CommGraphEvent => ({
+      ...event(hour + 1),
+      timestamp: Date.UTC(2024, 0, 1, hour, 59, 59),
+    });
+    const day = Array.from({ length: 24 }, (_unused, hour) => at(hour));
+    render(<CommGraphTransportBar epicId={EPIC} events={day} />);
+    const reserved = screen.getByTestId(
+      "comm-graph-transport-cursor-time-reserve",
+    ).textContent;
+
+    let checked = 0;
+    for (const row of day) {
+      act(() => {
+        useCommGraphTimelineStore
+          .getState()
+          .setCursor(EPIC, commGraphCursorForEvent(row));
+      });
+      const reading = screen.getByTestId(
+        "comm-graph-transport-cursor-time",
+      ).textContent;
+      // The reserved box is never the narrower of the two, at any hour.
+      expect(reserved.length).toBeGreaterThanOrEqual(reading.length);
+      checked += 1;
+    }
+
+    // Anti-vacuity: every hour was actually read back, and the reservation is
+    // a real string rather than the empty one that trivially satisfies a
+    // length comparison against nothing.
+    expect(checked).toBe(24);
+    expect(reserved.length).toBeGreaterThan(0);
   });
 });

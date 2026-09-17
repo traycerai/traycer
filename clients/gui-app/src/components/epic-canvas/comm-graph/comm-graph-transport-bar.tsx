@@ -396,9 +396,16 @@ function CommGraphEmptyTrack(props: { readonly following: boolean }) {
  * track. The playhead would land some seventy pixels left of the finger that
  * placed it, every marker would slide with it, and the next `pointermove`
  * would measure a narrower rect and resolve the same screen position to a
- * different row. So the width is reserved by an invisible copy of the NEWEST
- * row's time and the reading is laid over it: the footprint is a function of
- * the log, never of the cursor, and nothing moves when one appears.
+ * different row. So the width is reserved by an invisible time and the reading
+ * is laid over it: the footprint is a CONSTANT, and nothing moves when a
+ * cursor appears.
+ *
+ * THE WIDEST TIME, not the newest row's. A localized time is not the same
+ * width at every instant - `9:05:09 AM` is a character shorter than
+ * `12:05:09 PM` - and width is not monotonic in the timestamp, so reserving
+ * from any particular row leaves a reading that can overrun its box and paint
+ * across the Live badge beside it. {@link WIDEST_TIME_TEXT} is measured off
+ * the locale instead, once.
  */
 function CommGraphCursorTime(props: {
   readonly transport: CommGraphTransport;
@@ -420,7 +427,7 @@ function CommGraphCursorTime(props: {
         data-testid="comm-graph-transport-cursor-time-reserve"
         className="invisible"
       >
-        {cursorTimeText(events[events.length - 1].timestamp)}
+        {WIDEST_TIME_TEXT}
       </span>
       {cursor === null ? null : (
         <span
@@ -433,6 +440,29 @@ function CommGraphCursorTime(props: {
     </span>
   );
 }
+
+/**
+ * The longest a time reads in this locale, walked once at module load.
+ *
+ * ONLY THE HOUR AND THE DAY PERIOD change width - minutes and seconds are
+ * always two digits, and `tabular-nums` makes every digit the same advance -
+ * so twenty-four hourly probes cover every shape this locale can produce, 24h
+ * locales included (where they are all the same and the loop simply agrees).
+ * `:59:59` keeps the other fields at their widest in the locales that vary
+ * them, and a half-hour zone offset shifts those to `:29:59`, which is the
+ * same width.
+ *
+ * A CONSTANT rather than a per-render maximum over `events`, because a log can
+ * hold fifty thousand rows and this is read on every tick of playback.
+ */
+const WIDEST_TIME_TEXT = ((): string => {
+  let widest = "";
+  for (let hour = 0; hour < 24; hour += 1) {
+    const text = cursorTimeText(Date.UTC(2024, 0, 1, hour, 59, 59));
+    if (text.length > widest.length) widest = text;
+  }
+  return widest;
+})();
 
 /** One spelling of a cursor's instant, so the reading and its reserved box agree. */
 function cursorTimeText(timestamp: number): string {
