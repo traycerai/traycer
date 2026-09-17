@@ -1118,10 +1118,19 @@ export const providerLoginCapabilitySchema = z.object({
    * `.catch(null)` hardens a present-but-unrecognized value. Absence is a
    * different question and is answered by the VERSION: this key rides
    * `providers.list@9.2`, so any peer below that is parsed through its own
-   * frozen schema and filled by `providersListUpgradeV91ToV92`. No reader
-   * receives it absent, and none should be written to tolerate that - the
-   * spelling that tolerates absence is what let it go unnoticed when these
-   * markers were briefly added to the already-released 9.1 in place.
+   * frozen schema and filled by `providersListUpgradeV91ToV92`.
+   *
+   * So absence is ruled out by CONSTRUCTION rather than by validation, and the
+   * difference matters: a same-version pairing takes the transport fast path
+   * and returns the payload by cast, so `.catch(null)` never runs at all on
+   * the 9.2-to-9.2 leg. A reader is therefore right to fail CLOSED on an
+   * absent marker instead of assuming it cannot arrive; what it must not do is
+   * read absence as a meaningful value. `Boolean(...)` in
+   * `providerLoginIsRemoteSafe` is the sanctioned spelling for exactly that,
+   * and `!== null` is the one to avoid - it reports an absent key as
+   * remote-safe, which is the fail-OPEN direction and is how these markers
+   * went unnoticed when they were briefly added to the already-released 9.1
+   * in place.
    */
   remoteSafe: z.object({}).nullable().catch(null),
   /**
@@ -1819,30 +1828,6 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
- * Frozen `providers.list@9.1` provider state: the live shape as it stood
- * before the login-capability markers.
- *
- * 9.1 stopped being the head line when 9.2 opened to publish `remoteSafe` and
- * `selfOpensBrowser`. It is frozen HERE, against the four-key login capability
- * it actually shipped, and that pin is the whole point of this declaration.
- *
- * `.omit()` states a delta against the live shape, which is the right tool
- * when the delta is a TOP-LEVEL key - but it is blind to a key added INSIDE a
- * nested schema the frozen alias still points at. That is exactly how these
- * two markers silently grew 9.0 and 9.1 after they had shipped: both lines
- * reached `providerLoginCapabilitySchema` by reference, so widening the live
- * capability widened two released lines with it, and the released host
- * `host-v1.3.2-staging.39.g3a73077` publishes a `protocol-surface.json`
- * advertising canonical 9.1 with only `oauthArgs` / `token` / `codePaste` /
- * `terminalLogin`. Pinning `loginCapability` to the four-key
- * `providerLoginCapabilitySchemaV70` is what makes this snapshot match the
- * bytes those hosts actually send.
- *
- * Do NOT add fields here, and do not let a field reach this shape through a
- * live nested schema either. Add them to `providerCliStateBaseShape` above,
- * which only 9.2 (the head line) publishes.
- */
-/**
  * The profile row `providers.list@9.0` / `@9.1` shipped: v8.0's plus `apiKey`,
  * which landed while 9.x was still the unreleased head. Same hand-written
  * discipline and same reason as `providerIdSchemaV91` above.
@@ -1882,25 +1867,67 @@ const providerManagedVersionsSchemaV91 = z.object({
   available: z.array(providerPackVersionSchema),
 });
 
+/**
+ * Frozen `providers.list@9.1` provider state: the live shape as it stood
+ * before the login-capability markers.
+ *
+ * 9.1 stopped being the head line when 9.2 opened to publish `remoteSafe` and
+ * `selfOpensBrowser`. It is frozen HERE, against the four-key login capability
+ * it actually shipped, and that pin is the whole point of this declaration.
+ *
+ * `.omit()` states a delta against the live shape, which is the right tool
+ * when the delta is a TOP-LEVEL key - but it is blind to a key added INSIDE a
+ * nested schema the frozen alias still points at. That is exactly how these
+ * two markers silently grew 9.0 and 9.1 after they had shipped: both lines
+ * reached `providerLoginCapabilitySchema` by reference, so widening the live
+ * capability widened two released lines with it, and the released host
+ * `host-v1.3.2-staging.39.g3a73077` publishes a `protocol-surface.json`
+ * advertising canonical 9.1 with only `oauthArgs` / `token` / `codePaste` /
+ * `terminalLogin`. Pinning `loginCapability` to the four-key
+ * `providerLoginCapabilitySchemaV70` is what makes this snapshot match the
+ * bytes those hosts actually send.
+ *
+ * Do NOT add fields here, and do not let a field reach this shape through a
+ * live nested schema either. Add them to `providerCliStateBaseShape` above,
+ * which only 9.2 (the head line) publishes.
+ *
+ * WHAT THE FOUR PINS COVER, AND WHAT THEY DO NOT. `loginCapability` is the
+ * leaf this freeze was written for; the other three are the leaves whose
+ * growth has already moved a released line once. `providerId` and
+ * `managedVersions.sharedWithProviders` are the two `providerId` enums - V70
+ * froze the second for Reasonix and V80 again for Antigravity - and `profiles`
+ * is the row `apiKey` and `launchCommand` were added to.
+ *
+ * They are NOT every live schema this row can reach, and the snapshot proves
+ * it: ablate `nativeCapabilities.supportedTabs`, `managedInstallState`,
+ * `advisory`, `autoJudge`, or the `providerPackVersionSchema` inside
+ * `managedVersions.available`, and this row reddens. Note also that only
+ * `loginCapability` reddens on its own TODAY - the other three are
+ * byte-identical to live and bite only once the live schema moves, which is
+ * what a pin is for but does mean their ablation is silent.
+ *
+ * Of what stays live, `nativeCapabilities` is the sharpest exposure, not
+ * `sharedWithProviders`: it is read through a WHOLE-OBJECT `.catch(DEFAULT)`
+ * above, so a single unknown `supportedTabs` member costs a 9.1 peer its MCP,
+ * Plugins and Skills tabs at once, where `sharedWithProviders`'s `.catch([])`
+ * degrades to one missing label. And `providerSettingsTabSchema` has already
+ * grown once (`modelProviders`). So the argument for leaving a leaf live is
+ * never "it carries no `providerId`" - it is the GRANULARITY of the `.catch()`
+ * standing between that leaf and the rest of the row.
+ *
+ * That exposure is not this line's alone, and the measurement says so: adding
+ * one member to `providerSettingsTabSchema` reddens `providers.list@7.0`,
+ * `@8.0`, `@9.0`, `@9.1` and `@9.2` together, because every frozen row reaches
+ * it live. Closing that is a catalog-wide change and deliberately not this
+ * one's job; what belongs here is that the next reader knows it is open.
+ *
+ * Nor is this the set V80 leaves live: `autoJudge` exists only on 9.1 and 9.2
+ * (V90 omits it and V80 has no such key), so it has no precedent in either
+ * direction. If you grow any of these, pin it here in the same change - the
+ * frozen-catalog row will go red, and regenerating it instead of pinning is
+ * the mistake this whole comment exists to prevent.
+ */
 export const providerCliStateSchemaV91 = providerCliStateSchema.extend({
-  // Four leaves pinned, not one. `loginCapability` is the leaf this freeze was
-  // written for, but a snapshot that pins only the leaf that just leaked is a
-  // snapshot of the last bug rather than a guard against the next.
-  //
-  // These four are not a judgement call: they are every leaf on this row that
-  // reaches a schema which has ever grown. `providerId` and
-  // `managedVersions.sharedWithProviders` are the two `providerId` enums (V70
-  // and V80 froze both, for Antigravity), and `profiles` is the row `apiKey`
-  // and `launchCommand` were added to. Ablating any of the four reddens this
-  // line.
-  //
-  // The rest are deliberately live, and that is the same set V80 leaves live:
-  // `auth`, `nativeCapabilities`, `selected`, `candidates`,
-  // `managedInstallState`, `versionVisibility`, `advisory` and `nextRunBinary`.
-  // None of them carries a `providerId`, which is what makes leaving them live
-  // survivable rather than lucky. If you grow one, pin it here in the same
-  // change - the frozen-catalog row will go red, and regenerating it instead
-  // of pinning is the mistake this whole comment exists to prevent.
   providerId: providerIdSchemaV91,
   profiles: z.array(providerProfileSchemaV91).catch([]),
   managedVersions: providerManagedVersionsSchemaV91

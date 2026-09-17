@@ -136,10 +136,20 @@ const LIVE_FROZEN_EXPORTS = {
   // What that red means depends on whether the line has SHIPPED, and the two
   // answers are opposites - read this before reaching for either:
   //
-  //  - RELEASED: peers in the field already speak it, so the response it serves
+  //  - RELEASED: peers in the field already speak it, so the RESPONSE it serves
   //    is fixed forever. Freeze the line that stopped being head under reserved
   //    `VNN` names, open the next one against live, and do NOT regenerate. That
   //    is what v7.0 above records.
+  //
+  //    One carve-out, and it is a row in this very list. A REQUEST row whose
+  //    contract BINDS the live schema has nothing to freeze, so it is
+  //    regenerated instead - `providers.list@7.0 request` already has been,
+  //    twice, for `reasonix` and `antigravity`. That is safe for the reason the
+  //    response side is not: a request travels client to host, and a client
+  //    only ever names a provider the host itself just reported, so a new id
+  //    cannot reach an older host's decoder. Growth in the other direction has
+  //    no such argument, which is why the rule above is about responses. See
+  //    `providersListRequestSchema`, whose docblock records that v7.0 binds it.
   //  - UNRELEASED: no peer can have negotiated it, so there is no contract to
   //    break, and additive growth regenerates this fixture. `enabled` and
   //    `launchCommand` on `providerProfileSchema` both did exactly that, and
@@ -147,9 +157,15 @@ const LIVE_FROZEN_EXPORTS = {
   //
   // **A line is RELEASED when a HOST that advertises it has been published** -
   // not when a tag contains the commit that opened it. Check it with
-  // `gh release list` INCLUDING prereleases, and read the release's uploaded
-  // `protocol-surface.json`, which states the canonical version and the exact
-  // response shape that host serves.
+  // `gh release list --repo traycerai/traycer-internal` INCLUDING prereleases,
+  // and read the release's uploaded `protocol-surface.json`, which states the
+  // canonical version and the exact response shape that host serves.
+  //
+  // The repo in that command is load-bearing, not decoration. Hosts are
+  // published from the INTERNAL repo; run it against THIS one and the newest
+  // host you can see is `host-v1.3.1`, which is the very answer the discredited
+  // tag recipe below gave. A reader who omits the flag reaches the wrong
+  // conclusion while believing they followed the rule.
   //
   // That wording is this precise because the older recipe here - "it appears in
   // a non-rc `host-v*`/`cli-v*`/`desktop-v*` tag at or above
@@ -161,9 +177,10 @@ const LIVE_FROZEN_EXPORTS = {
   // (`git ls-remote --tags origin | grep staging` is empty), and is not an rc.
   //
   // Note that the compat gate's own baseline discovery
-  // (`scripts/compat/resolve-baselines.ts`) matches that same tag pattern, so it
-  // could not have caught this either and cannot catch the next one. Until that
-  // is reconciled, a staging-only line is guarded by THIS file and by the reader
+  // (`protocol/scripts/compat/resolve-baselines.ts`) matches that same tag
+  // pattern, so it could not have caught this either and cannot catch the next
+  // one. Until that is reconciled, a staging-only line is guarded by THIS file
+  // and by the reader
   // - which is why the rule above is stated here rather than left implied.
   //
   // So the red is a PROMPT to check release status, not a verdict on its own.
