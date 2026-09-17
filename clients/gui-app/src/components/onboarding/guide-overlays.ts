@@ -26,16 +26,21 @@ export const CLOSING_OVERLAY_SELECTOR = OVERLAY_SLOTS.map(
 
 /**
  * The surfaces that answer Escape for themselves. Wider than the overlay slots
- * above, which are about who owns the SCREEN: the composer's mention/slash
- * picker sits over the composer without obscuring it, mounts only while it is
- * open, and closes on the very Escape a guide used to swallow - which finished
- * the guide for the session. The rest is the shape every Radix dismissable
- * layer shares (`select`, `context-menu`, `drawer`, and the four slots above),
- * so a new one is covered the day it ships.
+ * above, which are about who owns the SCREEN: the hand-rolled pickers sit over
+ * their editor without obscuring it, mount only while they are open, carry no
+ * `data-state`, and close on the very Escape a guide used to swallow - which
+ * finished the guide for the session. Three are listed by slot: the composer's
+ * mention/slash menu, the comment composer's mention picker, and the artifact
+ * editor's link popover. The rest is the shape every Radix dismissable layer
+ * shares (`select`, `context-menu`, `drawer`, and the four slots above), so a
+ * new Radix one is covered the day it ships; a new hand-rolled one is not,
+ * and belongs in this list.
  */
 const ESCAPE_OWNER_SELECTOR = [
   OPEN_OVERLAY_SELECTOR,
   '[data-slot="composer-menu"]',
+  '[data-slot="mention-suggestion"]',
+  '[data-slot="artifact-link-popover"]',
   '[data-state="open"]:is([role="menu"], [role="listbox"], [role="dialog"])',
 ].join(", ");
 

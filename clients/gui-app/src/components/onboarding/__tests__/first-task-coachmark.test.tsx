@@ -704,6 +704,23 @@ describe("FirstTaskCoachmark", () => {
     expect(useFirstTaskGuideStore.getState().status).toBe("finished");
   });
 
+  it("leaves the Escape that closes a comment mention picker to the picker", async () => {
+    const target = await renderReadyGuide();
+    // The comment composer's picker is the same shape as the composer menu:
+    // portalled, `role="listbox"`, no `data-state`, mounted only while open.
+    const picker = document.createElement("div");
+    picker.setAttribute("data-slot", "mention-suggestion");
+    picker.setAttribute("role", "listbox");
+    document.body.append(picker);
+
+    fireEvent.keyDown(target, { key: "Escape" });
+    expect(useFirstTaskGuideStore.getState().status).toBe("active");
+
+    picker.remove();
+    fireEvent.keyDown(target, { key: "Escape" });
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+  });
+
   // Escape means "close this guide" wherever it was pressed: someone reaching
   // for it wants out of the guidance, not out of whatever holds focus. Only a
   // dismissable surface that is genuinely elsewhere - the picker cases above -
