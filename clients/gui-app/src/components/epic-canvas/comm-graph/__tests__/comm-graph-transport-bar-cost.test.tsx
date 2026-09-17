@@ -141,6 +141,16 @@ describe("what a playback step costs the transport bar", () => {
  * time. So it lives here now, where a media player puts its clock and where it
  * costs the drawing nothing.
  */
+/** The bar's clock, spelled independently - see the width case for why. */
+function expectedClock(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).format(timestamp);
+}
+
 describe("the scrubber's own time readout", () => {
   beforeEach(() => {
     useCommGraphTimelineStore.setState({ stateByEpicId: {} });
@@ -169,10 +179,17 @@ describe("the scrubber's own time readout", () => {
         .setCursor(EPIC, commGraphCursorForEvent(EVENTS[3]));
     });
 
-    // Detached: the row the cursor actually names, not the newest one.
+    // Detached: the row the cursor actually names, not the newest one. The
+    // expected spelling is built here rather than imported, so that a change
+    // to the bar's clock has to be made deliberately in two places - but what
+    // pins the FORMAT is the width case below, not this. This case is about
+    // WHICH ROW is read.
     expect(
       screen.getByTestId("comm-graph-transport-cursor-time").textContent,
-    ).toBe(new Date(EVENTS[3].timestamp).toLocaleTimeString());
+    ).toBe(expectedClock(EVENTS[3].timestamp));
+    expect(expectedClock(EVENTS[3].timestamp)).not.toBe(
+      expectedClock(EVENTS[EVENTS.length - 1].timestamp),
+    );
 
     act(() => {
       useCommGraphTimelineStore.getState().setCursor(EPIC, null);
@@ -210,47 +227,55 @@ describe("the scrubber's own time readout", () => {
     expect(reserved().textContent).toBe(live);
   });
 
-  it("reserves room for the widest hour, not for the newest row's", () => {
-    // A LOCALIZED TIME IS NOT ONE WIDTH. `9:05:09 AM` is a character shorter
-    // than `12:05:09 PM`, and which one an instant produces has nothing to do
-    // with how recent it is - so a box reserved from any particular row leaves
-    // some other row's reading overrunning it. The reading is absolutely
-    // positioned, so an overrun paints across the Live badge beside it rather
-    // than pushing it along.
+  it("writes a clock that is the same width at every hour of the day", () => {
+    // WHY THE RESERVATION CAN BE EXACT. Two earlier versions reserved a
+    // MEASURED width - the newest row's time, then the longest of a day's
+    // probes - and both were approximations: a locale's `9:05:09 AM` is a
+    // character shorter than its `12:05:09 PM`, and once that was handled by
+    // character count, `AM` and `PM` are still different widths at the same
+    // length in a proportional face. The reading is absolutely positioned, so
+    // any shortfall paints across the Live badge instead of pushing it along.
     //
-    // Swept over a full day rather than over one handpicked pair, because the
-    // pair that is wider depends on the locale the suite happens to run in -
-    // and in a 24-hour locale there is no such pair at all, which would leave
-    // a single-case version quietly proving nothing.
+    // So the variance is removed rather than chased, and these are the two
+    // properties that do it - asserted on the rendered output rather than on
+    // the formatter, because the element is what has to hold still.
     const at = (hour: number): CommGraphEvent => ({
       ...event(hour + 1),
       timestamp: Date.UTC(2024, 0, 1, hour, 59, 59),
     });
     const day = Array.from({ length: 24 }, (_unused, hour) => at(hour));
     render(<CommGraphTransportBar epicId={EPIC} events={day} />);
-    const reserved = screen.getByTestId(
-      "comm-graph-transport-cursor-time-reserve",
-    ).textContent;
 
-    let checked = 0;
+    const readings: string[] = [];
     for (const row of day) {
       act(() => {
         useCommGraphTimelineStore
           .getState()
           .setCursor(EPIC, commGraphCursorForEvent(row));
       });
-      const reading = screen.getByTestId(
-        "comm-graph-transport-cursor-time",
-      ).textContent;
-      // The reserved box is never the narrower of the two, at any hour.
-      expect(reserved.length).toBeGreaterThanOrEqual(reading.length);
-      checked += 1;
+      readings.push(
+        screen.getByTestId("comm-graph-transport-cursor-time").textContent,
+      );
     }
 
-    // Anti-vacuity: every hour was actually read back, and the reservation is
-    // a real string rather than the empty one that trivially satisfies a
-    // length comparison against nothing.
-    expect(checked).toBe(24);
-    expect(reserved.length).toBeGreaterThan(0);
+    // ONE LENGTH across the whole day - no one-digit hour beside a two-digit
+    // one - and the reserved box is that same length.
+    expect(new Set(readings.map((text) => text.length)).size).toBe(1);
+    expect(
+      screen.getByTestId("comm-graph-transport-cursor-time-reserve").textContent
+        .length,
+    ).toBe(readings[0].length);
+
+    // AND NOT A LETTER IN ANY OF THEM, which is what makes equal length mean
+    // equal WIDTH: `tabular-nums` equalises digits and says nothing about
+    // `AM` against `PM`. Without this the case above would pass on a format
+    // that still varied in pixels.
+    for (const text of readings) expect(text).not.toMatch(/\p{L}/u);
+
+    // Anti-vacuity: all twenty-four were actually read back, and they are not
+    // all the empty string.
+    expect(readings).toHaveLength(24);
+    expect(readings[0].length).toBeGreaterThan(0);
+    expect(new Set(readings).size).toBe(24);
   });
 });
