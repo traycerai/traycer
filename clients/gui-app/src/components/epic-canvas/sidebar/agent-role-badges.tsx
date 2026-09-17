@@ -8,7 +8,6 @@ interface AgentRoleBadgesProps {
 }
 
 export function AgentRoleHoverContent(props: {
-  readonly agentName: string;
   readonly claims: readonly RoleClaim[];
 }) {
   return (
@@ -16,12 +15,7 @@ export function AgentRoleHoverContent(props: {
       className="flex max-w-[min(80vw,20rem)] flex-col gap-1.5"
       data-testid="agent-role-hover-content"
     >
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="text-ui-xs font-medium">Agent roles</span>
-        <span className="break-words text-ui-xs text-muted-foreground">
-          {props.agentName}
-        </span>
-      </div>
+      <span className="text-ui-xs font-medium">Agent roles</span>
       <div className="flex flex-col gap-1">
         {props.claims.map((claim) => (
           <div key={claim.claimId} className="flex min-w-0 flex-col gap-0.5">
