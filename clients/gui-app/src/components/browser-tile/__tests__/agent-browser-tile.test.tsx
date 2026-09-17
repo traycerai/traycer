@@ -53,6 +53,9 @@ const state = vi.hoisted(() => ({
       handoffToken: null,
     }),
   ),
+  prepareOpenTab: vi.fn(() => {
+    throw new Error("not used in this test");
+  }),
   closeCanvasTile: vi.fn(),
   focusAddress: vi.fn(),
   /** Shared across renders so a Retry click can be asserted against it. */
@@ -380,6 +383,7 @@ function liveSessions(): BrowserSessionsState {
     errorMessage: null,
     retry: () => {},
     openTab: state.openTab,
+    prepareOpenTab: state.prepareOpenTab,
     closeTab: state.closeTab,
     attachTab: () => Promise.reject(new Error("not used")),
     moveTab: () => Promise.reject(new Error("not used")),
