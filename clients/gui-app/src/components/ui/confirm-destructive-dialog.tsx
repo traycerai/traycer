@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 
 export interface ConfirmDestructiveDialogProps {
+  children?: ReactNode;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -147,6 +148,8 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
             ) : null}
           </div>
         </div>
+
+        {props.children}
 
         <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
