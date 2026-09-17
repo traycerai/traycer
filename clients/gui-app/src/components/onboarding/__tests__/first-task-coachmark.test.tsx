@@ -704,7 +704,11 @@ describe("FirstTaskCoachmark", () => {
     expect(useFirstTaskGuideStore.getState().status).toBe("finished");
   });
 
-  it("ignores an Escape aimed at neither the card nor the target", async () => {
+  // Escape means "close this guide" wherever it was pressed: someone reaching
+  // for it wants out of the guidance, not out of whatever holds focus. Only a
+  // dismissable surface that is genuinely elsewhere - the picker cases above -
+  // answers it first.
+  it("closes the guide on an Escape aimed at neither the card nor the target", async () => {
     render(
       <>
         <input aria-label="Application input" />
@@ -718,7 +722,7 @@ describe("FirstTaskCoachmark", () => {
       name: "Application input",
     });
     fireEvent.keyDown(applicationInput, { key: "Escape" });
-    expect(useFirstTaskGuideStore.getState().status).toBe("active");
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
   });
 
   it("does not acknowledge Add folder when the target is still disabled", async () => {

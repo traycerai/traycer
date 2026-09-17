@@ -40,6 +40,7 @@ import {
 import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
 import { OnboardingWorkspaceIllustration } from "@/components/onboarding/onboarding-workspace-illustration";
 import { useOnboardingSwipe } from "@/components/onboarding/use-onboarding-swipe";
+import { escapeOwnedElsewhere } from "@/components/onboarding/guide-overlays";
 import { useSessionImportScan } from "@/components/session-import/use-session-import-scan";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host";
@@ -298,6 +299,15 @@ function OnboardingTour(props: {
       event.altKey
     )
       return;
+    // Escape is the Skip button, wherever focus happens to be: the tour IS the
+    // screen, so an Escape aimed at one of its own controls is still aimed at
+    // the tour. A picker or dialog that is open answers for itself first.
+    if (event.key === "Escape") {
+      if (escapeOwnedElsewhere([])) return;
+      event.preventDefault();
+      finish("skipped");
+      return;
+    }
     if (
       event.target instanceof Element &&
       event.target.closest(
@@ -311,9 +321,6 @@ function OnboardingTour(props: {
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
       back();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      finish("skipped");
     }
   });
   useEffect(() => {
