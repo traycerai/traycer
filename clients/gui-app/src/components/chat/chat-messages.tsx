@@ -1087,16 +1087,28 @@ interface ManualAnnouncementResolvers extends FallbackIdentityResolvers {
  * It exists because neither "failed" nor "frozen" covers every stall: a host
  * row that keeps advertising an endpoint while every request fails leaves the
  * poll retrying forever, and a wedged probe never clears `availabilityPending`
- * at all. Both are indefinite silence about a switch that did happen, and this
- * is the only bound that does not depend on guessing which query field means
- * "terminal".
+ * at all. Both are an unbounded wait for a label, and this is the only bound
+ * that does not depend on guessing which query field means "terminal".
+ *
+ * Note what it is NOT a bound on: reaching the user. Delivery is gated on
+ * `canSpeak`, which has no clock at all - a hold kept because the surface
+ * cannot announce is not even holding a timer, so a tab left hidden for an
+ * hour announces when it comes back. That is intended. The event is known to
+ * be news by then (it was established as such on first sight), and the
+ * alternative is dropping a switch the user asked for.
  *
  * The figure is a TRADE, not a proof, and it is worth being exact about which.
- * What is measurable from here is the GUI's own share: `agent.gui.listHarnesses`
- * is a condition-poll method whose lanes top out at a 5s interval, so noticing
- * that a probe settled costs at most one ceiling tick, and the catalogue fetch
- * that follows is a single un-polled round trip. 10s is two of those ticks plus
- * room for the fetch.
+ *
+ * What is measurable from here is the GUI's own share, and only for the lane
+ * this wait actually sits in. `agent.gui.listHarnesses` has several
+ * condition-poll lanes and they are nothing like each other:
+ * `harnesses.all-available` is 15 minutes flat, `harnesses.unavailable` climbs
+ * to 5. What bounds THIS wait is `harnesses.pending` (800ms to a 5s ceiling)
+ * and its two error spreads - and it is that lane precisely because the hold
+ * is waiting on a probe, which is the condition putting the row there. So
+ * noticing a settle costs at most one 5s tick, and the catalogue fetch after
+ * it is a single un-polled round trip (`listModels` is `poll: null`). 10s is
+ * two of those ticks: one for the notice, the second left for the fetch.
  *
  * What is NOT measurable from here is how long the host takes to probe a
  * provider in the first place - that is a CLI or SDK call on the far side, and

@@ -3326,7 +3326,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const harness = createHarness();
       registerHarness(harness);
       const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
-      const chat = renderChat(baselineEpoch, undefined);
+      renderChat(baselineEpoch, undefined);
 
       // Not ready BEFORE the switch exists, so its first sight is an absorbing
       // observation - the same position a warm remount puts an old event in.
@@ -3343,12 +3343,25 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(0);
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
-      // And it was CONSUMED, not left pending: a subsequent observation on a
-      // ready surface must not rediscover it either.
-      const later = await captureLiveRegionCommits(() => {
-        chat.rerenderWith({});
-      });
-      expect(countSentenceOccurrences(later, SWITCHED_SLUG_SENTENCE)).toBe(0);
+      // There is deliberately NO further assertion that the event was
+      // "consumed rather than left pending". It cannot be observed from here,
+      // and an assertion that looks like it checks it would be inert.
+      //
+      // Measured, not assumed. Ablating the sequence advance in `consume()`
+      // leaves the dropped event rediscoverable, and every way of provoking a
+      // later observation stays silent anyway: after a consume-and-drop `held`
+      // is null, so no wake is armed and nothing re-observes on its own;
+      // `rerenderWith({})` patches no prop and writes nothing to the store, so
+      // no layout-effect dependency moves; pairing it with `settleCatalogue()`
+      // (which does move one) still commits nothing; and cycling readiness to
+      // force a frame re-absorbs, which re-drops the rediscovered event and
+      // hides the very thing being looked for. Both configurations produce an
+      // empty commit list and an empty live region.
+      //
+      // Which is the mechanism working, not a gap: the drop is idempotent, so
+      // rediscovery is harmless here even when the sequence does not move. The
+      // assertion above - silence across a readiness restore and a full
+      // deadline - is this test's whole pin, and it reddens on the real defect.
     });
 
     it("keeps holding a switch whose catalogue settles while the surface cannot announce, and speaks the resolved label once it can", async () => {
