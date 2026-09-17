@@ -878,7 +878,9 @@ export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  // The >=1.7 fast path still needs the newer 1.11 acknowledgement downgrade.
+  // The >=1.7 fast path still needs the newer draft-image cause downgrade,
+  // which rides `CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR` - 1.12, not the 1.11
+  // this line named while the work was in review.
   const bridgeProjected = projectChatActionAckForVersion(frame, negotiated);
   // BEFORE the 1.7 identity return: `chat.imported` shipped on the 1.8 line,
   // and a released 1.7 client's strict event enum fails the WHOLE snapshot on
