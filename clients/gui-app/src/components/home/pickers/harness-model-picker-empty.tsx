@@ -213,9 +213,9 @@ function noModelsLabel(
   return `No ${activeProvider.label} models match`;
 }
 
-// The state row shown when the active provider is unavailable. API-key
-// providers stay visible in the picker so they can surface a CTA that walks the
-// user to Settings → Providers instead of a dead-end "unavailable" row.
+// Availability can fail on a credential OR a binary, even for the same
+// provider. Only the host's typed reason identifies the remedy. Older hosts
+// without that field keep their existing API-key affordance.
 function unavailableProviderState(
   provider: GuiHarnessCatalogEntry,
   onOpenProviderSettings: () => void,
@@ -234,7 +234,50 @@ function unavailableProviderState(
     );
   }
 
-  if (provider.requiresApiKey) {
+  const reason = provider.unavailableReason ?? null;
+  if (reason === "missing-binary") {
+    return (
+      <PickerStateRow
+        label={`${provider.label} CLI not found`}
+        icon={undefined}
+        action={
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              const focus = useProvidersFocusStore.getState();
+              focus.setFocusHarnessId(provider.id);
+              // CLI candidates live on General; Account is the default for
+              // providers that accept a key, including shared-binary aliases.
+              focus.setFocusTab("general");
+              onOpenProviderSettings();
+            }}
+          >
+            Set up CLI
+          </Button>
+        }
+      />
+    );
+  }
+  if (reason === "external-cli-required" || reason === "other") {
+    // Amp's SDK ignores Traycer's CLI selection. Its error already names the
+    // install command and AMP_CLI_PATH; preserve it without a Settings CTA.
+    // Unclassified failures likewise get their actual reason, not a guess.
+    return (
+      <PickerStateRow
+        label={provider.error?.trim() || `${provider.label} unavailable`}
+        icon={undefined}
+        action={undefined}
+      />
+    );
+  }
+  // Every other reason has returned above, so `reason` is now
+  // `"missing-credential"` or `null`, and `null` means an OLD HOST that sends
+  // no reason at all. Its fallback is the pre-reason behaviour: the key CTA for
+  // any provider that takes a key. This used to spell that as
+  // `reason === null && provider.requiresApiKey`, which narrowing makes
+  // redundant - the comment is where that intent lives now.
+  if (reason === "missing-credential" || provider.requiresApiKey) {
     return (
       <ProviderApiKeyCta
         harnessId={provider.id}

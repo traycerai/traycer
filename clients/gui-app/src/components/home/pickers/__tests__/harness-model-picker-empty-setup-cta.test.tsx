@@ -15,6 +15,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { ModelRowsState } from "../harness-model-picker-empty";
 
 const mocks = vi.hoisted(() => ({
@@ -95,6 +96,8 @@ function terminalLoginCapableState(
       token: null,
       codePaste: null,
       terminalLogin: {},
+      remoteSafe: null,
+      selfOpensBrowser: null,
     },
     availabilityPending: false,
     nativeCapabilities: {
@@ -132,6 +135,202 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     });
     mocks.start.mockClear();
     setScopeSupport("supported");
+    useProvidersFocusStore.getState().clearFocusHarnessId();
+    useProvidersFocusStore.getState().clearFocusTab();
+  });
+
+  it.each([
+    { id: "kiro", label: "Kiro" },
+    { id: "droid", label: "Droid" },
+    { id: "openrouter", label: "OpenRouter" },
+    { id: "huggingface", label: "Hugging Face" },
+  ] as const)(
+    "routes a missing $label binary to CLI settings",
+    ({ id, label }) => {
+      const onOpenProviderSettings = vi.fn();
+      render(
+        ModelRowsState({
+          catalogLoading: false,
+          catalogError: false,
+          hostUnavailableLabel: null,
+          hasQuery: false,
+          activeProvider: harnessEntry({
+            id,
+            label,
+            available: false,
+            requiresApiKey: true,
+            unavailableReason: "missing-binary",
+            error: "The resolver exhausted its candidates.",
+          }),
+          activeProviderState: null,
+          rowsCount: 0,
+          onOpenProviderSettings,
+          terminalLoginSurface: null,
+          runTargetHostId: null,
+          onClosePicker: () => undefined,
+        }),
+      );
+
+      expect(
+        screen.getByRole("option", { name: `${label} CLI not found` }),
+      ).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Add API key" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Set up CLI" }));
+      expect(useProvidersFocusStore.getState().focusHarnessId).toBe(id);
+      expect(useProvidersFocusStore.getState().focusTab).toBe("general");
+      expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { id: "cursor", label: "Cursor" },
+    { id: "openrouter", label: "OpenRouter" },
+    { id: "huggingface", label: "Hugging Face" },
+  ] as const)(
+    "keeps Add API key for a missing $label credential",
+    ({ id, label }) => {
+      const onOpenProviderSettings = vi.fn();
+      render(
+        ModelRowsState({
+          catalogLoading: false,
+          catalogError: false,
+          hostUnavailableLabel: null,
+          hasQuery: false,
+          activeProvider: harnessEntry({
+            id,
+            label,
+            available: false,
+            requiresApiKey: true,
+            unavailableReason: "missing-credential",
+          }),
+          activeProviderState: null,
+          rowsCount: 0,
+          onOpenProviderSettings,
+          terminalLoginSurface: null,
+          runTargetHostId: null,
+          onClosePicker: () => undefined,
+        }),
+      );
+
+      expect(screen.queryByRole("button", { name: "Set up CLI" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Add API key" }));
+      expect(useProvidersFocusStore.getState().focusHarnessId).toBe(id);
+      expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    {
+      reason: "external-cli-required",
+      message:
+        "The Amp CLI is not installed. Install it with `npx -y @ampcode/sdk install`, or point AMP_CLI_PATH at an existing amp binary.",
+    },
+    { reason: "other", message: "Provider registry verification failed." },
+  ] as const)(
+    "preserves the host remedy for $reason without a misleading CTA",
+    ({ reason, message }) => {
+      render(
+        ModelRowsState({
+          catalogLoading: false,
+          catalogError: false,
+          hostUnavailableLabel: null,
+          hasQuery: false,
+          activeProvider: harnessEntry({
+            id: "amp",
+            label: "Amp",
+            available: false,
+            requiresApiKey: true,
+            unavailableReason: reason,
+            error: message,
+          }),
+          activeProviderState: null,
+          rowsCount: 0,
+          onOpenProviderSettings: vi.fn(),
+          terminalLoginSurface: null,
+          runTargetHostId: null,
+          onClosePicker: () => undefined,
+        }),
+      );
+
+      expect(screen.getByRole("option", { name: message })).toBeDefined();
+      expect(screen.queryByRole("button")).toBeNull();
+    },
+  );
+
+  it.each([null, undefined])(
+    "keeps the legacy key CTA when the host has no reason (%s)",
+    (unavailableReason) => {
+      render(
+        ModelRowsState({
+          catalogLoading: false,
+          catalogError: false,
+          hostUnavailableLabel: null,
+          hasQuery: false,
+          activeProvider: harnessEntry({
+            id: "cursor",
+            label: "Cursor",
+            available: false,
+            requiresApiKey: true,
+            unavailableReason,
+          }),
+          activeProviderState: null,
+          rowsCount: 0,
+          onOpenProviderSettings: vi.fn(),
+          terminalLoginSurface: null,
+          runTargetHostId: null,
+          onClosePicker: () => undefined,
+        }),
+      );
+      expect(screen.getByRole("button", { name: "Add API key" })).toBeDefined();
+    },
+  );
+
+  it("keeps an installed API-key-capable Droid on the terminal sign-in path when signed out", () => {
+    const onOpenProviderSettings = vi.fn();
+    const onClosePicker = vi.fn();
+    render(
+      ModelRowsState({
+        catalogLoading: false,
+        catalogError: false,
+        hostUnavailableLabel: null,
+        hasQuery: false,
+        activeProvider: harnessEntry({
+          id: "droid",
+          label: "Droid",
+          available: true,
+          requiresApiKey: true,
+          modelsError: catalogErrorFor(providerSignedOutMessage("droid")),
+        }),
+        activeProviderState: {
+          ...terminalLoginCapableState("droid", []),
+          apiKey: { supported: true, configured: false, source: null },
+          loginCapability: {
+            oauthArgs: null,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+        rowsCount: 0,
+        onOpenProviderSettings,
+        terminalLoginSurface: {
+          kind: "landing",
+          resolveLandingPageId: () => "draft-1",
+        },
+        runTargetHostId: null,
+        onClosePicker,
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: "Add API key" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Sign in from a terminal/ }),
+    );
+    expect(mocks.start).toHaveBeenCalledWith("draft-1");
+    expect(onClosePicker).toHaveBeenCalledTimes(1);
+    expect(onOpenProviderSettings).not.toHaveBeenCalled();
   });
 
   it("renders the setup CTA for a reasonix entry with the signed-out modelsError: steps + manual command, no button, no report-issue action", () => {

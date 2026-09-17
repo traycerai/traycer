@@ -63,6 +63,8 @@ const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
   token: null,
   codePaste: null,
   terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 function copilotState() {

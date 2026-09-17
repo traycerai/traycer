@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
   hostIsLocalForLoginAutoOpen,
+  providerLoginIsRemoteSafe,
   providerSignInUnavailableHint,
   providerStartLoginFailureMessage,
   providerSupportsTerminalLogin,
@@ -34,6 +35,8 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
       token: null,
       codePaste: null,
       terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
     },
     availabilityPending: false,
     profiles: [],
@@ -95,6 +98,8 @@ describe("providerSignInUnavailableHint", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         }),
         true,
@@ -126,6 +131,8 @@ describe("providerSignInUnavailableHint", () => {
             token: null,
             codePaste: {},
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         }),
         false,
@@ -133,7 +140,7 @@ describe("providerSignInUnavailableHint", () => {
     ).toBeNull();
   });
 
-  it("allows --device-auth sign-in on a remote host", () => {
+  it("allows declared remote-safe sign-in on a remote host", () => {
     expect(
       providerSignInUnavailableHint(
         providerState({
@@ -143,6 +150,8 @@ describe("providerSignInUnavailableHint", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: {},
+            selfOpensBrowser: null,
           },
         }),
         false,
@@ -189,6 +198,8 @@ describe("providerSignInUnavailableHint", () => {
           token: null,
           codePaste: null,
           terminalLogin: {},
+          remoteSafe: null,
+          selfOpensBrowser: null,
         },
       }),
       true,
@@ -196,6 +207,46 @@ describe("providerSignInUnavailableHint", () => {
     expect(hint).toContain("signed in from a terminal");
     expect(hint).not.toContain("browser sign-in");
   });
+
+  it.each([
+    { providerId: "amp", name: "Amp", apiKeySupported: true },
+    { providerId: "kiro", name: "Kiro", apiKeySupported: true },
+    { providerId: "hermes", name: "Hermes Agent", apiKeySupported: false },
+    { providerId: "kilocode", name: "Kilo Code", apiKeySupported: false },
+  ] as const)(
+    "points $providerId at both model pickers and only supported Account credentials",
+    ({ providerId, name, apiKeySupported }) => {
+      const state = providerState({
+        providerId,
+        apiKey: {
+          supported: apiKeySupported,
+          configured: false,
+          source: null,
+        },
+        loginCapability: {
+          oauthArgs: null,
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+      });
+      const terminalHint = `${name} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
+      for (const isSelectedHostLocal of [true, false]) {
+        const hint = providerSignInUnavailableHint(state, isSelectedHostLocal);
+        if (apiKeySupported) {
+          expect(hint).toBe(
+            `${terminalHint} Or set an API key on the Account tab.`,
+          );
+        } else {
+          expect(hint).toBe(terminalHint);
+          expect(hint).not.toContain("API key");
+          expect(hint).not.toContain("Account tab");
+        }
+      }
+    },
+  );
 
   // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
   // `terminalLogin` with `oauthArgs: null` - there is no headless command.
@@ -212,6 +263,8 @@ describe("providerSignInUnavailableHint", () => {
             token: null,
             codePaste: null,
             terminalLogin: {},
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         }),
         true,
@@ -222,11 +275,46 @@ describe("providerSignInUnavailableHint", () => {
   );
 });
 
+describe("providerLoginIsRemoteSafe", () => {
+  it("uses the remote-safe marker rather than a device-auth argv flag", () => {
+    const kimiCapability = {
+      oauthArgs: ["login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+      remoteSafe: {},
+      selfOpensBrowser: null,
+    };
+    expect(providerLoginIsRemoteSafe(kimiCapability)).toBe(true);
+    expect(
+      providerSignInUnavailableHint(
+        providerState({ providerId: "kimi", loginCapability: kimiCapability }),
+        false,
+      ),
+    ).toBeNull();
+    expect(
+      providerLoginIsRemoteSafe({
+        ...kimiCapability,
+        oauthArgs: ["login", "--device-auth"],
+        remoteSafe: null,
+        selfOpensBrowser: null,
+      }),
+    ).toBe(false);
+    expect(
+      providerLoginIsRemoteSafe({ ...kimiCapability, remoteSafe: null }),
+    ).toBe(false);
+    expect(providerLoginIsRemoteSafe(null)).toBe(false);
+    expect(providerLoginIsRemoteSafe(undefined)).toBe(false);
+  });
+});
+
 const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
   oauthArgs: ["auth", "login"],
   token: null,
   codePaste: null,
   terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 const NO_TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
@@ -234,6 +322,8 @@ const NO_TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
   token: null,
   codePaste: null,
   terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 describe("providerSupportsTerminalLogin", () => {
@@ -272,6 +362,8 @@ describe("providerSupportsTerminalLogin", () => {
         token: null,
         codePaste: null,
         terminalLogin: {},
+        remoteSafe: null,
+        selfOpensBrowser: null,
       }),
     ).toBe(true);
     expect(
@@ -280,22 +372,68 @@ describe("providerSupportsTerminalLogin", () => {
         token: null,
         codePaste: null,
         terminalLogin: {},
+        remoteSafe: null,
+        selfOpensBrowser: null,
       }),
     ).toBe(true);
   });
 });
 
 describe("shouldAutoOpenLoginUrl", () => {
-  it("auto-opens on a remote host even without a device code", () => {
-    expect(shouldAutoOpenLoginUrl(false, null)).toBe(true);
+  // NonNullable, not the bare field type: the field is nullable, and spreading
+  // a possibly-null value into an object literal below would silently drop
+  // every required key rather than failing at the spread.
+  const capability = (
+    selfOpensBrowser: Record<string, never> | null,
+  ): NonNullable<ProviderCliState["loginCapability"]> => ({
+    oauthArgs: ["login"],
+    token: null,
+    codePaste: null,
+    terminalLogin: null,
+    remoteSafe: null,
+    selfOpensBrowser,
   });
 
-  it("auto-opens a device-code URL on a local host", () => {
-    expect(shouldAutoOpenLoginUrl(true, "7CH1-OXNVU")).toBe(true);
+  it("auto-opens on a remote host even when the child opens its own browser", () => {
+    // The host's browser is on a machine the user cannot see, so whatever the
+    // child does there is invisible. This branch never reads the marker.
+    expect(shouldAutoOpenLoginUrl(false, capability({}))).toBe(true);
+    expect(shouldAutoOpenLoginUrl(false, capability(null))).toBe(true);
   });
 
-  it("does not auto-open a code-paste URL on a local host", () => {
-    expect(shouldAutoOpenLoginUrl(true, null)).toBe(false);
+  it("does not auto-open on a local host when the child opens its own browser", () => {
+    // THE regression pin. Before the marker this read `userCode !== null`, and
+    // Kimi - which runs a device-code flow AND opens the browser itself -
+    // therefore got a second consent tab the moment the host keyed it
+    // device-auth. Written against a provider that is BOTH, because a provider
+    // that is only self-opening passed the old predicate too and so cannot
+    // tell the two implementations apart.
+    const kimiShaped: ProviderCliState["loginCapability"] = {
+      ...capability({}),
+      remoteSafe: {},
+    };
+    expect(shouldAutoOpenLoginUrl(true, kimiShaped)).toBe(false);
+  });
+
+  it("auto-opens on a local host when the child does not open a browser", () => {
+    // Codex and Grok print a URL and a code for the GUI to open; Antigravity
+    // prints a consent link that is the flow's only affordance. All three are
+    // `null` here, and all three must get a tab.
+    expect(shouldAutoOpenLoginUrl(true, capability(null))).toBe(true);
+  });
+
+  it("auto-opens when there is no capability to read", () => {
+    // The fail-safe direction: a duplicate tab is a nuisance, no tab at all is
+    // a dead end, so an unknown answer opens.
+    //
+    // The genuinely ABSENT key is not expressible here - the field is required
+    // on the live type - and it is not this test's job: an old host's payload
+    // reaches the client through the v8->v9 bridge, which fills `null`. That
+    // fill is pinned in the protocol suite
+    // (`provider-login-remote-safe-marker.test.ts`), and the predicate's
+    // `?? null` is the belt to that braces.
+    expect(shouldAutoOpenLoginUrl(true, null)).toBe(true);
+    expect(shouldAutoOpenLoginUrl(true, undefined)).toBe(true);
   });
 });
 

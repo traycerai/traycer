@@ -154,6 +154,19 @@ const FIXTURES = {
   // reached a wire already in the field), and 9.0 froze at the pre-`autoJudge`
   // provider state when 9.1 opened to publish the per-provider judge. Neither
   // dump is changed by its freeze.
+  //
+  // They have since parted over the `remoteSafe` login-capability marker, and
+  // the split is release status rather than taste. 8.0 is RELEASED
+  // (`cli-v1.3.0` / `host-v1.3.0`), so it was kept byte-identical by pinning
+  // `providerCliStateBaseShapeV80` to the hand-frozen four-key
+  // `providerLoginCapabilitySchemaV70` - the response rows above are never
+  // regenerated to green, and this one did not have to be. Major 9 is
+  // UNRELEASED (no tag contains the commit that opened 9.1, rcs included; the
+  // newest non-rc OSS tag registers `providers.list` only to 8.0), and
+  // `providerCliStateSchemaV90` is `.omit({ autoJudge })` off the LIVE state,
+  // so it widens with the live shape by construction and its row regenerates -
+  // the `agent.list@9.0` licence, verbatim. Re-derive that status from the tags
+  // before copying this paragraph; it moves with every release.
   "providers.list@8.0": dump(providersListResponseSchemaV80),
   "providers.list@9.0": dump(providersListResponseSchemaV90),
   // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the

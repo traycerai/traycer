@@ -35,6 +35,19 @@ import {
 export const harnessSurfaceSchema = z.enum(["gui", "tui"]);
 export type HarnessSurface = z.infer<typeof harnessSurfaceSchema>;
 
+// A remedy classified at the failing availability probe, never inferred from
+// the provider id or its ability to accept an API key. OpenRouter and Hugging
+// Face can fail either their key check or their shared CLI resolution.
+export const guiHarnessUnavailableReasonSchema = z.enum([
+  "missing-binary",
+  "missing-credential",
+  "external-cli-required",
+  "other",
+]);
+export type GuiHarnessUnavailableReason = z.infer<
+  typeof guiHarnessUnavailableReasonSchema
+>;
+
 export const guiHarnessOptionSchema = z.object({
   id: guiHarnessIdSchema,
   label: z.string(),
@@ -44,6 +57,15 @@ export const guiHarnessOptionSchema = z.object({
   enabled: z.boolean().default(true),
   available: z.boolean(),
   error: z.string().nullable(),
+  // Added to the unreleased 9.1 head only. Older hosts carry no reason; their
+  // 9.0 -> 9.1 bridge fills null without guessing from free-text `error`.
+  // Optional for pre-field 9.1 hosts; unknown future reasons degrade to
+  // `other` instead of rejecting the entire catalog. `other` is an explicit
+  // verdict that neither a key nor an install CTA is known to fix the error.
+  unavailableReason: guiHarnessUnavailableReasonSchema
+    .nullable()
+    .optional()
+    .catch("other"),
   modes: z.array(harnessSurfaceSchema),
   // True when this (enabled) harness authenticates with an API key. The
   // renderer keeps such a provider visible in the picker even while

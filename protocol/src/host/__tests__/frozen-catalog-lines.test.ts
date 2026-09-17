@@ -159,8 +159,27 @@ const LIVE_FROZEN_EXPORTS = {
   // silently narrowing what is guarded.
   // Two freezes here as well: 8.0 froze when 9.0 opened, and 9.0 froze at the
   // pre-`autoJudge` provider state when 9.1 opened to publish the per-provider
-  // judge. Same response as when each was head - each names its frozen schema
-  // now and its dump is unchanged, so neither row was regenerated.
+  // judge. Neither dump was changed BY its freeze.
+  //
+  // The two rows have since parted, and they are the two bullets above worked
+  // out on one field - the `remoteSafe` login-capability marker, which grew the
+  // LIVE capability:
+  //
+  //  - 8.0 did NOT move, because `providerCliStateBaseShapeV80` was re-pointed
+  //    at the hand-frozen four-key `providerLoginCapabilitySchemaV70` in the
+  //    same change (so was v7.0's). `cli-v1.3.0` / `host-v1.3.0` shipped 8.0,
+  //    so the first bullet governs and the answer is a pin, never a
+  //    regeneration. That both released rows stayed byte-identical is the
+  //    evidence the pin worked.
+  //  - 9.0 DID move, and the second bullet is why. Major 9 is unreleased: no
+  //    tag contains the commit that opened 9.1, release candidates INCLUDED,
+  //    and the newest non-rc OSS tag (`host-v1.3.1`) registers
+  //    `providers.list` only to 8.0. `providerCliStateSchemaV90` is
+  //    `.omit({ autoJudge })` off the live state, so an unreleased 9.0 widens
+  //    with the live shape by construction. Its own "Do NOT add fields here"
+  //    governs the SCHEMA - the field goes on `providerCliStateBaseShape`,
+  //    which is where `remoteSafe` went - and not this row, which regenerates.
+  //    The same licence `agent.list@9.0` carries, for the same reason.
   "providers.list@8.0": providersListResponseSchemaV80,
   "providers.list@9.0": providersListResponseSchemaV90,
   // The head line, holding 9.0's old job: it names the LIVE schema, so the next

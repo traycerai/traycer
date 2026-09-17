@@ -1075,6 +1075,7 @@ import {
   type ProviderLoginCapability,
   type ProviderLoginCapabilityV10,
   type ProviderLoginCapabilityV40,
+  type ProviderLoginCapabilityV70,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -1919,12 +1920,55 @@ function upgradeLoginCapabilityFromV10(
 // provider whose whole `loginCapability` is null makes the optional chain
 // yield `undefined` - not because an old host's payload reaches them with the
 // key missing. It does not.
+//
+// The return type is `ProviderLoginCapabilityV70`, NOT the live capability,
+// and that is not a tidy-up: this helper's only hop lands on
+// `providersListResponseSchemaV70Preimage`, whose capability leaf is the
+// hand-frozen four-key v7.0 snapshot. It could be annotated live only while
+// `providerCliStateBaseShapeV70` still pointed at the live schema, which made
+// the two types the same object. Pinning that base shape for `remoteSafe`
+// separated them, and the honest type is the one the target actually models -
+// filling a fifth key here would be dropped by that target anyway (these
+// callbacks are chained BY CAST, with no re-parse to apply `.catch(null)`).
 function upgradeLoginCapabilityFromV40(
   loginCapability: ProviderLoginCapabilityV40 | null,
-): ProviderLoginCapability | null {
+): ProviderLoginCapabilityV70 | null {
   return loginCapability === null
     ? null
     : { ...loginCapability, terminalLogin: null };
+}
+
+// Fills BOTH major-9 login-capability markers that a frozen V70-shaped state
+// (the v7.0 and v8.0 list lines) never carries - the third and fourth
+// repetitions of the same "old host never had this feature" fill, after
+// `codePaste` and `terminalLogin` above.
+//
+// One function for both because they ride the same line and the same hop, not
+// because they mean related things: `remoteSafe` is "this flow needs no
+// loopback callback on the host" and `selfOpensBrowser` is "the child opens a
+// browser itself". Kimi is the only provider that is both, which is the
+// concrete reason they are two keys.
+//
+// `null` is the honest projection for each, and for each it is also the
+// SAFE one - which is worth stating because the two keys fail in opposite
+// directions. A null `remoteSafe` makes the GUI refuse a remote sign-in it
+// cannot prove will work; a null `selfOpensBrowser` makes the GUI open the
+// browser itself, which costs a duplicate tab at worst and never strands a
+// user at a waiting step with nothing opened. An old host reported neither
+// fact, so neither may be asserted.
+//
+// Filling them MATTERS on the client, not just for type completeness - the same
+// argument `upgradeLoginCapabilityFromV40` spells out one function up. A client
+// decodes an old host's payload through the NEGOTIATED FROZEN schema, so the
+// live `.catch(null)` never runs and the keys come out of the decode absent;
+// this bridge is what turns that into `null` before any GUI code sees it. A
+// test that exercises only the live schema passes while that bug ships.
+function upgradeLoginCapabilityFromV70(
+  loginCapability: ProviderLoginCapabilityV70 | null,
+): ProviderLoginCapability | null {
+  return loginCapability === null
+    ? null
+    : { ...loginCapability, remoteSafe: null, selfOpensBrowser: null };
 }
 function downgradeProviderRequestForV10<T>(
   schema: {
@@ -2281,7 +2325,30 @@ export const providersListUpgradeV80ToV90 = defineUpgradePath<
   // `.optional()` precisely so "this host has no per-profile key method" stays
   // distinguishable from a concrete state, and a v8.0 host IS such a host.
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  // The response is no longer identity: `remoteSafe` rides major 9, and both
+  // v7.0 and v8.0 are pinned to the four-key `providerLoginCapabilitySchemaV70`,
+  // so THIS is the first bridge whose target models the marker - the same rule
+  // the v6->v7 hop states for `terminalLogin` ("this is the first bridge whose
+  // target models it").
+  //
+  // Not the v7->v8 hop, whatever `providerLoginCapabilitySchemaV70`'s older
+  // wording suggested: that text was written when 8.0 was the head line, and
+  // `providersListUpgradeV70ToV80` fills only `profiles[].enabled`. The fill's
+  // home MOVES as shapes are re-pointed; re-derive it from which target models
+  // the key rather than from an analogy.
+  //
+  // Filling on the wrong hop is not cosmetic. `upgradeResponseToVersion` chains
+  // these callbacks by cast with no re-parse, so a fill onto a frozen target is
+  // simply dropped - and a fill that never happens leaves the key genuinely
+  // ABSENT in a client that decoded an old host through the frozen schema,
+  // where `.catch(null)` never ran.
+  upgradeResponse: (response) => ({
+    ...response,
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      loginCapability: upgradeLoginCapabilityFromV70(provider.loginCapability),
+    })),
+  }),
 });
 
 /**
@@ -2677,9 +2744,27 @@ export const providersListDowngradeV7ToV1 = defineDowngradePath<
   }),
 });
 
-function enabledProviderProfilesOnly(
-  providers: readonly ProviderCliState[],
-): ProviderCliState[] {
+// Generic over the row shape, and that is a correction rather than a
+// generalization for its own sake. It was declared `readonly ProviderCliState[]
+// -> ProviderCliState[]`, which compiled for the SIX `providers.list@8.0`
+// downgrade sources below only because `ProviderCliStateV80` happened to be
+// structurally assignable to the live state - so those v8.0 rows were LAUNDERED
+// into the live type on the way through, and `providersListDowngradeV8ToV1`
+// then handed `downgradeProviderCliStateToV10` a row whose real type is not in
+// its accepted union.
+//
+// Pinning the v8.0 capability leaf for `remoteSafe` ends that coincidence: a
+// frozen four-key capability is not a live five-key one, so the laundering
+// stops type-checking. Preserving the caller's row type is the honest fix, and
+// it is what makes the v8->v1 hop declare the shape it actually downgrades (see
+// `ProviderCliStateV80` in `DowngradableToV10ProviderState`). The constraint is
+// deliberately the minimum this function touches - `isProfileEnabled` reads one
+// optional boolean - so no future row shape has to be added here.
+function enabledProviderProfilesOnly<
+  TProvider extends {
+    readonly profiles: readonly { readonly enabled?: boolean }[];
+  },
+>(providers: readonly TProvider[]): TProvider[] {
   return providers.map((provider) => ({
     ...provider,
     profiles: provider.profiles.filter(isProfileEnabled),
@@ -6052,9 +6137,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // normally decided by shared state and would poison every 9.0 peer's
           // projection with no opt-out. Here it is genuinely emission-gated:
           // the host resolves the catalog against the negotiated minor and
-          // serves a 9.0 peer the pre-`auto` array. The row's other addition,
-          // `nativeAutoJudge`, needs no annotation - a new KEY is stripped by
-          // the within-major re-parse.
+          // serves a 9.0 peer the pre-`auto` array. `nativeAutoJudge` and
+          // `unavailableReason` need no annotation - each new KEY is stripped
+          // by the within-major re-parse. The reason widens this unreleased
+          // 9.1 head in place; the 9.0 -> 9.1 bridge fills null for old hosts.
           responseGrowthProjectionGated: true,
         },
       },

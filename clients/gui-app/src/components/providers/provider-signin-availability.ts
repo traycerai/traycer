@@ -97,7 +97,7 @@ export function providerCanStartProfileOauth(
 
 /**
  * Headless `providers.startLogin` that does not need a localhost callback on
- * the host: Claude's paste-code page, or a CLI spawned with `--device-auth`.
+ * the host: Claude's paste-code page, or a flow the host marks remote-safe.
  * Terminal login is a different button (composer), so it is not this.
  */
 export function providerLoginIsRemoteSafe(
@@ -105,23 +105,51 @@ export function providerLoginIsRemoteSafe(
 ): boolean {
   if (loginCapability === null || loginCapability === undefined) return false;
   if (loginCapability.codePaste !== null) return true;
-  const oauthArgs = loginCapability.oauthArgs ?? null;
-  return oauthArgs !== null && oauthArgs.includes("--device-auth");
+  // `remoteSafe` is a REQUIRED key carrying `.catch(null)`, so a parsed
+  // capability always has it and an unparsed literal is held to the same type.
+  // It is therefore never `undefined`, and the `!== undefined` arm this briefly
+  // carried was a condition that could not be false - the same thing the marker
+  // itself is declared under (see `cli-profiles.ts`: do not state what nothing
+  // can falsify). Widening it back means widening the schema first.
+  return loginCapability.remoteSafe !== null;
 }
 
 /**
  * Whether the GUI should open `startLogin`'s URL itself.
  *
- * On a local host the login child may already open a browser (Claude, Antigravity).
- * Opening the same URL again double-opens a consent page on one `state`.
- * Device-auth children (`userCode` present) do not open a browser, so the GUI
- * must. Remote hosts never show the host's browser to the user.
+ * Two independent questions, in this order:
+ *
+ *  1. Is the host remote? Then the host's browser is on a machine the user
+ *     cannot see, so the GUI always opens the URL - whatever the child does
+ *     there is invisible and irrelevant. This branch does NOT read the
+ *     capability, which is why a provider's marker is only ever observable on
+ *     a LOCAL host.
+ *  2. On a local host, open only if the child does not already open one.
+ *     Opening the same URL twice double-opens a consent page on one `state`.
+ *
+ * `selfOpensBrowser` replaced `userCode !== null` as the answer to (2), and
+ * the swap was forced by a measured counterexample rather than by tidiness.
+ * The old premise - "device-auth children do not open a browser, so the GUI
+ * must" - held for Codex and Grok and was FALSE for Kimi, which runs a
+ * device-code flow and opens the browser itself. The moment the host keyed
+ * Kimi device-auth, every local Kimi sign-in opened a second consent tab.
+ *
+ * The same docblock used to name Claude and Antigravity together as children
+ * that "may already open a browser". Claude does; Antigravity does not - its
+ * server prints a consent link the GUI has to open, which is why the host
+ * holds `startLogin` open for that line (`EXTERNAL_LOGIN_URL_GRACE_MS`). One
+ * proxy, wrong in both directions; the fact now travels per provider.
+ *
+ * An absent or null marker means "not known to open its own browser", so this
+ * returns true and the user gets a tab. That is the fail-safe direction: a
+ * duplicate tab is a nuisance, a missing one is a dead end.
  */
 export function shouldAutoOpenLoginUrl(
   isLocalHost: boolean,
-  userCode: string | null,
+  loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): boolean {
-  return !isLocalHost || userCode !== null;
+  if (!isLocalHost) return true;
+  return (loginCapability?.selfOpensBrowser ?? null) === null;
 }
 
 /**
@@ -187,7 +215,10 @@ export function providerSignInUnavailableHint(
     // send its user to "its own CLI" when Traycer can open that CLI for them.
     // It is also FALSE for the host check: a device flow needs no loopback,
     // so terminal login works on a remote host.
-    return `${providerDisplayName(state.providerId)} is signed in from a terminal. Use the sign-in option in the chat composer.`;
+    const hint = `${providerDisplayName(state.providerId)} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
+    return state.apiKey.supported
+      ? `${hint} Or set an API key on the Account tab.`
+      : hint;
   }
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
   // `null` alone, NOT `null || length === 0`. An EMPTY argv is a real headless

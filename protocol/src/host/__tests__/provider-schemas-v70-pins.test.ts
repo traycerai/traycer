@@ -8,7 +8,9 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  downgradeProviderCliStateToV10,
   providerCliStateSchema,
+  providerCliStateSchemaV10,
   providerCliStateSchemaV70Preimage,
   providerIdSchema,
   providerIdSchemaV70,
@@ -449,13 +451,36 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
       providers: [canonical],
       native: NATIVE_RESULT_SAMPLE,
     });
-    // The frozen capability descriptor predates `modelProviders`, so that key
-    // is the ONE difference the frozen parse may introduce - everything else
-    // must round-trip untouched.
+    // The frozen parse may introduce exactly three differences, each because
+    // the live shape grew a key AFTER v7.0 froze. They are enumerated rather
+    // than waved at, because the whole value of this test is that anything
+    // NOT on this list is a leak of a post-v7.0 field into a frozen line:
+    //
+    //   1. `modelProviders` on nativeCapabilities - predates the descriptor.
+    //   2. `enabled` on a profile.
+    //   3. `remoteSafe` and `selfOpensBrowser` on the login capability - the
+    //      two markers this initiative added. `providerLoginCapabilitySchemaV70`
+    //      is pinned at four keys and must keep stripping both.
+    //
+    // Item 3 is the one to be careful with: the correct behaviour is that the
+    // frozen parse DROPS these, so the assertion strips them from the live
+    // side rather than expecting them on the frozen one.
     const { modelProviders: _modelProviders, ...liveCapabilities } =
       viaLive.providers[0].nativeCapabilities;
     const { enabled: _enabled, ...liveProfile } =
       viaLive.providers[0].profiles[0];
+    const liveLoginCapability = viaLive.providers[0].loginCapability;
+    if (liveLoginCapability === null) {
+      throw new Error(
+        "fullyPopulatedProviderState must populate loginCapability - a null " +
+          "here would make the capability half of this pin vacuous",
+      );
+    }
+    const {
+      remoteSafe: _remoteSafe,
+      selfOpensBrowser: _selfOpensBrowser,
+      ...frozenShapedLoginCapability
+    } = liveLoginCapability;
     expect(viaFrozen).toEqual({
       ...viaLive,
       providers: [
@@ -463,6 +488,7 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
           ...viaLive.providers[0],
           profiles: [liveProfile],
           nativeCapabilities: liveCapabilities,
+          loginCapability: frozenShapedLoginCapability,
         },
       ],
     });
@@ -692,9 +718,15 @@ describe("providerManagedInstallStateSchemaV70Preimage pins the v7.0 arm and rea
 // Same caveat as the managedInstallState pin above: `biometric` isn't
 // modelled by the LIVE capability schema either, so this pins the v7.0 key
 // set rather than contrasting it against a live schema that currently
-// accepts more. It stays meaningful the same way: once a real fifth
-// capability field lands live (the way `terminalLogin` did on v7.0 itself),
-// this frozen copy must keep stripping it.
+// accepts more.
+//
+// The real fifth field has since landed - `remoteSafe`, the marker that says a
+// headless login needs no loopback callback on the host - and the two-directional
+// contrast this comment was waiting for lives in
+// `provider-login-remote-safe-marker.test.ts`, which asserts both that the live
+// capability keeps it and that this frozen copy strips it. `biometric` stays
+// here on its own merit: it pins the KEY SET against any unknown key, which no
+// test written around one real field can do.
 describe("providerLoginCapabilitySchemaV70 pins its four-key capability set", () => {
   it("strips an unmodeled capability key on parse instead of carrying it through", () => {
     const parsed = providerLoginCapabilitySchemaV70.parse({
@@ -708,5 +740,86 @@ describe("providerLoginCapabilitySchemaV70 pins its four-key capability set", ()
     expect(Object.keys(parsed).sort()).toEqual(
       ["codePaste", "oauthArgs", "terminalLogin", "token"].sort(),
     );
+  });
+});
+
+// The v1.0 downgrade's strip list is hand-written, and the function's own
+// comment predicts what one forgotten entry does: the strict v1.0 parse
+// rejects the row, the caller filters it out, and the provider does not lose a
+// field - it DISAPPEARS for that client.
+//
+// That prediction has now come true twice. The (since removed) auth-aware
+// `enablementMode` / `enablementSource` pair was the first. `autoJudge` was the
+// second: it landed with the `auto` permission mode, was never added to the
+// destructure, and is `.optional()` - so the key is only on a row once a user
+// actually picks a judge, and a default install never reproduces it.
+//
+// Both times the guard was a fixture hand-written for one named field, which is
+// precisely why the second walked past: a per-field fixture only tests the field
+// its author had in mind. This derives the obligation from the two SCHEMAS'
+// key sets, so the NEXT field is caught by construction rather than by whoever
+// next reads the comment.
+// WHY THIS DERIVES when the key-set pins at the top of this file are
+// emphatically hand-written: they are pinning a FROZEN shape, where deriving
+// from the live schema would track the very drift they exist to detect. This
+// asserts a RELATIONSHIP between two schemas - "everything live has and v1.0
+// does not must be stripped" - and that obligation genuinely IS whatever the
+// schemas say, on any given day. Hand-listing it here would reproduce the
+// maintained-list failure twice over: once in the destructure, once in the test
+// meant to guard it. Do not "fix" this to match the pins above.
+describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", () => {
+  const laterThanV10 = Object.keys(providerCliStateSchema.shape).filter(
+    (key) => !(key in providerCliStateSchemaV10.shape),
+  );
+
+  // A row carrying every field the live shape has and v1.0 does not. Kept
+  // local rather than folded into `fullyPopulatedProviderState`, because that
+  // fixture is shared with the v7.0 round-trip pin above and a new field there
+  // becomes a new delta the pin has to except.
+  const everyLaterFieldPresent = () =>
+    providerCliStateSchema.parse({
+      ...fullyPopulatedProviderState("claude-code"),
+      packId: "pack-claude-code",
+      managedVersions: {
+        autoDownload: true,
+        pinnedVersion: null,
+        updateAvailable: null,
+        sharedWithProviders: ["codex"],
+        totalSizeBytes: null,
+        available: [],
+      },
+      managedVersionsUnavailable: { reason: "network" },
+      nextRunBinary: {
+        kind: "managed",
+        path: "/managed/claude-code/1.2.3/bin",
+        version: "1.2.3",
+      },
+      cliBinaryResolved: false,
+      autoJudge: "traycer",
+    });
+
+  it("has a non-empty obligation set, so nothing below can pass vacuously", () => {
+    expect(laterThanV10.length).toBeGreaterThan(0);
+  });
+
+  it("the fixture carries every one of them - else the strip check is hollow", () => {
+    // Fails BY NAME when a field is added to the live shape and not to the
+    // fixture. Fix it here first; the next test then tells you whether the
+    // destructure needs it too.
+    const live = everyLaterFieldPresent();
+    expect(laterThanV10.filter((key) => key in live).sort()).toEqual(
+      [...laterThanV10].sort(),
+    );
+  });
+
+  it("downgrades without vanishing, and none of them survive", () => {
+    const downgraded = downgradeProviderCliStateToV10(everyLaterFieldPresent());
+    // `null` IS the bug. It does not read as data loss at the call site - the
+    // caller simply has one fewer provider.
+    expect(downgraded).not.toBeNull();
+    for (const key of laterThanV10) {
+      expect(downgraded).not.toHaveProperty(key);
+    }
+    expect(providerCliStateSchemaV10.safeParse(downgraded).success).toBe(true);
   });
 });

@@ -1217,6 +1217,23 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   }
                 ]
               },
+              "unavailableReason": {
+                "default": "other",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "missing-binary",
+                      "missing-credential",
+                      "external-cli-required",
+                      "other"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "modes": {
                 "type": "array",
                 "items": {
@@ -12054,13 +12071,41 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                             "type": "null"
                           }
                         ]
+                      },
+                      "remoteSafe": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "selfOpensBrowser": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
                       "oauthArgs",
                       "token",
                       "codePaste",
-                      "terminalLogin"
+                      "terminalLogin",
+                      "remoteSafe",
+                      "selfOpensBrowser"
                     ],
                     "additionalProperties": false
                   },
@@ -14940,13 +14985,41 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                             "type": "null"
                           }
                         ]
+                      },
+                      "remoteSafe": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "selfOpensBrowser": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
                       "oauthArgs",
                       "token",
                       "codePaste",
-                      "terminalLogin"
+                      "terminalLogin",
+                      "remoteSafe",
+                      "selfOpensBrowser"
                     ],
                     "additionalProperties": false
                   },
