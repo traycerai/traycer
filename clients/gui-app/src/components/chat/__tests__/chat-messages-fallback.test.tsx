@@ -3266,10 +3266,22 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
 
     it("clears the hold timer on unmount so it does not outlive the surface", async () => {
       // Falsification: drop the `clearTimeout` in the store-subscription
-      // layout effect's cleanup (the one after "must not outlive them") -
-      // the hold timeout stays pending. The wake no longer reads the store
-      // (`setManualHoldTick` instead), and React 19 does not warn on a
-      // post-unmount setState, so the pending-timer count is the observable.
+      // layout effect's cleanup (the one after "must not outlive them") - the
+      // hold timeout stays pending. The wake no longer reads the store
+      // (`setManualHoldTick` instead) and React 19 does not warn on a
+      // post-unmount setState, so nothing about the wake FIRING is observable;
+      // the timer itself has to be.
+      //
+      // A cold `vi.getTimerCount()` cannot answer it either. A varying number
+      // of unrelated fake timers are pending while the announcement commits -
+      // 1, 3 or 4 across runs - and they are not this component's to clear, so
+      // an absolute count and a delta both flaked, roughly one run in three.
+      // Advancing by 0 does not settle it; they are not all zero-delay.
+      //
+      // What makes the count answerable is running the clock to one tick SHORT
+      // of the deadline. Every other timer is shorter-lived and fires; the
+      // hold's is the one thing that cannot, because it was armed for exactly
+      // this window. So the 1 below is the hold, by construction.
       vi.useFakeTimers();
       unsettleCatalogue();
       const harness = createHarness();
@@ -3280,12 +3292,120 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       await flushAnnouncer();
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
-      // 2 pending while held: the hold timeout, plus one other fixture
-      // timer that unmount tears down regardless. Cleanup is what takes
-      // the leftover from 1 (the hold) to 0; dropping it leaves that one.
-      expect(vi.getTimerCount()).toBe(2);
+      // The advance re-observes, and the hold survives it: the catalogue is
+      // still unsettled and the deadline still has a millisecond to run. The
+      // silence assertion after it is what says so.
+      await act(async () => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS - 1);
+        await Promise.resolve();
+      });
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      expect(vi.getTimerCount()).toBe(1);
       chat.unmount();
       expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("drops a switch first seen while the observer would absorb, instead of holding it past the history window", async () => {
+      // The hold's other end, and the reason `canSpeak` is read TWICE.
+      //
+      // `confirmedManualFallbackAction` is never cleared from the store and a
+      // remount resets `lastManualSequence` to 0, so a warm store re-offers an
+      // old switch as new. What keeps it quiet is that the observation it is
+      // handed to absorbs - the announcer records the key and pushes nothing.
+      // That absorption IS the history filter.
+      //
+      // Deferring instead carries the event PAST that window: the hold outlives
+      // every absorbing frame and the deadline then waits for a speaking one,
+      // which is exactly the frame the filter is down. Falsification: gate only
+      // the deferred exits on `canSpeak` (the P1 fix alone) - the hold is taken
+      // while not ready, survives the restore, and the last block below speaks
+      // a switch the user already lived through.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+
+      // Not ready BEFORE the switch exists, so its first sight is an absorbing
+      // observation - the same position a warm remount puts an old event in.
+      harness.callbacks().onConnectionStatus("connecting", null, null);
+      await flushAnnouncer();
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        harness.callbacks().onConnectionStatus("open", null, null);
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS + 5_000);
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(0);
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      // And it was CONSUMED, not left pending: a subsequent observation on a
+      // ready surface must not rediscover it either.
+      const later = await captureLiveRegionCommits(() => {
+        chat.rerenderWith({});
+      });
+      expect(countSentenceOccurrences(later, SWITCHED_SLUG_SENTENCE)).toBe(0);
+    });
+
+    it("keeps holding a switch whose catalogue settles while the surface cannot announce, and speaks the resolved label once it can", async () => {
+      // The gap the deadline test could not see, because it is the COMMON
+      // path rather than the rare one: the catalogue simply answering.
+      //
+      // Pre-fix, `!modelCatalogueSettledFor(...)` guarded only the unsettled
+      // branch, so a settle falling in a not-ready frame dropped straight
+      // through to consume - into an absorbing observe, which records the key
+      // and pushes nothing while the sequence advances. Permanently silent
+      // about a switch that did happen, with the label right there.
+      //
+      // Falsification: gate only the deadline on `canSpeak` and leave the
+      // settled exit ungated - the middle block below consumes and the final
+      // one finds nothing left to say.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      // Published while READY, so this event is genuine news and the hold is
+      // legitimately taken. That is what separates this case from the one
+      // above; the difference is not the settle, it is whose news it is.
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      harness.callbacks().onConnectionStatus("connecting", null, null);
+      await flushAnnouncer();
+
+      modelLabelOverride.value = new Map([
+        [
+          `${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`,
+          RESOLVED_MANUAL_MODEL_LABEL,
+        ],
+      ]);
+      settleCatalogue();
+      const whileUnready = await captureLiveRegionCommits(() => {
+        chat.rerenderWith({});
+      });
+      expect(
+        countSentenceOccurrences(whileUnready, SWITCHED_RESOLVED_SENTENCE),
+      ).toBe(0);
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        harness.callbacks().onConnectionStatus("open", null, null);
+        // The restore observe absorbs (`!wasReady`); the 0ms wake is what
+        // brings the hold back to a frame that can actually speak.
+        vi.advanceTimersByTime(0);
+      });
+      expect(
+        countSentenceOccurrences(commits, SWITCHED_RESOLVED_SENTENCE),
+      ).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_RESOLVED_SENTENCE);
+      expect(liveRegionText()).not.toContain(TARGET_TUPLE.model);
     });
 
     it("does not expire the hold while the surface cannot announce, and still speaks the slug once it can", async () => {
@@ -3296,12 +3416,12 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       // rebases the completion observer, which `reset()`s the shared queue.
       //
       // The silent-while-not-ready assertion below is a prerequisite, not the
-      // pin: reverting `canExpire` to plain `ready` still stays silent here,
+      // pin: reverting `canSpeak` to plain `ready` still stays silent here,
       // because `observe` absorbs a not-ready (and the first ready) frame.
       //
       // The speak-after-restore assertion is the pin. It breaks on either
       // production piece:
-      //   - `canExpire: ready` (not `!willAbsorb`) consumes the event into
+      //   - `canSpeak: ready` (not `!willAbsorb`) consumes the event into
       //     the absorbing first-ready observe and never speaks.
       //   - Dropping the 0ms wake (`wakeMs = remainingMs > 0 ? remainingMs
       //     : ready ? 0 : null`) leaves the hold stuck after that observe

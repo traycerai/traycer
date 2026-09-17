@@ -1,7 +1,12 @@
+import { QueryClient } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   useFallbackModelCatalogues,
   useFallbackModelLabels,
@@ -18,9 +23,11 @@ import {
  *
  * The two RPC-level hooks it composes (`useGuiHarnessesQueryForClient`,
  * `useHostQueries`) are mocked directly, which is what lets this file avoid a
- * `QueryClientProvider` / real `HostClient` entirely - the real fetch/cache
- * machinery is exercised by whichever component tests need a live transport;
- * this file is only about the MAPPING logic layered on top of it.
+ * `QueryClientProvider` and any live transport - the real fetch/cache
+ * machinery is exercised by whichever component tests need one; this file is
+ * only about the MAPPING logic layered on top of it. {@link HOST_SPINE} is a
+ * `HostClient` in name only for that reason: it is never dialled, and exists
+ * so the readiness snapshot has a non-null client to be honest about.
  */
 
 /**
@@ -81,14 +88,30 @@ const modelsSettled = vi.hoisted(() => ({ value: true }));
  */
 const hostCanExecute = vi.hoisted(() => ({ value: true }));
 
+/**
+ * Derived from the client argument the way the real snapshot derives it, not
+ * asserted independently of it. `hasRpcEndpoint` is `client !== null && ...` in
+ * production, so a null client forces `canExecute` false no matter how ready
+ * the host is - and a double free to report `canExecute: true` alongside a null
+ * client describes a state the app cannot reach, which is a bad thing for the
+ * next reader to take as a description of readiness.
+ *
+ * That is why the cases below pass {@link HOST_SPINE} rather than `null`: the
+ * control names whether the HOST is dialable, and the client has to be present
+ * for that question to arise at all.
+ */
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: () => ({
-    hostId: hostCanExecute.value ? "host-1" : null,
-    requestContextUserId: hostCanExecute.value ? "user-1" : null,
-    isReady: hostCanExecute.value,
-    hasRpcEndpoint: hostCanExecute.value,
-    canExecute: hostCanExecute.value,
-  }),
+  useReactiveHostReadiness: (client: unknown) => {
+    const hasRpcEndpoint = client !== null && hostCanExecute.value;
+    const isReady = hostCanExecute.value;
+    return {
+      hostId: hasRpcEndpoint ? "host-1" : null,
+      requestContextUserId: hasRpcEndpoint ? "user-1" : null,
+      isReady,
+      hasRpcEndpoint,
+      canExecute: isReady && hasRpcEndpoint,
+    };
+  },
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
@@ -187,11 +210,36 @@ const SETTLED_TRUE = {
   lastSettledAvailable: true,
 } as const;
 
+/**
+ * A `HostClient` that is never dialled - both RPC hooks are mocked above, so
+ * nothing reaches the messenger. It exists so the hooks receive the non-null
+ * client that a ready readiness snapshot implies (see the readiness mock).
+ *
+ * This is not the "real `HostClient`" the file header declines: what that note
+ * rules out is the fetch/cache machinery, and this spine carries none of it.
+ */
+const HOST_SPINE: HostClient<HostRpcRegistry> = new HostClient<HostRpcRegistry>(
+  {
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(new QueryClient()),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      handlers: {},
+      requestId: () => "request-unused",
+    }),
+  },
+);
+
 describe("useFallbackModelLabels", () => {
   beforeEach(() => {
     harnessesQueryState.isPending = false;
     harnessesQueryState.isError = false;
     modelsSettled.value = true;
+    // Reset here too, not only in the second describe. A case that leaves the
+    // host frozen would otherwise silence every test after it in THIS block,
+    // and they would pass for the wrong reason: no read because no host,
+    // rather than the mapping rule each one is about.
+    hostCanExecute.value = true;
     harnessesData.value = {
       harnesses: [
         settledRow("claude", true, SETTLED_TRUE),
@@ -214,7 +262,7 @@ describe("useFallbackModelLabels", () => {
 
   it("resolves a slug present in the catalogue to its label, matching case-insensitively", () => {
     const { result } = renderHook(() =>
-      useFallbackModelLabels(null, ["claude"], true),
+      useFallbackModelLabels(HOST_SPINE, ["claude"], true),
     );
     // Falsification: drop the `.toLowerCase()` on either side of the map
     // lookup in `fallback-identity.ts` - this goes red on the mixed-case slug.
@@ -228,7 +276,7 @@ describe("useFallbackModelLabels", () => {
 
   it("renders the slug unchanged when the catalogue has no matching entry", () => {
     const { result } = renderHook(() =>
-      useFallbackModelLabels(null, ["claude"], true),
+      useFallbackModelLabels(HOST_SPINE, ["claude"], true),
     );
     // A model the provider has since dropped, or one never in this catalogue
     // read - the only honest degradation the module's own doc describes.
@@ -237,7 +285,7 @@ describe("useFallbackModelLabels", () => {
 
   it("issues no model query for a harness the catalogue reports unavailable, and degrades to the slug", () => {
     const { result } = renderHook(() =>
-      useFallbackModelLabels(null, ["claude", "codex"], true),
+      useFallbackModelLabels(HOST_SPINE, ["claude", "codex"], true),
     );
     // Falsification: drop the `available` filter from `harnessIds`'s memo -
     // this goes red, since a query would then be issued for "codex" too.
@@ -266,7 +314,7 @@ describe("useFallbackModelLabels", () => {
     };
 
     const { result } = renderHook(() =>
-      useFallbackModelLabels(null, ["claude", "codex"], true),
+      useFallbackModelLabels(HOST_SPINE, ["claude", "codex"], true),
     );
 
     // Falsification: relax `harnessIds`'s filter back to `harness.available`
@@ -295,7 +343,7 @@ describe("useFallbackModelLabels", () => {
     };
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["codex"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["codex"], true),
     );
     // No request is issued for it, so a caller that waited would wait forever
     // and the manual-switch announcement would never be spoken at all.
@@ -321,7 +369,7 @@ describe("useFallbackModelLabels", () => {
     };
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["codex"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["codex"], true),
     );
     // A disabled harness is not fanned out, so no catalogue is coming however
     // its probe resolves. Waiting on one is the indefinite-silence half of the
@@ -331,7 +379,7 @@ describe("useFallbackModelLabels", () => {
 
   it("issues no query and degrades to the slug for every tuple while the resolver is disabled", () => {
     const { result } = renderHook(() =>
-      useFallbackModelLabels(null, ["claude"], false),
+      useFallbackModelLabels(HOST_SPINE, ["claude"], false),
     );
     expect(hostQueriesCalls.requests).toHaveLength(0);
     expect(result.current("claude", "claude-fable-5-1[1m]")).toBe(
@@ -341,7 +389,7 @@ describe("useFallbackModelLabels", () => {
 
   it("ignores a harness id not present in harnessIdsInPlay - null entries filtered, no query for the unlisted id", () => {
     const { result } = renderHook(() =>
-      useFallbackModelLabels(null, [null, "claude", null], true),
+      useFallbackModelLabels(HOST_SPINE, [null, "claude", null], true),
     );
     expect(hostQueriesCalls.requests.map((r) => r.params.harnessId)).toEqual([
       "claude",
@@ -382,7 +430,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesData.value = undefined;
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude", "codex"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude", "codex"], true),
     );
 
     expect(result.current.settledFor("claude")).toBe(false);
@@ -397,7 +445,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesData.value = undefined;
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
 
     // This assertion used to read `true`, on the words "a failed read is never
@@ -423,7 +471,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     };
 
     const { result: pending } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
     // Falsification: skip the availabilityPending arm. `harnessIds` drops
     // this row (`available: false`), so walking only survivors reports it
@@ -441,7 +489,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
       ],
     };
     const { result: settledUnavailable } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
     expect(settledUnavailable.current.settledFor("claude")).toBe(true);
 
@@ -462,7 +510,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
       ],
     };
     const { result: reprobing } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
     expect(reprobing.current.settledFor("claude")).toBe(false);
   });
@@ -486,7 +534,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesQueryState.isError = true;
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
 
     // Falsification: gate either branch of the availability wait on
@@ -507,7 +555,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     modelsSettled.value = false;
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
 
     expect(result.current.settledFor("claude")).toBe(false);
@@ -522,7 +570,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesData.value = undefined;
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
 
     expect(result.current.settledFor("claude")).toBe(true);
@@ -545,7 +593,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     };
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
 
     expect(result.current.settledFor("claude")).toBe(true);
@@ -565,7 +613,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     modelsSettled.value = false;
 
     const { result } = renderHook(() =>
-      useFallbackModelCatalogues(null, ["claude"], true),
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
     );
 
     expect(result.current.settledFor("claude")).toBe(true);

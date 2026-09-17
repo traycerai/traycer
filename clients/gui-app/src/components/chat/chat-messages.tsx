@@ -1084,20 +1084,27 @@ interface ManualAnnouncementResolvers extends FallbackIdentityResolvers {
  * How long the manual-switch sentence waits for a real model label before going
  * out with whatever has resolved.
  *
- * The figure has to clear the slowest path that still ENDS, or the deadline
- * would cut off answers that were on their way. `agent.gui.listHarnesses` is a
- * condition-poll method whose lanes top out at a 5s interval, so the worst case
- * for noticing that a probe settled is one full ceiling tick; the catalogue
- * fetch that follows is a single un-polled round trip. 10s is two ceiling ticks
- * and leaves room for that fetch, so nothing inside the normal machinery can
- * reach it - what reaches it is a read that has stopped making progress.
- *
  * It exists because neither "failed" nor "frozen" covers every stall: a host
  * row that keeps advertising an endpoint while every request fails leaves the
  * poll retrying forever, and a wedged probe never clears `availabilityPending`
  * at all. Both are indefinite silence about a switch that did happen, and this
  * is the only bound that does not depend on guessing which query field means
  * "terminal".
+ *
+ * The figure is a TRADE, not a proof, and it is worth being exact about which.
+ * What is measurable from here is the GUI's own share: `agent.gui.listHarnesses`
+ * is a condition-poll method whose lanes top out at a 5s interval, so noticing
+ * that a probe settled costs at most one ceiling tick, and the catalogue fetch
+ * that follows is a single un-polled round trip. 10s is two of those ticks plus
+ * room for the fetch.
+ *
+ * What is NOT measurable from here is how long the host takes to probe a
+ * provider in the first place - that is a CLI or SDK call on the far side, and
+ * nothing in this client bounds it. So this cannot be a figure that only a
+ * broken read reaches; a genuinely slow probe will reach it too, and then the
+ * sentence goes out with the slug. That is the trade the deadline makes, and it
+ * is made in the direction the rest of this hold already argues for: a clumsy
+ * announcement beats silence about a switch that happened.
  */
 const MANUAL_LABEL_HOLD_MS = 10_000;
 
@@ -1116,6 +1123,7 @@ interface ManualHoldRecord {
  */
 function rescheduleManualHoldWake(input: {
   readonly held: ManualHoldRecord | null;
+  readonly deliverable: boolean;
   readonly now: number;
   readonly ready: boolean;
   readonly currentTimerId: number | null;
@@ -1126,23 +1134,34 @@ function rescheduleManualHoldWake(input: {
   }
   const held = input.held;
   if (held === null) return null;
-  // Measured from the ORIGINAL start, so repeated observations during a hold
-  // cannot push the deadline away from it.
+  if (input.deliverable) {
+    // The wait ended on its own terms and the event was kept only because the
+    // observation would have absorbed it. Whether that is worth another wake
+    // is a question about READINESS, not about the clock - which is exactly
+    // why the observer reports this rather than letting the arithmetic below
+    // guess: a settle arriving early is ripe with 9 seconds still unspent.
+    //
+    // Not ready, stay quiet. Re-arming would spin at 0ms until readiness
+    // moved, and nothing is lost by waiting: readiness moving re-observes
+    // through the store subscription or the effect's dependencies.
+    //
+    // Ready yet absorbed, wake once more, because the `observe` in that same
+    // pass is what clears the `wasReady` which caused it. The next observation
+    // will speak, and no other trigger is guaranteed to arrive. It converges
+    // rather than loops - every `observe` moves the observer's own state
+    // towards not absorbing.
+    return input.ready ? window.setTimeout(input.wake, 0) : null;
+  }
+  // Still genuinely waiting, so bring the observer back when the deadline
+  // lands. Measured from the ORIGINAL start, so repeated observations during a
+  // hold cannot push it away.
+  //
+  // Necessarily positive: the observer only leaves a hold undeliverable while
+  // it reads the elapsed as within the window, off this same `now` and
+  // `startedAt`. That is the whole reason the clock is read once per
+  // observation and handed to both halves.
   const remainingMs = MANUAL_LABEL_HOLD_MS - (input.now - held.startedAt);
-  if (remainingMs > 0) return window.setTimeout(input.wake, remainingMs);
-  // Nothing remaining, yet still held: the deadline was ripe and declined,
-  // which happens for exactly one reason - the observation was absorbing.
-  //
-  // Not ready, stay quiet. Re-arming would spin at 0ms until readiness moved,
-  // and nothing is lost by waiting: readiness moving re-observes through the
-  // store subscription or the effect's dependencies.
-  //
-  // Ready yet absorbed, wake once more, because the `observe` in that same
-  // pass is what clears the `wasReady` which caused it. The next observation
-  // will speak, and no other trigger is guaranteed to arrive. It converges
-  // rather than loops - every `observe` moves the observer's own state towards
-  // not absorbing.
-  return input.ready ? window.setTimeout(input.wake, 0) : null;
+  return window.setTimeout(input.wake, remainingMs);
 }
 
 /**
@@ -1156,11 +1175,29 @@ interface ManualHoldClock {
   /** `Date.now()` for this observation. */
   readonly now: number;
   /**
-   * Whether an elapsed deadline may actually give up and speak. False while
-   * the surface cannot announce, where consuming the event would discard it.
+   * Whether an announcement made in THIS observation would actually reach the
+   * user, i.e. whether the observer would push it rather than absorb it.
+   *
+   * Read at both ends of the hold, and it means something different at each,
+   * because absorption is both the delivery gate and the history filter. On
+   * first sight false means "this is history" - consume it and drop it, which
+   * is what every unheld slot does. Once deferred, false means "speaking now
+   * would be speaking into the void" - keep waiting, because the event was
+   * already established as news.
    */
-  readonly canExpire: boolean;
+  readonly canSpeak: boolean;
   held: ManualHoldRecord | null;
+  /**
+   * Written by the observer: the held event's wait is over - the catalogue
+   * answered or the deadline passed - and only {@link canSpeak} is keeping it.
+   *
+   * An output rather than something the scheduler derives, because the two
+   * would disagree. "Ripe" is not "the deadline elapsed": the ordinary case is
+   * an answer arriving with most of the window unspent, and a scheduler
+   * reading the clock would arm for the full remainder and leave the event
+   * waiting on a re-observation nothing is obliged to produce.
+   */
+  deliverable: boolean;
 }
 
 interface ManualObservation {
@@ -1201,59 +1238,116 @@ function observeManualFallbackAction({
     hold.held = null;
     return { sequence, announcement: null };
   }
-  // Hold the event rather than consume it, and return the OLD sequence so the
-  // next observation sees it as new again. The layout effect below lists the
-  // catalogues among its dependencies, so the render that subscribes this
-  // harness - and then the frame its catalogue lands on - each re-observe, and
-  // the switch is announced once, by its real name.
-  //
-  // Bounded by `settled`, never by `loaded`: a catalogue read that cannot run
-  // reports settled and the sentence goes out with the slug. Waiting for a
-  // label that is not coming would trade a clumsy announcement for silence
-  // about a switch that actually happened, which is the worse of the two for
-  // someone driving this by ear.
-  //
-  // And bounded a second time, by the clock, because `settled` can only speak
-  // for the reads it can SEE. A poll that keeps failing against a host still
-  // advertising an endpoint, or a probe wedged with `availabilityPending` set,
-  // are both "an answer is still coming" forever. The wait therefore ends
-  // either when the answer arrives or when this deadline does.
-  if (!modelCatalogueSettledFor(manual.target.harnessId)) {
-    const held = hold.held;
-    if (held === null || held.sequence !== manual.sequence) {
+  // Bound once, because `manual` is a destructured PARAMETER: the guard above
+  // narrows it here, but that narrowing does not follow the field into the
+  // closure below, where TypeScript assumes a parameter may have been
+  // reassigned. A local const carries it, and reads better at the three sites
+  // that need the harness id anyway.
+  const target = manual.target;
+  // Announcing this switch and giving up the right to announce it again, in
+  // one step. Every exit that speaks goes through here, and there are three of
+  // them - two that decline to hold and one that stops holding - so the pairing
+  // of "clear the hold" with "return the NEW sequence" is written once. Split
+  // apart, a consume that advanced the sequence while leaving the record set
+  // would re-arm the deadline for an event nothing is waiting on.
+  const consume = (): ManualFallbackAnnouncementObservation => {
+    hold.held = null;
+    return {
+      sequence,
+      announcement: {
+        key: JSON.stringify([
+          "manual",
+          manual.hostId,
+          manual.epicId,
+          manual.chatId,
+          manual.userMessageId,
+          manual.turnId,
+          manual.sequence,
+        ]),
+        text: `Switched this chat to ${fallbackDestinationSentence(
+          fallbackDestinationOfTuple(target, labelFor, modelLabelFor),
+          true,
+        )}.`,
+      },
+    };
+  };
+  const held = hold.held;
+  const deferred = held !== null && held.sequence === manual.sequence;
+
+  if (!deferred) {
+    // FIRST sight of this event, and the one decision only takeable here: is
+    // it news at all?
+    //
+    // An observation that would absorb IS this system's history filter. Every
+    // other outcome slot hands its event straight to `observe`, which records
+    // the key and pushes nothing, and that is what keeps a warm store quiet:
+    // `confirmedManualFallbackAction` is never cleared, and a remount resets
+    // the sequence high-water mark to 0, so an hour-old switch reads as new
+    // again and is silenced only by being handed over while absorbing.
+    //
+    // Deferring instead would carry it PAST that window - the hold survives
+    // every absorbing observation and the deadline then keeps waking until one
+    // would speak, which is precisely the frame the filter is no longer up.
+    // The old switch is then told as live news. So absorbing here means
+    // consume-and-drop, exactly as the pre-hold code did.
+    if (!hold.canSpeak) return consume();
+    // Hold the event rather than consume it, and return the OLD sequence so
+    // the next observation sees it as new again. The layout effect below lists
+    // the catalogues among its dependencies, so the render that subscribes
+    // this harness - and then the frame its catalogue lands on - each
+    // re-observe, and the switch is announced once, by its real name.
+    //
+    // Bounded by `settled`, never by `loaded`: a catalogue read that cannot
+    // run reports settled and the sentence goes out with the slug. Waiting for
+    // a label that is not coming would trade a clumsy announcement for silence
+    // about a switch that actually happened, which is the worse of the two for
+    // someone driving this by ear.
+    if (!modelCatalogueSettledFor(target.harnessId)) {
       hold.held = { sequence: manual.sequence, startedAt: hold.now };
       return { sequence: lastSequence, announcement: null };
     }
-    const elapsedMs = hold.now - held.startedAt;
-    // A backwards system-clock jump reads as a negative elapsed. Treat that as
-    // expired rather than as "keep waiting": this deadline exists to bound
-    // silence, so on a nonsense reading the safe direction is to SPEAK.
-    if (
-      (elapsedMs >= 0 && elapsedMs < MANUAL_LABEL_HOLD_MS) ||
-      !hold.canExpire
-    ) {
-      return { sequence: lastSequence, announcement: null };
-    }
+    return consume();
   }
-  hold.held = null;
-  return {
-    sequence,
-    announcement: {
-      key: JSON.stringify([
-        "manual",
-        manual.hostId,
-        manual.epicId,
-        manual.chatId,
-        manual.userMessageId,
-        manual.turnId,
-        manual.sequence,
-      ]),
-      text: `Switched this chat to ${fallbackDestinationSentence(
-        fallbackDestinationOfTuple(manual.target, labelFor, modelLabelFor),
-        true,
-      )}.`,
-    },
-  };
+
+  // Deferred, so this event was news AND deliverable when it was taken. From
+  // here it may only be consumed into an observation that will actually speak.
+  // Consuming into an absorbing one records the key and pushes nothing, and
+  // the sequence has already moved - the switch is then lost outright, which
+  // is the failure the hold exists to prevent, reached from the third side.
+  //
+  // This governs BOTH exits. The deadline is the rarer one; the catalogue
+  // simply settling is the common one, and it was the gap: a hold taken while
+  // ready, whose `listModels` answer lands during a reconnect, used to consume
+  // straight into an absorbing observe.
+  //
+  // So the wait's own terms are settled FIRST, and delivery second. Deciding
+  // them in that order is what lets the scheduler below be told that a held
+  // event is ripe, rather than re-deriving it from the clock and getting a
+  // different answer.
+  //
+  // The clock is the second bound, and it is here because `settled` can only
+  // speak for the reads it can SEE. A poll that keeps failing against a host
+  // still advertising an endpoint, or a probe wedged with `availabilityPending`
+  // set, are both "an answer is still coming" forever. The wait therefore ends
+  // either when the answer arrives or when this deadline does.
+  const elapsedMs = hold.now - held.startedAt;
+  // A backwards system-clock jump reads as a negative elapsed. Treat that as
+  // expired rather than as "keep waiting": this deadline exists to bound
+  // silence, so on a nonsense reading the safe direction is to SPEAK.
+  const stillWaiting = elapsedMs >= 0 && elapsedMs < MANUAL_LABEL_HOLD_MS;
+  if (!modelCatalogueSettledFor(target.harnessId) && stillWaiting) {
+    return { sequence: lastSequence, announcement: null };
+  }
+  if (!hold.canSpeak) {
+    // Ripe, and held back only by this observation being an absorbing one.
+    // Nothing about the wait will change again, so no further catalogue answer
+    // or deadline is coming to bring the observer back - the scheduler has to,
+    // and it cannot see this from the clock: the common case gets here with
+    // most of the deadline still unspent.
+    hold.deliverable = true;
+    return { sequence: lastSequence, announcement: null };
+  }
+  return consume();
 }
 
 interface UnattendedFallbackAnnouncementObservation {
@@ -1536,12 +1630,15 @@ function ChatFallbackAnnouncementSource(
       props.baselineEpoch === state.transcriptBaselineEpoch;
     const holdClock: ManualHoldClock = {
       now: Date.now(),
-      // The deadline may only fire into an observation that will actually
-      // SPEAK, which is a stricter thing than `ready`. An absorbing observe
-      // records the key and pushes nothing, while giving up advances the
-      // sequence counter - so expiring into one consumes the event and bins
-      // it, losing the switch outright. That is the failure this hold exists
-      // to prevent, reached from the other side.
+      // Whether the `observe` below this will push or absorb - the one fact
+      // the hold needs at both of its ends, for two different reasons.
+      //
+      // Consuming the event into an absorbing observe records the key and
+      // pushes nothing, while the sequence counter advances regardless. On the
+      // way out that loses the switch outright, which is the failure this hold
+      // exists to prevent reached from the other side. On the way IN it is the
+      // intended behaviour, because absorption is also how every other slot
+      // filters a warm store's history.
       //
       // `ready` alone is not enough, and this is the trap: absorption also
       // covers the FIRST ready observation after a not-ready one, because the
@@ -1549,11 +1646,12 @@ function ChatFallbackAnnouncementSource(
       // returning does not by itself mean the next sentence lands - it means
       // the one after it does. Ask the observer rather than inferring, and ask
       // with the inputs the following `observe` will get.
-      canExpire: !observer.willAbsorb({
+      canSpeak: !observer.willAbsorb({
         ready,
         baselineEpoch: props.baselineEpoch,
       }),
       held: manualHold.current,
+      deliverable: false,
     };
     const manual = observeManualFallbackAction({
       manual: state.confirmedManualFallbackAction,
@@ -1572,6 +1670,7 @@ function ChatFallbackAnnouncementSource(
     // it elapsed.
     manualHoldTimer.current = rescheduleManualHoldWake({
       held: manualHold.current,
+      deliverable: holdClock.deliverable,
       now: holdClock.now,
       ready,
       currentTimerId: manualHoldTimer.current,
