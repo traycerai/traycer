@@ -79,5 +79,15 @@ export function worktreeFolderIntentReferencesRemoved(
         repoMatches(ref.repoIdentifier, intent.repoIdentifier),
     );
   }
+  // `local` - "run against the workspace checkout itself (no git)", per the
+  // intent schema. It names no worktree and no branch, so no worktree removal
+  // can invalidate it: `removed.worktreePaths` holds the worktree directories a
+  // completed sweep took off this host, and a sweep removes worktrees, never a
+  // workspace checkout. A `local` chat is owed no swept-worktree notice for the
+  // same reason - it never had a worktree to lose.
+  //
+  // So this is the ANSWER for `local`, not a case still to be filled in. It has
+  // been read as the latter at least once (recorded as a follow-up out of the
+  // draft-image epic), which is why it is written down here.
   return false;
 }

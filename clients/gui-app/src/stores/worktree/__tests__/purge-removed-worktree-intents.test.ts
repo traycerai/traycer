@@ -192,6 +192,29 @@ describe("worktreeFolderIntentReferencesRemoved", () => {
       ),
     ).toBe(false);
   });
+
+  it("keeps a local intent even when its own path was swept", () => {
+    // The case above uses `/repo`, which is in neither removed set - so on its
+    // own it cannot tell "a local intent is never stale" from "that particular
+    // path was not removed". This one puts the local intent's `workspacePath`
+    // squarely in `worktreePaths` and in the deleted branch's repo, so only the
+    // rule itself can keep it live.
+    //
+    // The rule: `local` means "run against the workspace checkout itself (no
+    // git)". It names no worktree and no branch, and a sweep removes worktrees,
+    // never a workspace checkout - so a path collision is not a reference.
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        {
+          kind: "local",
+          workspacePath: "/wt/gone",
+          repoIdentifier: ACME,
+          isPrimary: true,
+        },
+        REMOVED,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("worktree intent purge on sweep completion", () => {
