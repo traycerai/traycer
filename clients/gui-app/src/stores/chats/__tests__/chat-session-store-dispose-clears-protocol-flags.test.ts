@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
+  type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -54,6 +55,7 @@ function createHarness(): Harness {
         sameTurnSteeringProtocolSupported: () => true,
         draftBlobBridgeSupported: () => true,
         interviewSettlementActionsProtocolSupported: () => true,
+        autoPermissionModeProtocolSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -69,53 +71,72 @@ function createHarness(): Harness {
   };
 }
 
+/**
+ * Every per-stream capability the state exposes, read by NAME PATTERN rather
+ * than listed.
+ *
+ * Listing them is what let this defect recur. The suite first pinned three
+ * flags; `auto` permission mode then added a fourth, cleared it in `retry()`
+ * and not in `dispose()`, and a test naming the other three had nothing to say
+ * about it. Deriving the set means the NEXT capability is covered the day it
+ * lands, which is the invariant that actually matters here: the two teardown
+ * paths agree, whatever the set happens to be.
+ */
+function capabilityFlags(
+  state: ChatSessionState,
+): Record<string, boolean | null> {
+  // Spread into an index-signature local first. `Object.entries` on a declared
+  // interface yields `any` values, which the lint rightly refuses; through this
+  // local every value reads as `unknown` and is narrowed below.
+  const record: Record<string, unknown> = { ...state };
+  const flags: Record<string, boolean | null> = {};
+  for (const key of Object.keys(record)) {
+    if (!/Supported$/.test(key)) continue;
+    const value = record[key];
+    if (typeof value !== "boolean" && value !== null) continue;
+    flags[key] = value;
+  }
+  return flags;
+}
+
 describe("chat session store - dispose clears every per-stream capability flag", () => {
-  it("leaves no capability reading true after dispose", () => {
+  it("leaves no capability advertised after dispose", () => {
     const harness = createHarness();
     harness.callbacks().onConnectionStatus("open", null, null);
 
-    // Precondition: without this the assertion below could pass on a store
-    // that never advertised anything, which would test nothing.
-    expect({
-      steer: harness.handle.store.getState().steerProtocolSupported,
-      bridge: harness.handle.store.getState().draftBlobBridgeSupported,
-      interview:
-        harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
-    }).toEqual({ steer: true, bridge: true, interview: true });
+    // Precondition: every capability is advertised, so a survivor below can
+    // only be staleness and not a flag that was never set.
+    const open = capabilityFlags(harness.handle.store.getState());
+    expect(Object.keys(open).length).toBeGreaterThanOrEqual(4);
+    expect(Object.values(open).every((value) => value === true)).toBe(true);
 
     harness.handle.dispose();
 
-    expect({
-      steer: harness.handle.store.getState().steerProtocolSupported,
-      bridge: harness.handle.store.getState().draftBlobBridgeSupported,
-      interview:
-        harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
-    }).toEqual({ steer: false, bridge: false, interview: false });
+    // Nothing still reads as advertised. `false` and `null` are both retired -
+    // the auto flag's `null` means "cannot say", which is what a disposed store
+    // is - so the assertion is that no capability remains TRUE.
+    const closed = capabilityFlags(harness.handle.store.getState());
+    expect(Object.keys(closed)).toEqual(Object.keys(open));
+    expect(
+      Object.entries(closed).filter(([, value]) => value === true),
+    ).toEqual([]);
   });
 
-  it("agrees with retry(), which clears the same three", () => {
-    // Two paths tear the stream down and both must answer the same way. If
-    // they ever diverge again, whichever one is wrong is the one that did not
-    // move with the other.
+  it("agrees with retry(), flag for flag, whatever the set is", () => {
+    // Two paths tear the stream down and both must answer identically. This
+    // compares the DERIVED set rather than named members, because the defect it
+    // guards is a new capability joining one path and not the other - which has
+    // happened twice now, once in each direction.
     const harness = createHarness();
     harness.callbacks().onConnectionStatus("open", null, null);
     harness.handle.store.getState().retry();
-
-    const afterRetry = {
-      steer: harness.handle.store.getState().steerProtocolSupported,
-      bridge: harness.handle.store.getState().draftBlobBridgeSupported,
-      interview:
-        harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
-    };
+    const afterRetry = capabilityFlags(harness.handle.store.getState());
 
     harness.callbacks().onConnectionStatus("open", null, null);
     harness.handle.dispose();
 
-    expect({
-      steer: harness.handle.store.getState().steerProtocolSupported,
-      bridge: harness.handle.store.getState().draftBlobBridgeSupported,
-      interview:
-        harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
-    }).toEqual(afterRetry);
+    expect(capabilityFlags(harness.handle.store.getState())).toEqual(
+      afterRetry,
+    );
   });
 });
