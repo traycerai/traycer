@@ -1625,11 +1625,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     limits shows three independent gauges, which is what `Show mini bar`
     promises. A single bar in front of several readings was one severity
     colour with nothing on the row saying which limit it belonged to. The
-    SWITCH and the ladder's `bar` rung still govern them as ONE decision
-    (`showBar && parts.bar` in `status-bar-provider-segment.tsx`): a strip
-    that runs out of room drops every bar at once rather than thinning them
-    one at a time, and `percent-only` has already narrowed to the tightest
-    reading two rungs after the bars went. Each bar carries
+    switch governs them as ONE decision (`parts.bar` in
+    `status-bar-provider-segment.tsx`): off takes every bar away at once
+    rather than thinning them one at a time. Each bar carries
     `data-window-key`, since order is otherwise the only thing pairing a
     gauge with its number, and every one stays `aria-hidden` - the accessible
     content is the percentages and the provider tooltip, unchanged. The gauge
@@ -1719,27 +1717,39 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     are its alternatives - `Tightest limit (automatic)` beside `5h` reads as
     two kinds of thing on one line - which is why a provider's limits are a
     checkbox column instead.
-  - **Every rate-limit row that hides something is also a rung of the strip's
-    collapse ladder**, and the two meet rather than fight. A provider draws
-    its selected limits (the tightest alone by default). When the cluster runs
-    out of room it drops the mode word, then the bars, then the timers, then
-    everything but the coloured percentage - at which point it also narrows
-    to the tightest of the selection however many are checked, since several
-    bare numbers under one icon say which limits exist but not which is
-    which - then everything but the icon, and finally folds whole providers
-    into a `+N` chip - skipping any rung whose setting is already off, since
-    taking away something invisible would free no width. The percentage is
-    severity-coloured at every rung, bar or no bar.
+  - **The strip draws everything that is switched on, at every width, and
+    SCROLLS what does not fit.** A provider draws its selected limits (the
+    tightest alone by default) with every part the Display rows ask for -
+    mode word, mini bar, countdown - and the width of the window never
+    shortens a reading or hides a provider: every account and every display
+    switch is a choice the user made, and a strip that quietly dropped one to
+    fit would be overriding a choice it was asked to show. When the usage
+    cluster outgrows the room the resource readout leaves it, the cluster
+    scrolls horizontally (`status-bar-usage-scroller.tsx`: a wrapper around
+    the trigger, since a `<button>` is not a reliable scroll container; no
+    scrollbar; a mouse wheel turned sideways by `useHorizontalWheelScroll`,
+    touch and trackpad native) and a mask fades ONLY the edge that hides
+    something (`useHorizontalScrollEdges` + `horizontalScrollFadeClass`) - the
+    fade is the affordance. The scroll position resets to the start when the
+    SET of segments changes (host switch, provider hidden or shown, account
+    checked or unchecked) or the WATCHED HOST changes
+    (`statusBarUsageScrollKey` - two hosts can draw identical segment ids and
+    the strip keeps its subtree across a switch) and never when a reading
+    inside one moves, so a countdown tick does not throw away where the user
+    scrolled to. The refresh `↻` sits after the scroller, outside it, so it
+    never scrolls away with the numbers it refreshes; the resource segment
+    stays `shrink-0`, pinned right, printing every metric with its label at
+    every width. The percentage is severity-coloured always, bar or no bar.
   - **Which ACCOUNTS a provider's segments describe is chosen in the usage
     panel, not on this page** (`layout/header/rate-limit-popover.tsx`). Every
     profile card - managed and ambient, Overview and detail tab alike -
-    carries a `Status bar` switch right of its enable toggle, and the strip
+    carries an eye toggle immediately left of its accent dot (`Eye` checked,
+    `EyeOff` not; `aria-pressed`), and the strip
     draws **one segment per checked account** for the host it is watching:
-    provider icon, the profile's inline `AccentDot`, its name on the rungs
-    that still print words, and its own limits, mini bars and countdowns
-    resolved through the provider's limit selection above. The ladder folds
-    segments, so `+N` counts accounts and its tooltip names each
-    (`Codex · Work 57%`). Store:
+    provider icon, the profile's inline `AccentDot`, its name before the
+    reading, and its own limits, mini bars and countdowns resolved through the
+    provider's limit selection above - every one drawn in full, scrolled to
+    when the strip is short of room. Store:
     `rateLimits.shownProfiles[hostId][providerId] = [profileId | null, …]`
     (`stores/settings/layout-store.ts`; `null` is the ambient login), keyed by
     host because a profile id names a credential on ONE machine - the panel
@@ -1753,7 +1763,18 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     preference: no density preset carries it (`applyLayoutPreset` carries it
     over like `placement`), only `Reset to defaults` clears it, and Layout
     draws no control for it because Layout is app-level and the accounts are
-    not. Analytics: `layout.statusBar.shownProfiles`, from the switch.
+    not. Analytics: `layout.statusBar.shownProfiles`, from the eye.
+    - **The eye exists only while the strip is on screen.** Whether it is
+      is ONE predicate, `selectStatusBarShown` / `useStatusBarShown`
+      (`stores/settings/layout-store.ts`): `placement === "status-bar"` on a
+      desktop viewport, `mobileFooter` on a mobile one - the same read
+      `AppShell` mounts the strip on. Under the header placement, or on a
+      phone with the footer off, every card drops its eye and its "drawn"
+      highlight alike, since there is no segment for either to point at. A
+      hidden provider (`hiddenProviders`) hides the eye only - there is no
+      segment for it to govern - and leaves the highlight alone. The checks
+      stay in the store untouched and take effect again when the strip
+      returns.
     - **Nothing checked draws ONE account**, resolved by
       `resolveStatusBarProfileIds` (`hooks/rate-limits/use-rate-limit-profile-selection.ts`):
       the profile last picked in a composer on THAT host if the provider still
@@ -1762,11 +1783,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       chat on ANY host, so a tile bound to another machine made the segment
       jump to an account this host does not have and fall to ambient. The
       card for the fallback account is highlighted (`aria-current`) with its
-      switch off and a tooltip saying it is shown by default; checked cards
-      are highlighted with the switch on. The old `Active` badge is gone with
-      the rule it described. The switch is hidden while the provider itself is
-      off the strip (`hiddenProviders`), since there is no segment for it to
-      govern.
+      eye off and a tooltip saying it is shown by default; checked cards
+      are highlighted with the eye on. The old `Active` badge is gone with
+      the rule it described.
     - **A segment is a deep link.** Clicking one arms
       `rate-limit-popover-store.revealProfile` (session-only, never persisted)
       and selects the provider's tab; the card scrolls itself into view and
@@ -1774,8 +1793,11 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       bubble to the cluster's `PopoverTrigger`, which is what opens the panel.
     - The header glyph has two slots and no room to name an account, so it
       draws the FIRST of the accounts the strip would draw per provider
-      (`resolveRateLimitProfileId`); Layout's limits list reads the same one,
-      since the limit selection is per provider.
+      (`resolveRateLimitProfileId`) - while the strip is on screen. While it
+      is not, the checks have no control, so the glyph resolves without them
+      (last-used → first profile → ambient). Layout's limits list keeps
+      reading the checked account regardless, since it previews the strip and
+      the limit selection is per provider.
     - The dot and the name are drawn only for a provider with two or more
       profiles - the composer rail's rule, and for the same reason: one
       account needs telling apart from nothing.
@@ -1789,8 +1811,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     name that carries identity (`Fable`, `Opus wk`, `Cursor models`, a named
     Codex limit) is kept and the countdown appended, since several of those
     share one reset instant and would otherwise print as one string. The count
-    is the provider's LIVE limits, not the ones the rung draws - a provider
-    drawing its tightest alone still has to say which of several it is.
+    is the provider's LIVE limits, not the ones the selection draws - a
+    provider drawing its tightest alone still has to say which of several it
+    is.
     Settings' checkbox list is not a caller: it lists every limit so each can
     be checked, so a name is the point even when there is one.
   - **Grok's period label never parses the wire token.** `periodType` is
@@ -1826,10 +1849,10 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
 settings…`.
   - **The preview is the strip, not a picture of it**
     (`panels/layout/status-bar-preview.tsx`). It renders the same
-    `StatusBarUsageReadings` box, the same `StatusBarProviderSegment`, the same
-    `+N` chip and the same `StatusBarResourceSegment` the footer does, off the
-    same store and the same cache entries, so it cannot show a shape the strip
-    cannot produce. What it does NOT do is make a reading happen:
+    `StatusBarUsageScroller`, the same `StatusBarUsageReadings` box, the same
+    `StatusBarProviderSegment` and the same `StatusBarResourceSegment` the
+    footer does, off the same store and the same cache entries, so it cannot
+    show a shape the strip cannot produce. What it does NOT do is make a reading happen:
     `useStatusBarRateLimitSegments` takes a required `mode`, and `passive`
     disables every observer in all three batches - the http lane included, since
     that is the one that would otherwise fetch - and hands back no mount
@@ -1837,9 +1860,12 @@ settings…`.
     "renders no refresh button" would be a promise about markup, while an empty
     `httpRefetches` is a promise about behaviour, and `refetch` on a disabled
     query still fetches. It also mounts no popover, no resource stream and no
-    dynamic action handler. The whole frame is `inert` + `aria-hidden`: every
-    control in it is a real one that would be a dead end there, and the rows
-    below are where each is actually configured.
+    dynamic action handler. The readings and the resource control inside the
+    frame are `inert` + `aria-hidden`: every control in the picture is a real
+    one that would be a dead end there, and the rows below are where each is
+    actually configured. The frame and the scroller around the readings stay
+    LIVE, so the picture scrolls under a wheel or a swipe exactly as the strip
+    does - an inert ancestor would swallow both.
   - **So the preview is honest rather than idealised.** An account with no
     provider draws the strip's "connect a provider" line, a cold provider
     beside a live one draws its cold track, and with no global resource stream
@@ -1855,18 +1881,16 @@ settings…`.
     and where a live number comes from. Everything else in the cluster is
     passed through untouched - providers past the second keep their cold
     track, and the substitution walks the CLUSTER rather than the two
-    readings, so the provider count, the icon set, the strip order, the
-    per-provider switches and the `+N` fold's arithmetic are the ones the
-    strip would have. An `unavailable` provider is never sampled: it has
+    readings, so the provider count, the icon set, the strip order and the
+    per-provider switches are the ones the strip would have. An
+    `unavailable` provider is never sampled: it has
     ANSWERED that it cannot report usage, so a percentage over it is a
     stronger invention than the cold case and the caption's own sentence
     would be false for it - it keeps its dash and its note, and a cluster
     with nothing cold in it gets no sample at all. The per-provider
     "no reading yet" lines for the SAMPLED providers are dropped while the
     caption speaks for them (the two would otherwise contradict each other
-    under one frame), and a `Folded:` line carrying an invented number is
-    marked `(sample)`, since a fold takes that reading off the strip the
-    caption sits above. The reset instants are taken from the same 60s clock
+    under one frame). The reset instants are taken from the same 60s clock
     the countdowns read, so the sample never ticks; the passive reader is
     unchanged, so it never fetches; and one live or degraded reading anywhere
     in the cluster puts the host's own readings back, cold tracks included -
@@ -1877,26 +1901,20 @@ settings…`.
 placement is Status bar.` in `header` placement, and `Shown at this window
 width when Footer status bar is on.` below `md`, where the placement sentence
     would be a false promise and the switch is what actually answers. The
-    width control also STARTS at `normal` below `md` rather than `wide`,
-    because the strip forces the `compact` rung on a mobile viewport and 880 is
-    the nominal width inside that band - a phone opening the group sees the
-    rung its own footer draws.
+    width control also STARTS at `narrow` below `md` rather than `wide`: a
+    phone's footer is narrower than any option, so the closest picture of it
+    is the one whose readings scroll.
   - **`inert` is why the frame's own tooltips are not the explanation.** It
-    removes the subtree from hit testing, so no `TooltipWrapper` inside it can
+    removes the readings from hit testing, so no `TooltipWrapper` inside them can
     open - and the states those tooltips exist for (three bare dashes, a dimmed
     reading behind a ⚠) are exactly the ones a preview reads as broken without
     one. A `status-bar-preview-notes` list under the frame carries them
     instead: one line per non-live provider segment and ONE line for the
     resource segment, both from the same builders the tooltips use
     (`statusBarSegmentTooltip`, `statusBarResourceMetricViews`), so the caption
-    and the strip can never word one state two ways. The `+N` chip's tooltip is
-    lifted the same way, as a `Folded: <provider> <reading>, …` line built from
-    the chip's own `providerReadingText` - at the Narrow width, the one a reader
-    picks precisely to find out what folds, `+2` with no way to see which two is
-    the worst of the three. It is also why the LADDER is stepped by the preview
-    itself and handed to both halves: which providers folded is a property of
-    the measurement, and only one box can be the measured one. They are two
-    SIBLINGS
+    and the strip can never word one state two ways. Nothing is said about a
+    reading being out of view: a segment past the frame's edge is a scroll
+    away, not a state. They are two SIBLINGS
     rather than one list, because reading the resource reason costs a
     `useDesktopAppResourceUsage` SUBSCRIPTION and subscribing is what starts
     the 1 Hz IPC poll - so that half is its own component mounted under `Show
@@ -1904,55 +1922,45 @@ resource monitor`, never a gated result. Both dim whenever the frame does,
     and both are absent when there is nothing to explain.
   - **The width control names a NOMINAL width, and the frame is drawn at
     exactly that width** - `w-[480px]` / `w-[880px]` / `w-[920px]` on the
-    `inert` frame, one per density band (`< 500` icon-only, `< 900` compact,
-    else full) - under a `max-w-full` that is the honest half of it: every
+    frame - under a `max-w-full` that is the honest half of it: every
     Settings surface caps at `max-w-5xl`, so this box is at most ~944px wide
     however large the window is, and a frame drawn past that would push the
-    resource cluster off the right edge with nothing on screen saying so -
-    the reported bug moved one cluster over, and reproducing at 100% rather
-    than under ~1560px. Wide is **920** for the same reason: a nominal no
-    pane can draw is not a width, and 920 is still `≥ 900`, so the `full`
-    ceiling and every Display switch survive. Density comes from that nominal
-    width through `statusBarDensityForWidth`, NEVER from a measured box:
-    inside the Settings modal that box is `min(pane, 1024) − chrome`, which is
-    `compact` on any window under ~1560px, and at the `compact` ceiling the
-    ladder drops the mode word, the mini bar and the countdown whatever the
-    store says. A preview that measured itself answered "this switch does
-    nothing" to the first three Display switches a user tried - in the modal
-    only, since the promoted tab has less padding and reached `full`, so the
-    same switches worked in one Settings surface and not the other. What is
-    still MEASURED is the ladder's own `roomRef` on the usage slot inside the
-    frame, which the frame's width is what sizes, so the rungs and the `+N`
-    fold answer "does this fit the strip in front of me" exactly as they do in
-    the footer - and on a pane narrower than the nominal they answer it about
+    resource cluster off the right edge with nothing on screen saying so.
+    Wide is **920** for the same reason: a nominal no pane can draw is not a
+    width. What the width changes is how much of the usage cluster is in view
+    before the fade - the readings themselves are the same at every width,
+    since the strip scrolls rather than shortening them - and Narrow is the
+    option that shows the fade at all, on a strip that would need it. The
+    scroller inside the frame measures the room the frame's width leaves it,
+    so it answers "does this fit the strip in front of me" exactly as it does
+    in the footer - and on a pane narrower than the nominal it answers about
     the narrower strip actually drawn, which is the honest reading. It
-    defaults to **Wide**, so the first thing a reader sees is every switch
-    doing something. It is component state, never persisted: a way of LOOKING
-    at the strip rather than a preference about it. The three fixed-px widths
-    are the one sanctioned exception to the fluid-sizing rule, recorded in
+    defaults to **Wide**, the most room the strip can have - the readings
+    still scroll there when there are more than fit. It is component state,
+    never persisted: a way of LOOKING at the
+    strip rather than a preference about it. The three fixed-px widths are
+    the one sanctioned exception to the fluid-sizing rule, recorded in
     `gui-app/AGENTS.md`: the box IS a simulated viewport, and a control that
     names a pixel width has to draw one.
-  - **The preview's ladder measures a stretching box**, the same two-box shape
-    the strip uses: the usage slot is `min-w-0 flex-1` and carries `roomRef`,
-    the readings inside stay `shrink-0` under `contentRef`, and there is no
-    separate spacer. A content-sized container would report its own content the
-    moment that content fits, which is a ladder that can only ever go down -
-    Wide → Narrow → Wide would stay collapsed until Settings was reopened. It
-    also carries an invisible `reservedRef` placeholder composed of the strip's
-    own two numbers (`pl-1` plus the refresh button's `size-5`): the ladder
-    subtracts whatever shares the room with the readings, and a preview that
-    reserved nothing would collapse ~24px later than the strip - at the one
-    width whose whole job is to say what collapses first. The real
-    `RefreshIconButton` would close the gap too, but it renders disabled for a
-    passive reader, which misrepresents a live control.
+  - **The preview's scroller has the room the strip's has**: the usage slot is
+    `min-w-0 flex-1`, the scroller inside it takes that room, the readings
+    stay `shrink-0` at their natural width, and there is no separate spacer.
+    It also carries an invisible placeholder composed of the strip's own two
+    numbers (`pl-1` plus the refresh button's `size-5`): the strip's scroller
+    has only the room that control leaves, and a preview that reserved nothing
+    would give its readings ~24px more than the strip has and show no fade at
+    a width where the strip already scrolls - at Narrow, whose whole job is to
+    show that. The real `RefreshIconButton` would close the gap too, but it
+    renders disabled for a passive reader, which misrepresents a live
+    control.
   - **The preview is STICKY inside its group, from `md` up** (`md:sticky
 md:top-0`): positioned against the nearest scrollport - the settings
     `overflow-y-auto` box, padding-less in both the modal and the tab, hence
     `top-0` - and confined to its containing block, `SettingsGroup`'s card, so
     it releases when the Status bar group scrolls past. The breakpoint is the
     one `AppShell` mounts the strip on, and the reason is the same as the
-    caption's: below `md` this block is a dimmed `inert` picture of a surface
-    the shell does not draw, it is several hundred pixels tall once its
+    caption's: below `md` this block is a dimmed picture of a surface the
+    shell does not draw, it is several hundred pixels tall once its
     description and captions wrap, and a sticky box taller than its scrollport
     pins its TOP - so its own last caption would be unreachable, scrolling
     being what the pin cancels. Two things make it work: `SettingsGroup`'s card
