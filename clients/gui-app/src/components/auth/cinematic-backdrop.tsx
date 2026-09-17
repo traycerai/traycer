@@ -13,13 +13,13 @@ export function PhotoBloom() {
       <img
         src={gradientBg}
         alt=""
-        className="absolute inset-0 h-full w-full object-cover object-top opacity-90 brightness-[0.28] contrast-[1.26] saturate-[0.95]"
+        className="absolute inset-0 h-full w-full object-cover object-top opacity-90 brightness-28 contrast-126 saturate-95"
       />
       <div className="absolute inset-x-0 bottom-0 h-[74svh] overflow-hidden [mask-image:linear-gradient(to_bottom,transparent_0%,rgba(0,0,0,0.4)_22%,black_42%,black_100%)]">
         <img
           src={gradientBg}
           alt=""
-          className="absolute left-1/2 top-0 h-[145%] w-[138%] max-w-none -translate-x-[41%] object-cover object-top opacity-100 brightness-[0.68] contrast-[1.16] saturate-[1.04]"
+          className="absolute left-1/2 top-0 h-[145%] w-[138%] max-w-none -translate-x-[41%] object-cover object-top opacity-100 brightness-68 contrast-116 saturate-104"
         />
       </div>
       <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(0,0,0,0.8)_0%,rgba(0,0,0,0.86)_36%,rgba(0,0,0,0.66)_55%,rgba(0,0,0,0.18)_82%,rgba(0,0,0,0.38)_100%)]" />

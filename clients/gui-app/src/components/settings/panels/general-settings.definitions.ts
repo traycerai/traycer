@@ -42,6 +42,31 @@ export const GENERAL = defineSettingsSection("general", {
     availableWhen: alwaysAvailable,
     keywords: ["prompt", "input", "message box", "editor"],
   },
+  // Application scope, deliberately: this is one preference for this app, not
+  // per machine, so it belongs here rather than under the sidebar's host picker
+  // (SETTINGS.md, "Scope: the organising idea"). The Auto-mode judge it pairs
+  // with IS per machine and lives on the host-scoped Permissions page for the
+  // same reason.
+  defaultPermission: {
+    kind: "row",
+    group: "chatComposer",
+    search: { anchor: "general-default-permission-mode" },
+    label: "Default permission mode",
+    description:
+      "What a new conversation starts under. A machine you have already run agents on reuses the mode it last ran with; this is what a fresh one opens on, and any chat can still change its own.",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "permissions",
+      "approval",
+      "approve",
+      "auto mode",
+      "plan mode",
+      "accept edits",
+      "full access",
+      "supervised",
+      "new chat",
+    ],
+  },
   voiceInput: {
     kind: "row",
     group: "chatComposer",
@@ -80,8 +105,9 @@ export const GENERAL = defineSettingsSection("general", {
       "shortcut",
     ],
   },
-  // Gated on DATA: the card renders only once a terminal has printed a local
-  // URL, which no shell can promise — so it folds into the page.
+  // Gated on DATA and on the HOST: the card renders once a terminal has printed
+  // a local URL, or once the active host advertises `config.browser.get` —
+  // neither of which a shell can promise, so it folds into the page.
   browser: {
     kind: "group",
     search: { contributesTo: "page" },
@@ -90,6 +116,18 @@ export const GENERAL = defineSettingsSection("general", {
     breadcrumb: null,
     availableWhen: alwaysAvailable,
     keywords: [],
+  },
+  // The row's description names the active host, so the rendered sentence is a
+  // `status` and this static copy is what search reads.
+  agentBrowserAccess: {
+    kind: "row",
+    group: "browser",
+    search: { contributesTo: "page" },
+    label: "Let agents use the in-app browser",
+    description:
+      "Agents get Traycer's browser as a tool and are told to use it for web pages. Turn off to let them use their own browser tooling.",
+    availableWhen: alwaysAvailable,
+    keywords: ["agent", "browser", "playwright", "mcp"],
   },
   detectedDevOrigins: {
     kind: "row",

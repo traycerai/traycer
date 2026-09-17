@@ -55,10 +55,8 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
         className="sm:max-w-lg"
         data-testid="epic-write-commands-dialog"
       >
-        <DialogTitle className="text-ui font-semibold">
-          Pending changes
-        </DialogTitle>
-        <DialogDescription className="text-ui-sm text-muted-foreground">
+        <DialogTitle>Pending changes</DialogTitle>
+        <DialogDescription>
           Changes this window has issued that the host has not finished
           answering, and the ones it answered but nobody has acknowledged yet.
         </DialogDescription>

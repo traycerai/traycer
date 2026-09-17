@@ -503,11 +503,11 @@ function RegenerateBranchNameOffer(props: {
   return (
     <div
       role="status"
-      className="flex gap-2.5 rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2.5 text-amber-950 dark:text-amber-100"
+      className="flex gap-2.5 rounded-md border border-warning/35 bg-warning/10 px-3 py-2.5 text-warning-foreground"
       data-testid="repo-branch-prefix-regenerate-offer"
     >
       <TriangleAlert
-        className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+        className="mt-0.5 size-3.5 shrink-0 text-warning-foreground"
         aria-hidden
       />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -515,9 +515,9 @@ function RegenerateBranchNameOffer(props: {
           <span className="text-ui-sm font-medium">
             Update the staged branch name?
           </span>
-          <p className="text-ui-xs text-amber-950/80 dark:text-amber-100/80">
+          <p className="text-ui-xs text-warning-foreground/80">
             This picker already proposed{" "}
-            <code className="rounded bg-amber-500/15 px-1 py-0.5 font-mono text-amber-950 dark:text-amber-50">
+            <code className="rounded bg-warning/15 px-1 py-0.5 font-mono text-warning-foreground">
               {props.previousProposal}
             </code>
             . Apply the new prefix to that staged name, or keep it as-is.
@@ -526,18 +526,17 @@ function RegenerateBranchNameOffer(props: {
         <div className="flex flex-wrap items-center justify-end gap-1.5">
           <Button
             type="button"
-            variant="ghost"
+            variant="warning-ghost"
             size="sm"
-            className="text-amber-950 hover:bg-amber-500/15 hover:text-amber-950 dark:text-amber-100 dark:hover:bg-amber-500/20 dark:hover:text-amber-50"
             onClick={props.onDismiss}
           >
             Keep current
           </Button>
           <Button
             type="button"
-            variant="outline"
+            variant="warning-ghost"
             size="sm"
-            className="border-amber-600/40 bg-background/60 text-amber-950 hover:bg-amber-500/15 hover:text-amber-950 dark:border-amber-400/40 dark:text-amber-50 dark:hover:bg-amber-500/20 dark:hover:text-amber-50"
+            className="border-warning/40 bg-background/60"
             onClick={props.onConfirm}
           >
             Use new prefix

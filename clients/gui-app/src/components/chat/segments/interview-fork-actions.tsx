@@ -23,8 +23,7 @@ export function InterviewForkActions(props: InterviewForkActionsProps) {
         <Button
           type="button"
           size={iconOnly ? "icon-xs" : "sm"}
-          variant="ghost"
-          className="text-muted-foreground"
+          variant="muted"
           aria-label="Cross Question"
           disabled={props.disabled}
           onClick={() => props.onFork("cross-question")}
@@ -42,8 +41,7 @@ export function InterviewForkActions(props: InterviewForkActionsProps) {
         <Button
           type="button"
           size={iconOnly ? "icon-xs" : "sm"}
-          variant="ghost"
-          className="text-muted-foreground"
+          variant="muted"
           aria-label="A/B Fork"
           disabled={props.disabled}
           onClick={() => props.onFork("ab-worktree")}

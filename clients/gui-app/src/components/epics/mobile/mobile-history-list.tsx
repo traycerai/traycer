@@ -18,7 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /** Matches the row settle, so the surface and its rows share one motion. */
-const SETTLE_CLASS = "transition-transform duration-[220ms]";
+const SETTLE_CLASS = "transition-transform duration-220";
 
 export interface MobileHistoryListProps {
   readonly error: Error | null;

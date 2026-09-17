@@ -39,9 +39,10 @@ function ActivityDot(props: {
   if (props.activity === "turn") {
     return (
       <AgentSpinningDots
-        className="shrink-0 text-muted-foreground"
+        className="shrink-0"
         testId={undefined}
         variant={undefined}
+        tone="muted"
       />
     );
   }

@@ -110,8 +110,6 @@ import {
 import { cloneElement, type ReactNode } from "react";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
-import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
-import type { OfficeAutoDecision } from "@/lib/comm-graph/office/office-auto";
 import {
   useAppLocalNotificationsStore,
   type AppLocalNotificationEntry,
@@ -395,7 +393,6 @@ function officeElement(
       onAutoProbe={vi.fn()}
       onRegisterFlush={vi.fn()}
       viewPicker={null}
-      autoChip={null}
       onCameraChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}
@@ -2543,78 +2540,6 @@ describe("CommGraphOfficeCanvas", () => {
     const surface = screen.getByTestId("comm-graph-office-canvas");
     expect(surface.contains(screen.getByTestId("marker-view-picker"))).toBe(
       true,
-    );
-  });
-
-  it("shows Auto's chip text for the decision it was given", () => {
-    const decision: OfficeAutoDecision = {
-      view: "towers",
-      fits: [
-        { view: "floor", zoom: 0.12 },
-        { view: "towers", zoom: 0.83 },
-      ],
-      agents: 42,
-    };
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={decision} restoredView={null} />,
-        }),
-      ),
-    );
-
-    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
-      "Auto · Towers · measured at 42 agents · Floor would be 0.12×",
-    );
-  });
-
-  it("shows the measuring placeholder while Auto has not decided yet", () => {
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={null} restoredView={null} />,
-        }),
-      ),
-    );
-
-    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
-      "Auto · measuring…",
-    );
-  });
-
-  it("caps the auto-chip chrome at a tokenized sentence width, not a fixed rem (Finding 18)", () => {
-    // `max-w-[min(100%,24rem)]` caps a new layout surface at an arbitrary
-    // fixed rem, which the GUI fluid-sizing rule forbids - `max-w-sm`
-    // replaces it, relying on the wrapper already being clamped by its own
-    // absolute positioning against the tile.
-    render(
-      withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={null} restoredView={null} />,
-        }),
-      ),
-    );
-
-    const chip = screen.getByTestId("comm-graph-office-auto-chip");
-    const chrome = chip.parentElement;
-    expect(chrome).not.toBeNull();
-    expect(chrome?.className).toContain("max-w-sm");
-    expect(chrome?.className).not.toContain("max-w-[min(100%,24rem)]");
-  });
-
-  it("reads the LOD chip as Office at 1x and Overview once zoomed out past 0.7x", () => {
-    renderOffice(new Set([ORCHESTRATOR.id]));
-
-    expect(screen.getByTestId("comm-graph-office-lod-chip").textContent).toBe(
-      "Office",
-    );
-
-    // Two clicks: 1 / 1.25 / 1.25 = 0.64, below the 0.7x office-detail floor.
-    fireEvent.click(screen.getByTestId("comm-graph-office-zoom-out"));
-    fireEvent.click(screen.getByTestId("comm-graph-office-zoom-out"));
-
-    expect(screen.getByTestId("comm-graph-office-lod-chip").textContent).toBe(
-      "Overview",
     );
   });
 
@@ -5445,7 +5370,6 @@ function officeElementWithView(
       onAutoProbe={vi.fn()}
       onRegisterFlush={vi.fn()}
       viewPicker={null}
-      autoChip={null}
       onCameraChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}
@@ -7273,7 +7197,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * NONE WAS DRAWN"), and the call site sits at the one spot between the
      * gate's refusal and every downstream draw call that nothing skips: the
      * gate's `if (!draw) { … return; }` returns before camera work, shift,
-     * auto-fit, `advanceCamera`, `trackLodBand` and `worldRectOf` - all of
+     * auto-fit, `advanceCamera` and `worldRectOf` - all of
      * which run unconditionally on a drawn frame, ending in this one call.
      * `scene.isAnimating` is NOT this proxy: it is read as an argument to
      * `shouldDraw` itself, so it runs on a REFUSED frame too.
@@ -7328,34 +7252,42 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     /**
-     * A native wheel WITH a modifier key zooms about the cursor, and
-     * `zoomAbout` calls `syncLodBand` synchronously - so the chip is the
-     * precondition, not a flushed frame.
+     * A native wheel WITH a modifier key zooms about the cursor. `zoomAbout`
+     * mutates the camera synchronously and reads no React state to do it, so
+     * there is nothing left for this case to synchronize on before checking
+     * for a restart - unlike the pan case above, a zoom needs no fake-timer
+     * flush either.
+     *
+     * The two deltas below are chosen to cross both LOD-band thresholds (see
+     * `office-lod.ts`) in turn, which used to be the highest-risk shape of
+     * this gesture: it drove `syncLodBand`, a callback the render loop's
+     * effect once depended on. That callback is gone - the loop now reads the
+     * band straight off the camera inside the draw call - so nothing here
+     * synchronizes on it any more either; the deltas are kept because a zoom
+     * that crosses both bands still exercises `zoomAbout` more thoroughly
+     * than a token wheel notch would.
      */
-    it("a lod-band change does not restart the loop", () => {
+    it("a zoom does not restart the loop", () => {
       renderLoop({});
       const surface = screen.getByTestId("comm-graph-office-canvas");
-      const chip = screen.getByTestId("comm-graph-office-lod-chip");
-      expect(chip.textContent).toBe("Office");
 
-      // factor = exp(-300 / 300) = exp(-1) ≈ 0.368, below the 0.7 floor.
+      // factor = exp(-300 / 300) = exp(-1) ≈ 0.368, below the 0.7 office
+      // floor - crosses into the overview band.
       fireEvent.wheel(surface, {
         deltaY: 300,
         ctrlKey: true,
         clientX: 0,
         clientY: 0,
       });
-      expect(chip.textContent).toBe("Overview");
 
       // factor = exp(600 / 300) = exp(2) ≈ 7.39; 0.368 * 7.39 ≈ 2.72, above
-      // the 1.6 ceiling.
+      // the 1.6 ceiling - crosses into the close-up band.
       fireEvent.wheel(surface, {
         deltaY: -600,
         ctrlKey: true,
         clientX: 0,
         clientY: 0,
       });
-      expect(chip.textContent).toBe("Close-up");
 
       expect(mainCanvasContextCalls).toBe(0);
       expect(releaseSpy).not.toHaveBeenCalled();

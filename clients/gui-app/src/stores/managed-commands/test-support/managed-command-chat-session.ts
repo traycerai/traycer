@@ -93,6 +93,7 @@ export function installManagedCommandChatSession(args: {
             sendAction: () => undefined,
             close: () => undefined,
             sameTurnSteeringProtocolSupported: () => true,
+            draftBlobBridgeSupported: () => true,
             requestTranscriptRange: () => undefined,
             requestResnapshot: () => undefined,
           };

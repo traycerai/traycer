@@ -1629,6 +1629,26 @@ export const STAIRS_SIDE_MAP: SpriteMap = [
   "LLLLLLLLLLLLLLLL",
 ];
 
+/**
+ * A CARREL, and the bottom four rows are why.
+ *
+ * It used to be a hollow metal frame - a tinted lintel, an outline, and twelve
+ * rows of nothing - with the occupant drawn behind it showing straight
+ * through. A row of those reads as people standing in glass boxes rather than
+ * sitting at desks, which is what feedback round 1 said in as many words:
+ * "these transparent desks look weird".
+ *
+ * So the lower band is a DESK: one row of `woodLight` for the top edge over
+ * three of `woodDark` for the front, closing the booth at the height a desk
+ * closes one. The cubby is drawn above the character (`foot + 0.1` against the
+ * scene's `foot`), so this band passes in FRONT of the occupant's legs and
+ * leaves head and shoulders in the opening - which is the whole reading, and
+ * the reason the eight rows above it stay empty.
+ *
+ * The lintel keeps its `Z`: it is the one part of a cubby tinted with its
+ * occupant's colour, and it is how a dense quiet storey stays legible at a
+ * zoom where the person inside is four pixels tall.
+ */
 export const CUBBY_MAP: SpriteMap = [
   "ZZZZZZZZZZZZZZZZ",
   "OMMMMMMMMMMMMMMO",
@@ -1640,10 +1660,10 @@ export const CUBBY_MAP: SpriteMap = [
   "OM............MO",
   "OM............MO",
   "OM............MO",
-  "OM............MO",
-  "OM............MO",
-  "OM............MO",
-  "OM............MO",
+  "OMwwwwwwwwwwwwMO",
+  "OMWWWWWWWWWWWWMO",
+  "OMWWWWWWWWWWWWMO",
+  "OMWWWWWWWWWWWWMO",
   "OMMMMMMMMMMMMMMO",
   "OOOOOOOOOOOOOOOO",
 ];

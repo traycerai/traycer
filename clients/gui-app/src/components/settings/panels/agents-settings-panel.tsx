@@ -11,7 +11,9 @@ import { AgentSelectionGuideSection } from "./agent-selection-guide-section";
 // Titled "Agent selection" rather than "Agents": the page configures how a
 // coding agent and model are CHOSEN when spawning child agents. The
 // description says so explicitly, because "Agents" read as a manager for the
-// Agents inside a Task - a different surface entirely.
+// Agents inside a Task - a different surface entirely. Who reviews what the
+// chosen agent then DOES is a different question again, and lives on its own
+// page (Permissions).
 export function AgentsSettingsPanel() {
   return (
     <SettingsPanelShell

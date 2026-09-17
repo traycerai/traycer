@@ -71,7 +71,7 @@ export function HostDoctorReportContent(props: HostDoctorReportContentProps) {
       ))}
       <div className="flex flex-wrap items-center gap-2">
         {recurrence.locked ? (
-          <span className="min-w-0 flex-1 text-ui-sm text-rose-300">
+          <span className="min-w-0 flex-1 text-ui-sm text-destructive">
             Doctor paused after {RECURRENCE_THRESHOLD} failed fixes - re-run to
             retry.
           </span>

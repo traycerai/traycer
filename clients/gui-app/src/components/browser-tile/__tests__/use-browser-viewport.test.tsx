@@ -123,6 +123,9 @@ function sessionsState(
     errorMessage: null,
     retry: () => undefined,
     openTab: () => Promise.reject(new Error("unused")),
+    prepareOpenTab: () => {
+      throw new Error("unused");
+    },
     closeTab: () => Promise.resolve(),
     attachTab: () => Promise.resolve(),
     moveTab: () => Promise.resolve(),

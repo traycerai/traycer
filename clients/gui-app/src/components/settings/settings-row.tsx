@@ -77,7 +77,7 @@ export function SettingsRow(props: SettingsRowProps) {
           </p>
         ) : null}
         {hint ? (
-          <p className="text-ui-sm font-medium text-amber-700 dark:text-amber-300">
+          <p className="text-ui-sm font-medium text-warning-foreground">
             {hint}
           </p>
         ) : null}

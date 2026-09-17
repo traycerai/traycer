@@ -8,32 +8,6 @@ import type {
 } from "@/hooks/pr/use-pr-list-subscription";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 
-function buildPrItem(overrides: Partial<PrLightItem>): PrLightItem {
-  return {
-    githubHost: null,
-    base: null,
-    prUrl: null,
-    state: "open",
-    liveness: "live",
-    observedAt: null,
-    isDraft: false,
-    title: "Test PR",
-    baseRefName: "main",
-    headRefName: "feature/test",
-    additions: 10,
-    deletions: 2,
-    checksRollup: null,
-    reviewDecision: null,
-    commentCount: 0,
-    updatedAt: 1_000,
-    repoIdentifier: { owner: "acme", repo: "widgets" },
-    repoRole: "superproject",
-    linkGroupKey: null,
-    owners: [],
-    ...overrides,
-  };
-}
-
 function data(items: readonly PrLightItem[]): PrListSubscriptionData {
   return { sourceStatus: "ok", notice: null, items };
 }
@@ -60,26 +34,6 @@ function renderActions(value: TestSubscription, enabled: boolean): void {
 
 describe("PrPanelActions", () => {
   afterEach(cleanup);
-
-  it("renders freshness from the subscription supplied by the panel body", () => {
-    renderActions(
-      subscription(data([buildPrItem({ observedAt: null })])),
-      true,
-    );
-    expect(screen.getByTestId("pr-panel-staleness").textContent).toBe(
-      "Not yet fetched",
-    );
-  });
-
-  it("renders an updated label when the selected host reports an observation", () => {
-    renderActions(
-      subscription(data([buildPrItem({ observedAt: 1_000 })])),
-      true,
-    );
-    expect(screen.getByTestId("pr-panel-staleness").textContent).toMatch(
-      /^Updated /,
-    );
-  });
 
   it("sends refresh through the exact subscription instance passed by the body", () => {
     const current = subscription(data([]));

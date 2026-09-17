@@ -72,7 +72,9 @@ export class BrowserDebugSession {
   }
 
   isAttached(): boolean {
-    return !this.disposed && this.webContents.debugger.isAttached();
+    if (this.disposed) return false;
+    const browserDebugger = this.liveDebugger();
+    return browserDebugger !== null && browserDebugger.isAttached();
   }
 
   isReady(): boolean {
@@ -278,15 +280,23 @@ export class BrowserDebugSession {
     if (this.disposed) return;
     this.disposed = true;
     this.enablePromise = null;
-    const browserDebugger = this.webContents.debugger;
+    const browserDebugger = this.liveDebugger();
     this.stopListening();
     this.sessionEnd.resolve();
     this.frameRoutes.rejectPending("Browser debug session was disposed");
     this.frameRoutes.clear();
-    if (this.attachedBySession || !browserDebugger.isAttached()) {
+    if (
+      this.attachedBySession ||
+      browserDebugger === null ||
+      !browserDebugger.isAttached()
+    ) {
       this.attachmentEnd.resolve();
     }
-    if (this.attachedBySession && browserDebugger.isAttached()) {
+    if (
+      this.attachedBySession &&
+      browserDebugger !== null &&
+      browserDebugger.isAttached()
+    ) {
       try {
         browserDebugger.detach();
       } catch (err) {
@@ -341,13 +351,19 @@ export class BrowserDebugSession {
 
   private detachIfUnleased(): void {
     if (this.leases > 0 || this.disposed) return;
-    const browserDebugger = this.webContents.debugger;
+    const browserDebugger = this.liveDebugger();
     const attachedBySession = this.attachedBySession;
     // Listeners off first: this detach is deliberate, and the detach listener
     // exists to report the ones we did not ask for.
     this.stopListening();
     this.resetDetachedState();
-    if (!attachedBySession || !browserDebugger.isAttached()) return;
+    if (
+      !attachedBySession ||
+      browserDebugger === null ||
+      !browserDebugger.isAttached()
+    ) {
+      return;
+    }
     try {
       browserDebugger.detach();
     } catch (err) {
@@ -413,14 +429,35 @@ export class BrowserDebugSession {
 
   private stopListening(): void {
     if (!this.listening) return;
-    const browserDebugger = this.webContents.debugger;
+    this.listening = false;
+    // A destroyed WebContents took its debugger, and our listeners on it,
+    // down with it; there is nothing left to unsubscribe from.
+    const browserDebugger = this.liveDebugger();
+    if (browserDebugger === null) return;
     browserDebugger.off("message", this.messageListener);
     browserDebugger.off("detach", this.detachListener);
-    this.listening = false;
+  }
+
+  /**
+   * Electron's `webContents.debugger` is a native getter that THROWS "Object
+   * has been destroyed" once the WebContents is gone - it does not hand back
+   * an inert debugger. Every path that can run AFTER the guest died (dispose
+   * from the `destroyed` handler, the detach event that death emits, a lease
+   * released late) reads the debugger through here so teardown unwinds
+   * instead of throwing out of a lifecycle handler. Paths that need a live
+   * debugger to do their work (`ensureAttached`, `startListening`) keep the
+   * direct read: a throw there is a failed operation, reported to its caller.
+   */
+  private liveDebugger(): BrowserViewDebugger | null {
+    if (this.webContents.isDestroyed()) return null;
+    return this.webContents.debugger;
   }
 }
 
-type BrowserDebugWebContents = Pick<BrowserViewWebContents, "id" | "debugger">;
+type BrowserDebugWebContents = Pick<
+  BrowserViewWebContents,
+  "id" | "debugger" | "isDestroyed"
+>;
 
 function cdpFailure(
   command: BrowserCdpCommand,

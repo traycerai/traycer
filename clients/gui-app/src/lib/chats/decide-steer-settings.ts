@@ -13,10 +13,14 @@ import type {
  * any of them can't apply to a turn already in flight - a
  * differently-profiled prompt would otherwise fold into the running turn's
  * provider process and deliver under the wrong account. permissionMode is
- * excluded - it applies softly to the next turn, so a permission-only change
- * still injects at a safe point. The host derives provider-session fork policy
- * from the accepted settings; this function is renderer-only confirmation
- * policy.
+ * excluded because it needs no restart to take effect - the host applies an
+ * `activePermissionModeUpdate` to the RUNNING execution, so a permission-only
+ * change still injects at a safe point. (An earlier wording here said it
+ * "applies softly to the next turn", which is not what the host does and is
+ * the belief that put a "New mode applies to the next turn" note in the
+ * composer toolbar for a change that had already taken effect.) The host
+ * derives provider-session fork policy from the accepted settings; this
+ * function is renderer-only confirmation policy.
  *
  * `activeTurn.profileId` defaults to `null` (ambient) for a turn received from
  * a host, or read from persisted state, before this field existed. During that

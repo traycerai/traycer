@@ -7,10 +7,8 @@ import {
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import {
-  useSurfaceHostPin,
-  useTabSurfaceKey,
-} from "@/hooks/host/use-surface-host-pin";
+import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
+import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-active-epic-surface-host-pin";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
@@ -43,23 +41,26 @@ function hostChoiceStatus(
   return status ?? (active ? "Active" : undefined);
 }
 
-function useBrowserHostItems(surfaceKey: string): ReadonlyArray<CommandItem> {
+function useBrowserHostItems(
+  surfaceKey: string,
+  epicId: string | null,
+): ReadonlyArray<CommandItem> {
   const options = useHostOptions();
-  const hostPin = useSurfaceHostPin(surfaceKey);
-  const activeHostName =
-    options.hosts.find((host) => host.hostId === options.activeHostId)?.name ??
-    "Active host";
-  const followActive = {
+  const hostPin = useActiveEpicSurfaceHostPin(surfaceKey, epicId);
+  const followingHostName =
+    options.hosts.find((host) => host.hostId === hostPin.followingHostId)
+      ?.name ?? "Task host";
+  const followTask = {
     ...openerActionLeaf({
-      id: "open:browser:host:follow-active",
-      label: "Follow active host",
-      keywords: ["browser", "host", "active", activeHostName],
+      id: "open:browser:host:follow-task",
+      label: "Follow task host",
+      keywords: ["browser", "host", "task", followingHostName],
       run: () => hostPin.setSelection(null),
     }),
     statusBadge:
       hostPin.selection === null
-        ? `Selected · ${activeHostName}`
-        : activeHostName,
+        ? `Selected · ${followingHostName}`
+        : followingHostName,
   };
   const hosts = options.hosts.map((host) => {
     const status = hostChoiceStatus(
@@ -112,14 +113,14 @@ function useBrowserHostItems(surfaceKey: string): ReadonlyArray<CommandItem> {
           }),
         ]
       : [];
-  return [followActive, ...hosts, ...loading, ...retry];
+  return [followTask, ...hosts, ...loading, ...retry];
 }
 
 function makeBrowserHostSubpage(surfaceKey: string): CommandSubpage {
   return {
     id: "open:browser:host",
     title: "Show browsers from",
-    useItems: () => useBrowserHostItems(surfaceKey),
+    useItems: (ctx) => useBrowserHostItems(surfaceKey, ctx.activeEpicId),
   };
 }
 
@@ -156,7 +157,7 @@ export function useBrowserOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
   const surfaceKey = useTabSurfaceKey("browsers", ctx.activeTabId ?? "");
-  const hostPin = useSurfaceHostPin(surfaceKey);
+  const hostPin = useActiveEpicSurfaceHostPin(surfaceKey, ctx.activeEpicId);
   const hasTarget =
     ctx.activeEpicId !== null &&
     ctx.activeTabId !== null &&

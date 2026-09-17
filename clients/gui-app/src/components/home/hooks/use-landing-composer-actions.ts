@@ -70,10 +70,9 @@ import {
   collectImageAtoms,
   containsImageAtoms,
 } from "@/lib/composer/image-atoms";
-import {
-  getImageBytes,
-  sessionImageBytes,
-} from "@/lib/composer/landing-image-store";
+import { sessionImageBytes } from "@/lib/composer/landing-image-store";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
@@ -715,7 +714,7 @@ export function useLandingComposerActions(
         return;
       }
       submissionInFlightRef.current = true;
-      void resolveImageBytes(hashes)
+      void resolveImageBytes(hashes, hostId)
         .then((bytesByHash) => {
           if (attempt.abortController.signal.aborted) return;
           const missing = hashes.filter((hash) => !bytesByHash.has(hash));
@@ -1418,16 +1417,31 @@ function readSessionImageBytes(
   return bytesByHash;
 }
 
-// Async resolve via the landing fetcher (session ?? IndexedDB). Hashes with no
-// bytes are simply absent from the map; the caller treats those as missing.
+/**
+ * Async resolve through the FULL three-leg resolver, not the partition alone.
+ *
+ * Leg 1 is still `getImageBytes`, so a draft whose bytes were pasted in this
+ * window answers exactly as before. What the other two legs add is the case
+ * this surface newly has: a landing draft ADOPTED from the cloud is made
+ * visible by `applyHostDocument` BEFORE the eager recovery pass finishes, so a
+ * user can submit while the transfer is still in flight. A partition-only read
+ * calls that image missing and blocks the create, for bytes the host mirror or
+ * the published blob can still supply - and the attachment strip beside it,
+ * which does use the resolver, is showing the image at the time.
+ *
+ * Hashes with no bytes are simply absent from the map; the caller treats those
+ * as missing.
+ */
 async function resolveImageBytes(
   hashes: ReadonlyArray<string>,
+  hostId: string,
 ): Promise<Map<string, Uint8Array>> {
   const bytesByHash = new Map<string, Uint8Array>();
+  const target = draftImageByteTargetForHost(hostId);
   await Promise.all(
     hashes.map(async (hash) => {
-      const bytes = await getImageBytes(hash);
-      if (bytes !== undefined) bytesByHash.set(hash, bytes);
+      const bytes = await resolveDraftImageBytes(hash, target);
+      if (bytes !== null) bytesByHash.set(hash, bytes);
     }),
   );
   return bytesByHash;

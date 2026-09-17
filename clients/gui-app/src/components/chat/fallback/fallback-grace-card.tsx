@@ -231,12 +231,12 @@ export function FallbackGraceCard({
   return (
     <div
       data-testid="fallback-grace-card"
-      className="flex w-full flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-ui-sm"
+      className="flex w-full flex-col gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-ui-sm"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <AlertTriangle
-            className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+            className="size-3.5 shrink-0 text-warning-foreground"
             aria-hidden
           />
           <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-border/60 bg-background/60 px-1.5 py-0.5 text-ui-xs font-medium text-foreground">
@@ -246,15 +246,15 @@ export function FallbackGraceCard({
             </span>
           </span>
           {reasonLabel !== null ? (
-            <span className="text-ui-xs font-medium text-amber-700 dark:text-amber-300">
+            <span className="text-ui-xs font-medium text-warning-foreground">
               {reasonLabel}
             </span>
           ) : null}
         </div>
         <Button
-          size="sm"
-          variant="ghost"
-          className="h-auto px-1 py-0 text-ui-xs text-muted-foreground"
+          size="xs"
+          variant="muted"
+          className="h-auto"
           onClick={openFallbackSettings}
         >
           {FALLBACK_SETTINGS_LABEL}

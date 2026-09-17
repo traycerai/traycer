@@ -515,9 +515,7 @@ function BrowserDialogOverlay(props: {
             </SheetDescription>
           </SheetHeader>
           {promptInput("mx-4 w-auto")}
-          <SheetFooter className="flex-row justify-end gap-2">
-            {actions}
-          </SheetFooter>
+          <SheetFooter className="flex-row justify-end">{actions}</SheetFooter>
         </SheetContent>
       </Sheet>
     );

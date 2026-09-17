@@ -191,6 +191,58 @@ describe("usePromptStash capture/source CAS", () => {
     expect(editor.handle.getJSON()).toEqual(textDoc("keep me"));
     expect(result.current.pulseEpoch).toBe(0);
   });
+  it("keeps the source when a crop could not be captured (DRIVE RED)", async () => {
+    // A record holds the comment the user typed, the page it was taken on and
+    // which elements were marked - none of that is in the document text. A
+    // capture that could not take one has not captured the prompt, so clearing
+    // would destroy the only copy of those words.
+    const editor = makeEditor({ content: textDoc("keep me") });
+    const source = makeSource({
+      content: textDoc("keep me"),
+      annotations: [
+        {
+          kind: "browser-annotation",
+          annotationId: "ann-1",
+          tabId: "t-1",
+          sessionId: "s-1",
+          origin: "https://example.test",
+          pageUrl: "https://example.test/checkout",
+          pageTitle: "Checkout",
+          capturedAt: 1,
+          comment: "the button is misaligned",
+          counts: { elements: 1, regions: 0, strokes: 0 },
+          elements: [],
+          imageFileName: "crop.png",
+          // Bytes no leg can resolve: the crop was reclaimed.
+          imageHash: "f".repeat(64),
+          droppedElementCount: 0,
+        },
+      ],
+    });
+    const { result } = renderHook(() =>
+      usePromptStash(
+        hookArgs({
+          editorRef: editor.editorRef,
+          source,
+          destination: makeDestination(undefined),
+        }),
+      ),
+    );
+
+    await act(async () => {
+      result.current.stashCurrent();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(storeMocks.save).toHaveBeenCalledTimes(1);
+    });
+    // Saved - the words are safe - and the composer is left exactly as it is.
+    expect(source.clearIfUnchanged).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalled();
+  });
+
   it("surfaces capacity and image-preparation failures with composer-preserved copy", async () => {
     const editor = makeEditor({ content: textDoc("keep me") });
     const source = makeSource({ content: textDoc("keep me") });

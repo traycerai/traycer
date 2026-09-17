@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { TabChromeBackground } from "./tab-chrome-background";
@@ -67,9 +68,8 @@ function SplitGroupUnderline(props: {
     <span
       aria-hidden="true"
       data-testid={`split-tab-group-underline-${props.splitId}`}
-      style={{ color: "var(--color-primary)" }}
       className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-[1.5px]",
+        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-[1.5px] text-primary",
         SPLIT_ROW_PADDING_CLASS,
       )}
     >
@@ -84,9 +84,13 @@ function SplitGroupUnderline(props: {
       />
       <span
         data-testid={`split-tab-group-underline-left-${props.splitId}`}
-        style={{ color: props.leftColor ?? "var(--color-primary)" }}
+        style={
+          {
+            "--swatch": props.leftColor ?? "var(--color-primary)",
+          } as CSSProperties
+        }
         className={cn(
-          "relative min-w-0 flex-1 rounded-l-full",
+          "relative min-w-0 flex-1 rounded-l-full text-[var(--swatch)]",
           props.selectedSide !== "left" && "bg-current",
           props.selectedSide === "right" &&
             "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-current",
@@ -100,9 +104,13 @@ function SplitGroupUnderline(props: {
       />
       <span
         data-testid={`split-tab-group-underline-right-${props.splitId}`}
-        style={{ color: props.rightColor ?? "var(--color-primary)" }}
+        style={
+          {
+            "--swatch": props.rightColor ?? "var(--color-primary)",
+          } as CSSProperties
+        }
         className={cn(
-          "relative min-w-0 flex-1 rounded-r-full",
+          "relative min-w-0 flex-1 rounded-r-full text-[var(--swatch)]",
           props.selectedSide !== "right" && "bg-current",
           props.selectedSide === "left" &&
             "before:absolute before:inset-y-0 before:-left-0.5 before:w-0.5 before:bg-current",

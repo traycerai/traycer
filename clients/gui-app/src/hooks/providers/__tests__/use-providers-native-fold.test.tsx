@@ -22,6 +22,7 @@ import {
   mapProvidersListToMcpServers,
   mapNativeMutateToMcpMutate,
   mapMcpAuthResponse,
+  type McpListData,
 } from "@/hooks/providers/native-response-map";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
@@ -147,14 +148,15 @@ afterEach(() => {
 
 describe("native response mappers", () => {
   it("maps mcp list success and treats typed empty as empty servers", () => {
-    expect(
-      mapProvidersListToMcpServers({
-        response: {
-          providers: [],
-          native: { ok: true, kind: "mcp", servers: [] },
-        },
-      }),
-    ).toEqual({ servers: [] });
+    const mapped = mapProvidersListToMcpServers({
+      response: {
+        providers: [],
+        native: { ok: true, kind: "mcp", servers: [] },
+      },
+    });
+    expect(Object.keys(mapped).sort()).toEqual(["refreshError", "servers"]);
+    expect(mapped.servers).toEqual([]);
+    expect(mapped.refreshError).toBeNull();
   });
 
   it("throws ProviderNativeRpcError on ok:false native result", () => {
@@ -233,9 +235,13 @@ describe("useProvidersMcpList fold", () => {
       scope: "global",
       workspaceRoot: null,
     });
-    expect(fixture.queryClient.getQueryData(key)).toEqual({
-      servers: [EMPTY_SERVER],
-    });
+    const cached = fixture.queryClient.getQueryData<McpListData>(key);
+    expect(Object.keys(cached ?? {}).sort()).toEqual([
+      "refreshError",
+      "servers",
+    ]);
+    expect(cached?.servers).toEqual([EMPTY_SERVER]);
+    expect(cached?.refreshError).toBeNull();
     const classicKey = [
       "host",
       fixture.hostId,
@@ -327,7 +333,7 @@ describe("useProvidersMcpMutate fold", () => {
     });
   });
 
-  it("rolls back optimistic toggle on native error", async () => {
+  it("keeps the confirmed toggle state on native error", async () => {
     const fixture = createFixture({
       list: () => ({
         providers: [],
