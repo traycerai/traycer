@@ -38,13 +38,13 @@ export function HostRestartSessions(props: HostRestartSessionsProps) {
   );
   const openSession = useCallback(
     (epicId: string, sessionId: string): void => {
-      onNavigate();
-      routeNotificationForHost(
+      const routed = routeNotificationForHost(
         navigate,
         { kind: "chat", epicId, chatId: sessionId },
         Date.now(),
         { originHostId: hostId, effectiveHostId: hostId },
       );
+      if (routed) onNavigate();
     },
     [navigate, hostId, onNavigate],
   );
@@ -71,8 +71,8 @@ export function HostRestartSessions(props: HostRestartSessionsProps) {
             <Button
               type="button"
               variant="link"
-              size="sm"
-              className="h-auto max-w-full justify-start whitespace-normal p-0 text-left wrap-anywhere"
+              size="inline"
+              className="max-w-full justify-start whitespace-normal text-left wrap-anywhere"
               disabled={props.disabled}
               onClick={() => openSession(agent.epicId, agent.agentId)}
             >
@@ -106,6 +106,7 @@ function RunningTerminal(props: {
 }) {
   const { openTile } = useEpicTileNavigation();
   const canvases = useEpicCanvasStore((state) => state.canvasByTabId);
+  const tabsById = useEpicCanvasStore((state) => state.tabsById);
   const status = props.handle.store((state) => state.status);
   const kind = props.handle.store((state) => state.kind);
   const title = props.handle.store((state) => state.title);
@@ -113,8 +114,9 @@ function RunningTerminal(props: {
   if (kind !== "terminal" || status !== "running" || scope.kind !== "epic") {
     return null;
   }
-  const tile = Object.values(canvases)
-    .flatMap((canvas) =>
+  const tile = Object.entries(canvases)
+    .filter(([tabId]) => tabsById[tabId]?.epicId === scope.epicId)
+    .flatMap(([, canvas]) =>
       canvas === undefined ? [] : Object.values(canvas.tilesByInstanceId),
     )
     .find(
@@ -129,14 +131,14 @@ function RunningTerminal(props: {
       <Button
         type="button"
         variant="link"
-        size="sm"
-        className="h-auto max-w-full justify-start whitespace-normal p-0 text-left wrap-anywhere"
+        size="inline"
+        className="max-w-full justify-start whitespace-normal text-left wrap-anywhere"
         disabled={props.disabled}
         onClick={() => {
-          props.onNavigate();
-          openTile(
+          const target = openTile(
             tileIntent(tile, { epicId: scope.epicId }, "explicit", "direct_ui"),
           );
+          if (target !== null) props.onNavigate();
         }}
       >
         {title ?? `Terminal ${props.handle.sessionId}`}
