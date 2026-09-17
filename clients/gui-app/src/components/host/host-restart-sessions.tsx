@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useStore } from "zustand";
 import { useNavigate } from "@tanstack/react-router";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -107,9 +108,9 @@ function RunningTerminal(props: {
   const { openTile } = useEpicTileNavigation();
   const canvases = useEpicCanvasStore((state) => state.canvasByTabId);
   const tabsById = useEpicCanvasStore((state) => state.tabsById);
-  const status = props.handle.store((state) => state.status);
-  const kind = props.handle.store((state) => state.kind);
-  const title = props.handle.store((state) => state.title);
+  const status = useStore(props.handle.store, (state) => state.status);
+  const kind = useStore(props.handle.store, (state) => state.kind);
+  const title = useStore(props.handle.store, (state) => state.title);
   const scope = props.handle.scope;
   if (kind !== "terminal" || status !== "running" || scope.kind !== "epic") {
     return null;
