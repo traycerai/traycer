@@ -22,7 +22,7 @@ export function TerminalsPanelSkeleton() {
       data-testid="terminals-panel-skeleton"
       aria-busy="true"
     >
-      <SidebarGroup className="flex-1 px-2 py-3">
+      <SidebarGroup className="flex-1">
         <SidebarGroupContent className="space-y-0.5">
           {ROWS.map((row) => (
             <div

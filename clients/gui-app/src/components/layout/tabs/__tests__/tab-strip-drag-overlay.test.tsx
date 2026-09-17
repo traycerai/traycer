@@ -85,9 +85,17 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
 
     render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
 
-    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
-      "rgb(101, 67, 33)",
-    );
+    // `--swatch-border`, not `borderTopColor`: the chrome carries its identity
+    // colour as a custom property and paints with
+    // `border-t-[var(--swatch-border)]` (ticket 02's inline-style migration),
+    // so the CSS property this used to read is empty - and an assertion that
+    // compares "" against a colour fails loudly, unlike the ones that compare
+    // it against nothing.
+    expect(
+      screen
+        .getByTestId("tab-chrome-center")
+        .style.getPropertyValue("--swatch-border"),
+    ).toBe("#654321");
     // Identity icon (emoji) and the running-activity status render together.
     expect(screen.getByText("\u{1f680}")).toBeTruthy();
     expect(screen.getByTestId("header-tab-activity-tab-1")).toBeTruthy();
@@ -125,9 +133,11 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
 
     expect(screen.getByTestId("header-tab-approval-tab-1")).toBeTruthy();
-    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
-      "rgb(51, 68, 85)",
-    );
+    expect(
+      screen
+        .getByTestId("tab-chrome-center")
+        .style.getPropertyValue("--swatch-border"),
+    ).toBe("#334455");
   });
 
   it("falls back to no identity and an empty badge when the ghost is null", () => {

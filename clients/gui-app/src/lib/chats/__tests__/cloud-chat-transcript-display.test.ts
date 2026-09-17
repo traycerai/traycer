@@ -13,8 +13,14 @@ import {
 import {
   NO_PAYLOADS_RESOLVABLE,
   presentChat,
+  type PresentedContentBlock,
   type PresentedChat,
+  type PresentedChatEvent,
 } from "@traycer/protocol/persistence/chat-sync/presentation";
+import {
+  snapshotChatEventSchema,
+  snapshotContentBlockSchema,
+} from "@traycer/protocol/persistence/chat-sync/open-harness";
 import {
   buildCloudChatTranscript,
   describeTranscriptFidelity,
@@ -48,6 +54,93 @@ async function present(options: {
         ? NO_PAYLOADS_RESOLVABLE
         : resolverFromPayloadRefs(options.resolvable),
   });
+}
+
+function codexRetryBlock(
+  presented: PresentedChat,
+  input: {
+    readonly blockId: string;
+    readonly code: string;
+    readonly message: string;
+  },
+): PresentedContentBlock {
+  const template = presented.messages
+    .flatMap((message) => message.blocks)
+    .at(0);
+  if (template === undefined) throw new Error("Fixture chat has no block");
+  const raw = {
+    ...template.raw,
+    blockId: input.blockId,
+    status: "errored",
+    timestamp: 20,
+    type: "error",
+    message: input.message,
+    recoverable: true,
+    code: input.code,
+    failure: null,
+  };
+  return {
+    ...template,
+    blockId: input.blockId,
+    variant: "error",
+    known: snapshotContentBlockSchema.parse(raw),
+    raw,
+    payloadRefs: [],
+  };
+}
+
+function turnEvent(
+  template: PresentedChatEvent,
+  type: "turn.started" | "turn.completed",
+  turnId: string,
+): PresentedChatEvent {
+  if (template.known === null) throw new Error("Fixture event is unknown");
+  return {
+    ...template,
+    known: snapshotChatEventSchema.parse({
+      ...template.known,
+      type,
+      turnId,
+    }),
+  };
+}
+
+function firstEvent(presented: PresentedChat): PresentedChatEvent {
+  const event = presented.events.at(0);
+  if (event === undefined) throw new Error("Fixture chat has no event");
+  return event;
+}
+
+function codexRetryChat(
+  presented: PresentedChat,
+  input: {
+    readonly turnId: string;
+    readonly blocks: readonly PresentedContentBlock[];
+    readonly events: readonly PresentedChatEvent[];
+  },
+): PresentedChat {
+  const assistantIndex = presented.messages.findIndex(
+    (message) => message.known?.role === "assistant",
+  );
+  if (assistantIndex === -1) throw new Error("Fixture chat has no assistant");
+  const assistant = presented.messages.at(assistantIndex);
+  if (assistant?.known?.role !== "assistant") {
+    throw new Error("Fixture assistant is not known");
+  }
+  const known = {
+    ...assistant.known,
+    sender: { ...assistant.known.sender, harnessId: "codex" },
+    turnId: input.turnId,
+  };
+  return {
+    ...presented,
+    messages: presented.messages.map((message, index) =>
+      index === assistantIndex
+        ? { ...message, known, blocks: input.blocks }
+        : message,
+    ),
+    events: input.events,
+  };
 }
 
 describe("nothing is dropped", () => {
@@ -158,5 +251,90 @@ describe("the fidelity line", () => {
     };
 
     expect(describeTranscriptFidelity(lossless)).toBeNull();
+  });
+});
+
+describe("Codex retry presentation", () => {
+  it("treats a later turn.started as live after prior terminal evidence", async () => {
+    const presented = await present({ resolvable: null });
+    const turnId = "turn-retry-restarted";
+    const retry = codexRetryBlock(presented, {
+      blockId: "retry-restarted",
+      code: "RETRY_IN_PROGRESS",
+      message: "Provider overloaded; retrying",
+    });
+    const transcript = buildCloudChatTranscript(
+      codexRetryChat(presented, {
+        turnId,
+        blocks: [retry],
+        events: [
+          turnEvent(firstEvent(presented), "turn.completed", turnId),
+          turnEvent(firstEvent(presented), "turn.started", turnId),
+        ],
+      }),
+    );
+
+    const assistant = transcript.messages.find(
+      (message) => message.variant === "assistant",
+    );
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Retrying",
+          details: ["Retrying automatically. · Reported by Codex"],
+        }),
+      ]),
+    );
+  });
+
+  it("hides an all-hidden retry message without shifting later row keys", async () => {
+    const presented = await present({ resolvable: null });
+    const turnId = "turn-retry-finished";
+    const retry = codexRetryBlock(presented, {
+      blockId: "retry-finished",
+      code: "RETRY_ENDED",
+      message: "The Codex retry attempt ended.",
+    });
+    const transcript = buildCloudChatTranscript(
+      codexRetryChat(presented, {
+        turnId,
+        blocks: [retry],
+        events: [turnEvent(firstEvent(presented), "turn.completed", turnId)],
+      }),
+    );
+
+    expect(transcript.messages.map((message) => message.key)).toEqual([
+      "m:0:m-user",
+      "m:2:m-user-2",
+      "m:3:m-assistant-2",
+    ]);
+  });
+
+  it("labels a final Codex error with provider context", async () => {
+    const presented = await present({ resolvable: null });
+    const error = codexRetryBlock(presented, {
+      blockId: "codex-final-error",
+      code: "PROVIDER_AUTH_FAILED",
+      message: "Provider authentication failed",
+    });
+    const transcript = buildCloudChatTranscript(
+      codexRetryChat(presented, {
+        turnId: "turn-final-error",
+        blocks: [error],
+        events: [],
+      }),
+    );
+
+    const assistant = transcript.messages.find(
+      (message) => message.variant === "assistant",
+    );
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Codex turn failed",
+          body: "Provider authentication failed",
+        }),
+      ]),
+    );
   });
 });

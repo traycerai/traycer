@@ -468,7 +468,7 @@ function AvailableDesktopZoomSettingsRow() {
             Reset
             {resetMutation.isPending ? (
               <AgentSpinningDots
-                className="ml-1 text-current"
+                className="ml-1"
                 testId="desktop-zoom-settings-reset-pending"
                 variant="dots2"
               />

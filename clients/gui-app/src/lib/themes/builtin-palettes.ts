@@ -930,10 +930,27 @@ export const baseThemeColors: Record<
     accent: "oklch(0.97 0 0)",
     "accent-foreground": "oklch(0.205 0 0)",
     destructive: "oklch(0.577 0.245 27.325)",
+    // Text ON the solid destructive fill (the unread-count badges), not red
+    // text on a surface - that is `text-destructive`. Three call sites already
+    // asked for this class; until now it named nothing and the badges inherited
+    // whatever their parent painted, which on a light surface was dark text on
+    // red. Near-white reads on both appearances' destructive, so it is one
+    // value rather than a light/dark pair.
+    "destructive-foreground": "oklch(0.985 0 0)",
     success: "oklch(0.58 0.13 142)",
     "success-foreground": "oklch(0.42 0.13 145)",
     warning: "oklch(0.68 0.16 75)",
     "warning-foreground": "oklch(0.38 0.11 65)",
+    // The third status role, built the same way as the two above: the base is
+    // the tint a surface is washed with (`bg-info/10`, `border-info/30`) and
+    // the foreground is the text that has to stay readable ON that wash. Hue
+    // 250 splits the blue-500 and sky-500 the notice surfaces used before this
+    // token existed, so neither reads as having changed family. Worst measured
+    // contrast for the foreground is 5.14:1 light and 5.46:1 dark across every
+    // preset's background, canvas, card and popover - the same band the
+    // success and warning foregrounds already sit in.
+    info: "oklch(0.58 0.15 250)",
+    "info-foreground": "oklch(0.45 0.15 255)",
     border: "oklch(0.922 0 0)",
     input: "oklch(0.922 0 0)",
     ring: "oklch(0.708 0 0)",
@@ -984,10 +1001,13 @@ export const baseThemeColors: Record<
     accent: "oklch(0.269 0 0)",
     "accent-foreground": "oklch(0.985 0 0)",
     destructive: "oklch(0.704 0.191 22.216)",
+    "destructive-foreground": "oklch(0.985 0 0)",
     success: "oklch(0.72 0.14 142)",
     "success-foreground": "oklch(0.75 0.15 145)",
     warning: "oklch(0.78 0.14 80)",
     "warning-foreground": "oklch(0.9 0.08 85)",
+    info: "oklch(0.72 0.13 250)",
+    "info-foreground": "oklch(0.8 0.1 240)",
     border: "oklch(1 0 0 / 10%)",
     input: "oklch(1 0 0 / 15%)",
     ring: "oklch(0.556 0 0)",

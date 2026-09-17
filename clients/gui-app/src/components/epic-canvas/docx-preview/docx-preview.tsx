@@ -417,8 +417,7 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
           ref={scrollContainerRef}
           // Ctrl/Cmd+A selects the document, not the whole window.
           data-selection-root=""
-          className="absolute inset-0 overflow-auto"
-          style={{ padding: PAGE_GUTTER_PX }}
+          className="absolute inset-0 overflow-auto p-4"
           data-testid="docx-preview-container"
         >
           {/* Document styles stay inside this shadow host. */}

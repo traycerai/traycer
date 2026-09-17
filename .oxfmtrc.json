@@ -5,6 +5,7 @@
   "tabWidth": 2,
   "trailingComma": "all",
   "ignorePatterns": [
+    "clients/gui-app/src/lib/cn-tables.ts",
     "clients/desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.generated.ts",
     "protocol/**/__fixtures__/**",
     "protocol/**/snapshot-*.ts"

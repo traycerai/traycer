@@ -9,7 +9,7 @@ import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-c
  * vertical scroller instead of clipping. It stays flat only because the bar
  * overrides what `ui/tabs` imposes on every list and trigger - the fixed list
  * height, the active-state fill, the indicator offset - and an override lands
- * only when tailwind-merge recognises it as the same utility, which it does
+ * only when `cn` recognises it as the same utility, which it does
  * only when the two spell their Tailwind modifier the same way.
  *
  * That coupling is invisible in the bar's own source: its classes stay valid
@@ -94,7 +94,7 @@ describe("<SwitcherCategoryTabs />", () => {
   it("keeps the active trigger fill-less in both themes and carries its own underline on the primitive's active modifier", () => {
     const baseline = classTokens(renderBaselineTabs().trigger);
     // Every fill the primitive can paint on the TRIGGER ITSELF: the light one
-    // and the `dark:`-scoped one, which is a separate utility tailwind-merge
+    // and the `dark:`-scoped one, which is a separate utility `cn`
     // only replaces when the bar scopes its own the same way. Already-
     // transparent utilities are not a box and need no override, and a pseudo's
     // paint is a different surface - ui/tabs' `after:bg-foreground` indicator
@@ -142,7 +142,12 @@ describe("<SwitcherCategoryTabs />", () => {
     const imposedOffset = baseline.find(
       (token) =>
         modifierOf(token).includes("after:") &&
-        utilityOf(token).startsWith("bottom-"),
+        // The offset is a NEGATIVE utility (`-bottom-1.25`), and it has been
+        // spelled as a positive arbitrary one (`bottom-[-5px]`) before. Match
+        // either, or this positive control goes quietly dead the next time the
+        // primitive changes its mind about which spelling to use - which is
+        // the exact failure the rest of this file exists to catch.
+        /^-?bottom-/.test(utilityOf(token)),
     );
     expect(imposedOffset).toBeDefined();
     if (imposedOffset === undefined) return;

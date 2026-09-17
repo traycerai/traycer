@@ -132,9 +132,7 @@ function AutoCleanupChipFace(props: {
           data-tone={props.tone}
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            props.tone === "on"
-              ? "bg-emerald-500 dark:bg-emerald-400"
-              : "bg-muted-foreground/50",
+            props.tone === "on" ? "bg-success" : "bg-muted-foreground/50",
           )}
           aria-hidden
         />
@@ -385,9 +383,10 @@ function AutoCleanupPopoverPanel(props: {
         <div className="flex shrink-0 items-center gap-2">
           {busy ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="worktree-auto-cleanup-saving"
               variant={undefined}
+              tone="muted"
             />
           ) : null}
           <Switch
@@ -420,7 +419,7 @@ function AutoCleanupPopoverPanel(props: {
         <p
           role="status"
           data-testid="worktree-auto-cleanup-paused"
-          className="text-ui-xs text-pretty text-amber-700 dark:text-amber-300"
+          className="text-ui-xs text-pretty text-warning-foreground"
         >
           {AUTO_CLEANUP_PAUSED_COPY[policy.pausedReason]}
         </p>
@@ -457,7 +456,7 @@ function AutoCleanupStatusLines(props: {
         <p
           role="alert"
           data-testid="worktree-auto-cleanup-conflict"
-          className="text-ui-xs text-pretty text-amber-700 dark:text-amber-300"
+          className="text-ui-xs text-pretty text-warning-foreground"
         >
           Automatic cleanup was changed somewhere else. The current setting is
           shown above — apply your change again if you still want it.
@@ -487,8 +486,8 @@ function AutoCleanupFooterRow(props: {
       <Button
         type="button"
         variant="link"
-        size="sm"
-        className="h-auto shrink-0 p-0 text-ui-xs"
+        size="inline-xs"
+        className="shrink-0"
         onClick={props.onOpenHistory}
       >
         <span>History</span>
@@ -667,7 +666,7 @@ function AutoCleanupThresholdEditor(props: {
           aria-invalid={error !== null}
           aria-describedby={error !== null ? errorId : undefined}
           disabled={busy}
-          className="h-8 w-[min(30vw,4.5rem)] text-ui-sm"
+          className="h-8 w-[min(30vw,4.5rem)]"
           onChange={(event) => {
             setDraft(event.target.value);
             setHasLocalEdit(true);
@@ -677,6 +676,7 @@ function AutoCleanupThresholdEditor(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
           }}
+          size="sm"
         />
         <span className="text-ui-xs text-muted-foreground">days</span>
       </div>

@@ -38,6 +38,7 @@ import type {
   HostDoctorReport,
   FreePortAndRestartInput,
   IHostManagement,
+  HostLogsTailResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
@@ -61,6 +62,7 @@ export function HostDoctorCard(props: HostDoctorCardProps) {
   }
   return (
     <HostDoctorCardInner
+      key={props.expectedHostId}
       management={management}
       expectedHostId={props.expectedHostId}
       externalRecurrence={props.recurrenceState}
@@ -108,6 +110,16 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       queryFn: () => management.runDoctor({ expectedHostId }),
     }),
   );
+
+  // Reading a stopped host's log uses the desktop bridge, independently of
+  // repairs: it must neither announce a fix nor change failure recurrence.
+  const logsMutation = useMutation<HostLogsTailResult, Error, HostDoctorIssue>({
+    mutationKey: runnerMutationKeys.hostDoctorBridgeLogs(),
+    mutationFn: () =>
+      management.getHostLogs({ tailLines: 200, expectedHostId }),
+    onError: (error) =>
+      toastFromRunnerError(error, "Couldn't read this host's log."),
+  });
 
   const fixMutation = useMutation<
     FixActionResult,
@@ -190,8 +202,13 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   }, [refetchReport, recurrenceModel]);
 
   const { mutate: mutateFix } = fixMutation;
+  const { mutate: readLogs } = logsMutation;
   const handleFix = useCallback(
     (issue: HostDoctorIssue) => {
+      if (issue.fixAction === "host-logs") {
+        readLogs(issue);
+        return;
+      }
       if (recurrenceModel.recurrence.locked) {
         reportableErrorToast(
           "Doctor paused after 3 failed fixes. Click Re-run Doctor to retry.",
@@ -212,7 +229,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       }
       mutateFix(issue);
     },
-    [mutateFix, recurrenceModel.recurrence.locked],
+    [mutateFix, readLogs, recurrenceModel.recurrence.locked],
   );
 
   const handleToggleIssue = useCallback((code: string) => {
@@ -252,7 +269,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   if (reportError !== null) {
     return (
       <div className="space-y-2">
-        <div className="rounded-md border border-rose-700/40 bg-rose-900/20 px-3 py-2 text-ui-sm text-rose-200">
+        <div className="rounded-md border border-destructive/40 bg-destructive/20 px-3 py-2 text-ui-sm text-destructive">
           Doctor could not run: {reportError.message}
         </div>
         {/* The retry belongs on THIS arm above all others. The commonest way
@@ -285,11 +302,18 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
 
   if (issues.length === 0) {
     return (
-      <div className="rounded-md border border-emerald-700/40 bg-emerald-900/20 px-3 py-2 text-ui-sm text-emerald-200">
+      <div className="rounded-md border border-success/40 bg-success/20 px-3 py-2 text-ui-sm text-success-foreground">
         Doctor: no issues detected.
       </div>
     );
   }
+
+  const pendingRepairCode = fixMutation.isPending
+    ? fixMutation.variables.code
+    : null;
+  const pendingLogsCode = logsMutation.isPending
+    ? logsMutation.variables.code
+    : null;
 
   return (
     <HostDoctorReportContent
@@ -297,7 +321,8 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       expandedCodes={expandedCodes}
       recurrence={recurrenceModel.recurrence}
       reportFetching={reportFetching}
-      fixPendingCode={fixMutation.isPending ? fixMutation.variables.code : null}
+      fixPendingCode={pendingRepairCode ?? pendingLogsCode}
+      logTail={logsMutation.data?.tail ?? null}
       freePortPrompt={freePortPrompt}
       freePortPending={freePortMutation.isPending}
       onFix={handleFix}

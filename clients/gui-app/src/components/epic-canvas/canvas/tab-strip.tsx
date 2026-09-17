@@ -869,7 +869,7 @@ function TabItemBody(
             className={cn(
               "group relative flex h-9 shrink-0 cursor-pointer items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               "transition-[background-color,color] duration-300 ease-spring",
-              "hover:bg-card/60 active:scale-[0.97]",
+              "hover:bg-card/60 active:scale-97",
               // Paint over the strip border so the active tab merges with the panel below.
               isActive &&
                 "bg-(--app-background) text-canvas-foreground shadow-[inset_0_-1px_0_0_var(--app-background)]",
@@ -1353,9 +1353,10 @@ export function TabIcon(props: {
   const defaultIcon =
     props.tab.type === "chat" && props.titleGenerationPending ? (
       <AgentSpinningDots
-        className="size-3.5 text-muted-foreground"
+        className="size-3.5"
         testId={`tab-title-generating-${props.tab.instanceId}`}
         variant="dots2"
+        tone="muted"
       />
     ) : undefined;
   return (

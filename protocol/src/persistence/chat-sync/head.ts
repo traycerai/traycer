@@ -11,6 +11,8 @@ import {
   preservedChatEventSchema,
   type PreservedChatEvent,
 } from "@traycer/protocol/persistence/chat-sync/entries";
+import { autoJudgeUnattendedDenialRowSource } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   chatSyncHostPrivateSchema,
   chatSyncHostPrivateStorageSchema,
@@ -287,6 +289,74 @@ export const chatHeadRecordShape = {
  * later", which is the one place it is load-bearing today.
  */
 export const CHAT_SYNC_1_1_READER_FLOOR = { major: 1, minor: 1 } as const;
+
+/**
+ * The reader floor a publication carrying an agent-created unattended-denial
+ * row must stamp.
+ *
+ * `1.5` is the minor whose `row-order.ts` gained
+ * {@link autoJudgeUnattendedDenialRowSource}. A reader below it parses the
+ * publication perfectly - the row is an ordinary `approval.denied` carrying
+ * auto-judge metadata, not a new event kind - and then its own
+ * `projectTranscriptRows` produces no row where the publisher's produced one.
+ * The transcript renders with a permission-relevant refusal silently missing.
+ *
+ * **Why the same-major admission rule cannot cover it.** `gateChatHeadVersion`
+ * admits any same-major publication on purpose, because that is what makes
+ * unknown-variant passthrough worth having. Passthrough preserves BYTES, and
+ * preservation is not the problem here: residual capture carries the event
+ * through an older republisher losslessly. What an old reader lacks is the
+ * CODE to project it, and no amount of byte fidelity supplies that. This is
+ * precisely the case `minReaderVersion` is documented as the escape hatch for
+ * - "a change that would make an old reader act on a chat WRONGLY" - and
+ * showing someone a transcript with a refusal removed is that.
+ *
+ * **Why a floor rather than projecting the row out**, and why it is stamped on
+ * HISTORY rather than on settings: both answers are the ones
+ * `minimumChatSubscribeMinorForTranscriptEvent` already gives one layer up.
+ * The projection is the reader's own bundled copy, so only refusing it reaches
+ * a peer running stale code; and a durable row outlives the `permissionMode`
+ * that produced it, so a chat switched back to a pre-Auto mode before
+ * publication still carries the row - which is exactly the hole this closes,
+ * since a settings-derived floor reads the mode and finds nothing.
+ *
+ * Pinned literally, for the same reason {@link CHAT_SYNC_1_1_READER_FLOOR} is:
+ * it marks the minor that introduced the projection and must NOT follow
+ * `CHAT_SYNC_SCHEMA_VERSION` to 1.6, or every later minor would lock out
+ * readers over a row they can draw perfectly well.
+ */
+export const CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR = {
+  major: 1,
+  minor: 5,
+} as const;
+
+/**
+ * The floor a publication of `events` must stamp as `minReaderVersion`, or
+ * `null` when every supported reader can render it.
+ *
+ * `null` rather than `CHAT_SYNC_1_1_READER_FLOOR` for the ordinary case: `null`
+ * is what a correct publisher stamps when nothing needs gating, and returning a
+ * floor here would refuse readers for additive changes the format was designed
+ * to survive.
+ *
+ * Derives its answer from the row predicate rather than restating its
+ * condition, so the two cannot drift - the same arrangement
+ * `minimumChatSubscribeMinorForTranscriptEvent` has with the same predicate.
+ *
+ * The PUBLISHER calls this; the protocol only states the rule. Same split as
+ * `supportsAutoPermissionMode` / `chatSubscribeSupportsPermissionMode` and
+ * `agentConfigureResponseCanCarryPermissionMode`.
+ */
+export function chatSyncReaderFloorForTranscriptEvents(
+  events: Iterable<ChatEvent>,
+): SchemaVersion | null {
+  for (const event of events) {
+    if (autoJudgeUnattendedDenialRowSource(event) !== null) {
+      return CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR;
+    }
+  }
+  return null;
+}
 
 /**
  * Writer shape for the registered 1.1 contract: CDC params and per-cohort

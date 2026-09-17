@@ -1,8 +1,9 @@
 /**
  * Single-line text formatting, kept free of any rendering dependency.
  *
- * This lived in `lib/utils.ts` beside `cn()`, which imports `clsx` and
- * `tailwind-merge`. That was harmless while every caller was a component, and
+ * This lived in `lib/utils.ts` beside `cn()`, which pulls in the class merger
+ * and its compiled tables. That was harmless while every caller was a
+ * component, and
  * stopped being harmless when the chat find projection - a pure text pass -
  * became shared code: importing one string helper dragged the whole class-name
  * stack in behind it, and `lib/utils.ts` was one of only two edges keeping the

@@ -109,11 +109,7 @@ function PickerBadges(props: PickerBadgesProps) {
   return (
     <span className="flex shrink-0 items-center gap-1">
       {props.badges.map((badge) => (
-        <Badge
-          key={badge}
-          variant="secondary"
-          className="h-4 rounded-sm px-1 text-[0.625rem] font-medium"
-        >
+        <Badge key={badge} variant="secondary" className="h-4" size="xs">
           {badge}
         </Badge>
       ))}

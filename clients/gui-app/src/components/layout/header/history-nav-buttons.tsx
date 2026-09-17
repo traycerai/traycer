@@ -70,13 +70,12 @@ function HistoryNavArrows() {
         <span className="inline-flex">
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="Go back"
             data-testid="history-nav-back"
             disabled={!canGoBack}
             onClick={() => goBack(router)}
-            className="text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="size-4" />
           </Button>
@@ -91,13 +90,12 @@ function HistoryNavArrows() {
         <span className="inline-flex">
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="Go forward"
             data-testid="history-nav-forward"
             disabled={!canGoForward}
             onClick={() => goForward(router)}
-            className="text-muted-foreground hover:text-foreground"
           >
             <ArrowRight className="size-4" />
           </Button>

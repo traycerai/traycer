@@ -17,17 +17,24 @@ type LogHook = (message: { level: string; data: unknown[] }) => {
   data: unknown[];
 };
 
-// `vi.mock` is hoisted above every top-level binding, so the array the test
-// and the factory share has to be hoisted with it.
-const { hooks } = vi.hoisted(() => ({ hooks: [] as LogHook[] }));
+// `vi.mock` is hoisted above every top-level binding, so the array (and the
+// mutable transport levels the S2 threshold-helper tests flip) the test and
+// the factory share has to be hoisted with it.
+const { hooks, transports } = vi.hoisted(() => ({
+  hooks: [] as LogHook[],
+  transports: {
+    file: {
+      level: "info" as string | false,
+      resolvePathFn: (): string => "",
+    },
+    console: { level: "info" as string | false },
+  },
+}));
 
 vi.mock("electron-log", () => ({
   default: {
     hooks,
-    transports: {
-      file: { level: "info", resolvePathFn: (): string => "" },
-      console: { level: "info" },
-    },
+    transports,
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
@@ -40,7 +47,7 @@ vi.mock("../desktop-log-level", () => ({
   readDesktopLogLevelSync: (): string => "info",
 }));
 
-import { initLogger } from "../logger";
+import { initLogger, isDebugEnabled } from "../logger";
 
 /** What every installed hook does to one log call's arguments. */
 function throughHooks(data: unknown[]): unknown[] {
@@ -51,6 +58,8 @@ function throughHooks(data: unknown[]): unknown[] {
 describe("electron-log sanitizing hook", () => {
   beforeEach(() => {
     hooks.length = 0;
+    transports.file.level = "info";
+    transports.console.level = "info";
     initLogger();
   });
 
@@ -129,5 +138,56 @@ describe("electron-log sanitizing hook", () => {
 
   it("passes primitive arguments through untouched", () => {
     expect(throughHooks([1, true, null])).toEqual([1, true, null]);
+  });
+});
+
+describe("isDebugEnabled (S2 threshold helper)", () => {
+  beforeEach(() => {
+    transports.file.level = "info";
+    transports.console.level = "info";
+  });
+
+  it("is false at the default info level on both transports", () => {
+    expect(isDebugEnabled()).toBe(false);
+  });
+
+  it("is true once either transport is at debug or silly", () => {
+    transports.file.level = "debug";
+    expect(isDebugEnabled()).toBe(true);
+    transports.file.level = "info";
+    transports.console.level = "silly";
+    expect(isDebugEnabled()).toBe(true);
+  });
+
+  it("is false when neither transport is at debug or silly, for non-default levels on both", () => {
+    transports.file.level = "warn";
+    transports.console.level = "error";
+    expect(isDebugEnabled()).toBe(false);
+  });
+
+  it("is true with the file transport at info and the console transport at debug, and its converse", () => {
+    transports.file.level = "info";
+    transports.console.level = "debug";
+    expect(isDebugEnabled()).toBe(true);
+
+    transports.file.level = "debug";
+    transports.console.level = "info";
+    expect(isDebugEnabled()).toBe(true);
+  });
+
+  it("is false when one transport is fully disabled (level: false) and the other is at info, and its converse", () => {
+    transports.file.level = false;
+    transports.console.level = "info";
+    expect(isDebugEnabled()).toBe(false);
+
+    transports.file.level = "info";
+    transports.console.level = false;
+    expect(isDebugEnabled()).toBe(false);
+  });
+
+  it("is false when both transports are fully disabled (level: false)", () => {
+    transports.file.level = false;
+    transports.console.level = false;
+    expect(isDebugEnabled()).toBe(false);
   });
 });

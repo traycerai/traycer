@@ -17,11 +17,14 @@ import { v4 as uuidv4 } from "uuid";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import {
-  getImageBytes,
   hasLandingImageBytes,
   putImage,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { useDraftFirstImageFetcher } from "@/lib/attachments/use-draft-image-fetcher";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import {
   markLandingEditorMounted,
   scheduleLandingImageReconcile,
@@ -349,7 +352,13 @@ export function LandingComposer(props: LandingComposerProps) {
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
-    { hostClient, hostId: activeHostId, tuiOnly: composerMode === "terminal" },
+    {
+      hostClient,
+      hostId: activeHostId,
+      tuiOnly: composerMode === "terminal",
+      // The landing composer has no chat yet - see `ComposerBody`.
+      chatLineCarriesAutoMode: null,
+    },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -479,7 +488,13 @@ export function LandingComposer(props: LandingComposerProps) {
               { hash, bytes: bytes.byteLength },
             ]);
             if (postStoreReservation === null) {
-              handle.removeImageAttachmentById(id);
+              // The node STAYS, same rule as the chat composer's twin: this is
+              // a MIGRATION of bytes the draft already holds inline, not a new
+              // paste being refused. `b64content` is the durable copy and the
+              // draft sends fine unmigrated, so removing it here discarded the
+              // user's attachment for no reason but a full budget at open time.
+              // The stored hash is left unrooted for the sweep; the next
+              // re-entry tries again.
               scheduleLandingImageReconcile();
               return;
             }
@@ -646,10 +661,17 @@ export function LandingComposer(props: LandingComposerProps) {
     }
   }, [startPendingImageIngest]);
   const attachmentPending = isAttachmentIngestPending(paste);
-  const readPromptStashImage = useCallback(async (hash: string) => {
-    const bytes = await getImageBytes(hash);
-    return bytes ?? null;
-  }, []);
+  // Through the draft resolver rather than the partition alone, so this reader
+  // matches the chat composer's and the modal's. Leg 1 IS `getImageBytes`, so
+  // a landing draft whose bytes were pasted here answers exactly as before;
+  // what is added is the two legs behind it, which is what a landing draft
+  // ADOPTED from another host has - its bytes are on that host, or in the
+  // published blob, and never in this window's partition.
+  const readPromptStashImage = useCallback(
+    (hash: string): Promise<ImageBytes | null> =>
+      resolveDraftImageBytes(hash, draftImageByteTargetForHost(resolvedHostId)),
+    [resolvedHostId],
+  );
   // The unbound phase is intentionally namespaced away from the eventual
   // persisted draft id. Its runtime owns an independent revision counter, so
   // treating both phases as one identity could let equal counter values clear
@@ -1010,6 +1032,7 @@ export function LandingComposer(props: LandingComposerProps) {
         <LandingComposerAttachmentStrip
           content={runtimeState.content}
           onRemoveImage={handleRemoveImage}
+          hostId={resolvedHostId}
         />
       }
       workspaceControls={props.workspaceControls(mutationsDisabled)}
@@ -1067,11 +1090,30 @@ function resolveLandingSubmitBlock(args: {
 
 function noopSwitchProfileForTask(): void {}
 
-function LandingComposerAttachmentStrip(props: {
+/**
+ * Exported for its test only. The byte source below is the whole subject of
+ * that test, and a test that rebuilt this composition itself would keep passing
+ * after someone put the local-only fetcher back - which is the regression it
+ * exists to catch.
+ */
+export function LandingComposerAttachmentStrip(props: {
   readonly content: JsonContent;
   readonly onRemoveImage: (id: string) => void;
+  readonly hostId: string | null;
 }): ReactNode {
-  const fetcher = useLandingImageFetcher();
+  // Draft-first, over the local-only landing fetcher rather than instead of it.
+  // A restored draft's chip used to have exactly one source - this window's
+  // partition - and the blob cache retries a failed fetch four times inside
+  // about 1.75 s before resting on `unavailable` until a remount. Bytes that a
+  // cloud recovery landed at three seconds therefore sat in the store with
+  // nothing to make the mounted chip look again. Resolving through the draft
+  // legs means the chip's OWN fetch performs the cloud read, so it renders on
+  // the first attempt instead of racing that ladder. The landing fetcher stays
+  // underneath as the fallback whose throw keeps the poisoned-entry retry.
+  const fetcher = useDraftFirstImageFetcher(
+    useLandingImageFetcher(),
+    props.hostId,
+  );
   return (
     <AttachmentStrip
       content={props.content}

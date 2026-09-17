@@ -4,8 +4,14 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * The tint Settings ▸ Appearance gives a node kind's static glyph: the
- * per-type colour as an inline style under `byType`, the muted class under
- * `none`.
+ * per-type colour under `byType`, the muted class under `none`.
+ *
+ * The colour travels as a custom property rather than as `color`, the same way
+ * every other site that resolves this setting does (`useNodeIconDisplay`, the
+ * add-node dropdown, the artifact child index, the view menu, the colour
+ * picker, the file icons). Two idioms for one concept is how a setting ends up
+ * half-applied, and a literal in `--swatch` still fails `no-inline-styles`
+ * where a literal in `color` would not.
  *
  * Its own module rather than a second export of `epic-node-tab-icon.tsx`
  * (fast refresh wants that file to export components only), and a hook rather
@@ -20,7 +26,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * placeholder glyph has no type to take a colour from.
  */
 export function useEpicNodeIconTone(type: EpicNodeKind | null): {
-  readonly className: string | false;
+  readonly className: string;
   readonly style: CSSProperties | undefined;
 } {
   const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
@@ -30,5 +36,8 @@ export function useEpicNodeIconTone(type: EpicNodeKind | null): {
   if (color === null || colorMode === "none") {
     return { className: "text-muted-foreground", style: undefined };
   }
-  return { className: false, style: { color } };
+  return {
+    className: "text-[var(--swatch)]",
+    style: { "--swatch": color } as CSSProperties,
+  };
 }

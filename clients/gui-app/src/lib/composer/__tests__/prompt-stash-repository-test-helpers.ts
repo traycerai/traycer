@@ -86,6 +86,7 @@ export function textEntry(
   text: string,
 ): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt,
     content: textDoc(text),
@@ -99,6 +100,7 @@ export function imageEntry(
   hash: string,
 ): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt,
     content: imageDoc(hash, `img-${id}`),
@@ -114,7 +116,7 @@ export function snapshotFor(
   for (const [hash, bytes] of images) {
     imagesByHash.set(hash, { bytes, mimeType: "image/png" });
   }
-  return { entry: stashEntry, imagesByHash };
+  return { entry: stashEntry, imagesByHash, droppedAnnotations: 0 };
 }
 
 export function textSnapshot(

@@ -56,12 +56,12 @@ export function WorkspaceFileIcon(props: {
   const style: CSSProperties | undefined =
     icon.token === undefined
       ? undefined
-      : {
-          color: `var(--trees-file-icon-color-${icon.token}, ${
+      : ({
+          "--swatch": `var(--trees-file-icon-color-${icon.token}, ${
             FILE_TREE_ICON_COLOR_FALLBACKS[icon.token] ??
             "var(--muted-foreground)"
           })`,
-        };
+        } as CSSProperties);
 
   return (
     <svg
@@ -71,7 +71,11 @@ export function WorkspaceFileIcon(props: {
       viewBox={viewBox}
       width={icon.width ?? 16}
       height={icon.height ?? 16}
-      className={cn("shrink-0 text-muted-foreground", props.className)}
+      className={cn(
+        "shrink-0 text-muted-foreground",
+        icon.token !== undefined && "text-[var(--swatch)]",
+        props.className,
+      )}
       style={style}
     >
       <use href={href} />

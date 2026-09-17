@@ -3,14 +3,21 @@ import type { ComponentProps } from "react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-function InputGroupInput({ className, ...props }: ComponentProps<"input">) {
+// `size="sm"` by default: every search field in the app was writing
+// `text-ui-sm` back on at the call site. A group is always desktop chrome
+// (a search box, an address bar, a path picker), so the mobile 16px step the
+// bare `Input` default carries has nothing to protect here.
+function InputGroupInput({
+  className,
+  size,
+  ...props
+}: Omit<ComponentProps<typeof Input>, "variant">) {
   return (
     <Input
       data-slot="input-group-control"
-      className={cn(
-        "flex-1 rounded-none border-0 bg-transparent shadow-none ring-0 focus-visible:ring-0 disabled:bg-transparent aria-invalid:ring-0 dark:bg-transparent dark:disabled:bg-transparent",
-        className,
-      )}
+      variant="bare"
+      size={size ?? "sm"}
+      className={cn("flex-1", className)}
       {...props}
     />
   );

@@ -1719,13 +1719,13 @@ describe("<HomeFocusView /> row vocabulary", () => {
     const [chat, tui, unknown] = screen.getAllByTestId(
       "home-focus-agent-glyph",
     );
-    const probe = document.createElement("span");
-    probe.style.color = "#ff0000";
-    expect(chat.style.color).toBe(probe.style.color);
+    // `--swatch`, not `color`: the tint travels as a custom property that the
+    // `text-[var(--swatch)]` class reads, so an inline colour literal still
+    // trips `no-inline-styles`.
+    expect(chat.style.getPropertyValue("--swatch")).toBe("#ff0000");
     expect(chat.classList.contains("text-muted-foreground")).toBe(false);
-    probe.style.color = "#00ff00";
-    expect(tui.style.color).toBe(probe.style.color);
-    expect(unknown.style.color).toBe("");
+    expect(tui.style.getPropertyValue("--swatch")).toBe("#00ff00");
+    expect(unknown.style.getPropertyValue("--swatch")).toBe("");
     expect(unknown.classList.contains("text-muted-foreground")).toBe(true);
   });
 
@@ -1750,7 +1750,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
     openEveryTask();
 
     for (const glyph of screen.getAllByTestId("home-focus-agent-glyph")) {
-      expect(glyph.style.color).toBe("");
+      expect(glyph.style.getPropertyValue("--swatch")).toBe("");
       expect(glyph.classList.contains("text-muted-foreground")).toBe(true);
     }
   });

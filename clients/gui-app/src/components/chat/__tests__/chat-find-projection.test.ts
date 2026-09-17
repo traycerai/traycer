@@ -1013,6 +1013,37 @@ describe("chat find projection", () => {
     expect(noticeUnit?.owningChain).toEqual([]);
   });
 
+  it("indexes only the visible title for a retry provider notice", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(24, "assistant"),
+      segments: [
+        {
+          id: "retry-notice",
+          kind: "provider_notice",
+          status: "streaming",
+          noticeKind: "harness_message",
+          presentation: "retry",
+          tone: "info",
+          title: "Reconnecting 4/5",
+          message: null,
+          details: [
+            { label: "Reported by Codex", value: "retry-detail-4-of-5" },
+          ],
+          parentId: null,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set())[0];
+    const retryUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("retry-notice"),
+    );
+
+    expect(retryUnit?.text).toBe("Reconnecting 4/5");
+    expect(retryUnit?.text).not.toContain("Reported by Codex");
+    expect(retryUnit?.text).not.toContain("retry-detail-4-of-5");
+  });
+
   it("indexes a nested provider notice inside a sub-agent card, opening the same chain as the sub-agent's own body", () => {
     const subagentId = "subagent-with-notice";
     const assistant: ChatMessageModel = {

@@ -169,12 +169,57 @@ export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
 // ---- Permission + run settings --------------------------------------- //
 
+// Ordered most-restrictive to most-permissive; `ALL_PERMISSION_MODES` below
+// documents that order as load-bearing. `auto` sits above `auto_accept_edits`
+// because it does everything that mode does AND lets a judge approve the
+// commands that mode still parks on a human.
 export const permissionModeSchema = z.enum([
+  "supervised",
+  "auto_accept_edits",
+  "auto",
+  "full_access",
+]);
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
+
+/**
+ * Frozen copy of the permission-mode enum as every line before `auto` shipped
+ * it.
+ *
+ * This enum is BOUND BY REFERENCE from more released surfaces than any other
+ * value in this file - the persisted chat run settings, the `chat.subscribe`
+ * server frames that carry them, the `listHarnesses` catalog rows, and the
+ * `epic.getChatRunSettings` response - so widening the live enum above without
+ * pinning this one into each of those would put `auto` on wires whose
+ * installed peers strict-decode against a three-value set. One unknown member
+ * fails the WHOLE frame or response, not the one field: the documented
+ * `authStatus` / Reasonix hazard, in the mode dimension.
+ *
+ * **It is bound in the client→host direction too, which the harness rosters
+ * beside it are not.** `chat.subscribe`'s client frames (`1.0`-`1.10`) and
+ * `sessionImport.run`'s open request (`1.0`/`1.1`) name the frozen enum, so a
+ * pre-`auto` line cannot be USED to set the mode either. The framework's
+ * default for that direction is the opposite - a client→host enum addition is
+ * advisory, on the argument that an old host rejects the value per call
+ * (`framework/surface-compat.ts`) - and two things take this value out of it: no
+ * released client can spell `auto`, so nothing honest is being narrowed out,
+ * and a CURRENT host accepting it on an old line mints a durable chat that line
+ * is then refused (`chatSubscribeSupportsPermissionMode`). Other pre-`auto`
+ * request contracts whose method has no post-`auto` line yet -
+ * `epic.createChat`, `epic.updateChatRunSettings`, `epic.create`,
+ * `agent.create`, `agent.configure`, `agent.fork` - still bind the live enum,
+ * because pinning a head line would make the mode unsettable rather than
+ * version-gated. Those need a new line before they can be pinned.
+ *
+ * Do NOT add modes here. Add them to `permissionModeSchema` above and gate
+ * emission on the negotiated version, exactly as `guiHarnessIdSchemaPreReasonix`
+ * does for the harness roster.
+ */
+export const permissionModeSchemaPreAuto = z.enum([
   "supervised",
   "auto_accept_edits",
   "full_access",
 ]);
-export type PermissionMode = z.infer<typeof permissionModeSchema>;
+export type PermissionModePreAuto = z.infer<typeof permissionModeSchemaPreAuto>;
 
 // Canonical full set of permission modes, ordered most-restrictive to
 // most-permissive. Single source of truth shared by:
@@ -184,6 +229,14 @@ export type PermissionMode = z.infer<typeof permissionModeSchema>;
 // Adding a mode here propagates to every consumer; never duplicate this list.
 export const ALL_PERMISSION_MODES: readonly PermissionMode[] =
   permissionModeSchema.options;
+
+// The same list as the released lines shipped it, for the `.default(...)` of
+// every FROZEN `supportedPermissionModes` slot. A frozen enum whose default
+// still came from the live list would carry `auto` as a parse-time fill on a
+// line whose enum cannot spell it - a value zod's `.default()` never
+// re-validates, so it would reach a released client's reducer intact.
+export const ALL_PERMISSION_MODES_PRE_AUTO: readonly PermissionModePreAuto[] =
+  permissionModeSchemaPreAuto.options;
 
 export const chatRunSettingsSchema = z.object({
   harnessId: guiHarnessIdSchema,
@@ -216,20 +269,36 @@ export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
  * a later required field added to the live tuple must not silently leak into
  * this frozen contract.
  *
- * Client→host coverage is deliberately NARROWER than server→client, and the
- * asymmetry is the point: the host is the side that must stay permissive, since
- * a `1.7` peer has to be able to send `reasonix` in a settings write. Only
- * `chatSubscribeClientFrameSchemaV10` pins this tuple - that line is frozen
- * verbatim against a shipped host and gets the enum pin with everything else.
- * `1.1`-`1.6` client frames still bind the LIVE tuple, which costs nothing
- * today: a released client's own enum cannot spell `reasonix`, so only a
- * crafted peer could send it, and the server-frame freezes above are what stop
- * such a chat from ever being served back to a line that cannot decode it.
+ * Client→host coverage on the HARNESS axis is deliberately NARROWER than
+ * server→client, and the asymmetry is the point: the host is the side that must
+ * stay permissive, since a `1.7` peer has to be able to send `reasonix` in a
+ * settings write. Only `chatSubscribeClientFrameSchemaV10` pins this tuple -
+ * that line is frozen verbatim against a shipped host and gets the enum pin
+ * with everything else. `1.1`-`1.6` client frames bind the roster live, which
+ * costs nothing today: a released client's own enum cannot spell `reasonix`, so
+ * only a crafted peer could send it, and the server-frame freezes above are
+ * what stop such a chat from ever being served back to a line that cannot
+ * decode it.
+ *
+ * The MODE axis does not inherit that asymmetry, and `chat.subscribe`'s client
+ * frames from `1.1` up bind `chatRunSettingsSchemaPreAuto` instead. The
+ * difference is what the two values mean once accepted: an unknown harness id
+ * is a label the host can refuse per call, while an accepted `auto` mints a
+ * durable chat the accepting LINE is then refused
+ * (`chatSubscribeSupportsPermissionMode`). There is also no honest sender to
+ * keep permissive - no released client can spell the value at all.
+ *
+ * The tuple is frozen on TWO axes now. `harnessId` is pinned to the
+ * pre-Reasonix roster for the reason above; `permissionMode` is pinned to
+ * `permissionModeSchemaPreAuto` for the identical reason one dimension over -
+ * every released `chat.subscribe` line below `1.7` reaches the permission mode
+ * only through this tuple, so pinning it here is what stops an `auto` chat's
+ * settings from being served onto a line whose client rejects the value.
  */
 export const chatRunSettingsSchemaPreReasonix = z.object({
   harnessId: guiHarnessIdSchemaPreReasonix,
   model: z.string().min(1),
-  permissionMode: permissionModeSchema,
+  permissionMode: permissionModeSchemaPreAuto,
   reasoningEffort: z.string().nullable(),
   serviceTier: z.string().nullable().default(null),
   agentMode: agentModeSchema,
@@ -251,6 +320,57 @@ export type ChatRunSettingsPreReasonix = z.infer<
 // `epic.updateChatProfile`); there is deliberately no narrow model/harness
 // update - changing the model invalidates the reasoning/thinking/tier
 // selection, so it is only expressible as a full tuple.
+/**
+ * Wire-freeze copy of the LIVE settings tuple with `permissionMode` pinned
+ * pre-`auto`, and ONLY `permissionMode`.
+ *
+ * Bound by every `chat.subscribe` line from `1.7` through `1.12` - directly as
+ * `chatSchemaV18.settings`, and through `chatQueueStateSchemaPreAuto` on the
+ * queued prompts each of those lines carries. `1.13` is the first that binds
+ * the live tuple. Hand-frozen field-for-field rather than `.extend()`ed, so a
+ * later required field on the live tuple cannot leak onto those lines.
+ *
+ * It reaches FURTHER than the server frames that named it. The same tuple is
+ * bound by the `chat.subscribe` CLIENT frames of `1.1` through `1.12` - `send`,
+ * `editUserMessage`, `queueSteerNow`, `queueSettingsUpdate` and
+ * `queueSettingsRestamp` - so a settings write on one of those lines cannot say
+ * `auto` either. That direction is deliberately narrowed where the harness axis
+ * beside it is not; see `chatRunSettingsSchemaPreReasonix` above for why the
+ * two axes part company here. (`1.0` reaches the same place through
+ * `chatRunSettingsSchemaPreReasonix`, which pins both.)
+ *
+ * **The harness roster is deliberately live here, and that is a one-axis
+ * freeze rather than a complete one.** Four lines share this tuple and they do
+ * not agree about the roster: `1.9` and `1.10` are the Antigravity lines and
+ * MUST be able to spell `antigravity`, while `1.7` and `1.8` shipped in
+ * `cli-v1.3.0` / `host-v1.3.0` and strict-decode the twenty ids
+ * `guiHarnessIdSchemaPreAntigravity` records. Pinning the roster on this object
+ * would therefore break the two lines it exists to serve; giving `1.7`/`1.8`
+ * the pin needs a THIRD tier (pre-Antigravity AND pre-auto) plus a split of
+ * `chatSubscribeCommonServerFrameSchemasV18`, which is bound to `1.7`-`1.9`
+ * as one bundle.
+ *
+ * What holds the harness axis for `1.7`/`1.8` meanwhile is the host's floor
+ * gate - `minimumChatSubscribeMinorForHarness` puts `antigravity` at `9`, so
+ * such a chat is REFUSED to a subscriber below `1.9` rather than projected,
+ * exactly as an `auto` chat is refused below `1.13`. That gate predates this
+ * schema and is not weakened by it. Distinct from
+ * `chatRunSettingsSchemaPreReasonix`, which pins BOTH axes for the lines below
+ * `1.7`, where no such sharing forces the compromise.
+ */
+export const chatRunSettingsSchemaPreAuto = z.object({
+  harnessId: guiHarnessIdSchema,
+  model: z.string().min(1),
+  permissionMode: permissionModeSchemaPreAuto,
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  profileId: z.string().nullable().default(null),
+});
+export type ChatRunSettingsPreAuto = z.infer<
+  typeof chatRunSettingsSchemaPreAuto
+>;
+
 export const chatRunSettingsStrictSchema = z.object({
   harnessId: guiHarnessIdSchema,
   model: z.string().min(1),

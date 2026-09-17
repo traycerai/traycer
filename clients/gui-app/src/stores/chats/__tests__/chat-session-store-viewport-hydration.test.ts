@@ -81,6 +81,7 @@ function createViewportHarness(): ViewportHarness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: (request) => {
           rangeRequests.push(request);
         },

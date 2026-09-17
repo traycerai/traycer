@@ -76,7 +76,7 @@ function ContextMenuItem({
       data-inset={inset}
       data-variant={variant}
       className={cn(
-        "group/context-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
+        "group/context-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
         className,
       )}
       {...props}
@@ -164,8 +164,14 @@ function ContextMenuSubContent({
   ref,
   className,
   collisionPadding,
+  layout = "menu",
   ...props
-}: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
+}: React.ComponentProps<typeof ContextMenuPrimitive.SubContent> & {
+  /** As on `DropdownMenuSubContent`: `menu` is a list of rows, `panel` a
+   *  submenu holding a small control - the tab colour picker - which needs a
+   *  reading margin rather than a row gutter. */
+  readonly layout?: "menu" | "panel";
+}) {
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
@@ -178,9 +184,11 @@ function ContextMenuSubContent({
       <ContextMenuPrimitive.SubContent
         ref={ref}
         data-slot="context-menu-sub-content"
+        data-layout={layout}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          layout === "panel" ? "p-3 text-ui-sm" : "p-1",
           className,
         )}
         {...props}
