@@ -1743,7 +1743,8 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
   - **Which ACCOUNTS a provider's segments describe is chosen in the usage
     panel, not on this page** (`layout/header/rate-limit-popover.tsx`). Every
     profile card - managed and ambient, Overview and detail tab alike -
-    carries a `Status bar` switch right of its enable toggle, and the strip
+    carries an eye toggle immediately left of its accent dot (`Eye` checked,
+    `EyeOff` not; `aria-pressed`), and the strip
     draws **one segment per checked account** for the host it is watching:
     provider icon, the profile's inline `AccentDot`, its name before the
     reading, and its own limits, mini bars and countdowns resolved through the
@@ -1762,7 +1763,18 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     preference: no density preset carries it (`applyLayoutPreset` carries it
     over like `placement`), only `Reset to defaults` clears it, and Layout
     draws no control for it because Layout is app-level and the accounts are
-    not. Analytics: `layout.statusBar.shownProfiles`, from the switch.
+    not. Analytics: `layout.statusBar.shownProfiles`, from the eye.
+    - **The eye exists only while the strip is on screen.** Whether it is
+      is ONE predicate, `selectStatusBarShown` / `useStatusBarShown`
+      (`stores/settings/layout-store.ts`): `placement === "status-bar"` on a
+      desktop viewport, `mobileFooter` on a mobile one - the same read
+      `AppShell` mounts the strip on. Under the header placement, or on a
+      phone with the footer off, every card drops its eye and its "drawn"
+      highlight alike, since there is no segment for either to point at. A
+      hidden provider (`hiddenProviders`) hides the eye only - there is no
+      segment for it to govern - and leaves the highlight alone. The checks
+      stay in the store untouched and take effect again when the strip
+      returns.
     - **Nothing checked draws ONE account**, resolved by
       `resolveStatusBarProfileIds` (`hooks/rate-limits/use-rate-limit-profile-selection.ts`):
       the profile last picked in a composer on THAT host if the provider still
@@ -1771,11 +1783,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       chat on ANY host, so a tile bound to another machine made the segment
       jump to an account this host does not have and fall to ambient. The
       card for the fallback account is highlighted (`aria-current`) with its
-      switch off and a tooltip saying it is shown by default; checked cards
-      are highlighted with the switch on. The old `Active` badge is gone with
-      the rule it described. The switch is hidden while the provider itself is
-      off the strip (`hiddenProviders`), since there is no segment for it to
-      govern.
+      eye off and a tooltip saying it is shown by default; checked cards
+      are highlighted with the eye on. The old `Active` badge is gone with
+      the rule it described.
     - **A segment is a deep link.** Clicking one arms
       `rate-limit-popover-store.revealProfile` (session-only, never persisted)
       and selects the provider's tab; the card scrolls itself into view and
@@ -1783,8 +1793,11 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       bubble to the cluster's `PopoverTrigger`, which is what opens the panel.
     - The header glyph has two slots and no room to name an account, so it
       draws the FIRST of the accounts the strip would draw per provider
-      (`resolveRateLimitProfileId`); Layout's limits list reads the same one,
-      since the limit selection is per provider.
+      (`resolveRateLimitProfileId`) - while the strip is on screen. While it
+      is not, the checks have no control, so the glyph resolves without them
+      (last-used → first profile → ambient). Layout's limits list keeps
+      reading the checked account regardless, since it previews the strip and
+      the limit selection is per provider.
     - The dot and the name are drawn only for a provider with two or more
       profiles - the composer rail's rule, and for the same reason: one
       account needs telling apart from nothing.
