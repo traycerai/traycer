@@ -32,7 +32,7 @@ import type {
   PromptStashRow,
 } from "@/lib/composer/prompt-stash-codec";
 import type { PromptStashSourceAdapter } from "@/lib/composer/prompt-stash-source";
-import { registerActivePromptStash } from "@/lib/commands/active-prompt-stash-registry";
+import { registerActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
   consumeStashOnHost,
@@ -337,7 +337,7 @@ export function usePromptStash(
   }, [stashCurrent]);
   useEffect(() => {
     if (!active) return;
-    return registerActivePromptStash(() => {
+    return registerActiveDraftsControl(() => {
       stashCurrentRef.current();
     });
   }, [active]);

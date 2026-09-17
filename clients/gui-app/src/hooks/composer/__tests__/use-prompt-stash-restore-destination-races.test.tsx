@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
-import { resetActivePromptStashForTests } from "@/lib/commands/active-prompt-stash-registry";
+import { resetActiveDraftsControlForTests } from "@/lib/commands/active-drafts-control-registry";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
   emptyDoc,
@@ -131,7 +131,7 @@ vi.mock("sonner", () => ({
 
 describe("usePromptStash restore destination races", () => {
   beforeEach(() => {
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     idbData.clear();
     materializeMocks.impl = null;
     storeMocks.save.mockReset();
@@ -152,7 +152,7 @@ describe("usePromptStash restore destination races", () => {
 
   afterEach(() => {
     cleanup();
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     materializeMocks.impl = null;
     vi.restoreAllMocks();
   });

@@ -180,25 +180,3 @@ export function landingTarget(): DraftTarget {
 export function newChatTarget(epicId: string): DraftTarget {
   return { epicId, chatId: null, blockId: null };
 }
-
-export function stashDraftWrite(input: {
-  readonly draftId: string;
-  readonly content: JsonContent;
-  readonly blobHashes: ReadonlyArray<string>;
-  readonly createdAt: number;
-}): DraftWrite {
-  return {
-    draftId: input.draftId,
-    kind: "stash-entry",
-    target: { epicId: null, chatId: null, blockId: null },
-    revision: 0,
-    lastTouchedAt: input.createdAt,
-    workspace: null,
-    supersedes: null,
-    portable: {
-      content: input.content,
-      blobHashes: [...input.blobHashes],
-      createdAt: input.createdAt,
-    },
-  };
-}

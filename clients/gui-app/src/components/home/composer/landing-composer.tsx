@@ -17,7 +17,6 @@ import { v4 as uuidv4 } from "uuid";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import {
-  getImageBytes,
   hasLandingImageBytes,
   putImage,
   sessionObjectUrl,
@@ -107,15 +106,9 @@ import { ComposerHostNotice } from "@/components/home/composer/composer-host-not
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
-import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
+import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
 import { forkLandingDraftInPlace } from "@/lib/drafts/landing-draft-fork";
 import { useDraftAuthorityControl } from "@/hooks/drafts/use-draft-authority";
-import {
-  landingStashIdentity,
-  useLandingPromptStashDestination,
-  useLandingPromptStashSource,
-} from "./use-landing-prompt-stash-adapters";
 
 interface LandingComposerProps {
   readonly draftId: string | null;
@@ -143,13 +136,6 @@ function useLandingDraftComposerMode(
       state.drafts.find((draft) => draft.id === draftId)?.composerMode ?? null
     );
   });
-}
-
-function promptStashIsDisabled(
-  isSubmitting: boolean,
-  attachmentPending: boolean,
-): boolean {
-  return isSubmitting || attachmentPending;
 }
 
 function landingComposerCanSubmit(args: {
@@ -646,37 +632,6 @@ export function LandingComposer(props: LandingComposerProps) {
     }
   }, [startPendingImageIngest]);
   const attachmentPending = isAttachmentIngestPending(paste);
-  const readPromptStashImage = useCallback(async (hash: string) => {
-    const bytes = await getImageBytes(hash);
-    return bytes ?? null;
-  }, []);
-  // The unbound phase is intentionally namespaced away from the eventual
-  // persisted draft id. Its runtime owns an independent revision counter, so
-  // treating both phases as one identity could let equal counter values clear
-  // content written after promotion.
-  const stashIdentity = landingStashIdentity(draftId, props.pendingCreateId);
-  const promptStashSource = useLandingPromptStashSource({
-    stashIdentity,
-    runtimeStore,
-    draftId,
-    unboundRuntime,
-    editorRef,
-  });
-  const promptStashDestination = useLandingPromptStashDestination({
-    stashIdentity,
-    draftId,
-    runtimeStore,
-    editorRef,
-  });
-  const promptStash = usePromptStash({
-    active: chatComposerActive,
-    disabled: promptStashIsDisabled(isSubmitting, attachmentPending),
-    editorRef,
-    readHashImage: readPromptStashImage,
-    source: promptStashSource,
-    destination: promptStashDestination,
-    hostId: resolvedHostId,
-  });
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
   // and its hint can never disagree - the user is told why BEFORE pressing,
@@ -1000,10 +955,15 @@ export function LandingComposer(props: LandingComposerProps) {
           ) : null}
         </>
       }
-      stashControl={
-        <PromptStashControl
-          controller={promptStash}
+      draftsControl={
+        <ComposerDraftsControl
+          scope={{ surface: "landing", activeDraftId: draftId }}
+          hostId={resolvedHostId}
           pickerStore={pickerStore}
+          editorRef={editorRef}
+          // The rail is no longer chat-mode-only (D11), so the Cmd+S owner is
+          // the surface being edited, whichever composer mode it is in.
+          active={activityEnabled}
         />
       }
       attachmentsStrip={

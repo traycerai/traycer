@@ -58,8 +58,8 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const modelPickerShortcut = useKeybindingStore(
     (state) => state.bindings["composer.model-picker.toggle"],
   );
-  const stashShortcut = useKeybindingStore(
-    (state) => state.bindings["composer.stash"],
+  const draftsShortcut = useKeybindingStore(
+    (state) => state.bindings["composer.drafts"],
   );
   // Live snapshot of the active composer picker - the top-of-stack controller,
   // or null. The "Change model…" row dispatches `composer.model-picker.toggle`,
@@ -82,7 +82,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     if (kind === null) return NO_ITEMS;
-    const items: Array<CommandItem> = [buildStashPromptItem(stashShortcut)];
+    const items: Array<CommandItem> = [buildDraftsItem(draftsShortcut)];
     if (activeModelPicker !== null) {
       items.push(
         buildChangeModelItem(
@@ -109,7 +109,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     ctx.activeEpicId,
     ctx.activeTabId,
     modelPickerShortcut,
-    stashShortcut,
+    draftsShortcut,
     activeModelPicker,
   ]);
 }
@@ -119,16 +119,18 @@ export const composerSource: ReactCommandSource = {
   useItems: useComposerItems,
 };
 
-function buildStashPromptItem(shortcut: ChordString | null): CommandItem {
+function buildDraftsItem(shortcut: ChordString | null): CommandItem {
   return {
-    id: "composer:stash-prompt",
-    label: "Stash prompt",
-    description: "Save this prompt so it can be restored in any composer.",
-    keywords: ["stash", "save", "prompt", "draft"],
+    id: "composer:drafts",
+    label: "Drafts",
+    description: "Open the drafts list for this composer.",
+    // "stash" stays a keyword: the control replaced the prompt stash, and the
+    // word is what a user who learned the old feature will search for.
+    keywords: ["drafts", "stash", "saved", "prompt"],
     group: "suggested",
     scope: "actions",
     shortcut,
-    actionId: "composer.stash",
+    actionId: "composer.drafts",
     subpage: null,
     run: () => undefined,
   };

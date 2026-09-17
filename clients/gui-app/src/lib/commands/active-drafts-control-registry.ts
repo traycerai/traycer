@@ -1,15 +1,15 @@
 /**
- * Stack of prompt-stash actions owned by active composer surfaces. Overlay
+ * Stack of Drafts-control openers owned by active composer surfaces. Overlay
  * composers register after the surface beneath them, then hand control back
  * when they close. This avoids the dead-shortcut window a single-slot registry
  * creates when its winning registration unmounts.
  */
-type PromptStashAction = () => void;
+type DraftsControlAction = () => void;
 
-const stack: PromptStashAction[] = [];
+const stack: DraftsControlAction[] = [];
 
-export function registerActivePromptStash(
-  action: PromptStashAction,
+export function registerActiveDraftsControl(
+  action: DraftsControlAction,
 ): () => void {
   stack.push(action);
   return () => {
@@ -18,7 +18,7 @@ export function registerActivePromptStash(
   };
 }
 
-export function stashActivePrompt(): boolean {
+export function openActiveDraftsControl(): boolean {
   const action = stack.at(-1);
   if (action === undefined) return false;
   action();
@@ -26,6 +26,6 @@ export function stashActivePrompt(): boolean {
 }
 
 /** Test-only: prevent registrations leaking between isolated tests. */
-export function resetActivePromptStashForTests(): void {
+export function resetActiveDraftsControlForTests(): void {
   stack.length = 0;
 }

@@ -5,6 +5,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { appLogger, describeLogError } from "@/lib/logger";
+import { landingDraftsReady } from "@/lib/composer/landing-image-gc";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import {
   forgetBlobUnsupportedHost,
@@ -81,11 +82,9 @@ import {
   landingTarget,
   newChatTarget,
   requiredChatTarget,
-  stashDraftWrite,
 } from "./draft-write-codec";
 import type { ImageBlob } from "@/lib/attachments/image-bytes";
-import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
-import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
+import { convertStashEntry } from "./stash-migration";
 import {
   setDraftLocalDeleteListener,
   setDraftLocalEditListener,
@@ -200,56 +199,35 @@ const cloudIngestSeqByDraft = new Map<string, number>();
 const inheritableLandingTabs = new Map<string, { readonly active: boolean }>();
 const INHERITABLE_LANDING_TABS_CAP = 64;
 
-/** Host that last published or ingested each stash id. */
-const stashHostById = new Map<string, string>();
-/** Ids applied from a host list/subscribe, keyed `hostId:entryId`. */
-const stashSeenOnHost = new Set<string>();
-
-function stashSeenKey(hostId: string, entryId: string): string {
-  return `${hostId}:${entryId}`;
-}
+/**
+ * Stash ids whose source row this session has already asked its host to
+ * retire. An old host without `drafts.retract` answers the fall-back delete
+ * `deleted: false` and keeps listing the row, so without this the same
+ * retire would go out on every `drafts.list` forever; one wasted request per
+ * session per zombie row is the accepted cost (G5).
+ */
+const retiredStashIdsThisSession = new Set<string>();
 
 export function bindLandingAdoptionHost(hostId: string | null): void {
   landingAdoptionHostId = hostId;
 }
 
-/**
- * Upsert-once a local stash capture onto `hostId`. No-op when no
- * session is mounted (offline / old host) — IndexedDB remains the
- * local tier.
- */
+// removed in T07. `hooks/composer/use-prompt-stash.ts` still calls these; a
+// stash capture no longer reaches a host at all (the plane it published to is
+// what this file now converts away), so both are no-ops until the stash UI is
+// deleted with that hook.
 export function publishStashEntry(
-  hostId: string,
-  entry: PromptStashEntry,
+  _hostId: string,
+  _entry: unknown,
 ): Promise<void> {
-  stashHostById.set(entry.id, hostId);
-  const session = sessions.get(hostId)?.session;
-  if (session === undefined) return Promise.resolve();
-  return session.publishImmutable(
-    stashDraftWrite({
-      draftId: entry.id,
-      content: entry.content,
-      blobHashes: entry.blobHashes,
-      createdAt: entry.createdAt,
-    }),
-  );
+  return Promise.resolve();
 }
 
-/**
- * Owner-authorized delete after restore-consume. Idempotent: a second
- * device's consume that lost the race still restored locally; the
- * host answers `deleted: false`.
- */
-export async function deleteStashEntryOnHost(
-  hostId: string | null,
-  entryId: string,
+export function consumeStashOnHost(
+  _hostId: string | null,
+  _entryId: string,
 ): Promise<void> {
-  const bound = hostId ?? stashHostById.get(entryId) ?? null;
-  if (bound === null) return;
-  const session = sessions.get(bound)?.session;
-  if (session === undefined) return;
-  const dropped = await session.deleteOnHost(entryId);
-  if (dropped) stashHostById.delete(entryId);
+  return Promise.resolve();
 }
 
 export function draftsCloudScopeId(hostId: string): string | null {
@@ -260,88 +238,70 @@ export function draftsCloudScopeId(hostId: string): string | null {
   );
 }
 
-export async function consumeStashOnHost(
-  hostId: string | null,
-  entryId: string,
-): Promise<void> {
-  const bound = hostId ?? stashHostById.get(entryId) ?? null;
-  if (bound === null) {
-    await deleteStashEntryOnHost(null, entryId);
-    return;
-  }
-  const knownHost = stashHostById.get(entryId);
-  if (knownHost === undefined || knownHost === bound) {
-    await deleteStashEntryOnHost(bound, entryId);
-    return;
-  }
-  // Consumed through a host other than the one that published it: the
-  // entry's cloud row is retracted on the user's authority from here, and
-  // the publishing host tombstones its (immutable, hence unchanged) local
-  // row when it finds the cloud row gone. Ownership never moves.
-  const client = sessionClients.get(bound);
-  if (client !== undefined) {
-    try {
-      await client.request("drafts.retract", { draftId: entryId });
-      stashHostById.delete(entryId);
-      return;
-    } catch {
-      // An older host without `drafts.retract`: fall through to the
-      // idempotent delete, which answers `deleted: false` there and leaves
-      // the publisher's row (lossy, not broken).
-    }
-  }
-  await deleteStashEntryOnHost(bound, entryId);
-}
-
-async function ingestStashDocument(
+/**
+ * A `stash-entry` row an old client wrote (D20 keeps the kind on the wire):
+ * converted into a closed start-page draft exactly once - the converted map
+ * is app-global and survives restarts - and the source row retired so it
+ * stops being listed.
+ *
+ * The blobs are already in this window's landing store (`applyHostDocument`
+ * read them through `readDraftBlobsIntoLocalStore` before calling here), so
+ * `readBlob` resolves straight from that map.
+ */
+async function convertStashDocument(
   document: DraftDocument,
   images: ReadonlyMap<string, ImageBlob>,
 ): Promise<void> {
   if (document.kind !== "stash-entry") return;
-  stashHostById.set(document.draftId, document.ownerHostId);
-  stashSeenOnHost.add(stashSeenKey(document.ownerHostId, document.draftId));
+  // Not while the landing store may still be replaced wholesale: on desktop
+  // the per-window projection is authoritative when it lands, so a row
+  // installed before it would be dropped while the converted map recorded it
+  // as done. The next session lists this row again.
+  if (!landingDraftsReady()) return;
   try {
-    await usePromptStashStore.getState().ingestRemote(
-      {
-        id: document.draftId,
-        createdAt: document.portable.createdAt,
-        content: document.portable.content,
-        blobHashes: document.portable.blobHashes,
-      },
-      images,
-    );
+    const draftId = await convertStashEntry({
+      stashId: document.draftId,
+      content: document.portable.content,
+      blobHashes: document.portable.blobHashes,
+      lastTouchedAt: document.portable.createdAt,
+      readBlob: (hash) => Promise.resolve(images.get(hash) ?? null),
+    });
+    // A row converted in an earlier session still has to be retired, so the
+    // retire is not gated on this conversion having happened now.
+    if (draftId !== null) reserveCloudDraftIngestFence(draftId);
   } catch (error: unknown) {
-    appLogger.warn("[draft-mirror] stash ingest failed", {
+    appLogger.warn("[draft-mirror] stash conversion failed", {
       error: describeLogError(error),
     });
+    return;
   }
+  await retireStashSourceRow(document);
 }
 
-function dropStashEntry(draftId: string): void {
-  const hostId = stashHostById.get(draftId);
-  stashHostById.delete(draftId);
-  if (hostId !== undefined) {
-    stashSeenOnHost.delete(stashSeenKey(hostId, draftId));
-  }
-  usePromptStashStore
-    .getState()
-    .dropRemote(draftId)
-    .catch((error: unknown) => {
-      appLogger.warn("[draft-mirror] stash drop failed", {
-        error: describeLogError(error),
-      });
+/**
+ * Delete the converted row on its owner host when that host has a session
+ * here; otherwise retract the cloud row on the user's authority through the
+ * landing placement host, which is the only client this window is sure to
+ * hold. A host too old for `drafts.retract` leaves the row (lossy, not
+ * broken) - exactly what the foreign-landing-row delete does.
+ */
+async function retireStashSourceRow(document: DraftDocument): Promise<void> {
+  if (retiredStashIdsThisSession.has(document.draftId)) return;
+  retiredStashIdsThisSession.add(document.draftId);
+  try {
+    const owner = sessions.get(document.ownerHostId)?.session;
+    if (owner !== undefined) {
+      await owner.deleteOnHost(document.draftId);
+      return;
+    }
+    if (landingAdoptionHostId === null) return;
+    await retractDraftThroughHost(landingAdoptionHostId, document.draftId);
+  } catch (error: unknown) {
+    // The draft is converted either way; a failed retire leaves the source
+    // row to be retired by a later session.
+    appLogger.warn("[draft-mirror] stash source retire failed", {
+      error: describeLogError(error),
     });
-}
-
-function dropStashAbsentFromList(
-  hostId: string,
-  listedIds: ReadonlySet<string>,
-): void {
-  for (const [entryId, boundHost] of [...stashHostById.entries()]) {
-    if (boundHost !== hostId) continue;
-    if (!stashSeenOnHost.has(stashSeenKey(hostId, entryId))) continue;
-    if (listedIds.has(entryId)) continue;
-    dropStashEntry(entryId);
   }
 }
 
@@ -455,7 +415,6 @@ const sink: DraftMirrorSink = {
     applyComposerHostDelete(draftId);
     applyInterviewHostDelete(draftId);
     applyNewChatHostDelete(draftId);
-    dropStashEntry(draftId);
   },
   collectDirtyWrites(hostId) {
     return Promise.resolve(collectAllDirtyWrites(hostId));
@@ -478,7 +437,6 @@ const sink: DraftMirrorSink = {
     dropComposerAbsentFromList(hostId, listedIds, composerHostByChatId);
     dropInterviewAbsentFromList(hostId, listedIds, interviewHostByKey);
     dropNewChatAbsentFromList(hostId, listedIds, newChatHostByEpicId);
-    dropStashAbsentFromList(hostId, listedIds);
   },
   adoptUnadoptedLandingDrafts(hostId, wanted) {
     return adoptUnadoptedLandingDraftsForHost(hostId, wanted);
@@ -643,12 +601,12 @@ async function applyHostDocument(document: DraftDocument): Promise<void> {
     }
     rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
     if (document.kind === "stash-entry") {
-      await ingestStashDocument(document, images);
+      await convertStashDocument(document, images);
       return;
     }
   }
   if (document.kind === "stash-entry") {
-    await ingestStashDocument(document, new Map());
+    await convertStashDocument(document, new Map());
     return;
   }
   if (document.kind === "interview") {
@@ -837,7 +795,7 @@ function hostIdForDraft(draftId: string): string | null {
   if (newChat !== null) {
     return newChatHostByEpicId.get(newChat.epicId) ?? null;
   }
-  return stashHostById.get(draftId) ?? null;
+  return null;
 }
 
 function sessionForDraft(draftId: string): DraftMirrorSession | null {
@@ -1105,8 +1063,7 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   cloudIngestSeq = 0;
   cloudIngestSeqByDraft.clear();
   inheritableLandingTabs.clear();
-  stashHostById.clear();
-  stashSeenOnHost.clear();
+  retiredStashIdsThisSession.clear();
   warnedUnboundComposer.clear();
   warnedUnboundInterview.clear();
   resetDraftBlobTransportForTests();
@@ -1365,10 +1322,6 @@ registerExtraImageRootSource({
     )) {
       if (patch === undefined || patch.content === null) continue;
       hashes.push(...blobHashesFromContent(patch.content));
-    }
-    for (const row of usePromptStashStore.getState().rows) {
-      if (row.kind !== "entry") continue;
-      hashes.push(...row.entry.blobHashes);
     }
     return hashes;
   },

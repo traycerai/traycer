@@ -4,7 +4,6 @@ import {
   composerDraftWrite,
   interviewDraftWrite,
   requiredChatTarget,
-  stashDraftWrite,
 } from "@/lib/drafts/draft-write-codec";
 import { applyInterviewHostDocument } from "@/stores/composer/interview-draft-store";
 import { readInterviewDraftSnapshot } from "@/stores/composer/interview-draft-store";
@@ -144,20 +143,5 @@ describe("draft write codec", () => {
 
   it("collects sha256 image refs without inlining bytes", () => {
     expect(blobHashesFromContent(imageDoc(HASH))).toEqual([HASH]);
-  });
-
-  it("encodes an immutable stash-entry write", () => {
-    const write = stashDraftWrite({
-      draftId: "stash-1",
-      content: { type: "doc", content: [{ type: "paragraph" }] },
-      blobHashes: [HASH],
-      createdAt: 42,
-    });
-    expect(write.kind).toBe("stash-entry");
-    if (write.kind !== "stash-entry") return;
-    expect(write.revision).toBe(0);
-    expect(write.portable.createdAt).toBe(42);
-    expect(write.portable.blobHashes).toEqual([HASH]);
-    expect(write.supersedes).toBeNull();
   });
 });

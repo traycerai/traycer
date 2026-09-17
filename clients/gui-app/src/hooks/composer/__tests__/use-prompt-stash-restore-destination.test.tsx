@@ -11,7 +11,7 @@ import {
   PromptStashMissingBlobError,
 } from "@/lib/composer/prompt-stash-repository";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
-import { resetActivePromptStashForTests } from "@/lib/commands/active-prompt-stash-registry";
+import { resetActiveDraftsControlForTests } from "@/lib/commands/active-drafts-control-registry";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
   bytesOf,
@@ -138,7 +138,7 @@ vi.mock("sonner", () => ({
 
 describe("usePromptStash restore/destination lifecycle", () => {
   beforeEach(() => {
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     idbData.clear();
     materializeMocks.impl = null;
     storeMocks.save.mockReset();
@@ -159,7 +159,7 @@ describe("usePromptStash restore/destination lifecycle", () => {
 
   afterEach(() => {
     cleanup();
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     materializeMocks.impl = null;
     vi.restoreAllMocks();
   });

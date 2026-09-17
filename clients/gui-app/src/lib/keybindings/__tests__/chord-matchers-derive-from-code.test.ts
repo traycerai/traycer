@@ -115,6 +115,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 9,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
   "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
@@ -202,6 +203,10 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
   "gui-app/src/components/chat/composer/prompt-stash-control.tsx": {
     chars: ["d"],
     why: "single-letter accelerator on a visible label inside an open menu",
+  },
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": {
+    chars: ["c", "d"],
+    why: "single-letter accelerators on visible labels inside the open drafts list",
   },
   "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": {
     chars: ["+", "-", "0", "=", "F", "_", "f"],

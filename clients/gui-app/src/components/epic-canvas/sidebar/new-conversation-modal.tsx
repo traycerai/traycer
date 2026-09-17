@@ -146,12 +146,7 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
-import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
-import {
-  useNewConversationPromptStashDestination,
-  useNewConversationPromptStashSource,
-} from "./use-new-conversation-prompt-stash-adapters";
+import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
 
 /**
  * Isolated subscriber for the live draft content. The editor rewrites content
@@ -739,51 +734,6 @@ export function NewConversationModalBody(props: {
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
-  const fetchEpicImage = useEpicImageFetcher();
-  const readPromptStashImage = useCallback(
-    async (hash: string) => {
-      if (hasPastedImageBytes?.(hash) !== true) return null;
-      // Capture deliberately survives composer unmount, so this read is not
-      // coupled to component-lifecycle cancellation. `.fetch` directly: this
-      // one-shot read bypasses `imageBlobCache`, so it wants the byte source
-      // rather than the cache subject bundled with it.
-      const read = await fetchEpicImage.fetch(
-        hash,
-        new AbortController().signal,
-      );
-      return new Uint8Array(read.bytes);
-    },
-    [fetchEpicImage, hasPastedImageBytes],
-  );
-  const promptStashSource = useNewConversationPromptStashSource({
-    epicId,
-    seedContent: seed.content,
-    editorRef,
-  });
-  const promptStashDestination = useNewConversationPromptStashDestination({
-    epicId,
-    seedContent: seed.content,
-    editorRef,
-  });
-  const promptStash = usePromptStash({
-    // Registered for the modal's whole open lifetime, not just chat mode:
-    // unregistering on every chat<->terminal toggle would hand the top of
-    // the stack back to whatever composer sits beneath this modal (see
-    // `active-prompt-stash-registry.ts`), letting Cmd+S mutate a hidden
-    // draft. `disabled` below suppresses the action itself while the modal
-    // owns no stashable content, without giving up ownership of the slot.
-    active: true,
-    disabled: promptStashDisabled({
-      isSubmitting,
-      attachmentPending,
-      chatComposerActive,
-    }),
-    editorRef,
-    readHashImage: readPromptStashImage,
-    source: promptStashSource,
-    destination: promptStashDestination,
-    hostId: resolvedHostId,
-  });
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -1148,10 +1098,18 @@ export function NewConversationModalBody(props: {
       // used to opt out and render the desktop row at any width, which made
       // one composer look like two depending on where it was opened from.
       toolbarLayout={isMobile ? "collapsed" : "full"}
-      stashControl={
-        <PromptStashControl
-          controller={promptStash}
+      draftsControl={
+        <ComposerDraftsControl
+          scope={{ surface: "new-chat", epicId }}
+          hostId={resolvedHostId}
           pickerStore={pickerStore}
+          editorRef={editorRef}
+          // Owns Cmd+S for the modal's whole open lifetime, not just chat
+          // mode: unregistering on every chat<->terminal toggle would hand the
+          // top of the stack back to whatever composer sits beneath this modal
+          // (see `active-drafts-control-registry.ts`), and the drafts list is
+          // meaningful in either mode anyway.
+          active
         />
       }
       attachmentsStrip={
@@ -1361,22 +1319,5 @@ function useGlobalWorkspaceSnapshot(
         primaryPath: bucket.primaryPath,
       };
     }),
-  );
-}
-
-/**
- * `usePromptStash`'s `disabled` flag stays true for the modal's whole
- * terminal-mode span, not just while a save/paste is in flight - see the
- * call site's comment on why `active` no longer tracks `chatComposerActive`.
- * Extracted (rather than inlined at the call site) to keep
- * `NewConversationModalBody` under the complexity lint threshold.
- */
-function promptStashDisabled(args: {
-  readonly isSubmitting: boolean;
-  readonly attachmentPending: boolean;
-  readonly chatComposerActive: boolean;
-}): boolean {
-  return (
-    args.isSubmitting || args.attachmentPending || !args.chatComposerActive
   );
 }

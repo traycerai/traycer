@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
-import { resetActivePromptStashForTests } from "@/lib/commands/active-prompt-stash-registry";
+import { resetActiveDraftsControlForTests } from "@/lib/commands/active-drafts-control-registry";
 import { dispatchAction } from "@/lib/keybindings/dispatch";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
@@ -132,7 +132,7 @@ vi.mock("sonner", () => ({
 
 describe("usePromptStash command/menu state", () => {
   beforeEach(() => {
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     idbData.clear();
     materializeMocks.impl = null;
     storeMocks.save.mockReset();
@@ -153,7 +153,7 @@ describe("usePromptStash command/menu state", () => {
 
   afterEach(() => {
     cleanup();
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     materializeMocks.impl = null;
     vi.restoreAllMocks();
   });
@@ -186,7 +186,7 @@ describe("usePromptStash command/menu state", () => {
 
     act(() => result.current.setMenuOpen(true));
     expect(result.current.menuOpen).toBe(true);
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(true);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
     await waitFor(() => {
       expect(storeMocks.save).toHaveBeenCalledTimes(1);
     });
@@ -196,7 +196,7 @@ describe("usePromptStash command/menu state", () => {
 
     unmount();
     storeMocks.save.mockClear();
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(false);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(false);
     expect(storeMocks.save).not.toHaveBeenCalled();
   });
   it("modal Cmd+S stays registered while disabled (terminal mode) and never falls through to the underlying composer", async () => {
@@ -257,7 +257,7 @@ describe("usePromptStash command/menu state", () => {
     modalSource.capture.mockClear();
     modalSource.clearIfUnchanged.mockClear();
 
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(true);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
     await waitFor(() => {
       expect(storeMocks.save).toHaveBeenCalledTimes(1);
     });
@@ -278,7 +278,7 @@ describe("usePromptStash command/menu state", () => {
 
     // Modal remains on the stack (dispatch still finds an action) but both
     // sources stay untouched - suppressed, not redirected.
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(true);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -302,7 +302,7 @@ describe("usePromptStash command/menu state", () => {
 
     rerender({ disabled: false });
 
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(true);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
     await waitFor(() => {
       expect(storeMocks.save).toHaveBeenCalledTimes(1);
     });

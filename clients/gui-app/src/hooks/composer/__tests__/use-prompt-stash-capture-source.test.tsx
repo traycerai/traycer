@@ -9,7 +9,7 @@ import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashCapacityExceededError } from "@/lib/composer/prompt-stash-repository";
 import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
 import { PromptStashImagePreparationError } from "@/lib/composer/prompt-stash-content";
-import { resetActivePromptStashForTests } from "@/lib/commands/active-prompt-stash-registry";
+import { resetActiveDraftsControlForTests } from "@/lib/commands/active-drafts-control-registry";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import {
   hookArgs,
@@ -138,7 +138,7 @@ describe("usePromptStash capture/source CAS", () => {
     vi.spyOn(crypto, "randomUUID").mockReturnValue(
       "00000000-0000-4000-8000-000000000001",
     );
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     idbData.clear();
     materializeMocks.impl = null;
     storeMocks.save.mockReset();
@@ -159,7 +159,7 @@ describe("usePromptStash capture/source CAS", () => {
 
   afterEach(() => {
     cleanup();
-    resetActivePromptStashForTests();
+    resetActiveDraftsControlForTests();
     materializeMocks.impl = null;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

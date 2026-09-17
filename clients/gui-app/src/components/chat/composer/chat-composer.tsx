@@ -96,14 +96,8 @@ import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
-import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
 import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
-import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
-import {
-  useChatPromptStashDestination,
-  useChatPromptStashSource,
-} from "./use-chat-prompt-stash-adapters";
-import { PromptStashControl } from "./prompt-stash-control";
+import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 
@@ -233,15 +227,6 @@ export interface ChatComposerSubmitInput {
    * that left with the send.
    */
   readonly restore: ChatSendRestore;
-}
-
-function composerUtilityNeedsClearance(args: {
-  readonly rowCount: number;
-  readonly saving: boolean;
-  readonly connectedUpperSurface: boolean;
-}): boolean {
-  const triggerVisible = args.rowCount > 0 || args.saving;
-  return triggerVisible && args.connectedUpperSurface;
 }
 
 /** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
@@ -549,30 +534,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isResolvingFilePaths,
   });
 
-  // Chat-plane read with the reader's own bound, which replaces the old
-  // `hasAttachmentBytes` pre-check: the bytes may live on this host's disk or
-  // in the cloud now, so presence is no longer answerable synchronously, and
-  // the bound is what keeps a stash save from hanging on an unreachable image.
-  // A capture deliberately survives composer unmount, so this read is not
-  // coupled to component-lifecycle cancellation.
-  const readPromptStashImage = useChatAttachmentByteReader();
-  const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
-  // Chat writes the draft store, but restore still requires the exact ready
-  // editor generation that started the restore - a remount under the same
-  // taskId must not consume the stash into a different editor instance.
-  const promptStashDestination = useChatPromptStashDestination(
-    taskId,
-    editorRef,
-  );
-  const promptStash = usePromptStash({
-    active: focused,
-    disabled: pastePending,
-    editorRef,
-    readHashImage: readPromptStashImage,
-    source: promptStashSource,
-    destination: promptStashDestination,
-    hostId: tabHostId,
-  });
   const authority = useChatComposerDraftAuthority({
     chatId: taskId,
     tabHostId,
@@ -667,11 +628,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
-  const utilityClearanceVisible = composerUtilityNeedsClearance({
-    rowCount: promptStash.rows.length,
-    saving: promptStash.saving,
-    connectedUpperSurface: topSpacing === "connected",
-  });
+  // The Drafts pill is always rendered (D18), so the trigger-visibility half
+  // of the old predicate is constant-true: what is left to decide is whether
+  // the surface above is close enough to need the clearance strip.
+  const utilityClearanceVisible = topSpacing === "connected";
 
   return (
     <>
@@ -771,9 +731,19 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onDragLeave={onDragLeave}
                 dragOverlayVariant={dragOverlayVariant}
                 utilityRail={
-                  <PromptStashControl
-                    controller={promptStash}
+                  <ComposerDraftsControl
+                    // `currentEpicId` is null only for a chat with no epic
+                    // context yet; the read model then lists nothing under
+                    // `current` and the pill still opens on All.
+                    scope={{
+                      surface: "chat",
+                      epicId: currentEpicId ?? "",
+                      chatId: taskId,
+                    }}
+                    hostId={tabHostId}
                     pickerStore={pickerStore}
+                    editorRef={editorRef}
+                    active={focused}
                   />
                 }
                 attachmentsStrip={

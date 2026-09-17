@@ -274,3 +274,27 @@ function draftPreviewText(content: JsonContent): string {
     .trim()
     .slice(0, PREVIEW_LIMIT);
 }
+
+/**
+ * Which surface a row belongs to, in the words D12 gives it.
+ *
+ * A chat or new-agent row ALWAYS names itself, under either filter: the row's
+ * own first line is the draft's text, and text does not say which chat it was
+ * being typed into. The epic prefix is the part that is conditional, because
+ * inside one epic naming it on every row is noise.
+ *
+ * A start-page row is the exception and carries nothing under `current` - the
+ * start page has no sub-surfaces to tell apart, so the chip would repeat what
+ * the filter already said.
+ */
+export function draftRowSourceChip(
+  row: DraftInventoryRow,
+  scopeEpicId: string | null,
+  filter: DraftInventoryFilter,
+): string | null {
+  if (row.kind === "landing") {
+    return filter === "all" ? "Start page" : null;
+  }
+  const name = row.kind === "chat" ? row.chatTitle : "New agent";
+  return row.epicId === scopeEpicId ? name : `${row.epicTitle} · ${name}`;
+}

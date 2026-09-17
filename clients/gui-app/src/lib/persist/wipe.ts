@@ -31,8 +31,7 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger, describeLogError } from "@/lib/logger";
 import { FILE_EDIT_RECOVERY_DB_SUFFIX } from "@/lib/workspace/file-edit-recovery-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { PROMPT_STASH_DB_NAME } from "@/lib/composer/prompt-stash-repository";
-import { publishPromptStashReset } from "@/lib/composer/prompt-stash-channel";
+import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -132,17 +131,17 @@ async function enumeratedRendererDatabaseNames(
 // name known ahead of time, so its deletion never depends on `databases()`
 // support. `indexedDB` itself absent (e.g. a non-browser runtime) still
 // no-ops the whole thing so the wipe reaches the reload.
-async function deleteRendererDatabases(): Promise<boolean> {
+async function deleteRendererDatabases(): Promise<void> {
   const factory = indexedDBFactory();
   if (factory === undefined) {
     appLogger.info("[persist] renderer database delete unavailable", {
       reason: "no IndexedDB in this runtime",
     });
-    return false;
+    return;
   }
   const enumerated = await enumeratedRendererDatabaseNames(factory);
   const names = new Set(enumerated);
-  names.add(PROMPT_STASH_DB_NAME);
+  names.add(STASH_DB_NAME);
   names.add(persistKey("tab-recovery"));
   names.add(APPEARANCE_DB_NAME);
   // Recovery history must actually be deleted before reload. Other partitions
@@ -154,13 +153,11 @@ async function deleteRendererDatabases(): Promise<boolean> {
   // sweep never touched but whose db this same step is the only thing that
   // reclaims).
   let failedCount = 0;
-  let promptStashDeleted = true;
   await Promise.all(
     Array.from(names).map((name) =>
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
         if (name === persistKey("tab-recovery")) throw error;
         failedCount += 1;
-        if (name === PROMPT_STASH_DB_NAME) promptStashDeleted = false;
         appLogger.warn("[persist] renderer database delete failed", {
           error: describeLogError(error),
         });
@@ -171,7 +168,6 @@ async function deleteRendererDatabases(): Promise<boolean> {
     databaseCount: names.size,
     failedCount,
   });
-  return promptStashDeleted;
 }
 
 export async function clearAllPersistedStores(args: {
@@ -236,8 +232,7 @@ export async function clearAllPersistedStores(args: {
       error: describeLogError(error),
     });
   });
-  const promptStashDeleted = await deleteRendererDatabases();
-  if (promptStashDeleted) publishPromptStashReset();
+  await deleteRendererDatabases();
 
   // 4. Reload last.
   appLogger.info("[persist] local GUI state clear complete - reloading", {});

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  registerActivePromptStash,
-  resetActivePromptStashForTests,
-  stashActivePrompt,
-} from "@/lib/commands/active-prompt-stash-registry";
+  registerActiveDraftsControl,
+  resetActiveDraftsControlForTests,
+  openActiveDraftsControl,
+} from "@/lib/commands/active-drafts-control-registry";
 import {
   dispatchAction,
   type KeybindingRouter,
@@ -29,22 +29,22 @@ function noopRouter(): KeybindingRouter {
   };
 }
 
-describe("active-prompt-stash-registry", () => {
-  beforeEach(() => resetActivePromptStashForTests());
-  afterEach(() => resetActivePromptStashForTests());
+describe("active-drafts-control-registry", () => {
+  beforeEach(() => resetActiveDraftsControlForTests());
+  afterEach(() => resetActiveDraftsControlForTests());
 
   it("no-ops when no composer is registered", () => {
-    expect(stashActivePrompt()).toBe(false);
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(false);
+    expect(openActiveDraftsControl()).toBe(false);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(false);
   });
 
   it("dispatches the top-of-stack action", () => {
     const base = vi.fn();
     const overlay = vi.fn();
-    registerActivePromptStash(base);
-    registerActivePromptStash(overlay);
+    registerActiveDraftsControl(base);
+    registerActiveDraftsControl(overlay);
 
-    expect(stashActivePrompt()).toBe(true);
+    expect(openActiveDraftsControl()).toBe(true);
     expect(overlay).toHaveBeenCalledTimes(1);
     expect(base).not.toHaveBeenCalled();
   });
@@ -52,15 +52,15 @@ describe("active-prompt-stash-registry", () => {
   it("hands Mod+S back to the underlying composer when the overlay disposes", () => {
     const base = vi.fn();
     const overlay = vi.fn();
-    registerActivePromptStash(base);
-    const disposeOverlay = registerActivePromptStash(overlay);
+    registerActiveDraftsControl(base);
+    const disposeOverlay = registerActiveDraftsControl(overlay);
 
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(true);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
     expect(overlay).toHaveBeenCalledTimes(1);
     expect(base).not.toHaveBeenCalled();
 
     disposeOverlay();
-    expect(dispatchAction("composer.stash", noopRouter())).toBe(true);
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
     expect(base).toHaveBeenCalledTimes(1);
     expect(overlay).toHaveBeenCalledTimes(1);
   });
@@ -68,34 +68,34 @@ describe("active-prompt-stash-registry", () => {
   it("dispose is idempotent and order-independent", () => {
     const a = vi.fn();
     const b = vi.fn();
-    const disposeA = registerActivePromptStash(a);
-    registerActivePromptStash(b);
+    const disposeA = registerActiveDraftsControl(a);
+    registerActiveDraftsControl(b);
 
     disposeA();
     disposeA();
-    expect(stashActivePrompt()).toBe(true);
+    expect(openActiveDraftsControl()).toBe(true);
     expect(b).toHaveBeenCalledTimes(1);
     expect(a).not.toHaveBeenCalled();
   });
 
-  it("resetActivePromptStashForTests isolates suites by clearing the stack", () => {
+  it("resetActiveDraftsControlForTests isolates suites by clearing the stack", () => {
     const leaked = vi.fn();
-    registerActivePromptStash(leaked);
-    resetActivePromptStashForTests();
-    expect(stashActivePrompt()).toBe(false);
+    registerActiveDraftsControl(leaked);
+    resetActiveDraftsControlForTests();
+    expect(openActiveDraftsControl()).toBe(false);
     expect(leaked).not.toHaveBeenCalled();
   });
 });
 
-describe("composer.stash action metadata + dispatch reservation", () => {
+describe("composer.drafts action metadata + dispatch reservation", () => {
   it("defaults to mod+s, is repeat-sensitive, and is not externally handled", () => {
-    expect(ACTION_META["composer.stash"]).toMatchObject({
-      id: "composer.stash",
+    expect(ACTION_META["composer.drafts"]).toMatchObject({
+      id: "composer.drafts",
       kind: "chord",
       category: "app",
       defaultChord: "mod+s",
     });
-    expect(getDefaultBindings()["composer.stash"]).toBe("mod+s");
-    expect(isRepeatSensitiveAction("composer.stash")).toBe(true);
+    expect(getDefaultBindings()["composer.drafts"]).toBe("mod+s");
+    expect(isRepeatSensitiveAction("composer.drafts")).toBe(true);
   });
 });
