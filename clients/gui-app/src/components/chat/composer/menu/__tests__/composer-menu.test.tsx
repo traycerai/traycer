@@ -7,6 +7,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { isWithinTextEntryPopup } from "@/components/layout/shell/shell-gestures";
+
 import {
   createComposerPickerStore,
   type ComposerPickerItem,
@@ -186,5 +188,47 @@ describe("ComposerMenu preview panel viewport gate", () => {
     ).toBeNull();
     // The menu itself still renders - only the side panel is gone.
     expect(screen.getByText("/take")).toBeTruthy();
+  });
+});
+
+describe("ComposerMenu as its editor's popup", () => {
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+    });
+  });
+
+  // The other half lives with the keyboard-dismiss recognizer: a tap inside a
+  // text entry's popup keeps the keyboard up. This half pins that the menu -
+  // rendered in a portal, outside the editor's DOM - is recognised as one, so
+  // tapping a row or the header chrome never blurs the editor.
+  it("declares its rows and header as part of the editor's popup", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 400,
+    });
+    const store = createComposerPickerStore();
+    openSlashPickerWithItems(store, [describedSlashItem("take")]);
+
+    render(<ComposerMenu pickerStore={store} />);
+    await flush();
+
+    expect(isWithinTextEntryPopup(screen.getByRole("option"))).toBe(true);
+    expect(isWithinTextEntryPopup(screen.getByText("Slash commands"))).toBe(
+      true,
+    );
+  });
+
+  it("declares the preview panel beside the menu as part of the editor's popup", async () => {
+    const store = createComposerPickerStore();
+    openSlashPickerWithItems(store, [describedSlashItem("take")]);
+
+    render(<ComposerMenu pickerStore={store} />);
+    await flush();
+
+    const panel = document.querySelector('[data-slot="mention-preview-panel"]');
+    expect(panel).not.toBeNull();
+    expect(isWithinTextEntryPopup(panel)).toBe(true);
   });
 });

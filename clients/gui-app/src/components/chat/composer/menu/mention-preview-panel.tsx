@@ -146,6 +146,10 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     <div
       ref={panelRef}
       data-slot="mention-preview-panel"
+      // Describes the editor popup's active row, so it is part of that popup:
+      // tapping it must not dismiss the soft keyboard (see
+      // `isWithinTextEntryPopup`).
+      data-text-entry-popup=""
       role="presentation"
       aria-hidden
       className={cn(

@@ -306,6 +306,9 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
       <div
         role="presentation"
         data-slot="composer-menu"
+        // The editor's own popup: tapping it must not dismiss the soft
+        // keyboard (see `isWithinTextEntryPopup`).
+        data-text-entry-popup=""
         // top-0/left-0 so floating-ui's translate3d is the source of truth.
         // Width fits content (w-max) so short menus stay compact and long command
         // names render in full, with a comfortable floor (min-w) and a
