@@ -257,6 +257,14 @@ describe("TierStepHint - last-run tuples that this host does not own", () => {
     ).toBeDefined();
     expect(screen.queryByText(/Claude Fable/)).toBeNull();
     expect(hostQueriesCalls.requests).toHaveLength(0);
+    // The same ownership fact the resolution gate turns on, applied to the
+    // COPY. A legacy record may have been written on any machine, so the
+    // sentence must not attribute it to this one. Falsification: restore the
+    // unconditional "on this host" suffix and this goes red.
+    expect(screen.queryByText(/on this host/)).toBeNull();
+    expect(
+      screen.getByText(/— the model you last started a chat with\./),
+    ).toBeDefined();
   });
 
   it("resolves a host-owned tuple to its catalogue label and issues listModels for that harness", () => {
@@ -277,5 +285,14 @@ describe("TierStepHint - last-run tuples that this host does not own", () => {
     expect(hostQueriesCalls.requests.map((r) => r.params.harnessId)).toEqual([
       "claude",
     ]);
+    // The other arm of the copy matrix: this host DOES own the record, so the
+    // host clause is earned. Asserted as the pair to the case above, because a
+    // fix that dropped the clause unconditionally would satisfy that one alone
+    // and lose a true statement here.
+    expect(
+      screen.getByText(
+        /— the model you last started a chat with on this host\./,
+      ),
+    ).toBeDefined();
   });
 });

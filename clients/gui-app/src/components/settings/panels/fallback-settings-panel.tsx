@@ -1580,7 +1580,17 @@ function TierStepHint({
       {noSwitchDestinationText(
         fallbackProviderModelLabel(lastRun, modelLabelFor),
       )}{" "}
-      — the model you last started a chat with on this host.
+      {/* Two arms, because the subject has two provenances and only one of
+          them is about this machine. `hostOwnsLastRun` false means the
+          selector fell back to the unattributed legacy record, which may have
+          been written anywhere - the same fact that stops us resolving its
+          label above. Claiming "on this host" for it would be a statement we
+          have already reasoned is not known to be true, in a sentence whose
+          entire job is to say WHICH model this is. Dropping the clause stays
+          accurate either way: the user did start a chat with it. */}
+      {hostOwnsLastRun
+        ? "— the model you last started a chat with on this host."
+        : "— the model you last started a chat with."}
     </p>
   );
 }
