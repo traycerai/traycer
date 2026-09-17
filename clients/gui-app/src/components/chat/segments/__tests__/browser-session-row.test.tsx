@@ -270,4 +270,23 @@ describe("<BrowserSessionRow />", () => {
       isDisabled(screen.getByRole("button", { name: /open browser/i })),
     ).toBe(true);
   });
+
+  it("does not use a ready inventory while the host is unreachable", () => {
+    mocks.sessionsState = sessionsState({
+      items: [
+        sessionInfo({
+          sessionId: "sess-a",
+          tabs: [tab({ tabId: "tab-original", title: "Checkout" })],
+        }),
+      ],
+    });
+    mocks.reachability = reachability({ status: "unreachable" });
+
+    render(<BrowserSessionRow session={reference({})} findUnitId="find-1" />);
+
+    expect(screen.getByText(/Browser unavailable/)).not.toBeNull();
+    expect(
+      isDisabled(screen.getByRole("button", { name: /open browser/i })),
+    ).toBe(true);
+  });
 });

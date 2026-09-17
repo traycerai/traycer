@@ -32,8 +32,10 @@ interface BrowserSessionRowView {
 function hasReadyBrowserSessionInventory(
   session: BrowserSessionReference,
   inventory: BrowserSessionsState,
+  hostStatus: HostReachabilityStatus,
 ): boolean {
   return (
+    hostStatus === "reachable" &&
     inventory.hostId === session.hostId &&
     inventory.lifecycle === "live" &&
     inventory.inventoryReady
@@ -69,7 +71,7 @@ function browserSessionRowView(args: {
   readonly hostStatus: HostReachabilityStatus;
 }): BrowserSessionRowView {
   const { session, inventory, hostStatus } = args;
-  const ready = hasReadyBrowserSessionInventory(session, inventory);
+  const ready = hasReadyBrowserSessionInventory(session, inventory, hostStatus);
   const liveSession = ready
     ? inventory.items.find((item) => item.sessionId === session.sessionId)
     : undefined;
