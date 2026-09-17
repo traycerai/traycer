@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import {
   FakeStreamClient,
@@ -1251,6 +1259,10 @@ describe("browser sessions coordinator registry", () => {
       request.dismiss();
       expect(shown.remove).toHaveBeenCalledOnce();
 
+      // The dismissal resolves the already-in-flight `send()` promise with
+      // `null` immediately - it does not wait on the host's late reply.
+      await expect(sendPromise).resolves.toBeNull();
+
       session.emit(
         {
           kind: "openTabResult",
@@ -1265,7 +1277,7 @@ describe("browser sessions coordinator registry", () => {
         },
         null,
       );
-      await sendPromise;
+      await Promise.resolve();
 
       // The tile is already gone, so the late tab must never be shown - the
       // coordinator closes it on the host instead of a second rebind.
@@ -1275,6 +1287,29 @@ describe("browser sessions coordinator registry", () => {
         sessionId: "session-late",
         tabId: "tab-late",
       });
+    });
+
+    it("dismissing before send() is ever called sends no frame and resolves send() with null", async () => {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      const shown = presentation(true);
+
+      const request = state.prepareOpenTab("https://example.com", shown);
+      request.dismiss();
+      expect(shown.remove).toHaveBeenCalledOnce();
+
+      const sendPromise = request.send();
+
+      expect(session.sentFrames.some((frame) => frame.kind === "openTab")).toBe(
+        false,
+      );
+      await expect(sendPromise).resolves.toBeNull();
     });
 
     it("a false rebind (tile already gone another way) also closes the late-arriving tab", async () => {
@@ -1503,6 +1538,9 @@ describe("browser sessions coordinator registry", () => {
       const warn = vi
         .spyOn(console, "warn")
         .mockImplementation(() => undefined);
+      onTestFinished(() => {
+        warn.mockRestore();
+      });
 
       session.emit(
         {
@@ -1539,7 +1577,6 @@ describe("browser sessions coordinator registry", () => {
       expect(warn).toHaveBeenCalledOnce();
       const line = String(warn.mock.calls[0]?.[0]);
       expect(line).toContain("receipt-to-row");
-      warn.mockRestore();
 
       // The tab now actually opens - the earlier provisioning bookkeeping
       // must not have consumed or blocked this frame.

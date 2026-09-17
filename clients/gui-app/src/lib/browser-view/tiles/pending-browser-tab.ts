@@ -56,9 +56,10 @@ export function preparePendingBrowserTile(
           ),
       );
       if (!present) request.dismiss();
+      return present;
     };
     unsubscribe = useEpicCanvasStore.subscribe(check);
-    check();
+    return check();
   };
   return { node, request, observe };
 }

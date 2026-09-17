@@ -45,7 +45,7 @@ export function useAddBrowserAction(
   const { openTile } = useEpicTileNavigation();
   const openTabKey = browserMutationKeys.openTab(sessions.hostId);
   const addMutation = useMutation<
-    OpenedBrowserTab,
+    OpenedBrowserTab | null,
     Error,
     PreparedBrowserTabOpen | null
   >({
@@ -59,6 +59,7 @@ export function useAddBrowserAction(
       const opened = await (request === null
         ? sessions.openTab(null, DEFAULT_BROWSER_TILE_URL)
         : request.send());
+      if (opened === null) return null;
       return {
         hostId,
         sessionId: opened.sessionId,
@@ -67,7 +68,7 @@ export function useAddBrowserAction(
       };
     },
     onSuccess: (opened) => {
-      if (opened.pending) return;
+      if (opened === null || opened.pending) return;
       openTile(
         tileIntent(
           makeBrowserSessionTileRef(opened),
@@ -107,7 +108,7 @@ export function useAddBrowserAction(
     flushSync(() => {
       openTile(tileIntent(pending.node, { tabId }, "explicit", "direct_ui"));
     });
-    pending.observe();
+    if (!pending.observe()) return;
     mutate(pending.request);
     onOpened?.();
   }, [queryClient, openTabKey, sessions, openTile, tabId, mutate, onOpened]);

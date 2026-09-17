@@ -8,7 +8,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -1430,8 +1438,22 @@ describe("BrowsersPanelBody", () => {
         tabs: [],
       }),
     );
+    const previousTelemetry = window.localStorage.getItem(
+      "traycer:perf:telemetry",
+    );
     window.localStorage.setItem("traycer:perf:telemetry", "1");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => {
+      warn.mockRestore();
+      if (previousTelemetry === null) {
+        window.localStorage.removeItem("traycer:perf:telemetry");
+      } else {
+        window.localStorage.setItem(
+          "traycer:perf:telemetry",
+          previousTelemetry,
+        );
+      }
+    });
 
     replaceSessions([
       session({
@@ -1466,9 +1488,6 @@ describe("BrowsersPanelBody", () => {
     expect(payload.name).toBe("receipt-to-row");
     expect(payload.fields.hostId).toBe("host-1");
     expect(payload.fields.sessionId).toBe("sess-provisioning");
-
-    warn.mockRestore();
-    window.localStorage.removeItem("traycer:perf:telemetry");
   });
 });
 

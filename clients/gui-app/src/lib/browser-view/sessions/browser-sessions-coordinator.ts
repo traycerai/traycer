@@ -63,7 +63,8 @@ export interface PendingBrowserTabPresentation {
 }
 
 export interface PreparedBrowserTabOpen extends PendingBrowserTabRequest {
-  readonly send: () => Promise<BrowserOpenedTab>;
+  /** Null releases the caller on dismissal; an in-flight result is still cleaned up. */
+  readonly send: () => Promise<BrowserOpenedTab | null>;
   readonly dismiss: () => void;
 }
 
@@ -831,20 +832,31 @@ function createBrowserSessionsCoordinator(args: {
       clickedAt: performance.now(),
     };
     let dismissed = false;
-    let result: Promise<BrowserOpenedTab> | null = null;
+    let result: Promise<BrowserOpenedTab | null> | null = null;
+    let releaseDismissal: (() => void) | null = null;
+    const dismissal = new Promise<null>((resolve) => {
+      releaseDismissal = () => resolve(null);
+    });
     pendingPresentations.set(request.requestId, presentation.remove);
     return {
       ...request,
       dismiss: () => {
+        if (dismissed) return;
         dismissed = true;
+        if (result === null) pendingPresentations.delete(request.requestId);
+        releaseDismissal?.();
         presentation.remove();
       },
       send: () => {
         if (result !== null) return result;
+        if (dismissed) {
+          result = dismissal;
+          return result;
+        }
         if (!pendingPresentations.has(request.requestId)) {
           return Promise.reject(new Error("Browser sessions stream closed."));
         }
-        result = sendRequestWithId<BrowserOpenedTab>(
+        const response = sendRequestWithId<BrowserOpenedTab>(
           request.requestId,
           pendingOpens,
           null,
@@ -878,6 +890,7 @@ function createBrowserSessionsCoordinator(args: {
             throw error;
           },
         );
+        result = Promise.race([response, dismissal]);
         return result;
       },
     };

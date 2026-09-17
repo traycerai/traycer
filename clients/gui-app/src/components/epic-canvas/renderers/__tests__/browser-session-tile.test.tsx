@@ -8,7 +8,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ReactElement } from "react";
 import type {
   BrowserOpenedTab,
@@ -2083,6 +2091,9 @@ describe("BrowserSessionTile pending presentation", () => {
   it("logs the click-to-placeholder perf span exactly once, after the first paint", async () => {
     window.localStorage.setItem("traycer:perf:telemetry", "1");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => {
+      warn.mockRestore();
+    });
 
     render(pendingTileElement());
 
@@ -2097,7 +2108,5 @@ describe("BrowserSessionTile pending presentation", () => {
     };
     expect(payload.name).toBe("click-to-placeholder");
     expect(payload.fields.requestId).toBe("req-pending-1");
-
-    warn.mockRestore();
   });
 });

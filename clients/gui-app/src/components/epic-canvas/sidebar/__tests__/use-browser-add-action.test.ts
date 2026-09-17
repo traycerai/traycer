@@ -275,6 +275,90 @@ describe("useAddBrowserAction", () => {
     expect(navigateNested).toHaveBeenCalledOnce();
   });
 
+  it("a failed placement (navigation refuses to commit the pending tile) dispatches no open, no onOpened, and leaves the lock released", () => {
+    navigateNested.mockImplementationOnce(() => null);
+    const deferred = deferredOpenTab();
+    const openTab = vi.fn(deferred.openTab);
+    const onOpened = vi.fn();
+    const { result } = renderAddAction(sessionsValue(openTab), onOpened);
+
+    act(() => {
+      result.current.add();
+    });
+
+    expect(openTab).not.toHaveBeenCalled();
+    expect(onOpened).not.toHaveBeenCalled();
+    expect(openBrowserTiles()).toHaveLength(0);
+    expect(result.current.isAdding).toBe(false);
+  });
+
+  it("closing a pending tile releases the add lock while the host is still silent, without toasting, and the original late reply never rebinds", async () => {
+    const first = deferredOpenTab();
+    const second = deferredOpenTab();
+    let calls = 0;
+    const openTab: BrowserSessionsState["openTab"] = (sessionId, url) => {
+      calls += 1;
+      return calls === 1
+        ? first.openTab(sessionId, url)
+        : second.openTab(sessionId, url);
+    };
+    const { result } = renderAddAction(sessionsValue(openTab), null);
+
+    act(() => {
+      result.current.add();
+    });
+    await waitFor(() => {
+      expect(result.current.isAdding).toBe(true);
+    });
+    const firstInstanceId = openBrowserTiles().at(0)?.instanceId;
+    const paneId =
+      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.root?.id;
+    if (firstInstanceId === undefined || paneId === undefined) {
+      throw new Error("expected a pending tile in a seeded pane");
+    }
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .closeCanvasTab(VIEW_TAB_ID, paneId, firstInstanceId);
+    });
+
+    await waitFor(() => {
+      expect(result.current.isAdding).toBe(false);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(openBrowserTiles()).toHaveLength(0);
+
+    act(() => {
+      result.current.add();
+    });
+    await waitFor(() => {
+      expect(result.current.isAdding).toBe(true);
+    });
+    expect(openBrowserTiles()).toHaveLength(1);
+
+    // The discarded first request's host reply arrives late - it must not
+    // rebind onto anything, including the new second pending tile.
+    await act(async () => {
+      first.resolve({ sessionId: "sess-late", tabId: "tab-late" });
+      await Promise.resolve();
+    });
+    expect(openBrowserTiles()).not.toMatchObject([
+      { sessionId: "sess-late", tabId: "tab-late" },
+    ]);
+
+    await act(async () => {
+      second.resolve({ sessionId: "sess-2", tabId: "tab-2" });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(openBrowserTiles()).toMatchObject([
+        { sessionId: "sess-2", tabId: "tab-2" },
+      ]);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("a pip placement opens no pending tile, converts to pip only on the exact resolved tab, and calls onOpened only after", async () => {
     settingsState.browserPlacement = "pip";
     const deferred = deferredOpenTab();

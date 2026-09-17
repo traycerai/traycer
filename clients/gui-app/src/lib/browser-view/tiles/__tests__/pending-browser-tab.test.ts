@@ -1,5 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { preparePendingBrowserTile } from "@/lib/browser-view/tiles/pending-browser-tab";
 import {
@@ -192,5 +192,22 @@ describe("preparePendingBrowserTile", () => {
 
     const rebound = findByInstanceId(TAB_A, node.instanceId);
     expect(rebound?.ref).toMatchObject({ sessionId: "sess-1", tabId: "tab-1" });
+  });
+
+  it("observe() reports failed placement and dismisses; send() afterward dispatches nothing and resolves null", async () => {
+    const deferred = deferredOpenTab();
+    const openTab = vi.fn(deferred.openTab);
+    const { request, observe } = preparePendingBrowserTile(
+      sessionsValue(openTab),
+      "about:blank",
+    );
+    // Never placed into the canvas - the tile the request is bound to does
+    // not exist, exactly what a failed placement looks like to `observe()`.
+
+    expect(observe()).toBe(false);
+
+    const opened = await request.send();
+    expect(opened).toBeNull();
+    expect(openTab).not.toHaveBeenCalled();
   });
 });

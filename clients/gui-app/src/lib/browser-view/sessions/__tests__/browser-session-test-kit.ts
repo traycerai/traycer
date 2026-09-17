@@ -115,17 +115,29 @@ export function fakePrepareOpenTab(args: {
       clickedAt: 0,
     };
     let dismissed = false;
-    let result: Promise<BrowserOpenedTab> | null = null;
+    let result: Promise<BrowserOpenedTab | null> | null = null;
+    let releaseDismissal: (() => void) | null = null;
+    const dismissal = new Promise<null>((resolve) => {
+      releaseDismissal = () => resolve(null);
+    });
     return {
       ...request,
       dismiss: () => {
+        if (dismissed) return;
         dismissed = true;
+        releaseDismissal?.();
         presentation.remove();
       },
       send: () => {
         if (result !== null) return result;
-        result = args.openTab(null, url).then(
+        if (dismissed) {
+          result = dismissal;
+          return result;
+        }
+        const transport = args.openTab(null, url).then(
           (opened) => {
+            // A late reply after dismissal must never rebind a discarded
+            // request onto a (possibly reused) presentation.
             if (!dismissed) presentation.rebind(opened);
             return opened;
           },
@@ -134,6 +146,7 @@ export function fakePrepareOpenTab(args: {
             throw error;
           },
         );
+        result = Promise.race([transport, dismissal]);
         return result;
       },
     };
