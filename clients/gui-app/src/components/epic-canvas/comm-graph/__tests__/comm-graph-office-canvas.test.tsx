@@ -1084,44 +1084,45 @@ describe("CommGraphOfficeCanvas", () => {
     expect(screen.getByTestId("comm-graph-office-fit")).toBeDefined();
   });
 
-  it("shows no cursor chip when there is no cursor", () => {
-    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
-
-    expect(screen.queryByTestId("comm-graph-office-cursor-chip")).toBeNull();
-  });
-
-  it("shows a Paused chip once the epic's cursor is set", () => {
-    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
-
-    act(() => {
-      useCommGraphTimelineStore
-        .getState()
-        .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
-    });
-
-    const chip = screen.getByTestId("comm-graph-office-cursor-chip");
-    expect(chip.textContent).toMatch(/^Paused at/);
-  });
-
-  it("shows a Replaying chip when the cursor is set and playback is running", () => {
-    render(
-      withQueryClient(
-        officeElement(
-          new Set([ORCHESTRATOR.id, REVIEWER.id]),
-          { ...STATIC_OFFICE, playing: true },
-          {},
+  it("draws no cursor chip over the floor, detached or playing", () => {
+    // THE LAST READ-ONLY SENTENCE OVER THE DRAWING, and the fourth chip to
+    // leave this canvas. It said `Paused at 14:32:07` / `Replaying 14:32:07`
+    // in the top-left corner whenever the floor was detached from live -
+    // which is the whole time a person is watching a replay.
+    //
+    // The READING survived; the chip did not. It moved to the transport bar,
+    // where a media player puts its time and where it costs the drawing
+    // nothing (`comm-graph-transport-cursor-time`, pinned in the transport
+    // suite). The prefix went with the corner: the bar's own play/pause button
+    // already says which of the two states this is.
+    //
+    // Pinned as an absence from BOTH states it used to appear in, because a
+    // deleted component is not a decision anything can read.
+    for (const playing of [false, true]) {
+      render(
+        withQueryClient(
+          officeElement(
+            new Set([ORCHESTRATOR.id, REVIEWER.id]),
+            { ...STATIC_OFFICE, playing },
+            {},
+          ),
         ),
-      ),
-    );
+      );
+      act(() => {
+        useCommGraphTimelineStore
+          .getState()
+          .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
+      });
 
-    act(() => {
-      useCommGraphTimelineStore
-        .getState()
-        .setCursor("epic-1", { timestamp: 1_000, hostId: "host-1", id: 1 });
-    });
-
-    const chip = screen.getByTestId("comm-graph-office-cursor-chip");
-    expect(chip.textContent).toMatch(/^Replaying/);
+      expect(screen.queryByTestId("comm-graph-office-cursor-chip")).toBeNull();
+      expect(screen.queryByText(/paused at/i)).toBeNull();
+      expect(screen.queryByText(/replaying/i)).toBeNull();
+      // ANTI-VACUITY: the canvas really mounted with a cursor set, so "no
+      // chip" is a fact about this floor and not about a render that never
+      // reached the state the chip needed.
+      expect(screen.getByTestId("comm-graph-office-zoom-in")).toBeDefined();
+      cleanup();
+    }
   });
 
   it("suspends its scene while ineligible and resumes it exactly once on return", () => {

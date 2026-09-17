@@ -160,6 +160,8 @@ export function CommGraphTransportBar(props: CommGraphTransportBarProps) {
         onSeekToFraction={seekToFraction}
       />
 
+      <CommGraphCursorTime transport={transport} />
+
       {/*
         WITH NOTHING CAPTURED THERE IS NO LIVE BADGE either: "Live" next to an
         empty track reads as a feed that is stuck, when the truth is that there
@@ -362,6 +364,45 @@ function CommGraphEmptyTrack(props: { readonly following: boolean }) {
         No events yet
       </span>
     </div>
+  );
+}
+
+/**
+ * WHICH MOMENT A DETACHED GRAPH IS SHOWING.
+ *
+ * It used to be a chip over the office floor - `Paused at 14:32:07` in the
+ * top-left corner, the last read-only sentence drawn over the drawing, and
+ * removed with the rest of them in feedback round 2 ("no more hidden labels or
+ * anything left now, right?").
+ *
+ * The reading itself is worth keeping, because nothing else says it: a floor
+ * scrubbed back to an hour ago is pixel-identical to a live one, and the
+ * playhead gives a position without a time. So it moved to the scrubber, where
+ * a media player puts it and where it costs a canvas nothing - the same value
+ * the chip read (`cursor.timestamp`), in the bar that owns the cursor.
+ *
+ * NO "PAUSED AT" / "REPLAYING" PREFIX any more. The chip carried one because it
+ * stood alone over a floor; here it sits a few pixels from the play/pause
+ * button, which is already showing which of the two this is.
+ *
+ * NOTHING WHILE LIVE - not the current time, which would be a clock, and not a
+ * dash holding the space. Live has no cursor to report, and the Live badge
+ * beside it says so.
+ */
+function CommGraphCursorTime(props: {
+  readonly transport: CommGraphTransport;
+}) {
+  const cursor = props.transport.cursor;
+  if (cursor === null) return null;
+  return (
+    <span
+      data-testid="comm-graph-transport-cursor-time"
+      // `shrink-0` against a track that is `flex-1 min-w-0`: the readout is a
+      // fixed handful of digits and the track is what should give up width.
+      className="shrink-0 text-ui-xs text-muted-foreground tabular-nums"
+    >
+      {new Date(cursor.timestamp).toLocaleTimeString()}
+    </span>
   );
 }
 

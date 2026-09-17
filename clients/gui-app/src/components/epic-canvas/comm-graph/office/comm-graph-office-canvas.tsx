@@ -2748,27 +2748,6 @@ function OfficeChromeRow(props: {
   );
 }
 
-/** The moment a detached floor is showing; nothing while live. */
-function OfficeCursorChip(props: {
-  readonly cursorMs: number | null;
-  readonly playing: boolean;
-}) {
-  if (props.cursorMs === null) return null;
-  return (
-    <div
-      data-testid="comm-graph-office-cursor-chip"
-      // Read-only: it must not take the pan or the click a person aims at the
-      // floor underneath it.
-      className="pointer-events-none absolute top-2 left-2 z-10 rounded-md border border-border bg-popover px-1.5 py-0.5 text-ui-xs text-popover-foreground tabular-nums shadow-xs"
-    >
-      <span className="text-muted-foreground">
-        {props.playing ? "Replaying " : "Paused at "}
-      </span>
-      {new Date(props.cursorMs).toLocaleTimeString()}
-    </div>
-  );
-}
-
 export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
   /**
    * WHICH view draws this canvas - a value, not an id: the plan, the measure
@@ -4914,7 +4893,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           the past reads as a live floor that stopped moving. The chip names
           the moment being shown; the transport bar below owns moving it.
         */}
-        <OfficeCursorChip cursorMs={cursorMs} playing={playing} />
         {hoverCard === null || hoveredAgent === null ? null : (
           <OfficeAgentHover
             epicId={epicId}

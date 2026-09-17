@@ -16,7 +16,7 @@
  * marker's label and is reached only from there in this component, so its call
  * count is a direct reading of work the bar did rather than a proxy for it.
  */
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import { commGraphCursorForEvent } from "@/lib/comm-graph/comm-graph-timeline";
@@ -113,5 +113,57 @@ describe("what a playback step costs the transport bar", () => {
     );
 
     expect(plainTextCalls.mock.calls.length).toBeGreaterThan(afterFirstPaint);
+  });
+});
+
+/**
+ * WHERE THE OFFICE'S CURSOR CHIP WENT.
+ *
+ * `Paused at 14:32:07` / `Replaying 14:32:07` used to sit in the office
+ * canvas's top-left corner - the last read-only sentence drawn over the
+ * drawing, and the fourth chip to leave that canvas. The READING is worth
+ * keeping and the chip was not: a floor scrubbed back to an hour ago is
+ * pixel-identical to a live one, and the playhead gives a position without a
+ * time. So it lives here now, where a media player puts its clock and where it
+ * costs the drawing nothing.
+ */
+describe("the scrubber's own time readout", () => {
+  beforeEach(() => {
+    useCommGraphTimelineStore.setState({ stateByEpicId: {} });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useCommGraphTimelineStore.setState({ stateByEpicId: {} });
+  });
+
+  it("carries the detached cursor's own time, and nothing while live", () => {
+    // WHERE THE OFFICE'S CURSOR CHIP WENT. It was the last read-only sentence
+    // drawn over the floor and was removed with the rest of them; the reading
+    // it carried is worth keeping, because a floor scrubbed back to an hour
+    // ago is pixel-identical to a live one and the playhead gives a position
+    // without a time. So the scrubber carries it, where a media player does.
+    render(<CommGraphTransportBar epicId={EPIC} events={EVENTS} />);
+
+    // Live: no cursor, so no time - not the wall clock, which would be a
+    // clock, and not a dash holding the space.
+    expect(screen.queryByTestId("comm-graph-transport-cursor-time")).toBeNull();
+
+    act(() => {
+      useCommGraphTimelineStore
+        .getState()
+        .setCursor(EPIC, commGraphCursorForEvent(EVENTS[3]));
+    });
+
+    // Detached: the row the cursor actually names, not the newest one.
+    expect(
+      screen.getByTestId("comm-graph-transport-cursor-time").textContent,
+    ).toBe(new Date(EVENTS[3].timestamp).toLocaleTimeString());
+
+    act(() => {
+      useCommGraphTimelineStore.getState().setCursor(EPIC, null);
+    });
+
+    expect(screen.queryByTestId("comm-graph-transport-cursor-time")).toBeNull();
   });
 });
