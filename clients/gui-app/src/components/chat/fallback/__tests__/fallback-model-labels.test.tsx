@@ -2,7 +2,10 @@ import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import { useFallbackModelLabels } from "@/components/chat/fallback/fallback-identity";
+import {
+  useFallbackModelCatalogues,
+  useFallbackModelLabels,
+} from "@/components/chat/fallback/fallback-identity";
 
 /**
  * `useFallbackModelLabels`'s own resolution rules, isolated from any
@@ -20,10 +23,28 @@ import { useFallbackModelLabels } from "@/components/chat/fallback/fallback-iden
  * this file is only about the MAPPING logic layered on top of it.
  */
 
+/**
+ * The fields `useFallbackModelCatalogues`'s `unsettled` memo actually reads.
+ * Extra catalogue-row keys exist on the wire; this double only has to be
+ * honest about the ones the settled flag consults.
+ */
+interface HarnessSettledRow {
+  readonly id: string;
+  readonly available: boolean;
+  readonly availabilityPending: boolean;
+  readonly error: string | null;
+  readonly lastSettledAvailable: boolean | null;
+}
+
 const harnessesData = vi.hoisted(() => ({
   value: undefined as
-    | { readonly harnesses: ReadonlyArray<{ id: string; available: boolean }> }
+    | { readonly harnesses: ReadonlyArray<HarnessSettledRow> }
     | undefined,
+}));
+
+const harnessesQueryState = vi.hoisted(() => ({
+  isPending: false,
+  isError: false,
 }));
 
 const modelsByHarness = vi.hoisted(() => ({
@@ -45,8 +66,8 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     // no data - which is the one thing this double has to get right for the
     // "disabled surface" case below to mean anything.
     data: activity.enabled ? harnessesData.value : undefined,
-    isPending: false,
-    isError: false,
+    isPending: activity.enabled ? harnessesQueryState.isPending : false,
+    isError: activity.enabled ? harnessesQueryState.isError : false,
   }),
 }));
 
@@ -75,6 +96,11 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
       },
       isPending: false,
       isError: false,
+      // Production's `combine` treats `isSuccess || isError || !enabled` as
+      // settled. Without this the double would report every available
+      // harness's catalogue as still in flight, and `settledFor` tests
+      // below would be pinning the mock rather than the memo.
+      isSuccess: true,
     }));
     return args.combine === undefined ? results : args.combine(results);
   },
@@ -100,12 +126,42 @@ function modelOption(
   };
 }
 
+function settledRow(
+  id: string,
+  available: boolean,
+  overrides: {
+    readonly availabilityPending: boolean;
+    readonly error: string | null;
+    readonly lastSettledAvailable: boolean | null;
+  },
+): HarnessSettledRow {
+  return {
+    id,
+    available,
+    availabilityPending: overrides.availabilityPending,
+    error: overrides.error,
+    lastSettledAvailable: overrides.lastSettledAvailable,
+  };
+}
+
+const SETTLED_TRUE = {
+  availabilityPending: false,
+  error: null,
+  lastSettledAvailable: true,
+} as const;
+
 describe("useFallbackModelLabels", () => {
   beforeEach(() => {
+    harnessesQueryState.isPending = false;
+    harnessesQueryState.isError = false;
     harnessesData.value = {
       harnesses: [
-        { id: "claude", available: true },
-        { id: "codex", available: false },
+        settledRow("claude", true, SETTLED_TRUE),
+        settledRow("codex", false, {
+          availabilityPending: false,
+          error: null,
+          lastSettledAvailable: false,
+        }),
       ],
     };
     modelsByHarness.value = new Map([
@@ -174,5 +230,101 @@ describe("useFallbackModelLabels", () => {
     expect(result.current("claude", "claude-fable-5-1[1m]")).toBe(
       "Claude Fable",
     );
+  });
+});
+
+/**
+ * `settledFor` is keyed off the WANTED ids, not off the ids that already
+ * survived the availability filter. Walking only those survivors reported
+ * every still-loading id as settled - including, before `listHarnesses`
+ * answered, every id in play.
+ *
+ * Falsification for the pending-query case: restore the memo that only
+ * walked `harnessIds` (empty while `available === undefined`) and
+ * `settledFor("claude")` goes back to `true`.
+ */
+describe("useFallbackModelCatalogues.settledFor", () => {
+  beforeEach(() => {
+    harnessesQueryState.isPending = false;
+    harnessesQueryState.isError = false;
+    harnessesData.value = undefined;
+    modelsByHarness.value = new Map();
+    hostQueriesCalls.requests = [];
+  });
+
+  it("is false for every requested id while listHarnesses is still pending, and true for an id nobody asked about", () => {
+    harnessesQueryState.isPending = true;
+    harnessesData.value = undefined;
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude", "codex"], true),
+    );
+
+    expect(result.current.settledFor("claude")).toBe(false);
+    expect(result.current.settledFor("codex")).toBe(false);
+    // Unasked-for ids have no read in flight; treating them as unsettled
+    // would block on a request that will never be made.
+    expect(result.current.settledFor("grok")).toBe(true);
+  });
+
+  it("is true for every requested id when listHarnesses has errored - a failed read is never coming", () => {
+    harnessesQueryState.isError = true;
+    harnessesData.value = undefined;
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+
+    expect(result.current.settledFor("claude")).toBe(true);
+  });
+
+  it("is false for a row still deciding availability, and true once that row has settled unavailable", () => {
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", false, {
+          availabilityPending: true,
+          error: null,
+          lastSettledAvailable: null,
+        }),
+      ],
+    };
+
+    const { result: pending } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+    // Falsification: skip the availabilityPending arm. `harnessIds` drops
+    // this row (`available: false`), so walking only survivors reports it
+    // settled while its catalogue fetch has not even started.
+    expect(pending.current.settledFor("claude")).toBe(false);
+
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", false, {
+          availabilityPending: false,
+          error: null,
+          lastSettledAvailable: false,
+        }),
+      ],
+    };
+    const { result: settledUnavailable } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+    expect(settledUnavailable.current.settledFor("claude")).toBe(true);
+
+    // A row that already answered unavailable and is only re-checking:
+    // there is no catalogue coming for it either way.
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", false, {
+          availabilityPending: true,
+          error: null,
+          lastSettledAvailable: false,
+        }),
+      ],
+    };
+    const { result: rechecking } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+    expect(rechecking.current.settledFor("claude")).toBe(true);
   });
 });

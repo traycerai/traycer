@@ -346,28 +346,60 @@ function cancelOpportunityText(deadline: number | null, now: number): string {
   return `You have ${seconds} ${seconds === 1 ? "second" : "seconds"} to cancel. ${action}`;
 }
 
+/**
+ * A plan sentence and the identities it NAMED.
+ *
+ * The two travel together because `semanticKey` deduplicates on identity and
+ * the sentence is what the user hears: an identity in the key that the words
+ * never used re-announces text that has not changed, and a spoken one missing
+ * from the key silences a correction. Which identity a line speaks is not
+ * uniform - `retry` and `wait` name the failed tuple, `switch` names its
+ * destination, and `checking` / `notify` / no-plan name neither - so the answer
+ * has to come from the branch that wrote the words rather than from a
+ * predicate standing beside it.
+ */
+interface FallbackPlanLine {
+  readonly text: string;
+  readonly spoken: ReadonlyArray<string>;
+}
+
 function fallbackPlanText(
   plan: FallbackAnnouncementPlan | null,
   failedIdentity: string,
   now: number,
-): string {
+): FallbackPlanLine {
   if (plan === null || plan.action === "notify") {
-    return "There's nowhere to route this chat. It will stop and keep the error visible.";
+    return {
+      text: "There's nowhere to route this chat. It will stop and keep the error visible.",
+      spoken: [],
+    };
   }
   if (plan.action === "checking") {
-    return "Working out where to route this chat…";
+    return { text: "Working out where to route this chat…", spoken: [] };
   }
   switch (plan.action) {
     case "switch":
       return plan.destination === null
-        ? "The host is checking the next destination."
-        : `The chat will switch to ${plan.destination}.`;
+        ? { text: "The host is checking the next destination.", spoken: [] }
+        : {
+            text: `The chat will switch to ${plan.destination}.`,
+            spoken: [plan.destination],
+          };
     case "retry":
-      return `The chat will retry on ${failedIdentity}.`;
+      return {
+        text: `The chat will retry on ${failedIdentity}.`,
+        spoken: [failedIdentity],
+      };
     case "wait":
       return plan.resumesAt === null
-        ? `The host is checking when ${failedIdentity} can resume.`
-        : `The chat will wait for ${failedIdentity} and resume at ${formatWaitTime(plan.resumesAt, now)}.`;
+        ? {
+            text: `The host is checking when ${failedIdentity} can resume.`,
+            spoken: [failedIdentity],
+          }
+        : {
+            text: `The chat will wait for ${failedIdentity} and resume at ${formatWaitTime(plan.resumesAt, now)}.`,
+            spoken: [failedIdentity],
+          };
   }
 }
 
@@ -376,15 +408,19 @@ function fallbackHoldText(
   plan: FallbackAnnouncementPlan | null,
   failedIdentity: string,
   now: number,
-): string {
-  const parts = [fallbackPlanText(plan, failedIdentity, now)];
+): FallbackPlanLine {
+  const line = fallbackPlanText(plan, failedIdentity, now);
+  const parts = [line.text];
   if (plan?.action === "switch" && plan.destination !== null) {
     parts.push(FRESH_SESSION_HELPER);
     const moving = queuedMessagesMovingText(pending.queuedItemsMoving);
     if (moving !== null) parts.push(moving);
   }
   parts.push(cancelOpportunityText(pending.deadline, now));
-  return parts.join(" ");
+  // Everything this wrapper adds - the fresh-session line, the queued-message
+  // count, the countdown - names no tuple, so the identities are the inner
+  // line's unchanged.
+  return { text: parts.join(" "), spoken: line.spoken };
 }
 
 export function fallbackTraversalAnnouncement(input: {
@@ -399,19 +435,42 @@ export function fallbackTraversalAnnouncement(input: {
   // path owns the intervention window and its subsequent lifecycle.
   if (pending === undefined || pending.state === "retrying") return null;
   let text: string;
+  // The identities this branch actually SPOKE, carried out of the same code
+  // that builds the sentence.
+  //
+  // Not "both of them": `semanticKey` is what the observer deduplicates on, so
+  // an identity in the key the TEXT never used re-enqueues a sentence that has
+  // not changed a character, and a screen reader says it twice.
+  //
+  // Which identity a branch names is genuinely irregular, which is why this is
+  // reported rather than derived. `waiting` and the resume arm of `switching`
+  // name the failed tuple; an ordinary `switching` names its destination; and
+  // `hold` / `choosing` name whichever their PLAN line named - the failed tuple
+  // under `retry` and `wait`, the destination under `switch`, neither under
+  // `checking`, `notify` or no plan at all. A predicate standing beside the
+  // text would have to restate all of that and would drift from it the first
+  // time a sentence moved.
+  let spokenIdentities: ReadonlyArray<string>;
   switch (pending.state) {
-    case "hold":
-      text = fallbackHoldText(pending, plan, failedIdentity, now);
+    case "hold": {
+      const line = fallbackHoldText(pending, plan, failedIdentity, now);
+      text = line.text;
+      spokenIdentities = line.spoken;
       break;
-    case "choosing":
-      text = `Countdown paused. ${fallbackPlanText(plan, failedIdentity, now)} Choose a destination or close the menu to resume the countdown.`;
+    }
+    case "choosing": {
+      const line = fallbackPlanText(plan, failedIdentity, now);
+      text = `Countdown paused. ${line.text} Choose a destination or close the menu to resume the countdown.`;
+      spokenIdentities = line.spoken;
       break;
+    }
     case "switching": {
       // The wait rung's resume runs these same phases onto the tuple that
       // failed, so there is nowhere to switch TO: "Switching this chat to <the
       // model it was already on>" announced a move that never happened.
       if (pendingFallbackResumesFailedTuple(pending)) {
         text = `Resuming this chat on ${failedIdentity}.`;
+        spokenIdentities = [failedIdentity];
         break;
       }
       const destination = targetIdentity ?? plan?.destination ?? null;
@@ -423,6 +482,11 @@ export function fallbackTraversalAnnouncement(input: {
       // false every time the rung was skipped, as on the way to a wait.
       if (destination === null) return null;
       text = `Switching this chat to ${destination}.`;
+      // The resolved `destination`, not `targetIdentity`: when the catalogue
+      // has not landed this sentence names `plan.destination` instead, and
+      // keying on the input rather than on what was SAID would move the key
+      // while the text stood still.
+      spokenIdentities = [destination];
       break;
     }
     case "waiting": {
@@ -431,6 +495,7 @@ export function fallbackTraversalAnnouncement(input: {
           ? "The host will resume when the verified reset is ready."
           : `Resuming at ${formatWaitTime(pending.deadline, now)}.`;
       text = `Waiting for ${failedIdentity}. ${resume} Select ${STOP_WAITING_LABEL} to cancel.`;
+      spokenIdentities = [failedIdentity];
       break;
     }
   }
@@ -440,25 +505,27 @@ export function fallbackTraversalAnnouncement(input: {
     // No tick, deadline, queued count or sibling count here. The host plan id
     // changes when its action or destination changes.
     //
-    // The resolved IDENTITIES are in the key, and that is a deliberate
-    // exception to "no display labels". The model catalogue is fetched only
-    // once a fallback exists, so the FIRST fallback of a cold session observes
-    // before it resolves and names the raw slug - "claude-fable-5-1[1m]", the
+    // The SPOKEN identities are in the key, and that is a deliberate exception
+    // to "no display labels". The model catalogue is fetched only once a
+    // fallback exists, so the FIRST fallback of a cold session observes before
+    // it resolves and names the raw slug - "claude-fable-5-1[1m]", the
     // provider-internal string this feature exists to stop showing. The
-    // resolver updates a moment later, but without these two fields the
-    // corrected sentence deduplicates against the slug one and the user is
-    // never told the real model name.
+    // resolver updates a moment later, but without them the corrected sentence
+    // deduplicates against the slug one and the user is never told the real
+    // model name.
     //
     // Safe to key on precisely because they are pure IDENTITY - provider,
     // account and model. Unlike a tick or a deadline they change once, when
     // the catalogue lands, and then hold, so this re-announces a corrected
     // name rather than re-announcing continuously.
+    //
+    // SPOKEN, not both of them: the branch reports what its sentence named, so
+    // the key moves when the words move and not otherwise.
     semanticKey: JSON.stringify([
       pending.state,
       plan?.planId ?? null,
       plan === null ? fallbackTupleAnnouncementKey(pending.targetTuple) : null,
-      failedIdentity,
-      targetIdentity,
+      spokenIdentities,
     ]),
     text,
   };

@@ -57,6 +57,7 @@ import { useFallbackCatalogOptions } from "@/components/settings/panels/fallback
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
+  globalLastRunSettingsAreHostOwned,
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
@@ -1539,13 +1540,24 @@ function TierStepHint({
   const lastRun = useComposerRunSettingsStore((state) =>
     selectGlobalLastRunSettings(state, hostId),
   );
+  // The selector falls back to the UNATTRIBUTED legacy record when this host has
+  // no entry of its own, and that tuple may have been written on a different
+  // machine. Resolving it against THIS host's `listModels` would answer with
+  // another host's model under the same slug - a wrong name, which is worse
+  // than the slug, because nothing about it looks unresolved. So a legacy tuple
+  // subscribes to nothing and keeps its raw model, the resolver's documented
+  // answer when nothing can say otherwise.
+  const hostOwnsLastRun = useComposerRunSettingsStore((state) =>
+    globalLastRunSettingsAreHostOwned(state, hostId),
+  );
+  const resolvable = lastRun !== null && hostOwnsLastRun;
   // Hooks run before the state gate, as they must - and the read is enabled
   // only while there IS a subject, so a fresh install or a host nothing has run
   // on issues no query at all.
   const modelLabelFor = useFallbackModelLabels(
     client,
-    [lastRun === null ? null : lastRun.harnessId],
-    lastRun !== null,
+    [resolvable ? lastRun.harnessId : null],
+    resolvable,
   );
   if (lastRun === null) return null;
   if (

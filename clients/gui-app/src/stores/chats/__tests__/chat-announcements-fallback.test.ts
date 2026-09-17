@@ -708,6 +708,276 @@ describe("fallbackTraversalAnnouncement", () => {
     });
     expect(differentState?.semanticKey).not.toBe(first?.semanticKey);
   });
+
+  /**
+   * `semanticKey` carries the identities the branch actually SPOKE, not both
+   * of `failedIdentity` and `targetIdentity`. Keying on an identity the text
+   * never used re-enqueues a sentence that has not changed a character.
+   *
+   * Per (state, plan.action), not per state: `hold`/`choosing` take their
+   * spoken set from `fallbackPlanText`, which names the destination on a
+   * switch, the failed tuple on retry/wait, and nothing on checking/notify
+   * or a null plan.
+   */
+  describe("semanticKey speaks only the identities the sentence named", () => {
+    const OTHER_FAILED = "Opus Claude (acct-west)";
+    const OTHER_TARGET = "Astra Mini Codex (acct-east)";
+    const SLUG_TARGET = "claude-fable-5-1[1m]";
+    const LABEL_TARGET = "Claude Fable";
+
+    function announce(input: {
+      readonly state: PendingFallback["state"];
+      readonly plan: FallbackAnnouncementPlan | null;
+      readonly failedIdentity: string;
+      readonly targetIdentity: string | null;
+      readonly targetTuple: ChatRunSettings | null;
+      readonly revision: number;
+    }): FallbackTraversalAnnouncement {
+      const pending =
+        input.targetTuple === null
+          ? pendingFallback({
+              state: input.state,
+              traversalId: "t1",
+              revision: input.revision,
+              deadline: NOW + 12_000,
+              queuedItemsMoving: 0,
+            })
+          : pendingFallbackWithTarget({
+              state: input.state,
+              targetTuple: input.targetTuple,
+            });
+      const result = fallbackTraversalAnnouncement({
+        pending: { ...pending, revision: input.revision },
+        plan: input.plan,
+        failedIdentity: input.failedIdentity,
+        targetIdentity: input.targetIdentity,
+        now: NOW,
+      });
+      if (result === null) {
+        throw new Error("expected a traversal announcement");
+      }
+      return result;
+    }
+
+    it("hold/choosing + switch: changing only failedIdentity leaves semanticKey (and the sentence) unchanged", () => {
+      const switchPlan = plan({
+        planId: "plan-switch-1",
+        action: "switch",
+        destination: TARGET_IDENTITY,
+        resumesAt: null,
+      });
+      for (const state of ["hold", "choosing"] as const) {
+        const namedFailed = announce({
+          state,
+          plan: switchPlan,
+          failedIdentity: FAILED_IDENTITY,
+          targetIdentity: TARGET_IDENTITY,
+          targetTuple: null,
+          revision: 1,
+        });
+        const otherFailed = announce({
+          state,
+          plan: switchPlan,
+          failedIdentity: OTHER_FAILED,
+          targetIdentity: TARGET_IDENTITY,
+          targetTuple: null,
+          revision: 1,
+        });
+        // Falsification: put `failedIdentity` into spokenIdentities for
+        // every hold/choosing branch. The switch sentence names the
+        // destination, so a catalogue resolving the failed tuple would
+        // move the key while the live region repeated itself verbatim.
+        expect(otherFailed.semanticKey).toBe(namedFailed.semanticKey);
+        expect(otherFailed.text).toBe(namedFailed.text);
+        expect(namedFailed.text).toContain(TARGET_IDENTITY);
+        expect(namedFailed.text).not.toContain(FAILED_IDENTITY);
+      }
+    });
+
+    it("hold/choosing + retry or wait: failedIdentity moves the key, targetIdentity does not", () => {
+      for (const state of ["hold", "choosing"] as const) {
+        for (const action of ["retry", "wait"] as const) {
+          const namedPlan = plan({
+            planId: `plan-${action}-1`,
+            action,
+            destination: null,
+            resumesAt: action === "wait" ? NOW + 60_000 : null,
+          });
+          const base = announce({
+            state,
+            plan: namedPlan,
+            failedIdentity: FAILED_IDENTITY,
+            targetIdentity: TARGET_IDENTITY,
+            targetTuple: null,
+            revision: 1,
+          });
+          const failedMoved = announce({
+            state,
+            plan: namedPlan,
+            failedIdentity: OTHER_FAILED,
+            targetIdentity: TARGET_IDENTITY,
+            targetTuple: null,
+            revision: 1,
+          });
+          const targetMoved = announce({
+            state,
+            plan: namedPlan,
+            failedIdentity: FAILED_IDENTITY,
+            targetIdentity: OTHER_TARGET,
+            targetTuple: null,
+            revision: 1,
+          });
+          expect(failedMoved.semanticKey).not.toBe(base.semanticKey);
+          expect(targetMoved.semanticKey).toBe(base.semanticKey);
+          expect(base.text).toContain(FAILED_IDENTITY);
+        }
+      }
+    });
+
+    it("hold/choosing + checking, notify, or no plan: neither identity moves the key", () => {
+      const plans: ReadonlyArray<FallbackAnnouncementPlan | null> = [
+        plan({
+          planId: "plan-checking-1",
+          action: "checking",
+          destination: null,
+          resumesAt: null,
+        }),
+        plan({
+          planId: "plan-notify-1",
+          action: "notify",
+          destination: null,
+          resumesAt: null,
+        }),
+        null,
+      ];
+      for (const state of ["hold", "choosing"] as const) {
+        for (const namedPlan of plans) {
+          const base = announce({
+            state,
+            plan: namedPlan,
+            failedIdentity: FAILED_IDENTITY,
+            targetIdentity: TARGET_IDENTITY,
+            targetTuple: null,
+            revision: 1,
+          });
+          const failedMoved = announce({
+            state,
+            plan: namedPlan,
+            failedIdentity: OTHER_FAILED,
+            targetIdentity: TARGET_IDENTITY,
+            targetTuple: null,
+            revision: 1,
+          });
+          const targetMoved = announce({
+            state,
+            plan: namedPlan,
+            failedIdentity: FAILED_IDENTITY,
+            targetIdentity: OTHER_TARGET,
+            targetTuple: null,
+            revision: 1,
+          });
+          expect(failedMoved.semanticKey).toBe(base.semanticKey);
+          expect(targetMoved.semanticKey).toBe(base.semanticKey);
+        }
+      }
+    });
+
+    it("waiting: failedIdentity moves the key, targetIdentity does not", () => {
+      const waitPlan = plan({
+        planId: "plan-wait-1",
+        action: "wait",
+        destination: null,
+        resumesAt: NOW + 60_000,
+      });
+      const base = announce({
+        state: "waiting",
+        plan: waitPlan,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: TARGET_IDENTITY,
+        targetTuple: null,
+        revision: 1,
+      });
+      const failedMoved = announce({
+        state: "waiting",
+        plan: waitPlan,
+        failedIdentity: OTHER_FAILED,
+        targetIdentity: TARGET_IDENTITY,
+        targetTuple: null,
+        revision: 1,
+      });
+      const targetMoved = announce({
+        state: "waiting",
+        plan: waitPlan,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: OTHER_TARGET,
+        targetTuple: null,
+        revision: 1,
+      });
+      expect(failedMoved.semanticKey).not.toBe(base.semanticKey);
+      expect(targetMoved.semanticKey).toBe(base.semanticKey);
+      expect(base.text).toBe(targetMoved.text);
+    });
+
+    it("switching (non-resume): the resolved destination moving slug → label changes the key", () => {
+      const switchPlan = plan({
+        planId: "plan-switch-1",
+        action: "switch",
+        destination: SLUG_TARGET,
+        resumesAt: null,
+      });
+      const slug = announce({
+        state: "switching",
+        plan: switchPlan,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: SLUG_TARGET,
+        targetTuple: TARGET_TUPLE,
+        revision: 2,
+      });
+      const label = announce({
+        state: "switching",
+        plan: switchPlan,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: LABEL_TARGET,
+        targetTuple: TARGET_TUPLE,
+        revision: 2,
+      });
+      // This is the original catalogue-correction: without the destination
+      // in the key, the resolved name deduplicates against the slug one.
+      expect(label.semanticKey).not.toBe(slug.semanticKey);
+      expect(slug.text).toBe(`Switching this chat to ${SLUG_TARGET}.`);
+      expect(label.text).toBe(`Switching this chat to ${LABEL_TARGET}.`);
+    });
+
+    it("switching (resume on the failed tuple): failedIdentity moves the key, targetIdentity does not", () => {
+      const base = announce({
+        state: "switching",
+        plan: null,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: FAILED_IDENTITY,
+        targetTuple: FAILED_TUPLE,
+        revision: 4,
+      });
+      const failedMoved = announce({
+        state: "switching",
+        plan: null,
+        failedIdentity: OTHER_FAILED,
+        targetIdentity: FAILED_IDENTITY,
+        targetTuple: FAILED_TUPLE,
+        revision: 4,
+      });
+      const targetMoved = announce({
+        state: "switching",
+        plan: null,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: OTHER_TARGET,
+        targetTuple: FAILED_TUPLE,
+        revision: 4,
+      });
+      expect(base.text).toBe(`Resuming this chat on ${FAILED_IDENTITY}.`);
+      expect(failedMoved.semanticKey).not.toBe(base.semanticKey);
+      expect(targetMoved.semanticKey).toBe(base.semanticKey);
+    });
+  });
 });
 
 describe("fallbackReturnAnnouncement", () => {
@@ -1206,6 +1476,156 @@ describe("createFallbackAnnouncementObserver", () => {
     expect(
       observer.observe(input({ baselineEpoch: 1, traversal: revisionBump })),
     ).toEqual([]);
+  });
+
+  it("waiting: a targetIdentity-only catalogue resolution does not enqueue a second announcement", () => {
+    const waitPlan = plan({
+      planId: "plan-wait-1",
+      action: "wait",
+      destination: null,
+      resumesAt: NOW + 60_000,
+    });
+    const waiting = (targetIdentity: string, revision: number) => {
+      const result = fallbackTraversalAnnouncement({
+        pending: pendingFallback({
+          state: "waiting",
+          traversalId: "t1",
+          revision,
+          deadline: NOW + 5_000,
+          queuedItemsMoving: 0,
+        }),
+        plan: waitPlan,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity,
+        now: NOW,
+      });
+      if (result === null) {
+        throw new Error("expected a waiting announcement");
+      }
+      return result;
+    };
+    const observer = createFallbackAnnouncementObserver();
+    // Absorb a different state so the first waiting observation is live.
+    observer.observe(
+      input({ baselineEpoch: 1, traversal: traversal("hold", 1, "p1") }),
+    );
+    const first = observer.observe(
+      input({
+        baselineEpoch: 1,
+        traversal: waiting("claude-fable-5-1[1m]", 2),
+      }),
+    );
+    expect(first).toHaveLength(1);
+
+    // Same sentence, different unused targetIdentity, later revision.
+    // Falsification: put `targetIdentity` in waiting's semanticKey and this
+    // re-announces character-for-character.
+    const second = observer.observe(
+      input({
+        baselineEpoch: 1,
+        traversal: waiting("Claude Fable", 3),
+      }),
+    );
+    expect(second).toEqual([]);
+  });
+
+  it("hold + switch: a failedIdentity-only catalogue resolution does not enqueue a second announcement", () => {
+    const switchPlan = plan({
+      planId: "plan-switch-1",
+      action: "switch",
+      destination: TARGET_IDENTITY,
+      resumesAt: null,
+    });
+    const holdSwitch = (failedIdentity: string, revision: number) => {
+      const result = fallbackTraversalAnnouncement({
+        pending: pendingFallback({
+          state: "hold",
+          traversalId: "t1",
+          revision,
+          deadline: NOW + 12_000,
+          queuedItemsMoving: 0,
+        }),
+        plan: switchPlan,
+        failedIdentity,
+        targetIdentity: TARGET_IDENTITY,
+        now: NOW,
+      });
+      if (result === null) {
+        throw new Error("expected a hold announcement");
+      }
+      return result;
+    };
+    const observer = createFallbackAnnouncementObserver();
+    observer.observe(
+      input({ baselineEpoch: 1, traversal: traversal("choosing", 1, "p1") }),
+    );
+    const first = observer.observe(
+      input({
+        baselineEpoch: 1,
+        traversal: holdSwitch(FAILED_IDENTITY, 2),
+      }),
+    );
+    expect(first).toHaveLength(1);
+
+    // The switch sentence names the destination, not the failed tuple.
+    // Falsification: put `failedIdentity` into hold/choosing spoken
+    // identities unconditionally, and this re-announces the same sentence.
+    const failedResolved = observer.observe(
+      input({
+        baselineEpoch: 1,
+        traversal: holdSwitch("Claude Fable (acct-north)", 3),
+      }),
+    );
+    expect(failedResolved).toEqual([]);
+  });
+
+  it("switching: a destination resolving slug → label DOES re-announce", () => {
+    const switchPlan = plan({
+      planId: "plan-switch-1",
+      action: "switch",
+      destination: "claude-fable-5-1[1m]",
+      resumesAt: null,
+    });
+    const switching = (targetIdentity: string, revision: number) => {
+      const result = fallbackTraversalAnnouncement({
+        pending: pendingFallback({
+          state: "switching",
+          traversalId: "t1",
+          revision,
+          deadline: null,
+          queuedItemsMoving: 0,
+        }),
+        plan: switchPlan,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity,
+        now: NOW,
+      });
+      if (result === null) {
+        throw new Error("expected a switching announcement");
+      }
+      return result;
+    };
+    const observer = createFallbackAnnouncementObserver();
+    observer.observe(
+      input({ baselineEpoch: 1, traversal: traversal("hold", 1, "p1") }),
+    );
+    const slug = observer.observe(
+      input({
+        baselineEpoch: 1,
+        traversal: switching("claude-fable-5-1[1m]", 2),
+      }),
+    );
+    expect(slug).toHaveLength(1);
+    expect(slug[0]?.text).toBe("Switching this chat to claude-fable-5-1[1m].");
+
+    const labelled = observer.observe(
+      input({
+        baselineEpoch: 1,
+        traversal: switching("Claude Fable", 3),
+      }),
+    );
+    expect(labelled).toHaveLength(1);
+    expect(labelled[0]?.text).toBe("Switching this chat to Claude Fable.");
   });
 
   it("ignores a lower-revision replay outright, without disturbing the current generation's own dedupe", () => {

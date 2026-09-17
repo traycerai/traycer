@@ -4728,6 +4728,16 @@ describe("FallbackSettingsPanel - the equivalent-models step hint", () => {
     // answers `null` with no host runtime above the panel, and
     // `selectGlobalLastRunSettings` falls back to this tier for exactly that
     // case. Seeding a per-host bucket would be seeding a key nothing reads.
+    //
+    // Which means these two cases pin the RENDERING - that the hint asks
+    // `modelLabelFor` and prints its answer - and deliberately not the
+    // subscription. `useFallbackModelLabels` is doubled above by a resolver
+    // that ignores `enabled`, so a legacy tuple resolves here and would NOT in
+    // production: the hint declines to resolve a tuple this host does not own,
+    // because that record carries no host and the catalogue being consulted
+    // belongs to one. That contract needs a real resolver and a real host id,
+    // so it lives in `fallback-settings-panel-tier-step-hint.test.tsx`; do not
+    // read these two as evidence about it.
     useComposerRunSettingsStore.setState({
       legacyGlobalLastRunSettings: LAST_RUN,
     });

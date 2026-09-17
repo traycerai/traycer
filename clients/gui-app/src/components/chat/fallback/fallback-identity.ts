@@ -528,13 +528,78 @@ export function useFallbackModelCatalogues(
     return outer;
   }, [harnessIds, modelCatalogues]);
 
+  // Keyed off the WANTED ids, not off `harnessIds`, and that distinction is the
+  // whole of this memo.
+  //
+  // `harnessIds` is what survived two filters - the harness list having
+  // arrived, and the row being available - so an id still waiting on EITHER is
+  // absent from it. Walking only `harnessIds` therefore reported every such id
+  // settled: before `agent.gui.listHarnesses` answers, that is every id in
+  // play, which is exactly the premature answer the model-catalogue `settled`
+  // flag exists to prevent, one layer higher up. The manual-switch announcer
+  // CONSUMES its event, so a single settled-too-early read there names the raw
+  // slug permanently.
   const unsettled = useMemo(() => {
     const pendingIds = new Set<string>();
+    // Nothing is in flight when the hook is off, matching `settled`'s own third
+    // arm - a disabled query sits at `isPending` forever and waiting on it
+    // would never end.
+    if (!enabled) return pendingIds;
+    // The same `safeParse` gate `harnessIds` applies, and for the same reason
+    // turned around: a harness with no GUI catalogue never has `listModels`
+    // called for it, so there is nothing here to wait FOR. Deferring on one
+    // would hold an announcement open against a request that is never going to
+    // be made - the failure `settledFor`'s own note below warns about, arrived
+    // at from the other direction. Applied to the WANTED list rather than per
+    // branch, because it is a fact about the id alone and holds before the
+    // harness list has said anything.
+    const wanted =
+      wantedKey === ""
+        ? []
+        : wantedKey
+            .split(" ")
+            .filter((id) => guiHarnessIdSchema.safeParse(id).success);
+
+    if (available === undefined) {
+      // A failed read is never coming, so it SETTLES rather than blocking - the
+      // same trade the catalogue flag makes, for the same reason: waiting on it
+      // would swap a clumsy label for silence about a switch that happened.
+      if (!harnessesQuery.isError) for (const id of wanted) pendingIds.add(id);
+      return pendingIds;
+    }
+
+    const rowById = new Map(available.map((row) => [String(row.id), row]));
+    for (const id of wanted) {
+      const row = rowById.get(id);
+      // Pending is not an unavailable verdict. A row still deciding gets left
+      // out of `harnessIds` by the `available` filter above, so without this it
+      // would read settled while its answer - and the catalogue fetch that
+      // follows it - are both still outstanding. `lastSettledAvailable ===
+      // false` is a row that has already ANSWERED unavailable once and is only
+      // re-checking; there is no catalogue coming for it either way.
+      if (
+        row !== undefined &&
+        row.availabilityPending &&
+        !row.available &&
+        row.error === null &&
+        row.lastSettledAvailable !== false
+      ) {
+        pendingIds.add(id);
+      }
+    }
+
     harnessIds.forEach((harnessId, index) => {
       if (!modelCatalogues[index].settled) pendingIds.add(harnessId);
     });
     return pendingIds;
-  }, [harnessIds, modelCatalogues]);
+  }, [
+    available,
+    enabled,
+    harnessIds,
+    harnessesQuery.isError,
+    modelCatalogues,
+    wantedKey,
+  ]);
 
   return useMemo(
     () => ({
