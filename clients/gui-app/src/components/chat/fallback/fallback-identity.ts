@@ -23,6 +23,7 @@ import {
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -414,6 +415,19 @@ export function useFallbackModelCatalogues(
   });
   const available = harnessesQuery.data?.harnesses;
 
+  // What ends a wait is a read that CANNOT RUN - not one that failed. Both
+  // query hooks below disable on `client === null || !readiness.canExecute`
+  // (`use-host-query.ts`, `use-host-queries.ts`), and a disabled query sits at
+  // `isPending` with nothing scheduled behind it, so every settlement arm in
+  // this hook has to treat that as answered or hold forever. Read from the same
+  // hook those two use, against the same client, so the three cannot disagree.
+  //
+  // `canExecute` alone is the whole gate, not half of it: the snapshot sets
+  // `hasRpcEndpoint` to `client !== null && ...`, so a null client already
+  // forces `canExecute` false. Restating the client test would be a second
+  // spelling of one condition, free to drift from it.
+  const readsFrozen = !useReactiveHostReadiness(client).canExecute;
+
   // The wanted harnesses as a stable STRING, computed every render rather than
   // memoised on `tuples`.
   //
@@ -509,14 +523,25 @@ export function useFallbackModelCatalogues(
     ): ReadonlyArray<ModelCatalogueRead> =>
       results.map((result) => ({
         models: result.data?.models,
-        // Answered, failed, or switched off. The third arm reads this hook's
-        // own `enabled` rather than inferring idleness from the result, and
-        // that is the load-bearing choice: a DISABLED query sits at
-        // `isPending` with `isFetching` false forever, so a `!isFetching` test
-        // would call it settled - but so is a query that has mounted and not
-        // yet started its fetch, and calling THAT settled is precisely the
-        // premature answer this flag exists to prevent.
-        settled: result.isSuccess || result.isError || !enabled,
+        // Answered, failed, or not running. The last two arms read the
+        // CONDITIONS that disable the query rather than inferring idleness from
+        // the result, and that is the load-bearing choice: a DISABLED query
+        // sits at `isPending` with `isFetching` false forever, so a
+        // `!isFetching` test would call it settled - but so is a query that has
+        // mounted and not yet started its fetch, and calling THAT settled is
+        // precisely the premature answer this flag exists to prevent.
+        //
+        // `enabled` alone was not the whole condition: `useHostQueries`
+        // disables on an unbound client and on un-settled readiness too, so a
+        // cold slot on a restarting host held every caller indefinitely.
+        //
+        // `isError` DOES belong here, unlike in the availability wait below,
+        // and the difference is a fact about the method rather than a judgement
+        // call: `agent.gui.listModels` is declared `poll: null`, so a failure
+        // is the end of that read. `agent.gui.listHarnesses` is a condition-
+        // poll method whose error lanes re-issue, so there the same flag means
+        // the opposite thing. See the note in `unsettled`.
+        settled: result.isSuccess || result.isError || !enabled || readsFrozen,
       })),
   });
 
@@ -576,32 +601,36 @@ export function useFallbackModelCatalogues(
             .split(" ")
             .filter((id) => guiHarnessIdSchema.safeParse(id).success);
 
-    // A failed harness read settles the AVAILABILITY wait rather than blocking
-    // it - the same trade the catalogue flag makes, for the same reason:
-    // waiting on a read that is never coming would swap a clumsy label for
-    // silence about a switch that happened.
+    // A FROZEN harness read settles the availability wait. Note what this
+    // deliberately does not test: `isError`.
     //
-    // Read OUT HERE, not inside the no-data branch, and that placement is the
-    // whole point. TanStack's error reducer SPREADS existing state and never
-    // clears `data` ("flag existing data as invalidated if we get a background
-    // error"), so a refetch failure after one success leaves `isError` true
-    // WITH the last good rows still retained. An `isError` test reachable only
-    // when `available === undefined` therefore never fires in that case, and a
-    // cached `availabilityPending` row was re-added on every render for as long
-    // as the refetch kept failing. `settledFor` would never come back true, and
-    // the manual-switch announcer - which CONSUMES its event - stays silent
-    // about a switch that already happened. Indefinite silence is the worse
-    // half of this trade, not the safer one.
-    const harnessReadFailed = harnessesQuery.isError;
-
+    // `agent.gui.listHarnesses` is a condition-poll method, and BOTH of its
+    // error lanes - `harnesses.initial-error` and `harnesses.stale-error` -
+    // are spreads of the 800ms `harnesses.pending` lane
+    // (`host-method-policy-table.ts`), which the episode coordinator enters on
+    // a failure with or without retained data. Those queries are pinned
+    // `retry: false`, so one dropped frame reaches `status: "error"` by itself.
+    // An `isError` test here therefore fires on the COMMONEST failure there is
+    // - a single missed tick mid-probe - and settling then consumes the
+    // announcement with a raw slug that the answer arriving 800ms later can no
+    // longer correct. That is the unrecoverable direction of this trade, spent
+    // on a condition that repairs itself.
+    //
+    // The wait it looks like it is protecting against is not indefinite either:
+    // the announcer HOLDS rather than consumes, returning the old sequence so a
+    // later observation sees the event as new again, and it lists these
+    // catalogues among its dependencies precisely so the frame an answer lands
+    // on re-observes. A failing poll makes the sentence LATE, bounded by the
+    // lane's 5s ceiling. Only a read that cannot run at all makes it silent,
+    // and that is the condition tested here.
     if (available === undefined) {
-      if (!harnessReadFailed) for (const id of wanted) pendingIds.add(id);
+      if (!readsFrozen) for (const id of wanted) pendingIds.add(id);
       return pendingIds;
     }
 
-    // Model reads below are still honoured on a harness-read error: this gate
-    // is only about waiting for an AVAILABILITY verdict that is not coming.
-    if (!harnessReadFailed) {
+    // Model reads below are still honoured: this gate is only about waiting for
+    // an AVAILABILITY verdict that genuinely is not coming.
+    if (!readsFrozen) {
       const rowById = new Map(available.map((row) => [String(row.id), row]));
       for (const id of wanted) {
         const row = rowById.get(id);
@@ -639,14 +668,7 @@ export function useFallbackModelCatalogues(
       if (!modelCatalogues[index].settled) pendingIds.add(harnessId);
     });
     return pendingIds;
-  }, [
-    available,
-    enabled,
-    harnessIds,
-    harnessesQuery.isError,
-    modelCatalogues,
-    wantedKey,
-  ]);
+  }, [available, enabled, harnessIds, modelCatalogues, readsFrozen, wantedKey]);
 
   return useMemo(
     () => ({

@@ -758,6 +758,32 @@ const modelLabelOverride = vi.hoisted(() => ({
   value: null as ReadonlyMap<string, string> | null,
 }));
 
+/**
+ * Catalogue-settled flag for `useFallbackModelCatalogues`. Default `true` so
+ * every existing case in this file still consumes a manual switch on the first
+ * observation. The hold that waits on an unsettled catalogue is pinned in the
+ * nested describe below; this mock previously claimed that hold already had
+ * "its own pin" elsewhere, which was false.
+ *
+ * `settledFor` is a STABLE function identity (replaced only when a test mints
+ * a new one) so a layout-effect re-observation is a deliberate settle, not an
+ * accidental new arrow on every render.
+ */
+const catalogueSettled = vi.hoisted(() => {
+  const state: {
+    value: boolean;
+    settledFor: (harnessId: string) => boolean;
+  } = {
+    value: true,
+    settledFor: (_harnessId: string): boolean => state.value,
+  };
+  return state;
+});
+
+function mintCatalogueSettledFor(): (harnessId: string) => boolean {
+  return (_harnessId: string): boolean => catalogueSettled.value;
+}
+
 vi.mock(
   "@/components/chat/fallback/fallback-identity",
   async (importOriginal) => {
@@ -779,10 +805,7 @@ vi.mock(
       useFallbackModelLabels: () => labelFor,
       useFallbackModelCatalogues: () => ({
         labelFor,
-        // Always settled, so the announcer consumes on the first observation.
-        // These cases are about WHAT gets announced; the catalogue-timing hold
-        // that defers consumption is a different behaviour with its own pin.
-        settledFor: () => true,
+        settledFor: catalogueSettled.settledFor,
       }),
     };
   },
@@ -1225,6 +1248,8 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     runManualRungState.handler = () => Promise.resolve({ outcome: "applied" });
     runManualRungState.callCount.current = 0;
     modelLabelOverride.value = null;
+    catalogueSettled.value = true;
+    catalogueSettled.settledFor = mintCatalogueSettledFor();
     disposeAllChatSessions();
   });
 
@@ -3091,5 +3116,225 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const card = screen.getByTestId("fallback-grace-card").textContent;
     expect(card).toContain("Astra Mini");
     expect(card).not.toContain(TARGET_TUPLE.model);
+  });
+
+  /**
+   * Manual-switch catalogue-label hold: `observeManualFallbackAction` will not
+   * consume a confirmed switch while `settledFor(target.harnessId)` is false,
+   * until either the catalogue settles or `MANUAL_LABEL_HOLD_MS` elapses on a
+   * READY surface. 10_000 below is that constant; it is not imported, so a
+   * change to the production figure fails these tests rather than silently
+   * tracking it.
+   */
+  describe("manual-switch catalogue-label hold", () => {
+    const RESOLVED_MANUAL_MODEL_LABEL = "Astra Mini";
+    const MANUAL_SWITCH_RESOLVED_IDENTITY = `Codex · ${RESOLVED_MANUAL_MODEL_LABEL} · high on ${TARGET_PROFILE_LABEL}`;
+    const SWITCHED_SLUG_SENTENCE = `Switched this chat to ${MANUAL_SWITCH_TARGET_IDENTITY}.`;
+    const SWITCHED_RESOLVED_SENTENCE = `Switched this chat to ${MANUAL_SWITCH_RESOLVED_IDENTITY}.`;
+    // `MANUAL_LABEL_HOLD_MS` in chat-messages.tsx. Literal on purpose.
+    const MANUAL_LABEL_HOLD_MS = 10_000;
+
+    function publishHeldSwitch(harness: Harness): void {
+      harness.handle.store.getState().publishConfirmedManualFallbackAction({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        rung: "switch",
+        userMessageId: "user-msg-hold",
+        turnId: "turn-hold",
+        target: TARGET_TUPLE,
+      });
+    }
+
+    function settleCatalogue(): void {
+      catalogueSettled.value = true;
+      catalogueSettled.settledFor = mintCatalogueSettledFor();
+    }
+
+    function unsettleCatalogue(): void {
+      catalogueSettled.value = false;
+      catalogueSettled.settledFor = mintCatalogueSettledFor();
+    }
+
+    it("holds the confirmed switch and does not announce while the catalogue is unsettled", async () => {
+      // Falsification: drop the `!modelCatalogueSettledFor(...)` hold in
+      // `observeManualFallbackAction` - this speaks the slug sentence on the
+      // first observation instead of staying silent.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+      expect(liveRegionText()).not.toContain(TARGET_TUPLE.model);
+    });
+
+    it("announces the resolved label exactly once when the catalogue settles before the deadline", async () => {
+      // Falsification: announce on first sight (no hold) - the sentence would
+      // carry the RAW SLUG, because the override is applied only at settle.
+      // Falsification: wait for the deadline instead of settle - advancing
+      // 9s then settling would still be silent here, or would speak the slug
+      // if the deadline were shorter than 9s.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      act(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS - 1_000);
+      });
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      modelLabelOverride.value = new Map([
+        [
+          `${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`,
+          RESOLVED_MANUAL_MODEL_LABEL,
+        ],
+      ]);
+      settleCatalogue();
+      const commits = await captureLiveRegionCommits(() => {
+        chat.rerenderWith({});
+      });
+      expect(
+        countSentenceOccurrences(commits, SWITCHED_RESOLVED_SENTENCE),
+      ).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_RESOLVED_SENTENCE);
+      expect(liveRegionText()).not.toContain(TARGET_TUPLE.model);
+    });
+
+    it("announces the raw slug at the deadline when the catalogue never settles, woken by the timer alone", async () => {
+      // Falsification: omit the `window.setTimeout` that re-calls
+      // `observeState` - nothing else changes here, so the sentence never
+      // lands. Falsification: consume on first sight - this would speak
+      // BEFORE the timer, and `captureLiveRegionCommits` around the advance
+      // would see 0 inserts.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS);
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      expect(liveRegionText()).toContain(TARGET_TUPLE.model);
+    });
+
+    it("does not re-announce the same switch after the deadline has consumed it", async () => {
+      // Falsification: leave `lastManualSequence` at the pre-hold value after
+      // expiry (the hold's "return the OLD sequence" path leaking past
+      // consume) - a later observation would insert a second span.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+
+      await captureLiveRegionCommits(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS);
+      });
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      const spokenNode = liveRegionSpan();
+      expect(spokenNode).not.toBeNull();
+
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, undefined, undefined, undefined);
+        chat.rerenderWith({});
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(0);
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      expect(liveRegionSpan()).toBe(spokenNode);
+    });
+
+    it("clears the hold timer on unmount so it does not outlive the surface", async () => {
+      // Falsification: drop the `clearTimeout` in the store-subscription
+      // layout effect's cleanup (the one after "must not outlive them") -
+      // the hold timeout stays pending. The wake no longer reads the store
+      // (`setManualHoldTick` instead), and React 19 does not warn on a
+      // post-unmount setState, so the pending-timer count is the observable.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      // 2 pending while held: the hold timeout, plus one other fixture
+      // timer that unmount tears down regardless. Cleanup is what takes
+      // the leftover from 1 (the hold) to 0; dropping it leaves that one.
+      expect(vi.getTimerCount()).toBe(2);
+      chat.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("does not expire the hold while the surface cannot announce, and still speaks the slug once it can", async () => {
+      // Readiness lever: `connectionStatus` `"connecting"` / `"open"`.
+      // `"connecting"` does not bump `connectionEpoch` (this file's reconnect
+      // pin already documents that), so flipping back to `"open"` restores
+      // `ready` without a snapshot rewrite. `visible` is reachable but also
+      // rebases the completion observer, which `reset()`s the shared queue.
+      //
+      // The silent-while-not-ready assertion below is a prerequisite, not the
+      // pin: reverting `canExpire` to plain `ready` still stays silent here,
+      // because `observe` absorbs a not-ready (and the first ready) frame.
+      //
+      // The speak-after-restore assertion is the pin. It breaks on either
+      // production piece:
+      //   - `canExpire: ready` (not `!willAbsorb`) consumes the event into
+      //     the absorbing first-ready observe and never speaks.
+      //   - Dropping the 0ms wake (`wakeMs = remainingMs > 0 ? remainingMs
+      //     : ready ? 0 : null`) leaves the hold stuck after that observe
+      //     clears `wasReady`, with nothing else scheduled to re-observe.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      harness.callbacks().onConnectionStatus("connecting", null, null);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      act(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS + 5_000);
+      });
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        harness.callbacks().onConnectionStatus("open", null, null);
+        // The restore observe is absorbing (`!wasReady`). Production arms a
+        // 0ms timer so the next observe — now non-absorbing — can expire.
+        vi.advanceTimersByTime(0);
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      expect(liveRegionText()).toContain(TARGET_TUPLE.model);
+    });
   });
 });

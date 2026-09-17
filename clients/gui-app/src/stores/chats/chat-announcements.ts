@@ -675,6 +675,24 @@ export interface FallbackAnnouncementObserver {
   readonly observe: (
     input: FallbackAnnouncementsInput,
   ) => ReadonlyArray<FallbackAnnouncement>;
+  /**
+   * Whether an observation with these inputs would ABSORB rather than speak.
+   *
+   * Exposed for one caller and one reason: a producer that is DEFERRING an
+   * event has to know whether handing it over now would deliver it or bin it.
+   * An absorbing observation still records the key, so a deferred outcome
+   * passed into one is consumed and silently dropped - and the caller cannot
+   * work this out for itself, because absorption turns on state only the
+   * observer holds (the readiness of the PREVIOUS observation, and the
+   * baseline epoch it last saw).
+   *
+   * Call it with the same inputs as the `observe` that follows; `observe`
+   * mutates both, so the answer is only good for the next one.
+   */
+  readonly willAbsorb: (input: {
+    readonly ready: boolean;
+    readonly baselineEpoch: number;
+  }) => boolean;
 }
 
 interface ObservedFallbackTraversal {
@@ -705,10 +723,20 @@ export function createFallbackAnnouncementObserver(): FallbackAnnouncementObserv
   const seenManualOutcomes = new Set<string>();
   const seenUnattendedOutcomes = new Set<string>();
 
+  // One definition of absorption, read by `observe` and answered to callers
+  // through `willAbsorb`. Two spellings of this rule would be a defect waiting
+  // to happen: a producer deciding whether to hand an event over has to be
+  // asking the same question the delivery then answers.
+  const willAbsorb = (input: {
+    readonly ready: boolean;
+    readonly baselineEpoch: number;
+  }): boolean =>
+    baselineEpoch !== input.baselineEpoch || !wasReady || !input.ready;
+
   return {
+    willAbsorb,
     observe: (input) => {
-      const changedEpoch = baselineEpoch !== input.baselineEpoch;
-      const absorb = changedEpoch || !wasReady || !input.ready;
+      const absorb = willAbsorb(input);
       const hydrating = hydrationSequence !== input.hydrationSequence;
       const priorResidentMessageIds = residentMessageIds;
       baselineEpoch = input.baselineEpoch;

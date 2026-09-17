@@ -1405,6 +1405,53 @@ describe("createFallbackAnnouncementObserver", () => {
     ).toEqual([]);
   });
 
+  it("willAbsorb predicts exactly whether the NEXT observe speaks a direct outcome", () => {
+    // `willAbsorb` exists so a producer holding an event back can find out
+    // whether handing it over now would DELIVER it or bin it - an absorbing
+    // observe records the key and pushes nothing, so a deferred outcome passed
+    // into one is consumed and lost. The value of that answer is entirely in
+    // its agreeing with what `observe` then does, so this asserts the
+    // agreement rather than restating the predicate: the expectation is read
+    // off `observe`'s own behaviour. Change the absorb rule in one place and
+    // this goes red.
+    const observer = createFallbackAnnouncementObserver();
+    let sequence = 0;
+    const step = (
+      overrides: Partial<FallbackAnnouncementsInput>,
+      because: string,
+    ): void => {
+      sequence += 1;
+      // A fresh key each step, or the seen-set would mute a later step for a
+      // reason that has nothing to do with absorption.
+      const next = input({
+        ...overrides,
+        manualOutcome: { key: `m${sequence}`, text: `switched ${sequence}` },
+      });
+      // Asked with the same inputs, immediately before the call it describes.
+      // `observe` mutates both of the things absorption turns on, so this is
+      // the only order in which the answer means anything.
+      const predicted = observer.willAbsorb({
+        ready: next.ready,
+        baselineEpoch: next.baselineEpoch,
+      });
+      expect(observer.observe(next).length > 0, because).toBe(!predicted);
+    };
+
+    // One observer's lifetime, walking every cause of absorption and the
+    // speaking case between them.
+    step({ baselineEpoch: 1 }, "first observation ever: nothing was ready yet");
+    step({ baselineEpoch: 1 }, "primed and ready: speaks");
+    step({ baselineEpoch: 1, ready: false }, "not ready");
+    step(
+      { baselineEpoch: 1 },
+      "FIRST ready observation after a gap - still absorbing, because " +
+        "`wasReady` is assigned at the END of the previous observe",
+    );
+    step({ baselineEpoch: 1 }, "ready twice running: speaks");
+    step({ baselineEpoch: 2 }, "new baseline epoch: changed provenance");
+    step({ baselineEpoch: 2 }, "settled on the new epoch: speaks");
+  });
+
   it("a silent rebaseline does not permanently mute subsequent LIVE transitions", () => {
     const observer = createFallbackAnnouncementObserver();
     observer.observe(

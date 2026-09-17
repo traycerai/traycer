@@ -70,6 +70,27 @@ const hostQueriesCalls = vi.hoisted(() => ({
  */
 const modelsSettled = vi.hoisted(() => ({ value: true }));
 
+/**
+ * Whether the host can be dialled at all. Default `true`.
+ *
+ * This is the condition both query hooks disable themselves on, so it is the
+ * one that decides whether an unanswered read is going to be answered later or
+ * is simply not running. It is NOT interchangeable with an errored read: the
+ * harness query is a condition-poll method whose error lanes re-issue in 800ms,
+ * so a failure there is a late answer, while this is no answer.
+ */
+const hostCanExecute = vi.hoisted(() => ({ value: true }));
+
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({
+    hostId: hostCanExecute.value ? "host-1" : null,
+    requestContextUserId: hostCanExecute.value ? "user-1" : null,
+    isReady: hostCanExecute.value,
+    hasRpcEndpoint: hostCanExecute.value,
+    canExecute: hostCanExecute.value,
+  }),
+}));
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: (
     _client: unknown,
@@ -281,6 +302,33 @@ describe("useFallbackModelLabels", () => {
     expect(result.current.settledFor("codex")).toBe(true);
   });
 
+  it("settles a disabled harness whose own availability probe is still unresolved", () => {
+    // Same claim as the case above, on the one fixture that can prove it. That
+    // row is `available: true`, so the availability branch excludes it on
+    // `!row.available` before `row.enabled` is ever consulted - deleting the
+    // `enabled` conjunct leaves it green. Here `available` is false, so
+    // `enabled` is the only conjunct standing between this row and an
+    // unreleasable wait.
+    harnessesData.value = {
+      harnesses: [
+        settledRow("codex", false, {
+          enabled: false,
+          availabilityPending: true,
+          error: null,
+          lastSettledAvailable: false,
+        }),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["codex"], true),
+    );
+    // A disabled harness is not fanned out, so no catalogue is coming however
+    // its probe resolves. Waiting on one is the indefinite-silence half of the
+    // trade, and it is the half with no second chance.
+    expect(result.current.settledFor("codex")).toBe(true);
+  });
+
   it("issues no query and degrades to the slug for every tuple while the resolver is disabled", () => {
     const { result } = renderHook(() =>
       useFallbackModelLabels(null, ["claude"], false),
@@ -321,6 +369,12 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     harnessesData.value = undefined;
     modelsByHarness.value = new Map();
     hostQueriesCalls.requests = [];
+    // Both of these are reset HERE and not only in the first describe. A
+    // control left where the previous case put it is inherited by whatever is
+    // appended next, which passes or fails for a reason its own body does not
+    // state - and the last case in a file is exactly where the next one lands.
+    modelsSettled.value = true;
+    hostCanExecute.value = true;
   });
 
   it("is false for every requested id while listHarnesses is still pending, and true for an id nobody asked about", () => {
@@ -338,7 +392,7 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     expect(result.current.settledFor("grok")).toBe(true);
   });
 
-  it("is true for every requested id when listHarnesses has errored - a failed read is never coming", () => {
+  it("HOLDS every requested id when a cold listHarnesses read has errored - the initial-error lane re-issues", () => {
     harnessesQueryState.isError = true;
     harnessesData.value = undefined;
 
@@ -346,7 +400,14 @@ describe("useFallbackModelCatalogues.settledFor", () => {
       useFallbackModelCatalogues(null, ["claude"], true),
     );
 
-    expect(result.current.settledFor("claude")).toBe(true);
+    // This assertion used to read `true`, on the words "a failed read is never
+    // coming". It is coming: `agent.gui.listHarnesses` declares
+    // `initialErrorLane: HARNESS_INITIAL_ERROR_POLL_LANE`, which is a spread of
+    // the 800ms `harnesses.pending` lane, and the queries are pinned
+    // `retry: false` so a single dropped frame lands here on its own. Settling
+    // would consume the manual-switch announcement with a raw slug 800ms before
+    // the real name arrived, and that sentence cannot be corrected afterwards.
+    expect(result.current.settledFor("claude")).toBe(false);
   });
 
   it("is false for a row still deciding availability, and true once that row has settled unavailable", () => {
@@ -406,12 +467,12 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     expect(reprobing.current.settledFor("claude")).toBe(false);
   });
 
-  it("settles a pending row once the harness read itself has errored, even though TanStack retains the last good rows", () => {
-    // The state the previous version could not see: `listHarnesses` succeeded
-    // once, so `data` is populated, and a later refetch failed. The error
-    // reducer spreads existing state rather than clearing `data`, so `isError`
-    // and a full row set are true at the same time - and an `isError` test
-    // placed inside the no-data branch never runs.
+  it("HOLDS a pending row when a refetch errored and TanStack retained the last good rows", () => {
+    // `listHarnesses` succeeded once, so `data` is populated, and a later
+    // refetch failed. The error reducer spreads existing state rather than
+    // clearing `data`, so `isError` and a full row set are true together -
+    // which is precisely the `harnesses.stale-error` lane, re-issuing in 800ms
+    // with this row's probe still outstanding.
     harnessesData.value = {
       harnesses: [
         settledRow("claude", false, {
@@ -428,18 +489,17 @@ describe("useFallbackModelCatalogues.settledFor", () => {
       useFallbackModelCatalogues(null, ["claude"], true),
     );
 
-    // Falsification: move the `isError` read back inside the
-    // `available === undefined` branch and this goes red - the cached pending
-    // row is re-added on every render, `settledFor` never returns true, and
-    // the manual-switch announcer stays silent about a switch that happened
-    // for as long as the refetch keeps failing.
-    expect(result.current.settledFor("claude")).toBe(true);
+    // Falsification: gate either branch of the availability wait on
+    // `harnessesQuery.isError` and this goes red. That is the version this
+    // replaces, and it spent the unrecoverable direction of the trade - a
+    // permanently wrong slug - on the single commonest failure there is.
+    expect(result.current.settledFor("claude")).toBe(false);
   });
 
-  it("still waits on a pending MODEL read when the harness read has errored - the error only releases the availability wait", () => {
+  it("still waits on a pending MODEL read while the harness read is erroring - they are separate reads", () => {
     // `claude` is available, so it reaches `requests` and the model read
-    // governs it. A harness-read error must not short-circuit that: the
-    // catalogue answer is a separate read and is genuinely still in flight.
+    // governs it. Pinned from the other side: the availability half having an
+    // opinion must not decide the catalogue half either way.
     harnessesData.value = {
       harnesses: [settledRow("claude", true, SETTLED_TRUE)],
     };
@@ -451,5 +511,63 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     );
 
     expect(result.current.settledFor("claude")).toBe(false);
+  });
+
+  it("settles every requested id when the host cannot be dialled at all", () => {
+    // The case the `isError` test was reaching for and missing. Both query
+    // hooks disable on `!readiness.canExecute`, and a disabled query sits at
+    // `isPending` with nothing scheduled, so there is no later frame to wait
+    // for. THIS is a read that is not coming; an errored one is a late one.
+    hostCanExecute.value = false;
+    harnessesData.value = undefined;
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+
+    expect(result.current.settledFor("claude")).toBe(true);
+  });
+
+  it("settles a row still mid-probe when the host cannot be dialled", () => {
+    // Retained rows plus a frozen read: the probe that would clear
+    // `availabilityPending` cannot run, so waiting on it is permanent silence
+    // about a switch that did happen.
+    hostCanExecute.value = false;
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", false, {
+          enabled: true,
+          availabilityPending: true,
+          error: null,
+          lastSettledAvailable: null,
+        }),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+
+    expect(result.current.settledFor("claude")).toBe(true);
+  });
+
+  it("settles a pending MODEL read when the host cannot be dialled", () => {
+    // The model half of the same gate, and the one `enabled` alone did not
+    // cover: `useHostQueries` disables on an unbound client and on un-settled
+    // readiness as well as on this hook's flag, so a cold catalogue slot on a
+    // host that cannot be reached reported `isPending` with nothing behind it.
+    // Falsification: drop the `readsFrozen` arm from `combine`'s `settled` and
+    // this goes red.
+    hostCanExecute.value = false;
+    harnessesData.value = {
+      harnesses: [settledRow("claude", true, SETTLED_TRUE)],
+    };
+    modelsSettled.value = false;
+
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(null, ["claude"], true),
+    );
+
+    expect(result.current.settledFor("claude")).toBe(true);
   });
 });
