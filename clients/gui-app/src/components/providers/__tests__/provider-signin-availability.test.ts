@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { ReceivedLoginCapability } from "@/components/providers/provider-signin-availability";
 import {
   hostIsLocalForLoginAutoOpen,
   providerLoginIsRemoteSafe,
@@ -305,6 +306,44 @@ describe("providerLoginIsRemoteSafe", () => {
     ).toBe(false);
     expect(providerLoginIsRemoteSafe(null)).toBe(false);
     expect(providerLoginIsRemoteSafe(undefined)).toBe(false);
+  });
+
+  it("treats a capability with no remoteSafe key as not remote-safe", () => {
+    // Not a hypothetical shape. Both response decoders return the payload by
+    // cast when the peers agree on the major and the client's minor is not
+    // ahead (`clientCanonical.minor <= hostCanonical.minor`), so no parse runs
+    // and `.catch(null)` never supplies its default. `providers.list@9.1` is
+    // unreleased and was widened in place, so a host built before these
+    // markers landed answers on that very same 9.1 with the key absent - and
+    // no upgrade bridge runs, because by version the two peers already agree.
+    //
+    // No cast is needed to express this, which is the point of
+    // `ReceivedLoginCapability`: the wire shape is a real type, so a payload
+    // with the key genuinely absent is something the checker accepts and a
+    // reader can see. Writing `remoteSafe: undefined` would not be the same
+    // test - it satisfies the parsed type and describes a host that sent the
+    // key, rather than one that has never heard of it.
+    const unparsedFromOlderNinePointOneHost: ReceivedLoginCapability = {
+      oauthArgs: ["login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+    };
+
+    expect(providerLoginIsRemoteSafe(unparsedFromOlderNinePointOneHost)).toBe(
+      false,
+    );
+
+    // The control: the same payload from a host that DOES send the marker is
+    // still remote-safe, so the guard above is refusing absence rather than
+    // refusing everything.
+    expect(
+      providerLoginIsRemoteSafe({
+        ...unparsedFromOlderNinePointOneHost,
+        remoteSafe: {},
+        selfOpensBrowser: null,
+      }),
+    ).toBe(true);
   });
 });
 

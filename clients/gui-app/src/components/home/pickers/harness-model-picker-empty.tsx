@@ -63,7 +63,7 @@ interface ModelRowsStateProps {
    *  decides whether a terminal sign-in applies. `null` until resolved. */
   readonly activeProviderState: ProviderCliState | null;
   readonly rowsCount: number;
-  readonly onOpenProviderSettings: () => void;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
   /** Where a provider's setup terminal lands - see the type's doc. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   /** The picker's run-target host, which that terminal is minted on. */
@@ -218,7 +218,7 @@ function noModelsLabel(
 // without that field keep their existing API-key affordance.
 function unavailableProviderState(
   provider: GuiHarnessCatalogEntry,
-  onOpenProviderSettings: () => void,
+  onOpenProviderSettings: (focusTab: string) => void,
 ): ReactNode {
   if (
     provider.enabled &&
@@ -245,12 +245,13 @@ function unavailableProviderState(
             size="sm"
             variant="secondary"
             onClick={() => {
-              const focus = useProvidersFocusStore.getState();
-              focus.setFocusHarnessId(provider.id);
+              useProvidersFocusStore.getState().setFocusHarnessId(provider.id);
               // CLI candidates live on General; Account is the default for
               // providers that accept a key, including shared-binary aliases.
-              focus.setFocusTab("general");
-              onOpenProviderSettings();
+              // The tab goes THROUGH the callback rather than into the store
+              // here: the callback ends by setting the focus tab itself, so a
+              // write made before calling it is overwritten and lost.
+              onOpenProviderSettings("general");
             }}
           >
             Set up CLI
@@ -395,7 +396,7 @@ function ProviderSetupCta(props: {
 function ProviderApiKeyCta(props: {
   readonly harnessId: GuiHarnessCatalogEntry["id"];
   readonly label: string;
-  readonly onOpenProviderSettings: () => void;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
 }): ReactNode {
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
@@ -417,7 +418,9 @@ function ProviderApiKeyCta(props: {
           // Pre-select this provider in the settings panel so the user lands on
           // its API-key field, not the first provider in the rail.
           useProvidersFocusStore.getState().setFocusHarnessId(props.harnessId);
-          props.onOpenProviderSettings();
+          // Unchanged destination - this CTA has always landed on the tab the
+          // callback chose. Named here only because the tab is now explicit.
+          props.onOpenProviderSettings("usage");
         }}
       >
         Add API key

@@ -177,10 +177,55 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       expect(screen.queryByRole("button", { name: "Add API key" })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Set up CLI" }));
       expect(useProvidersFocusStore.getState().focusHarnessId).toBe(id);
-      expect(useProvidersFocusStore.getState().focusTab).toBe("general");
+      // The destination is asserted at the SEAM, not in the store. The real
+      // callback (`openProviderSettings`) ends by setting the focus tab
+      // itself, so a store write made here before it runs is overwritten - an
+      // earlier version of this test asserted `focusTab === "general"` with
+      // the callback stubbed to `vi.fn()`, and passed precisely because the
+      // thing that overwrites it had been mocked away.
       expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+      expect(onOpenProviderSettings).toHaveBeenCalledWith("general");
     },
   );
+
+  // The control for the defect the seam assertion above describes. `vi.fn()`
+  // cannot catch it: the callback has to actually WRITE the focus tab, the way
+  // the picker's own `openProviderSettings` does, before "the CTA reaches
+  // General" means anything. Under the original code - the CTA writing
+  // `setFocusTab("general")` itself and calling a no-argument callback - this
+  // test reads "usage" and fails.
+  it("lands on General once the picker's own callback has set the tab", () => {
+    render(
+      ModelRowsState({
+        catalogLoading: false,
+        catalogError: false,
+        hostUnavailableLabel: null,
+        hasQuery: false,
+        activeProvider: harnessEntry({
+          id: "kiro",
+          label: "Kiro",
+          available: false,
+          requiresApiKey: true,
+          unavailableReason: "missing-binary",
+          error: "The resolver exhausted its candidates.",
+        }),
+        activeProviderState: null,
+        rowsCount: 0,
+        // Stands in for `openProviderSettings` in `harness-model-picker.tsx`:
+        // its last act is to set the focus tab, which is what made a write
+        // performed before the call unobservable.
+        onOpenProviderSettings: (focusTab: string) => {
+          useProvidersFocusStore.getState().setFocusTab(focusTab);
+        },
+        terminalLoginSurface: null,
+        runTargetHostId: null,
+        onClosePicker: () => undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Set up CLI" }));
+    expect(useProvidersFocusStore.getState().focusTab).toBe("general");
+  });
 
   it.each([
     { id: "cursor", label: "Cursor" },

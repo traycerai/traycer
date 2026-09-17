@@ -96,22 +96,48 @@ export function providerCanStartProfileOauth(
 }
 
 /**
+ * A login capability as it can ARRIVE, which is not the same shape as one that
+ * has been parsed. `remoteSafe` is a required key carrying `.catch(null)`, so
+ * anything that went through the schema has it - but the response decoders skip
+ * the parse entirely when the peers agree on the major and the client's minor
+ * is not ahead (`rpc-codec.ts` / `ws-rpc-client.ts`, `clientCanonical.minor <=
+ * hostCanonical.minor`), returning the payload by cast.
+ *
+ * `providers.list@9.1` is unreleased and was widened in place, so a host built
+ * before the marker landed answers on that very same 9.1 with no `remoteSafe`
+ * key at all, and no upgrade bridge runs to fill one - by version, the two
+ * peers already agree. Spelling the marker optional here is what forces every
+ * reader to decide what absence means instead of inheriting a promise the wire
+ * does not keep.
+ */
+export type ReceivedLoginCapability = Omit<
+  NonNullable<ProviderCliState["loginCapability"]>,
+  "remoteSafe" | "selfOpensBrowser"
+> &
+  Partial<
+    Pick<
+      NonNullable<ProviderCliState["loginCapability"]>,
+      "remoteSafe" | "selfOpensBrowser"
+    >
+  >;
+
+/**
  * Headless `providers.startLogin` that does not need a localhost callback on
  * the host: Claude's paste-code page, or a flow the host marks remote-safe.
  * Terminal login is a different button (composer), so it is not this.
  */
 export function providerLoginIsRemoteSafe(
-  loginCapability: ProviderCliState["loginCapability"] | undefined,
+  loginCapability: ReceivedLoginCapability | null | undefined,
 ): boolean {
   if (loginCapability === null || loginCapability === undefined) return false;
   if (loginCapability.codePaste !== null) return true;
-  // `remoteSafe` is a REQUIRED key carrying `.catch(null)`, so a parsed
-  // capability always has it and an unparsed literal is held to the same type.
-  // It is therefore never `undefined`, and the `!== undefined` arm this briefly
-  // carried was a condition that could not be false - the same thing the marker
-  // itself is declared under (see `cli-profiles.ts`: do not state what nothing
-  // can falsify). Widening it back means widening the schema first.
-  return loginCapability.remoteSafe !== null;
+  // Compare against PRESENCE, not against `null` - see `ReceivedLoginCapability`
+  // for why absence is reachable. `remoteSafe !== null` answered `true` for a
+  // capability that never carried the key, advertising a remote sign-in for a
+  // provider whose callback lives on the machine the user is not sitting at.
+  // Refusing a sign-in that would have worked costs a click; offering one that
+  // cannot complete strands the user - so absence resolves to `false`.
+  return Boolean(loginCapability.remoteSafe);
 }
 
 /**
