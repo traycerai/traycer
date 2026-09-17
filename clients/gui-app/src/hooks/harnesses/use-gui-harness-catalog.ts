@@ -18,6 +18,7 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   useHostQuery,
+  useHostQueryWithResponseMap,
   type UseHostQueryOptions,
 } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
@@ -245,15 +246,55 @@ export function useGuiHarnessesQuery(
  * rather than falling back to the default host - a composer must never offer
  * another host's harnesses under its own host's name.
  */
+// Keep the last settled verdict with the host-scoped query, across observer
+// detach/remount. A cold pending row must not revive an older model catalog
+// after a settled negative verdict has withdrawn it.
+interface CachedGuiHarnessesResponse extends ListGuiHarnessesResponse {
+  readonly harnesses: Array<
+    GuiHarnessOption & {
+      readonly lastSettledAvailable?: boolean | null;
+    }
+  >;
+}
+
 export function useGuiHarnessesQueryForClient(
   client: HostClient<HostRpcRegistry> | null,
   activity: QueryActivityOptions,
-): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
-  return useHostQuery<HostRpcRegistry, "agent.gui.listHarnesses">({
+): UseQueryResult<CachedGuiHarnessesResponse, HostRpcError> {
+  return useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "agent.gui.listHarnesses",
+    CachedGuiHarnessesResponse
+  >({
     cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listHarnesses",
     params: {},
+    mapResponse: ({ response, queryClient, queryKey }) => {
+      const previous =
+        queryClient.getQueryData<CachedGuiHarnessesResponse>(queryKey);
+      return {
+        ...response,
+        harnesses: response.harnesses.map((harness) => {
+          const prior = previous?.harnesses.find(
+            (row) => row.id === harness.id,
+          );
+          return {
+            ...harness,
+            lastSettledAvailable:
+              !harness.enabled ||
+              !harness.availabilityPending ||
+              harness.available ||
+              harness.error !== null
+                ? harness.available && harness.enabled
+                : (prior?.lastSettledAvailable ??
+                  (prior !== undefined && !prior.availabilityPending
+                    ? prior.available && prior.enabled
+                    : null)),
+          };
+        }),
+      };
+    },
     options: {
       enabled: activity.enabled,
       subscribed: activity.subscribed,
@@ -459,30 +500,75 @@ export function useGuiHarnessCatalogForClient(
     },
   });
 
+  // Pending is not an unavailable verdict. Keep observing this host's last
+  // model list, without starting discovery for a cold pending provider.
+  const pendingRequests = useMemo(
+    () =>
+      attached
+        ? (harnessesQuery.data?.harnesses.flatMap((harness) =>
+            harness.enabled &&
+            harness.availabilityPending &&
+            harness.lastSettledAvailable !== false &&
+            !harness.available
+              ? [
+                  {
+                    method: "agent.gui.listModels" as const,
+                    params: { harnessId: harness.id, workingDirectory },
+                  },
+                ]
+              : [],
+          ) ?? EMPTY_GUI_MODEL_REQUESTS)
+        : EMPTY_GUI_MODEL_REQUESTS,
+    [attached, harnessesQuery.data?.harnesses, workingDirectory],
+  );
+  const pendingModelQueries = useHostQueries<
+    HostRpcRegistry,
+    "agent.gui.listModels"
+  >({
+    client,
+    cacheKeyIdentity: undefined,
+    requests: pendingRequests,
+    options: { enabled: false, staleTime: Infinity, gcTime: Infinity },
+  });
+
   const queryByHarnessId = useMemo(() => {
     const queryMap = new Map<GuiHarnessId, (typeof modelQueries)[number]>();
     harnessIds.forEach((id, index) => {
       queryMap.set(id, modelQueries[index]);
     });
+    pendingRequests.forEach((request, index) => {
+      queryMap.set(request.params.harnessId, pendingModelQueries[index]);
+    });
     return queryMap;
-  }, [harnessIds, modelQueries]);
+  }, [harnessIds, modelQueries, pendingRequests, pendingModelQueries]);
 
   const harnesses = useMemo<ReadonlyArray<GuiHarnessCatalogEntry>>(
     () =>
       attached && harnessesQuery.data !== undefined
         ? harnessesQuery.data.harnesses.map((harness) => {
             const modelQuery = queryByHarnessId.get(harness.id);
+            const models = modelQuery?.data?.models ?? EMPTY_GUI_MODEL_OPTIONS;
+            const retainPendingModels =
+              harness.enabled &&
+              harness.availabilityPending &&
+              harness.lastSettledAvailable !== false &&
+              models.length > 0;
             return {
               ...harness,
-              models: modelQuery?.data?.models ?? EMPTY_GUI_MODEL_OPTIONS,
+              // Presentation stays usable while the host re-probes. A settled
+              // unavailable or disabled response still removes cached rows.
+              available: harness.available || retainPendingModels,
+              models,
               // "Loading" must mean a fetch is actually happening. Raw
               // `isPending` is true for ANY no-data slot - including one a
               // `"cached-only"` observer will never fetch - which would read
               // as an eternal spinner. `isLoading` (`isPending && isFetching`)
               // reflects the query's shared fetch state, so it also turns true
               // while a surface's own targeted query fills this same slot.
-              modelsLoading: modelQuery?.isLoading ?? false,
+              modelsLoading:
+                !retainPendingModels && (modelQuery?.isLoading ?? false),
               modelsError:
+                !retainPendingModels &&
                 modelQuery?.error instanceof HostRpcError
                   ? modelQuery.error
                   : null,

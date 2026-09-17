@@ -220,6 +220,16 @@ function unavailableProviderState(
   provider: GuiHarnessCatalogEntry,
   onOpenProviderSettings: () => void,
 ): ReactNode {
+  if (provider.enabled && provider.availabilityPending) {
+    return (
+      <PickerStateRow
+        icon={<MutedAgentSpinner />}
+        label="Loading models"
+        action={undefined}
+      />
+    );
+  }
+
   if (provider.requiresApiKey) {
     return (
       <ProviderApiKeyCta
