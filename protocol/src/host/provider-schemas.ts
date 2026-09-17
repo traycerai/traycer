@@ -241,6 +241,43 @@ export const providerIdSchemaV80 = z.enum([
 ]);
 export type ProviderIdV80 = z.infer<typeof providerIdSchemaV80>;
 
+/**
+ * The id set `providers.list@9.0` and `@9.1` actually shipped: v8.0's twenty
+ * plus Antigravity.
+ *
+ * Hand-written, not `providerIdSchema` by reference, for the reason the whole
+ * freeze discipline exists - and here that is not theoretical. Both lines are
+ * RELEASED (the published host `host-v1.3.2-staging.39.g3a73077` advertises
+ * canonical 9.1), and until this pin they reached the LIVE enum, so the next
+ * `/add-harness` would have added a twenty-second id to two shipped lines
+ * without anything objecting. That is the same defect the login-capability
+ * markers caused, one leaf over.
+ */
+export const providerIdSchemaV91 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+  "antigravity",
+]);
+export type ProviderIdV91 = z.infer<typeof providerIdSchemaV91>;
+
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   "claude-code": "Claude Code",
@@ -1078,11 +1115,13 @@ export const providerLoginCapabilitySchema = z.object({
    * Shape carries no fields today - existence alone is the signal - but stays
    * an object for the same reason `codePaste` and `terminalLogin` do.
    *
-   * `.catch(null)` hardens a present-but-unrecognized value. A genuinely ABSENT
-   * key (a host on `providers.list@8.0` or below, decoded through the client's
-   * negotiated frozen schema) reads `undefined`, not `null` - the v8->v9
-   * upgrade bridge fills it, and GUI gates must test
-   * `!== null && !== undefined`.
+   * `.catch(null)` hardens a present-but-unrecognized value. Absence is a
+   * different question and is answered by the VERSION: this key rides
+   * `providers.list@9.2`, so any peer below that is parsed through its own
+   * frozen schema and filled by `providersListUpgradeV91ToV92`. No reader
+   * receives it absent, and none should be written to tolerate that - the
+   * spelling that tolerates absence is what let it go unnoticed when these
+   * markers were briefly added to the already-released 9.1 in place.
    */
   remoteSafe: z.object({}).nullable().catch(null),
   /**
@@ -1130,8 +1169,8 @@ export const providerLoginCapabilitySchema = z.object({
    * Kimi is the only provider that is both, which is exactly why one marker
    * could never have carried both facts.
    *
-   * Shape and `.catch(null)` follow `remoteSafe` above; the v8->v9 bridge
-   * fills it for old hosts, so GUI gates test `!== null && !== undefined`.
+   * Shape and `.catch(null)` follow `remoteSafe` above, as does the version
+   * that carries it: 9.2, filled for every older peer by the 9.1 -> 9.2 bridge.
    */
   selfOpensBrowser: z.object({}).nullable().catch(null),
 });
@@ -1207,15 +1246,19 @@ export type ProviderLoginCapabilityV40 = z.infer<
  * them here was the whole fix, because this shape ALREADY held the four keys
  * they shipped. Nothing new had to be snapshotted.
  *
- * Do not add fields here. Extend the live `providerLoginCapabilitySchema` and
- * let the FIRST bridge whose target models the new field fill it for old hosts,
- * the way the v6->v7 bridge fills `terminalLogin`. That bridge is
- * `providersListUpgradeV80ToV90` today, not a v7->v8 hop: with v7.0 and v8.0
- * both pinned here, major 9 is the first line that models a fifth key. An
- * earlier revision of this docblock said "the v7->v8 upgrade bridge" because it
- * was written when 8.0 was the head line; do not restore that reading - the
- * bridge MOVES as shapes are re-pointed, so re-derive it rather than copying it
- * from here.
+ * Do not add fields here. Extend the live `providerLoginCapabilitySchema`,
+ * OPEN A NEW MINOR for it, and let the first bridge whose target models the new
+ * field fill it for old hosts, the way the v6->v7 bridge fills `terminalLogin`.
+ * That bridge is `providersListUpgradeV91ToV92` today: 7.0, 8.0, 9.0 and 9.1
+ * are all pinned to this four-key shape, so 9.2 is the first line that models a
+ * fifth key.
+ *
+ * This paragraph has now named three different hops (v7->v8, then v8->v9, then
+ * this), and the last correction was needed because the shapes were re-pointed
+ * and this text was not. The bridge MOVES; re-derive which target models your
+ * field rather than copying the answer from here. Filling on a hop whose target
+ * does not model the key is silently dropped, because `upgradeResponseToVersion`
+ * chains the callbacks by cast with no re-parse.
  */
 export const providerLoginCapabilitySchemaV70 = z.object({
   oauthArgs: z.array(z.string()).nullable(),
@@ -1799,7 +1842,71 @@ export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
  * live nested schema either. Add them to `providerCliStateBaseShape` above,
  * which only 9.2 (the head line) publishes.
  */
+/**
+ * The profile row `providers.list@9.0` / `@9.1` shipped: v8.0's plus `apiKey`,
+ * which landed while 9.x was still the unreleased head. Same hand-written
+ * discipline and same reason as `providerIdSchemaV91` above.
+ */
+export const providerProfileSchemaV91 = z.object({
+  ...providerProfileShapeV70,
+  enabled: z.boolean().default(true).catch(true),
+  apiKey: providerProfileApiKeyStateSchema.nullable().catch(null).optional(),
+  launchCommand: z
+    .object({
+      command: z.string(),
+      shell: z.enum(["posix", "powershell"]),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
+});
+export type ProviderProfileV91 = z.infer<typeof providerProfileSchemaV91>;
+
+/**
+ * Frozen `providers.list@9.0` / `@9.1` managed-versions row. V80's shape with
+ * this line's id enum swapped in; the key set has not moved since V70.
+ *
+ * It exists for one leaf. `sharedWithProviders` is a host→client `providerId`
+ * array, and `providerManagedVersionsSchemaV80`'s comment records what leaving
+ * it live cost last time: "leaving it live let Antigravity reach a released
+ * wire". A `.extend()` on the live row does not reach a nested schema, so
+ * pinning `providerId` at the top level and stopping there leaves this one
+ * reading the live enum - the same hole, one level down.
+ */
+const providerManagedVersionsSchemaV91 = z.object({
+  autoDownload: z.boolean(),
+  pinnedVersion: z.string().nullable(),
+  updateAvailable: z.object({ version: z.string() }).nullable(),
+  sharedWithProviders: z.array(providerIdSchemaV91).catch([]),
+  totalSizeBytes: z.number().int().nonnegative().nullable(),
+  available: z.array(providerPackVersionSchema),
+});
+
 export const providerCliStateSchemaV91 = providerCliStateSchema.extend({
+  // Four leaves pinned, not one. `loginCapability` is the leaf this freeze was
+  // written for, but a snapshot that pins only the leaf that just leaked is a
+  // snapshot of the last bug rather than a guard against the next.
+  //
+  // These four are not a judgement call: they are every leaf on this row that
+  // reaches a schema which has ever grown. `providerId` and
+  // `managedVersions.sharedWithProviders` are the two `providerId` enums (V70
+  // and V80 froze both, for Antigravity), and `profiles` is the row `apiKey`
+  // and `launchCommand` were added to. Ablating any of the four reddens this
+  // line.
+  //
+  // The rest are deliberately live, and that is the same set V80 leaves live:
+  // `auth`, `nativeCapabilities`, `selected`, `candidates`,
+  // `managedInstallState`, `versionVisibility`, `advisory` and `nextRunBinary`.
+  // None of them carries a `providerId`, which is what makes leaving them live
+  // survivable rather than lucky. If you grow one, pin it here in the same
+  // change - the frozen-catalog row will go red, and regenerating it instead
+  // of pinning is the mistake this whole comment exists to prevent.
+  providerId: providerIdSchemaV91,
+  profiles: z.array(providerProfileSchemaV91).catch([]),
+  managedVersions: providerManagedVersionsSchemaV91
+    .nullable()
+    .catch(null)
+    .optional(),
   loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
 });
 export type ProviderCliStateV91 = z.infer<typeof providerCliStateSchemaV91>;

@@ -136,22 +136,37 @@ const LIVE_FROZEN_EXPORTS = {
   // What that red means depends on whether the line has SHIPPED, and the two
   // answers are opposites - read this before reaching for either:
   //
-  //  - RELEASED (it appears in a non-rc `host-v*`/`cli-v*`/`desktop-v*` tag at
-  //    or above `support-floor.json`): peers in the field already speak it, so
-  //    the response it serves is fixed forever. Freeze the line that stopped
-  //    being head under reserved `VNN` names, open the next one against live,
-  //    and do NOT regenerate. That is what v7.0 above records.
-  //  - UNRELEASED (the case for 8.0 today - `host-v1.2.0` registers
-  //    `providers.list` 1.0 through 7.0 and no 8.0, and RCs are excluded by
-  //    `includeReleaseCandidates: false`): no peer can have negotiated it, so
-  //    there is no contract to break, and additive growth regenerates this
-  //    fixture. `enabled` and `launchCommand` on `providerProfileSchema` both
-  //    did exactly that, and `launchCommand`'s comment says so at the field.
+  //  - RELEASED: peers in the field already speak it, so the response it serves
+  //    is fixed forever. Freeze the line that stopped being head under reserved
+  //    `VNN` names, open the next one against live, and do NOT regenerate. That
+  //    is what v7.0 above records.
+  //  - UNRELEASED: no peer can have negotiated it, so there is no contract to
+  //    break, and additive growth regenerates this fixture. `enabled` and
+  //    `launchCommand` on `providerProfileSchema` both did exactly that, and
+  //    `launchCommand`'s comment says so at the field.
+  //
+  // **A line is RELEASED when a HOST that advertises it has been published** -
+  // not when a tag contains the commit that opened it. Check it with
+  // `gh release list` INCLUDING prereleases, and read the release's uploaded
+  // `protocol-surface.json`, which states the canonical version and the exact
+  // response shape that host serves.
+  //
+  // That wording is this precise because the older recipe here - "it appears in
+  // a non-rc `host-v*`/`cli-v*`/`desktop-v*` tag at or above
+  // `support-floor.json`", confirmed with
+  // `git show <newest non-rc tag>:protocol/src/host/registry.ts` - returned the
+  // WRONG ANSWER for `providers.list@9.1` and licensed widening it in place.
+  // Every clause of it was true; it just asked about tags. The published host
+  // `host-v1.3.2-staging.39.g3a73077` advertises 9.1, carries no matching tag
+  // (`git ls-remote --tags origin | grep staging` is empty), and is not an rc.
+  //
+  // Note that the compat gate's own baseline discovery
+  // (`scripts/compat/resolve-baselines.ts`) matches that same tag pattern, so it
+  // could not have caught this either and cannot catch the next one. Until that
+  // is reconciled, a staging-only line is guarded by THIS file and by the reader
+  // - which is why the rule above is stated here rather than left implied.
   //
   // So the red is a PROMPT to check release status, not a verdict on its own.
-  // Confirm with `git show <newest non-rc tag>:protocol/src/host/registry.ts`
-  // rather than from this file - once 8.0 ships, the first bullet governs and
-  // regenerating it would be the exact mistake the row exists to catch.
   //
   // There is no `providers.list@7.1` row because there is no such line: the
   // enablement pair was its entire delta over 7.0 and both were removed. This

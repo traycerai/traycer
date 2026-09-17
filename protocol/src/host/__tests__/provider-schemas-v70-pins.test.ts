@@ -24,6 +24,7 @@ import {
   providersListResponseSchemaV70,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
+  providersListResponseSchemaV91,
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -191,11 +192,18 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
     const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
     const v90 = majorNine.versions[0].contract;
+    const v91 = majorNine.versions[1].contract;
     const head = majorNine.versions[majorNine.latestMinor].contract;
 
     // The head names live, whichever minor the head happens to be.
     expect(head.responseSchema).toBe(providersListResponseSchema);
-    // ...and nothing below it does, on any major.
+    // ...and nothing below it does, on any major. 9.1 is listed explicitly
+    // because it is the line this guard was written too late for: it held the
+    // head row while pointing at live, two login-capability markers were added
+    // to it after it had shipped, and nothing here objected. Re-pointing it at
+    // live is exactly that regression, so it must fail rather than pass.
+    expect(v91.responseSchema).toBe(providersListResponseSchemaV91);
+    expect(v91.responseSchema).not.toBe(providersListResponseSchema);
     expect(v90.responseSchema).toBe(providersListResponseSchemaV90);
     expect(v90.responseSchema).not.toBe(providersListResponseSchema);
     expect(v80.responseSchema).toBe(providersListResponseSchemaV80);

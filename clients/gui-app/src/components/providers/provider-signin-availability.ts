@@ -126,7 +126,15 @@ export function providerLoginIsRemoteSafe(
   // replaced now lives on the 9.1 -> 9.2 upgrade bridge (`registry.ts`), which
   // is where a fact about OLD hosts belongs; a host that models the key answers
   // for itself.
-  return loginCapability.remoteSafe !== null;
+  // `Boolean(...)`, not `!== null`. Under the declared type the two are
+  // identical; they differ only on an ABSENT key, where `!== null` is `true`
+  // and this is `false`. Absence is unreachable today - that is what the 9.2
+  // line bought - but the fast path that made it reachable still exists, and
+  // the two spellings fail in opposite directions. Refusing a sign-in that
+  // would have worked costs a click; offering one that cannot complete strands
+  // the user, so the safe reading is kept even where it is currently
+  // indistinguishable.
+  return Boolean(loginCapability.remoteSafe);
 }
 
 /**

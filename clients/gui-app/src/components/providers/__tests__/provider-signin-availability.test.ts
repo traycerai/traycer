@@ -466,9 +466,10 @@ describe("shouldAutoOpenLoginUrl", () => {
     // a dead end, so an unknown answer opens.
     //
     // The genuinely ABSENT key is not expressible here - the field is required
-    // on the live type - and it is not this test's job: an old host's payload
-    // reaches the client through the v8->v9 bridge, which fills `null`. That
-    // fill is pinned in the protocol suite
+    // on the live type - and it is not this test's job: the marker rides
+    // `providers.list@9.2`, so an older host's payload is parsed through its
+    // own frozen schema and then filled by the 9.1 -> 9.2 bridge. That fill is
+    // pinned in the protocol suite
     // (`provider-login-remote-safe-marker.test.ts`), and the predicate's
     // `?? null` is the belt to that braces.
     expect(shouldAutoOpenLoginUrl(true, null)).toBe(true);
