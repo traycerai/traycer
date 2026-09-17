@@ -12,6 +12,7 @@ import {
   commGraphTrackFraction,
   commGraphTransportMarkers,
   commGraphTransportTrack,
+  MIN_TICK_MS,
   type CommGraphTransportTrack,
 } from "@/lib/comm-graph/comm-graph-transport";
 
@@ -300,9 +301,23 @@ describe("commGraphPlaybackPace", () => {
     }
   });
 
-  it("never schedules a tick a timer cannot honour", () => {
-    for (const speed of [16, 64, 1_000]) {
-      expect(commGraphPlaybackPace(speed).tickMs).toBeGreaterThan(50);
+  it("never schedules a tick shorter than the floor it documents", () => {
+    // AGAINST THE FLOOR ITSELF, not a round number under it. `> 50` was true
+    // of the 87.5ms tick that rounding produced at 16x and at 32x, so it read
+    // as pinning this and pinned only that the arithmetic had not collapsed.
+    for (const speed of [8, 16, 32, 64, 1_000]) {
+      expect(commGraphPlaybackPace(speed).tickMs).toBeGreaterThanOrEqual(
+        MIN_TICK_MS,
+      );
+    }
+  });
+
+  it("charges the floor no more than one row of slack", () => {
+    // The control on the line above: `rowsPerTick = Infinity` would satisfy it
+    // and stall playback. Ceiling overshoots by less than one row's worth.
+    for (const speed of [16, 32, 64, 1_000]) {
+      const at = commGraphPlaybackPace(speed);
+      expect(at.tickMs - at.tickMs / at.rowsPerTick).toBeLessThan(MIN_TICK_MS);
     }
   });
 });

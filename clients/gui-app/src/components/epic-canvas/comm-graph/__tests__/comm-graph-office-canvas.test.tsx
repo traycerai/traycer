@@ -183,6 +183,7 @@ import {
   officeLodForZoom,
 } from "@/lib/comm-graph/office/office-lod";
 import { NAME_TAG_LINE_HEIGHT } from "@/components/epic-canvas/comm-graph/office/office-name-tags";
+import { OFFICE_LABEL_HALO_PX } from "@/components/epic-canvas/comm-graph/office/office-label-space";
 
 const OFFICE_VIEW: CommGraphTileViewState = {
   x: 0,
@@ -8932,6 +8933,12 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
  * not by losing one. That is the answer to the only real objection to dropping
  * a label rather than drawing it: in practice almost nothing is dropped,
  * because almost everything finds a line to move into.
+ *
+ * COUNTING THE OUTLINE COSTS NOTHING FURTHER, measured the same way again
+ * after the halo was folded into the reserved box: all twenty-four frames draw
+ * exactly the reading count they drew when the box was the glyph run alone -
+ * 2,108 across the grid, unchanged frame for frame. A two-pixel box is a
+ * label that moves a line sooner, not one that runs out of lines.
  */
 describe("CommGraphOfficeCanvas - one occupancy set for every label on the floor", () => {
   let rafQueue: Array<{
@@ -9031,22 +9038,33 @@ describe("CommGraphOfficeCanvas - one occupancy set for every label on the floor
       if (seen.has(key)) continue;
       seen.add(key);
       const plate = last.font.startsWith("bold ");
+      // THE TWO BACKINGS ARE DIFFERENT SHAPES, and each label carries its own.
+      // A plate paints a filled rect `SIGN_PADDING` beyond its letters; every
+      // other reading paints its own text once at each neighbouring pixel, so
+      // its ink runs a halo past the glyph run on all four sides. Reserving
+      // the glyph run alone here would let this case pass a frame whose
+      // outlines print into each other - and since a lift lands a box flush
+      // with the one it moved off, that is the ORDINARY outcome, not a corner.
+      const halo = plate ? 0 : OFFICE_LABEL_HALO_PX * last.cssScale;
       const fontPx = modelledFontPx(last.font) * last.cssScale;
       const width =
         (modelledTextWidth(last.text, last.font, last.letterSpacing) +
           (plate ? OFFICE_SIGN_PADDING_X * 2 : 0)) *
-        last.cssScale;
+          last.cssScale +
+        halo * 2;
       // A plate's baseline sits `SIGN_PADDING_Y` above its backing's bottom
-      // edge, so its box reaches BELOW the baseline - the one label here whose
-      // bottom is not its own `y`. `TagBox` carries a bottom-anchored height,
-      // so the shift goes into `y` and the padding into `height`.
+      // edge, and a haloed label's sits one pixel above its own - so neither
+      // box bottoms out on its `y`. `TagBox` carries a bottom-anchored height,
+      // so the shift goes into `y` and the rest into `height`.
       const height =
-        fontPx + (plate ? OFFICE_SIGN_PADDING_Y * 2 * last.cssScale : 0);
+        fontPx +
+        (plate ? OFFICE_SIGN_PADDING_Y * 2 * last.cssScale : 0) +
+        halo * 2;
       if (!(width > 0) || !(height > 0)) continue;
       boxes.push({
         left: last.x - width / 2,
         right: last.x + width / 2,
-        y: last.y + (plate ? OFFICE_SIGN_PADDING_Y * last.cssScale : 0),
+        y: last.y + (plate ? OFFICE_SIGN_PADDING_Y * last.cssScale : 0) + halo,
         height,
         text: last.text,
       });
@@ -9098,10 +9116,6 @@ describe("CommGraphOfficeCanvas - one occupancy set for every label on the floor
         flushRaf(4);
 
         const boxes = everyReadingFrom(replayFillText(calls));
-        // ANTI-VACUITY, both halves. A frame that painted nothing, or one
-        // that painted only name tags, satisfies "no overlaps" while proving
-        // nothing at all - and the bold half is the one the census found
-        // colliding, so its absence would void exactly the case being made.
         // ANTI-VACUITY, both halves. A frame that painted nothing, or one that
         // painted only name tags, satisfies "no overlaps" while proving
         // nothing at all - and the bold half is where the census found the

@@ -92,6 +92,82 @@ export function officeLabelBoxesOverlap(
   );
 }
 
+/**
+ * How far a screen label's backing bleeds past its glyphs, in screen pixels.
+ *
+ * The floor's colours are arbitrary - a character's shirt may land on the
+ * foreground colour - so a name is OUTLINED rather than trusted to contrast
+ * with whatever it sits on, by painting the same text once at each of the four
+ * neighbouring pixels and then again on top. That outline is ink like any
+ * other: two labels whose glyph runs merely touch still paint into each
+ * other's halo, and since {@link placeOfficeLabel} treats edge-touching boxes
+ * as clear - and a lift lands a box EXACTLY flush with the one it moved away
+ * from, by construction - flush is the common case rather than the rare one.
+ *
+ * So the box a label reserves is the box it PAINTS, halo included.
+ */
+export const OFFICE_LABEL_HALO_PX = 1;
+
+/** The face the office's non-plate lettering is set in - tags and floor signs. */
+export const OFFICE_LABEL_FONT_PX = 10;
+
+/**
+ * THE BOX A SCREEN LABEL ACTUALLY PAINTS, from where it would be drawn.
+ *
+ * ONE EM ABOVE THE BASELINE, plus the halo on all four sides. That is a LINE
+ * BOX rather than a bounding box: real glyphs sit at `[baseline - ascent,
+ * baseline + descent]`, which is the same em displaced DOWN by the descent,
+ * since a face's ascent and descent are what divide its em between them. So
+ * the box is the ink translated by a constant, every screen label on this
+ * canvas is translated by the same constant, and two disjoint boxes are two
+ * disjoint runs of ink - which is the property the whole pass rests on.
+ *
+ * Measuring the real ascent instead would buy nothing and cost the width
+ * cache: `measureText`'s bounding-box metrics are per STRING, so they cannot
+ * be keyed on a face the way {@link OFFICE_LABEL_FONT_PX} is, and jsdom does
+ * not report them at all.
+ */
+export function officeScreenLabelBox(label: {
+  /** Horizontal centre, in screen pixels - the text is drawn centre-aligned. */
+  readonly centerX: number;
+  /** Where the alphabetic baseline would sit, in screen pixels. */
+  readonly baselineY: number;
+  /** Measured glyph width, WITHOUT the halo. */
+  readonly width: number;
+  readonly fontPx: number;
+}): OfficeLabelBox {
+  const half = label.width / 2 + OFFICE_LABEL_HALO_PX;
+  return {
+    left: label.centerX - half,
+    right: label.centerX + half,
+    top: label.baselineY - label.fontPx - OFFICE_LABEL_HALO_PX,
+    bottom: label.baselineY + OFFICE_LABEL_HALO_PX,
+  };
+}
+
+/**
+ * The baseline to draw at, given the box the space handed back.
+ *
+ * The inverse of {@link officeScreenLabelBox}, and it lives beside it so the
+ * two cannot drift: a placed box may have been lifted off the one that was
+ * offered, and its bottom edge is a halo BELOW the baseline rather than on it.
+ * Drawing at `box.bottom` would put every label one pixel low.
+ */
+export function officeScreenLabelBaseline(box: OfficeLabelBox): number {
+  return box.bottom - OFFICE_LABEL_HALO_PX;
+}
+
+/**
+ * One line of this face - what a label moves by when it gives way.
+ *
+ * It is the box's own HEIGHT, which is what makes one attempt enough: a step
+ * shorter than the box would land a label still touching the neighbour it was
+ * lifting away from, and every extra attempt is another chance to be dropped.
+ */
+export function officeScreenLabelLineHeight(fontPx: number): number {
+  return fontPx + OFFICE_LABEL_HALO_PX * 2;
+}
+
 function shifted(box: OfficeLabelBox, dy: number): OfficeLabelBox {
   if (dy === 0) return box;
   return {

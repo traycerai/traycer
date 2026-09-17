@@ -11,7 +11,11 @@ import { describe, expect, it } from "vitest";
 import {
   createLabelSpace,
   OFFICE_LABEL_FIXED,
+  OFFICE_LABEL_HALO_PX,
   officeLabelBoxesOverlap,
+  officeScreenLabelBaseline,
+  officeScreenLabelBox,
+  officeScreenLabelLineHeight,
   placeOfficeLabel,
   resetLabelSpace,
   type OfficeLabelBox,
@@ -108,6 +112,59 @@ describe("placeOfficeLabel", () => {
         expect(officeLabelBoxesOverlap(placed[i], placed[j])).toBe(false);
       }
     }
+  });
+
+  it("keeps two lifted labels' outlines off each other", () => {
+    // WHY THE STEP IS THE BOX'S HEIGHT, end to end rather than as arithmetic.
+    // A lift lands a box EXACTLY flush with the one it moved away from, and
+    // edge-touching is clear by the rule above - so if the reserved box were
+    // the glyph run alone, "resolved" would mean two outlines sharing two rows
+    // of pixels. Both labels here are placed, and what is asserted is that
+    // what they PAINT stays apart.
+    const space = createLabelSpace();
+    const fontPx = 10;
+    const first = placeOfficeLabel(
+      space,
+      officeScreenLabelBox({ centerX: 100, baselineY: 50, width: 40, fontPx }),
+      OFFICE_LABEL_FIXED,
+    ) as OfficeLabelBox;
+    const second = placeOfficeLabel(
+      space,
+      officeScreenLabelBox({ centerX: 100, baselineY: 50, width: 40, fontPx }),
+      { dy: officeScreenLabelLineHeight(fontPx), max: 1 },
+    ) as OfficeLabelBox;
+
+    expect(second).not.toBeNull();
+    const gap =
+      officeScreenLabelBaseline(second) - officeScreenLabelBaseline(first);
+    // MORE than the face's own height, and that strict `>` is the whole
+    // assertion: a step of exactly `fontPx` is what stacking the glyph runs
+    // alone would give, and it is what this produced before the outline was
+    // counted. The exact figure follows, so a step that grew for some other
+    // reason is not quietly accepted as this one.
+    expect(gap).toBeGreaterThan(fontPx);
+    expect(gap).toBe(fontPx + OFFICE_LABEL_HALO_PX * 2);
+    expect(officeLabelBoxesOverlap(first, second)).toBe(false);
+  });
+
+  it("round-trips a baseline through the box it reserves", () => {
+    // The two halves of the conversion, against each other: a caller offers a
+    // baseline and draws at whatever comes back, so a box builder and a
+    // baseline reader that disagreed by the halo would move every label on the
+    // floor a pixel and nothing here would notice.
+    const space = createLabelSpace();
+    const placed = placeOfficeLabel(
+      space,
+      officeScreenLabelBox({
+        centerX: 100,
+        baselineY: 50,
+        width: 40,
+        fontPx: 10,
+      }),
+      OFFICE_LABEL_FIXED,
+    ) as OfficeLabelBox;
+
+    expect(officeScreenLabelBaseline(placed)).toBe(50);
   });
 
   it("forgets the previous frame when it is reset", () => {

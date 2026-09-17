@@ -22,6 +22,10 @@
  * own collision pass could not see.
  */
 import {
+  officeScreenLabelBaseline,
+  officeScreenLabelBox,
+  officeScreenLabelLineHeight,
+  OFFICE_LABEL_FONT_PX,
   placeOfficeLabel,
   type OfficeLabelBox,
   type OfficeLabelSpace,
@@ -55,26 +59,29 @@ export interface OfficePlacedNameTag {
   readonly ownerAgentId: string | null;
 }
 
-/** How far a displaced tag drops per attempt, and how many attempts it gets. */
-export const NAME_TAG_LINE_HEIGHT = 11;
+/**
+ * How far a displaced tag drops per attempt.
+ *
+ * DERIVED, not chosen: it is the height of the box a tag reserves, so one
+ * attempt is exactly enough to clear the neighbour that displaced it. It was
+ * a literal `11` for a 10px face - the halo's top pixel and nothing else -
+ * which left a lifted tag's outline painting into the outline above it.
+ */
+export const NAME_TAG_LINE_HEIGHT =
+  officeScreenLabelLineHeight(OFFICE_LABEL_FONT_PX);
 const MAX_SHIFTS = 2;
 
-function boxFor(
-  candidate: OfficeNameTagCandidate,
-  lineHeight: number,
-): OfficeLabelBox {
-  const half = candidate.width / 2;
-  return {
-    left: candidate.centerX - half,
-    right: candidate.centerX + half,
-    top: candidate.baselineY - lineHeight,
-    bottom: candidate.baselineY,
-  };
+function boxFor(candidate: OfficeNameTagCandidate): OfficeLabelBox {
+  return officeScreenLabelBox({
+    centerX: candidate.centerX,
+    baselineY: candidate.baselineY,
+    width: candidate.width,
+    fontPx: OFFICE_LABEL_FONT_PX,
+  });
 }
 
 export function layoutNameTags(
   candidates: ReadonlyArray<OfficeNameTagCandidate>,
-  lineHeight: number,
   space: OfficeLabelSpace,
 ): ReadonlyArray<OfficePlacedNameTag> {
   // Sorted before placing, so the same floor always drops the same tags: a
@@ -85,8 +92,8 @@ export function layoutNameTags(
   );
   const placed: OfficePlacedNameTag[] = [];
   for (const candidate of ordered) {
-    const box = placeOfficeLabel(space, boxFor(candidate, lineHeight), {
-      dy: lineHeight,
+    const box = placeOfficeLabel(space, boxFor(candidate), {
+      dy: NAME_TAG_LINE_HEIGHT,
       max: MAX_SHIFTS,
     });
     if (box === null) continue;
@@ -94,10 +101,10 @@ export function layoutNameTags(
       text: candidate.text,
       tone: candidate.tone,
       centerX: candidate.centerX,
-      // The baseline is the box's own bottom edge, so a displaced tag is
-      // drawn where the space actually reserved it rather than where this
-      // asked - the two differ by however many lines the shift took.
-      baselineY: box.bottom,
+      // Read back out of the box the space actually reserved, so a displaced
+      // tag is drawn where it landed rather than where this asked - the two
+      // differ by however many lines the shift took.
+      baselineY: officeScreenLabelBaseline(box),
       ownerAgentId: candidate.ownerAgentId,
     });
   }

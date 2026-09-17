@@ -72,7 +72,7 @@ export const BASE_STEP_MS = 700;
  * happen. Timers have a floor of their own near there too, so asking for a
  * twenty-millisecond tick buys nothing but a backlog.
  */
-const MIN_TICK_MS = 90;
+export const MIN_TICK_MS = 90;
 
 export interface CommGraphPlaybackPace {
   /** Milliseconds between ticks. */
@@ -99,7 +99,14 @@ export interface CommGraphPlaybackPace {
 export function commGraphPlaybackPace(speed: number): CommGraphPlaybackPace {
   const perRow = BASE_STEP_MS / Math.max(speed, Number.EPSILON);
   if (perRow >= MIN_TICK_MS) return { tickMs: perRow, rowsPerTick: 1 };
-  const rowsPerTick = Math.max(1, Math.round(MIN_TICK_MS / perRow));
+  // CEIL, NOT ROUND. Rounding to the NEAREST whole number of rows returns the
+  // tick closest to the floor, which is as often just under it as just over -
+  // at 16x and at 32x it returned 87.5ms, and a floor that the function
+  // defining it steps through is not a floor. Ceiling costs a slightly longer
+  // tick at those rungs and nothing else: `tickMs / rowsPerTick` is exactly
+  // `perRow` either way, so the per-row pace this is measured by, and the
+  // ladder's monotonicity with it, are untouched.
+  const rowsPerTick = Math.max(1, Math.ceil(MIN_TICK_MS / perRow));
   return { tickMs: perRow * rowsPerTick, rowsPerTick };
 }
 

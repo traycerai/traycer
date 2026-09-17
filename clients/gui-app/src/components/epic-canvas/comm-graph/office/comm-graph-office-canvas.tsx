@@ -170,12 +170,16 @@ import {
 } from "@/lib/comm-graph/office/office-signs";
 import {
   layoutNameTags,
-  NAME_TAG_LINE_HEIGHT,
   type OfficeNameTagCandidate,
 } from "@/components/epic-canvas/comm-graph/office/office-name-tags";
 import {
   createLabelSpace,
+  officeScreenLabelBaseline,
+  officeScreenLabelBox,
+  officeScreenLabelLineHeight,
   OFFICE_LABEL_FIXED,
+  OFFICE_LABEL_FONT_PX,
+  OFFICE_LABEL_HALO_PX,
   placeOfficeLabel,
   resetLabelSpace,
   type OfficeLabelSpace,
@@ -235,7 +239,12 @@ const AUTO_PAN_MS = 250;
 const CLICK_SLOP_PX = 4;
 /** Coalesces a pan/zoom gesture into one persisted view write. */
 const VIEW_PERSIST_DEBOUNCE_MS = 150;
-const LABEL_FONT_PX = 10;
+/**
+ * The office's own small face. Taken from the label space rather than declared
+ * here, because the box a label reserves is built from it and a second copy of
+ * the number would be a copy that drifts.
+ */
+const LABEL_FONT_PX = OFFICE_LABEL_FONT_PX;
 const HOVER_LABEL_FONT_PX = 11;
 /** The name-tag font, prebuilt: the width cache keys on text alone only
  * because this never varies. */
@@ -307,7 +316,10 @@ const SIGN_PLATE_HEIGHT_PX = OFFICE_SIGN_FONT_PX + OFFICE_SIGN_PADDING_Y * 2;
  */
 const FLOATING_SIGN_LIFT = { dy: -SIGN_PLATE_HEIGHT_PX, max: 2 } as const;
 /** The same escape for a storey's name, in the face that name is set in. */
-const FLOOR_SIGN_LIFT = { dy: -LABEL_FONT_PX, max: 2 } as const;
+const FLOOR_SIGN_LIFT = {
+  dy: -officeScreenLabelLineHeight(LABEL_FONT_PX),
+  max: 2,
+} as const;
 /**
  * How far Find's own label may walk down before it gives up.
  *
@@ -1076,12 +1088,18 @@ function seatBoundsFor(
  * foreground color), so a name is outlined rather than trusted to contrast
  * with whatever it happens to sit on. The backing's colour is the CALLER's,
  * because it has to contrast with the text rather than with the floor.
+ *
+ * THE OUTLINE IS INK THE LAYOUT HAS TO KNOW ABOUT, so its reach is
+ * {@link OFFICE_LABEL_HALO_PX} rather than a literal here: the box every
+ * caller reserves is built from the same constant, and an outline painted
+ * past a box that did not account for it is the overlap this pass exists to
+ * prevent, one pixel at a time.
  */
 const LABEL_BACKING_OFFSETS: ReadonlyArray<readonly [number, number]> = [
-  [-1, 0],
-  [1, 0],
-  [0, -1],
-  [0, 1],
+  [-OFFICE_LABEL_HALO_PX, 0],
+  [OFFICE_LABEL_HALO_PX, 0],
+  [0, -OFFICE_LABEL_HALO_PX],
+  [0, OFFICE_LABEL_HALO_PX],
 ];
 
 function drawScreenLabel(
@@ -1365,22 +1383,21 @@ function drawFloorSigns(args: {
   for (const entry of signs) {
     const screenX = entry.anchor.x * camera.zoom + camera.x;
     const screenY = entry.anchor.y * camera.zoom + camera.y - 2;
-    const half = measuredWidth(ctx, entry.text) / 2;
     const box = placeOfficeLabel(
       space,
-      {
-        left: screenX - half,
-        right: screenX + half,
-        top: screenY - LABEL_FONT_PX,
-        bottom: screenY,
-      },
+      officeScreenLabelBox({
+        centerX: screenX,
+        baselineY: screenY,
+        width: measuredWidth(ctx, entry.text),
+        fontPx: LABEL_FONT_PX,
+      }),
       FLOOR_SIGN_LIFT,
     );
     if (box === null) continue;
     drawScreenLabel(ctx, {
       text: entry.text,
       screenX,
-      screenY: box.bottom,
+      screenY: officeScreenLabelBaseline(box),
       fontPx: LABEL_FONT_PX,
       color,
       backing,
@@ -2304,11 +2321,7 @@ function drawNameTags(args: {
       width: measuredWidth(ctx, text),
     });
   }
-  for (const placed of layoutNameTags(
-    candidates,
-    NAME_TAG_LINE_HEIGHT,
-    space,
-  )) {
+  for (const placed of layoutNameTags(candidates, space)) {
     drawScreenLabel(ctx, {
       text: placed.text,
       screenX: placed.centerX,
@@ -2639,23 +2652,26 @@ function drawFindOverlay(args: {
     // only thing that says where a match is at overview zoom.
     ctx.save();
     ctx.font = `${HOVER_LABEL_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
-    const half = ctx.measureText(name).width / 2;
+    const width = ctx.measureText(name).width;
     ctx.restore();
     const box = placeOfficeLabel(
       space,
+      officeScreenLabelBox({
+        centerX: screenX,
+        baselineY: screenY,
+        width,
+        fontPx: HOVER_LABEL_FONT_PX,
+      }),
       {
-        left: screenX - half,
-        right: screenX + half,
-        top: screenY - HOVER_LABEL_FONT_PX,
-        bottom: screenY,
+        dy: officeScreenLabelLineHeight(HOVER_LABEL_FONT_PX),
+        max: FIND_LABEL_MAX_SHIFTS,
       },
-      { dy: HOVER_LABEL_FONT_PX, max: FIND_LABEL_MAX_SHIFTS },
     );
     if (box === null) continue;
     drawScreenLabel(ctx, {
       text: name,
       screenX,
-      screenY: box.bottom,
+      screenY: officeScreenLabelBaseline(box),
       fontPx: HOVER_LABEL_FONT_PX,
       color: palette.text,
       backing,
