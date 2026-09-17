@@ -64,6 +64,10 @@ vi.mock("electron", () => {
 });
 
 vi.mock("../../app/logger", () => ({
+  // `log` here has no `debug` - unlike the storage-layer suites, nothing in
+  // this file exercises the DEBUG decision log itself. Off (INFO) is the only
+  // safe default: `true` would call the undefined `log.debug`.
+  isDebugEnabled: () => false,
   log: { info: vi.fn(), warn: vi.fn() },
   describeLogError: (error: unknown) => String(error),
   sanitizeLogFields: (fields: unknown) => fields,

@@ -16,6 +16,7 @@ import {
   type TilePane,
 } from "./types";
 import { isTileRefRecordBacked } from "./tile-schema";
+import { browserSessionTileId } from "./tile-schema/browser-tile";
 import { findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
 import {
@@ -321,7 +322,8 @@ export function useIsActiveEpicArtifact(
  * so their synthetic ids never reach the persisted `lastFocusedArtifactId`.
  * They still need to light up their own list row, and their ids ARE stable
  * (derived from host + coordinates), so matching on the tile id directly is
- * safe here in a way that persisting it would not be.
+ * safe here in a way that persisting it would not be. Resolved browser tiles
+ * also match their session/tab identity because rebind preserves a pending id.
  *
  * `null` tileId means "this row has no tile" (an unknown-base PR) and is never
  * active. When `hostId` is provided, the active ref must match both id and
@@ -339,7 +341,12 @@ export function makeSelectIsActiveTile(
   return (state: EpicCanvasStore): boolean => {
     if (tileId === null) return false;
     const active = activeTileRef(state, tabId);
-    if (active === null || active.id !== tileId) return false;
+    if (active === null) return false;
+    const contentId =
+      active.type === "browser-session" && active.pending === undefined
+        ? browserSessionTileId(active)
+        : active.id;
+    if (active.id !== tileId && contentId !== tileId) return false;
     if (hostId === null) return true;
     return active.hostId === hostId;
   };

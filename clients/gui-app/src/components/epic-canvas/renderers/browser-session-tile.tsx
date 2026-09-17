@@ -1,6 +1,9 @@
 import { useCallback, useMemo } from "react";
 import { toast } from "sonner";
-import { BrowserTabTile } from "@/components/browser-tile/browser-tab-tile";
+import {
+  BrowserTabTile,
+  PendingBrowserTabTile,
+} from "@/components/browser-tile/browser-tab-tile";
 import type {
   BrowserTileNode,
   BrowserTilePlacement,
@@ -15,7 +18,10 @@ import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platfo
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
+import type {
+  BrowserSessionTileRef,
+  ResolvedBrowserSessionTileRef,
+} from "@/stores/epics/canvas/types";
 import { claimHostedPaneActivationFocus } from "@/components/epic-canvas/pane-activation";
 
 interface BrowserSessionTileProps {
@@ -46,6 +52,27 @@ function pageSessionIdForCanvasTile(nodeId: string): string {
  * imports the canvas store.
  */
 export function BrowserSessionTile(props: BrowserSessionTileProps) {
+  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.paneId,
+    props.node.instanceId,
+  );
+  if (props.node.pending !== undefined) {
+    return (
+      <PendingBrowserTabTile
+        request={props.node.pending}
+        onRequestClose={closeCanvasTile}
+      />
+    );
+  }
+  return <ResolvedBrowserSessionTile {...props} node={props.node} />;
+}
+
+function ResolvedBrowserSessionTile(
+  props: Omit<BrowserSessionTileProps, "node"> & {
+    readonly node: ResolvedBrowserSessionTileRef;
+  },
+) {
   const visible = useTileBodyVisible();
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,

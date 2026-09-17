@@ -21,6 +21,7 @@ import {
 } from "./cookie-jar-fixture";
 
 vi.mock("../../../app/logger", () => ({
+  isDebugEnabled: () => true,
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   sanitizeLogFields: (fields: Record<string, unknown>) => fields,
   describeLogError: (error: unknown) => String(error),
