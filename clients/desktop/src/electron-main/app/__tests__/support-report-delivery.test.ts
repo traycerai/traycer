@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, statSync, utimesSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
@@ -21,11 +21,41 @@ interface CapturedHint {
   readonly attachments: readonly CapturedAttachment[];
 }
 
+/**
+ * The headers shape `TransportMakeRequestResponse` declares: an index
+ * signature PLUS both named keys, REQUIRED and `string | null`
+ * (`@sentry/core@10.70.0` `types/transport.d.ts`). Every fake response below
+ * is built through {@link responseHeaders} so it carries both, which is what
+ * the real transport hands the `afterSendEvent` hook - Sentry's own response
+ * normalization fills both keys, `null` when the server sent neither, and
+ * `updateRateLimits` reads a `null` value and an absent header identically.
+ * A `Record<string, string | null>` here would have let the one fixture that
+ * feeds the REAL `sentryReportRateLimitWindow.observe` pass a shape the
+ * transport never produces.
+ */
+interface FakeSentryResponseHeaders {
+  [key: string]: string | null;
+  "x-sentry-rate-limits": string | null;
+  "retry-after": string | null;
+}
+
+function responseHeaders(values: {
+  readonly rateLimits: string | null;
+  readonly retryAfter: string | null;
+}): FakeSentryResponseHeaders {
+  return {
+    "x-sentry-rate-limits": values.rateLimits,
+    "retry-after": values.retryAfter,
+  };
+}
+
+interface FakeSendResponse {
+  readonly statusCode?: number;
+  readonly headers?: FakeSentryResponseHeaders;
+}
+
 interface FakeAfterSendEventListener {
-  (
-    event: { readonly event_id?: string },
-    sendResponse: { readonly statusCode?: number },
-  ): void;
+  (event: { readonly event_id?: string }, sendResponse: FakeSendResponse): void;
 }
 
 interface FakeSentryClient {
@@ -41,9 +71,6 @@ const sentryMock = vi.hoisted(() => ({
   isInitialized: vi.fn<() => boolean>(),
   captureFeedback: vi.fn<(feedback: unknown, hint: CapturedHint) => string>(),
   flush: vi.fn<(timeout: number) => Promise<boolean>>(),
-  // Defaults to `undefined` (as if no client were resolvable), matching the
-  // pre-fix world for every test below that never touches it: `submitReport`
-  // then falls back to `flush`'s own boolean, exactly as before.
   getClient: vi.fn<() => FakeSentryClient | undefined>(),
 }));
 
@@ -56,8 +83,18 @@ const loggerMock = vi.hoisted(() => ({
   },
 }));
 
+// Mutated per-test in `beforeEach` (real userData dir under this test's
+// tempDir) so the offline-queue tests can write fixtures at the exact path
+// `wasReportQueuedOffline` derives via `sentryOfflineQueuePath(app.getPath
+// ("userData"))` - the same helper the production code uses, so the reader
+// and this test's writer cannot silently look at two different directories.
+const electronMock = vi.hoisted(() => ({ userDataPath: "" }));
+
 vi.mock("electron", () => ({
-  app: { getVersion: (): string => "1.1.9" },
+  app: {
+    getVersion: (): string => "1.1.9",
+    getPath: (): string => electronMock.userDataPath,
+  },
   shell: { showItemInFolder: vi.fn() },
 }));
 
@@ -109,6 +146,10 @@ const diagnosticsMock = vi.hoisted(() => ({
 vi.mock("../diagnostics", () => diagnosticsMock);
 
 import { DesktopSupportService } from "../support";
+import {
+  sentryOfflineQueuePath,
+  sentryReportRateLimitWindow,
+} from "../sentry-delivery-observer";
 import type { HostFsLayout } from "../../host/host-paths";
 import type { SupportSubmitReportRequest } from "../../../ipc-contracts/window-types";
 
@@ -211,14 +252,79 @@ function makeFakeSentryClient(): FakeSentryClient {
   };
 }
 
+/**
+ * Writes a fixture directly under the offline-queue path
+ * `sentryOfflineQueuePath(app.getPath("userData"))` derives - the same one
+ * `wasReportQueuedOffline` reads. Each entry is `{id, eventId}`: when
+ * `eventId` is a string, the body's envelope header carries it as
+ * `event_id`; `null` writes a header with NO `event_id` key at all (the
+ * "index names an entry, but its body doesn't identify our envelope"
+ * shape), and omitting a body entirely (`hasBody: false`) simulates the
+ * store's own index write landing while the body write did not.
+ */
+async function writeOfflineQueueFixture(
+  entries: ReadonlyArray<{
+    readonly id: string;
+    readonly eventId: string | null;
+    readonly hasBody?: boolean;
+  }>,
+): Promise<void> {
+  const queuePath = sentryOfflineQueuePath(electronMock.userDataPath);
+  await mkdir(queuePath, { recursive: true });
+  await writeFile(
+    join(queuePath, "queue-v2.json"),
+    JSON.stringify(
+      entries.map((e) => ({ id: e.id, date: new Date().toISOString() })),
+    ),
+    "utf8",
+  );
+  for (const entry of entries) {
+    if (entry.hasBody === false) continue;
+    const header =
+      entry.eventId === null
+        ? JSON.stringify({ sent_at: new Date().toISOString() })
+        : JSON.stringify({
+            event_id: entry.eventId,
+            sent_at: new Date().toISOString(),
+          });
+    const itemHeader = JSON.stringify({ type: "event" });
+    const payload =
+      entry.eventId === null
+        ? "{}"
+        : JSON.stringify({ event_id: entry.eventId });
+    await writeFile(
+      join(queuePath, entry.id),
+      `${header}\n${itemHeader}\n${payload}\n`,
+      "utf8",
+    );
+  }
+}
+
+let defaultFakeClient: FakeSentryClient;
+
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "traycer-support-"));
   loggerMock.desktopLogPath = join(tempDir, "traycer-desktop.log");
   hostLogPath = join(tempDir, "host.log");
+  electronMock.userDataPath = join(tempDir, "userdata");
   await writeFile(loggerMock.desktopLogPath, "desktop log line\n", "utf8");
   await writeFile(hostLogPath, "host log line\n", "utf8");
   sentryMock.isInitialized.mockReturnValue(true);
-  sentryMock.flush.mockResolvedValue(true);
+  // Default happy path: a real observed 2xx on OUR event, not the bare
+  // `flush` boolean. `resolveDeliveryOutcome` now requires an explicit 2xx
+  // to call anything "delivered" - the old code's null-outcome fallthrough
+  // to "delivered" is gone, so every test below that doesn't itself drive a
+  // different outcome needs a client whose `afterSendEvent` genuinely fires
+  // with a 200, or it would see `unconfirmed` instead.
+  defaultFakeClient = makeFakeSentryClient();
+  sentryMock.getClient.mockReturnValue(defaultFakeClient);
+  sentryMock.flush.mockImplementation(async () => {
+    defaultFakeClient.emitAfterSendEvent(
+      { event_id: lastHint().event_id },
+      { statusCode: 200 },
+    );
+    return true;
+  });
   diagnosticsMock.handleGetMetrics.mockResolvedValue(FAKE_PROCESS_METRICS);
 });
 
@@ -712,9 +818,7 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     sentryMock.getClient.mockReturnValue(fakeClient);
   });
 
-  function mockFlushWithSendOutcome(sendResponse: {
-    readonly statusCode?: number;
-  }): void {
+  function mockFlushWithSendOutcome(sendResponse: FakeSendResponse): void {
     // Stands in for the SDK: by the time `flush` is called, `captureFeedback`
     // has already run, so the event_id it used is on the last captured hint -
     // exactly what `afterSendEvent` would carry for the event actually sent.
@@ -733,6 +837,7 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     const result = await freezeAndSubmit(buildService(null));
 
     expect(result.status).toBe("delivered");
+    expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
   });
 
   it("returns failed, not delivered, when afterSendEvent reports a 500", async () => {
@@ -745,26 +850,192 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     expect(result).toEqual({ status: "failed", reason: "error" });
   });
 
-  it("returns failed when afterSendEvent reports a 429 (rate-limited, dropped)", async () => {
+  it("maps a 429 with a retry-after header to rate-limited, with the header's own seconds - not core's 60s default", async () => {
+    mockFlushWithSendOutcome({
+      statusCode: 429,
+      headers: responseHeaders({ rateLimits: null, retryAfter: "90" }),
+    });
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result).toEqual({
+      status: "failed",
+      reason: "rate-limited",
+      retryAfterSeconds: 90,
+    });
+  });
+
+  it("maps a 429 with NO retry-after header to rate-limited with null seconds - never inventing core's 60s default", async () => {
     mockFlushWithSendOutcome({ statusCode: 429 });
 
     const result = await freezeAndSubmit(buildService(null));
 
-    expect(result).toEqual({ status: "failed", reason: "error" });
+    // This is the reason the direct-429 arm reads only THIS response's
+    // header: the window's own `current()` would answer 60 here (core's
+    // default guess for a bare 429), but that is not something the server
+    // actually said about this response.
+    expect(result).toEqual({
+      status: "failed",
+      reason: "rate-limited",
+      retryAfterSeconds: null,
+    });
   });
 
-  it("returns failed when the connection is destroyed - no status code, not delivered", async () => {
-    // A network-level failure never reaches an HTTP response: the SDK's own
-    // `sendEnvelope` catches the transport rejection and still emits
-    // `afterSendEvent`, but with an empty response carrying no status code
-    // at all. This must read as a definite non-delivery, same as a 500 - not
-    // silently fall through to "delivered".
+  it("an undefined status earned by a DIFFERENT event's 429 still maps to rate-limited (the RCA's own scenario)", async () => {
+    // The rate-limit window is fed by a CLIENT-WIDE observer in
+    // `crash-reporter.ts` (`client.on("afterSendEvent", (_, r) =>
+    // window.observe(r, Date.now()))`), not by `support.ts`'s own per-event
+    // hook - a 429 earned by a crash report sharing the same DSN quota is
+    // exactly what a per-event hook cannot see on its own. Simulate that
+    // observer directly here, rather than importing `crash-reporter.ts`
+    // (which pulls in far more than this test needs).
+    const observedAt = Date.now();
+    sentryReportRateLimitWindow.observe(
+      {
+        statusCode: 429,
+        headers: responseHeaders({ rateLimits: null, retryAfter: "5" }),
+      },
+      observedAt,
+    );
+    try {
+      // Our own event gets no HTTP response at all (network failure, or the
+      // SDK's client-side drop under the very limit just observed) -
+      // `resolveDeliveryOutcome` must still recognize the still-active
+      // window and not fall through to `unconfirmed`.
+      mockFlushWithSendOutcome({});
+
+      const result = await freezeAndSubmit(buildService(null));
+
+      expect(result.status).toBe("failed");
+      expect(result.status === "failed" && result.reason).toBe("rate-limited");
+    } finally {
+      // The window is real, process-wide module state with no reset hook -
+      // leaving it "limited" would strand every later test in this file
+      // (and this process) that expects the default happy path or an
+      // `unconfirmed`/`queued` outcome. Advancing past the 5s window here,
+      // using the SAME real clock every later test's `Date.now()` call will
+      // read, is what keeps that isolated to this one test.
+      await new Promise((resolve) => setTimeout(resolve, 5_050));
+    }
+  }, 10_000);
+
+  it("an undefined status, no rate limit, and the offline queue confirmed holding this envelope maps to queued", async () => {
+    mockFlushWithSendOutcome({});
+    const service = buildService(null);
+    // The Sentry event id is a pure, deterministic derivation of the
+    // reportId (`sentryEventIdFromReportId`: the uuid suffix, dashes
+    // stripped) - freezing first lets the fixture below name the exact id
+    // `captureFeedback` will use.
+    const draft = await service.freezeEvidence(KEY, null);
+    const eventId = draft.reportId.slice("rpt_".length);
+    await writeOfflineQueueFixture([{ id: "entry-a", eventId }]);
+
+    // The read happens in the same tick `flush` resolves, well before the
+    // offline transport's own 5s replay timer (`START_DELAY` on the
+    // queue-on-error path in `@sentry/core`'s offline transport) could ever
+    // fire, so there is no clock to race here.
+    const result = await service.submitReport(FORM, KEY);
+
+    expect(result).toEqual({ status: "queued", reportId: draft.reportId });
+    expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
+  });
+
+  it("an undefined status, no rate limit, and a queue that does NOT hold this envelope (cap-dropped) maps to unconfirmed - even though flush and the inner push both resolved", async () => {
+    mockFlushWithSendOutcome({});
+    const service = buildService(null);
+    const draft = await service.freezeEvidence(KEY, null);
+    // The index names an entry, but for a DIFFERENT event - exactly what the
+    // store's cap-drop path leaves behind (the body is unlinked, the index
+    // is left as it was for whatever was already queued).
+    await writeOfflineQueueFixture([
+      { id: "entry-someone-else", eventId: "some-other-event" },
+    ]);
+
+    const result = await service.submitReport(FORM, KEY);
+
+    expect(result).toEqual({ status: "unconfirmed", reportId: draft.reportId });
+  });
+
+  it("two different event ids where only one is actually queued answer queued and unconfirmed respectively", async () => {
+    // Deviation from the sub-plan's wrapper design, noted in the brief: this
+    // is exact attribution off the envelope's own `event_id`, not a
+    // set-difference over a wrapped `push` - so the case that matters is two
+    // DIFFERENT events where only one is actually in the queue, not a
+    // concurrent-push race.
+    const queuedService = buildService(null);
+    const queuedDraft = await queuedService.freezeEvidence(KEY, null);
+    const queuedEventId = queuedDraft.reportId.slice("rpt_".length);
+
+    const droppedService = buildService(null);
+    const droppedDraft = await droppedService.freezeEvidence(
+      "sender-1:2",
+      null,
+    );
+
+    await writeOfflineQueueFixture([
+      { id: "entry-queued", eventId: queuedEventId },
+    ]);
+
+    mockFlushWithSendOutcome({});
+    const queuedResult = await queuedService.submitReport(FORM, KEY);
+    expect(queuedResult).toEqual({
+      status: "queued",
+      reportId: queuedDraft.reportId,
+    });
+
+    mockFlushWithSendOutcome({});
+    const droppedResult = await droppedService.submitReport(FORM, "sender-1:2");
+    expect(droppedResult).toEqual({
+      status: "unconfirmed",
+      reportId: droppedDraft.reportId,
+    });
+  });
+
+  it("an index entry whose body the store's writeFile swallowed (never named the envelope) maps to unconfirmed, never failed", async () => {
+    mockFlushWithSendOutcome({});
+    const service = buildService(null);
+    const draft = await service.freezeEvidence(KEY, null);
+    // `Store.set` swallows a failed `writeFile` internally - the in-memory
+    // queue can hold an envelope the disk index never named. Simulate the
+    // disk-side symptom directly: no queue-v2.json at all (the write never
+    // landed), which is indistinguishable from "nothing queued" to a reader
+    // that only ever sees disk.
+    // (No fixture written - `sentryOfflineQueuePath` resolves to a
+    // directory that simply doesn't exist yet.)
+
+    const result = await service.submitReport(FORM, KEY);
+
+    expect(result).toEqual({ status: "unconfirmed", reportId: draft.reportId });
+  });
+
+  it("a transport throw the SDK swallows into {} (undefined status, no evidence either way) maps to unconfirmed", async () => {
+    // `sendEnvelope`'s catch turns a transport-level throw into the same
+    // shape as a queued-and-returned-{} response at the hook - this test
+    // exists so that shape is pinned as `unconfirmed`, not `failed`, even
+    // with nothing at all backing a `queued` verdict.
     mockFlushWithSendOutcome({});
 
     const result = await freezeAndSubmit(buildService(null));
 
-    expect(result).toEqual({ status: "failed", reason: "error" });
+    expect(result.status).toBe("unconfirmed");
   });
+
+  it("a NULL outcome (afterSendEvent never fires within the grace window) maps to unconfirmed, never delivered - the old fallthrough is gone", async () => {
+    // Unlike `still returns unconfirmed on silence` below (where `flush`
+    // itself times out first), here `flush` resolves true - the queue
+    // genuinely drained - but no listener ever fires. This exercises
+    // `awaitOutcome`'s own `SEND_OUTCOME_GRACE_MS` timeout, which is a real
+    // (short, ~500ms) wait; there is nothing in `support.ts` to inject a
+    // clock into for it.
+    fakeClient = makeFakeSentryClient();
+    sentryMock.getClient.mockReturnValue(fakeClient);
+    sentryMock.flush.mockResolvedValueOnce(true);
+
+    const result = await freezeAndSubmit(buildService(null));
+
+    expect(result.status).toBe("unconfirmed");
+    expect(result.status).not.toBe("delivered");
+  }, 5_000);
 
   it("still returns unconfirmed on silence - the flush-timeout path is unchanged", async () => {
     // The hook never fires at all (the send is still in flight); `flush`
@@ -818,6 +1089,29 @@ describe("DesktopSupportService.submitReport - Sentry send outcome (afterSendEve
     });
     await freezeAndSubmit(buildService(null));
 
+    expect(fakeClient.listenerCount()).toBe(0);
+  });
+
+  it("unsubscribes on a rate-limited exit", async () => {
+    mockFlushWithSendOutcome({
+      statusCode: 429,
+      headers: responseHeaders({ rateLimits: null, retryAfter: "5" }),
+    });
+    await freezeAndSubmit(buildService(null));
+
+    expect(fakeClient.listenerCount()).toBe(0);
+  });
+
+  it("unsubscribes on a queued exit", async () => {
+    mockFlushWithSendOutcome({});
+    const service = buildService(null);
+    const draft = await service.freezeEvidence(KEY, null);
+    await writeOfflineQueueFixture([
+      { id: "entry-a", eventId: draft.reportId.slice("rpt_".length) },
+    ]);
+
+    const result = await service.submitReport(FORM, KEY);
+    expect(result.status).toBe("queued");
     expect(fakeClient.listenerCount()).toBe(0);
   });
 });

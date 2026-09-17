@@ -1340,6 +1340,142 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(harness.submittedForms[1]?.intent).toBe(intent);
     });
 
+    it("shows the offline-saved banner on queued with no Try again, but a GitHub fallback", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({ status: "queued", reportId: "rpt_queued" }),
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.change(bugIntentField(), {
+        target: { value: "Queued while offline should not claim delivery" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain(
+        "it will be sent automatically when the connection returns",
+      );
+      expect(useDesktopDialogStore.getState().activeDialog).toBe(
+        "report-issue",
+      );
+      expect(
+        screen.getByRole("button", { name: "Report on GitHub instead" }),
+      ).not.toBeNull();
+      // A resend would collapse at ingest against the store's own replay
+      // (same event_id) and could only replace a stored report with a
+      // dropped one - so, unlike every other non-delivered outcome, queued
+      // offers no "Try again".
+      expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Report sent" })).toBeNull();
+      expect(harness.openedLinks).toEqual([]);
+    });
+
+    it("names the wait on a rate-limited failure with seconds, and keeps the draft with Try again offered", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({
+            status: "failed",
+            reason: "rate-limited",
+            retryAfterSeconds: 30,
+          }),
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      const intent = "Rate-limited with a known wait keeps the draft";
+      fireEvent.change(bugIntentField(), { target: { value: intent } });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("try again in 30 seconds");
+      expect(screen.getByDisplayValue(intent)).not.toBeNull();
+      expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Report on GitHub instead" }),
+      ).not.toBeNull();
+      expect(screen.queryByRole("heading", { name: "Report sent" })).toBeNull();
+    });
+
+    it("does not invent a number when a rate-limited failure carries no retryAfterSeconds", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: () =>
+          Promise.resolve({
+            status: "failed",
+            reason: "rate-limited",
+            retryAfterSeconds: null,
+          }),
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      const intent = "Rate-limited with no known wait keeps the draft too";
+      fireEvent.change(bugIntentField(), { target: { value: intent } });
+      fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("try again in a few minutes");
+      // No fabricated number: the header was absent and the copy must not
+      // pretend the server said something it didn't.
+      expect(alert.textContent).not.toMatch(/\d+\s+(second|minute)/);
+      expect(screen.getByDisplayValue(intent)).not.toBeNull();
+      expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
+    });
+
+    it.each([
+      [30, "30 seconds"],
+      [60, "a minute"],
+      [61, "2 minutes"],
+      [200, "4 minutes"],
+    ])(
+      "rateLimitWaitLabel boundary: %i seconds reads as '%s'",
+      async (retryAfterSeconds, expectedLabel) => {
+        const harness = createSupportBridgeHarness({
+          snapshot: undefined,
+          submitReport: () =>
+            Promise.resolve({
+              status: "failed",
+              reason: "rate-limited",
+              retryAfterSeconds,
+            }),
+          buildPublicDraft: undefined,
+          openExternalLink: undefined,
+          frozenDesktopLines: undefined,
+          frozenHostLines: undefined,
+        });
+        openManualReport();
+        renderReportIssueDialog(createRunnerHost(harness));
+        await flushDialogEffects();
+
+        fireEvent.change(bugIntentField(), {
+          target: { value: `Boundary case ${String(retryAfterSeconds)}` },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert.textContent).toContain(`try again in ${expectedLabel}`);
+      },
+    );
+
     it("renders the failed delivery banner with the same retry/fallback shape", async () => {
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
