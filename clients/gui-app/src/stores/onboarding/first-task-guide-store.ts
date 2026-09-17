@@ -120,10 +120,25 @@ function foldRememberedRun(
   };
   return previous.status === folded.status &&
     previous.runId === folded.runId &&
+    previous.total === folded.total &&
+    sameFinalCounts(previous.finalCounts, folded.finalCounts) &&
     sameEntries(previous.outcomes, folded.outcomes) &&
     sameEntries(previous.titles, folded.titles)
     ? previous
     : folded;
+}
+
+function sameFinalCounts(
+  a: SessionImportRunState["finalCounts"],
+  b: SessionImportRunState["finalCounts"],
+): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.imported === b.imported &&
+    a.skippedAlreadyImported === b.skippedAlreadyImported &&
+    a.failed === b.failed
+  );
 }
 
 function sameEntries<T>(

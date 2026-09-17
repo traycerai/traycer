@@ -85,8 +85,15 @@ function ProviderListItem(props: {
             aria-label={providerDisplayName(row.providerId)}
             aria-pressed={row.enabled === true}
             aria-describedby={descriptionId}
-            disabled={onSelect === null}
-            onClick={() => onSelect?.(row.providerId)}
+            // A card with a REASON stays in the tab order so the reason it
+            // describes can be reached; only a card with nothing to say is
+            // natively disabled.
+            aria-disabled={onSelect === null || undefined}
+            disabled={onSelect === null && row.disabledReason === null}
+            onClick={() => {
+              if (onSelect === null) return;
+              onSelect(row.providerId);
+            }}
             className="onboarding-provider-toggle flex min-w-0 flex-1 flex-col items-start gap-1.5 p-4 text-left"
           >
             <span className="flex w-full min-w-0 items-center gap-2.5">

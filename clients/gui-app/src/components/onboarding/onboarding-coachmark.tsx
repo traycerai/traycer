@@ -239,7 +239,12 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
       ? setTimeout(() => setGliding(glideElements, false), GLIDE_MS + 40)
       : null;
 
+    // A position resolves asynchronously, so one requested for a target the
+    // effect has since left could land after the new target's own and paint
+    // the halo on a detached node. Only the latest request may paint.
+    let positionRequest = 0;
     const reposition = (): void => {
+      const request = ++positionRequest;
       void computePosition(target, floater, {
         strategy: "fixed",
         placement: "bottom-start",
@@ -251,7 +256,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
           shift({ padding, boundary }),
         ],
       }).then(({ x, y }) => {
-        if (!floater.isConnected) return;
+        if (!floater.isConnected || request !== positionRequest) return;
         floater.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
         paintSpotlight(target, halo, cutoutRef.current, portal);
       });
@@ -259,6 +264,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
     reposition();
     const stop = autoUpdate(target, floater, reposition);
     return () => {
+      positionRequest += 1;
       stop();
       if (settle !== null) window.clearTimeout(settle);
     };
@@ -412,7 +418,11 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
   );
 }
 
-/** The card's step-progress row: filled bars for completed and current steps. */
+/**
+ * The card's step-progress row. Completed steps are filled; the current step
+ * and those after it stay as track, so the row reads as "how far you have
+ * come" rather than "where you are". The accessible value carries the step.
+ */
 function ProgressBars(props: { readonly progress: CoachmarkProgress }) {
   const { step, total } = props.progress;
   return (

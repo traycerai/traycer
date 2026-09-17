@@ -521,7 +521,10 @@ describe("OnboardingDetectedAgents", () => {
     ];
     const view = render(<OnboardingDetectedAgents />);
     const codexButton = providerButton("Codex", true);
-    expect(codexButton.disabled).toBe(true);
+    // Guarded with a reason: inert but still in the tab order, so the reason
+    // it describes stays reachable by keyboard and screen reader.
+    expect(codexButton.getAttribute("aria-disabled")).toBe("true");
+    expect(codexButton.disabled).toBe(false);
     fireEvent.click(codexButton);
     expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
 
@@ -532,6 +535,7 @@ describe("OnboardingDetectedAgents", () => {
     view.rerender(<OnboardingDetectedAgents />);
     const enabledCodexButton = providerButton("Codex", true);
     expect(enabledCodexButton.disabled).toBe(false);
+    expect(enabledCodexButton.getAttribute("aria-disabled")).toBeNull();
 
     fixtures.setEnabledPending = true;
     view.rerender(<OnboardingDetectedAgents />);

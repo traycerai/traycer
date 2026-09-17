@@ -119,7 +119,7 @@ export function OnboardingHostUnavailableNotice(props: {
           <p className="text-ui-sm text-muted-foreground">
             {props.refusal === null
               ? "Reconnect this device to continue."
-              : "Update Traycer on this device."}
+              : `Update Traycer on ${scope.hostLabel}.`}
           </p>
         </div>
       )}

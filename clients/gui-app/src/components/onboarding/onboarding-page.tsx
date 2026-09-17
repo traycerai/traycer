@@ -406,7 +406,7 @@ function OnboardingTour(props: {
           </div>
         </header>
         <section
-          aria-label="Welcome to Traycer"
+          aria-label="Your introduction to Traycer"
           className="onboarding-stage relative flex min-h-0 w-full flex-1 flex-col"
         >
           <AnimatePresence mode="wait" initial={false}>
