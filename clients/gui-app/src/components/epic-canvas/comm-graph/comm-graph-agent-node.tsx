@@ -143,6 +143,7 @@ function CommGraphPeerTaskNode(props: {
       data-search-match={data.searchMatched ? "true" : "false"}
       aria-label={`Agent in another task: ${label}`}
       className={cn(
+        // muted-fill-ok: the dashed border delimits the stub; the /40 wash only tints it
         "flex w-full flex-col gap-1 rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-left text-ui-xs text-muted-foreground shadow-sm hover:border-primary/50",
         data.pulsing && "animate-pulse border-primary ring-2 ring-primary/60",
         data.searchMatched &&
