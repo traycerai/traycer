@@ -61,7 +61,6 @@ describe("AgentRoleBadges", () => {
   it("renders every role and scope in the hover detail", () => {
     render(
       <AgentRoleHoverContent
-        agentName="Prankster and Master of Ceremonies"
         claims={[
           claim(
             "10000000-0000-4000-8000-000000000001",
@@ -74,7 +73,6 @@ describe("AgentRoleBadges", () => {
     );
 
     expect(screen.getByText("Agent roles")).toBeTruthy();
-    expect(screen.getByText("Prankster and Master of Ceremonies")).toBeTruthy();
     expect(
       screen.getByText("Chief Prankster & Master of Ceremonies"),
     ).toBeTruthy();
