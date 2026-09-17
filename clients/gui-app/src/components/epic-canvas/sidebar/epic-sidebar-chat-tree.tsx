@@ -1404,8 +1404,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                     resultCount={searchResultCount}
                   />
                 ) : null}
-                <SidebarContent className="gap-0">
-                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                <SidebarContent>
+                  <SidebarGroup className="min-h-0 flex-1">
                     <SidebarGroupContent
                       ref={treeRegionRef}
                       className="flex min-h-0 flex-1 flex-col"
@@ -1452,9 +1452,10 @@ function PendingCreateRow({ depth, name }: { depth: number; name: string }) {
       >
         <TreeChevronSpacer />
         <AgentSpinningDots
-          className="shrink-0 text-muted-foreground/70"
+          className="shrink-0"
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
         <span>{name}</span>
       </div>
@@ -3686,7 +3687,7 @@ function NestedChatStatusGlyph(props: {
   if (props.kind === "running") {
     return (
       <AgentSpinningDots
-        className="text-current"
+        className={undefined}
         testId={undefined}
         variant={undefined}
       />
@@ -4279,7 +4280,7 @@ function ChatRowArchiveButton(props: {
       >
         {props.pending ? (
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId={`epic-sidebar-archive-pending-${props.nodeId}`}
             variant={undefined}
           />

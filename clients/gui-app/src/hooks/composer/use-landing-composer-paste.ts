@@ -84,11 +84,19 @@ async function landingImageAttrsFromFiles(
   }
 
   const settled = await Promise.allSettled(
-    accepted.map(async (file) => {
+    accepted.map(async (file, candidateIndex) => {
       signal.throwIfAborted();
       const bytes = new Uint8Array(await file.arrayBuffer());
       signal.throwIfAborted();
       const hash = await putImage(bytes);
+      // These bytes are in the partition now, and whatever roots them charges
+      // them from here on. Hand THIS candidate's slot over to the hash rather
+      // than holding both until the slowest sibling finishes - that double
+      // count refuses pastes that fit. The index matters: these writes run
+      // concurrently, so "the first unnamed slot" would be whichever sibling is
+      // slowest, and settling a large slot with a small item's hash makes the
+      // difference vanish from the ledger.
+      reservation.settleStored(candidateIndex, hash);
       signal.throwIfAborted();
       return {
         id: uuidv4(),

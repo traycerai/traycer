@@ -263,7 +263,7 @@ function CommGraphTransportTrack(props: {
             className={cn(
               "absolute top-1 bottom-1 w-px -translate-x-1/2",
               marker.event.kind === "a2a_notice"
-                ? "bg-amber-500/70"
+                ? "bg-warning/70"
                 : "bg-foreground/25",
             )}
             style={{ left: `${marker.fraction * 100}%` }}
@@ -324,18 +324,13 @@ function CommGraphFollowLiveButton(props: {
     <Button
       type="button"
       size="xs"
-      variant="ghost"
+      variant="muted"
       aria-pressed={transport.following}
       data-testid="comm-graph-transport-follow-live"
       data-following={transport.following ? "true" : "false"}
       data-can-return={canReturn ? "true" : "false"}
       onClick={canReturn ? transport.returnToReplay : transport.followLive}
-      className={cn(
-        "shrink-0",
-        transport.following
-          ? "bg-primary/5 text-primary"
-          : "text-muted-foreground",
-      )}
+      className="shrink-0"
     >
       <LivePulse
         size="xs"

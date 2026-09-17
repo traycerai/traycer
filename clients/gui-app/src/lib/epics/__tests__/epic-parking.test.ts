@@ -219,6 +219,7 @@ function noopChatStreamClientFactory() {
   return {
     sendAction: () => undefined,
     sameTurnSteeringProtocolSupported: () => true,
+    draftBlobBridgeSupported: () => true,
     requestTranscriptRange: () => undefined,
     requestResnapshot: () => undefined,
     close: () => undefined,
@@ -244,6 +245,7 @@ function buildTestChatHandle(epicId: string, chatId: string, hostId: string) {
 /** Minimal valid `PendingChatAction`, matching `chat-queue-reconciler.test.ts`'s own fixture. */
 function pendingChatActionFixture(clientActionId: string): PendingChatAction {
   return {
+    wireContent: null,
     clientActionId,
     action: "send",
     queueItemId: null,
@@ -276,6 +278,7 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
     messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,
+    hashOnlyRetry: false,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -361,6 +364,7 @@ function buildTestChatHandleWithFrames(
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -486,6 +490,71 @@ function rejectLastChatAction(
     backgroundStopTaskIds: [],
     // The lease token rides every ack, but it is only ever non-null on a
     // `chat.fallback.*` hold. Nothing in this file takes one.
+    token: null,
+  });
+  return frame.clientActionId;
+}
+
+/**
+ * A send whose image travels as a bare hash, and the host refusing it with the
+ * typed cause that puts the client into silent recovery.
+ *
+ * Separate from {@link sendChatTestMessage} / {@link rejectLastChatAction}
+ * because the recovery branch keys on BOTH the code and the content: a
+ * rejection with no hash-only node in the restore document is an ordinary
+ * loud refusal, and so is one with any other code.
+ */
+const HASH_ONLY_SEND_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "Look at this" }] },
+    {
+      type: "imageAttachment",
+      attrs: {
+        id: "img-park-recovery",
+        fileName: "screenshot.png",
+        mimeType: "image/png",
+        size: 4,
+        b64content: null,
+        hash: "a".repeat(64),
+      },
+    },
+  ],
+};
+
+function sendHashOnlyChatTestMessage(
+  handle: ChatSessionStoreHandle,
+): SentChatMessageAction {
+  const sent = handle.store.getState().sendMessage({
+    content: HASH_ONLY_SEND_CONTENT,
+    sender: SEND_SENDER,
+    settings: SEND_SETTINGS,
+    attachments: buildAttachmentsFromJSONContent(HASH_ONLY_SEND_CONTENT),
+    deliveryPolicy: "auto",
+    restore: {
+      content: HASH_ONLY_SEND_CONTENT,
+      browserAnnotations: [],
+    },
+  });
+  if (sent === null) throw new Error("Expected a sent action");
+  return sent;
+}
+
+function refuseLastChatActionForMissingBytes(ack: LastChatActionAck): string {
+  const { frames, callbacks, epicId, chatId } = ack;
+  const frame = lastOwnerActionFrame(frames);
+  callbacks().onActionAck({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId,
+    chatId,
+    clientActionId: frame.clientActionId,
+    action: frame.kind,
+    status: "rejected",
+    reason: "Host does not hold this digest.",
+    code: "MISSING_ATTACHMENT_BYTES",
+    cause: "not-on-host",
+    backgroundStopTaskIds: [],
     token: null,
   });
   return frame.clientActionId;
@@ -794,6 +863,7 @@ function queuedManagedCommandItemFixture(
     kind: "managed-command",
     queueItemId,
     commandId: `command-${queueItemId}`,
+    hostId: null,
     description: "watch the build",
     monitoring: null,
     delivery: "next_turn",
@@ -1107,6 +1177,7 @@ describe("epic-parking - B1: retention-pool / warm-session key", () => {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -2137,6 +2208,124 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       expect(isEpicParked(EPIC)).toBe(false);
       expect(epicHandle.disposed).toBe(false);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 10a: a chat mid-RECOVERY. The host refused a hash-only image, the
+  // client is re-inlining it, and a retry is still to come. This state is a
+  // genuine gap in the two checks above it: the action has left
+  // `pendingActions` (the host answered it) and the prompt has not reached
+  // `failedSendRestoration` (it is not going back to the composer unless the
+  // retry fails). For a QUEUED send there is not even an optimistic echo. So
+  // an otherwise-idle recovering chat looked parkable, and parking it disposed
+  // the only copy of the prompt.
+  it("does not park while a chat is recovering a refused hash-only send (pin 10a)", () => {
+    const EPIC = "epic-park-chat-hash-recovery-pin10a";
+    const TAB = "tab-park-chat-hash-recovery-pin10a";
+    const CHAT_ID = "chat-hash-recovery-pin10a";
+    const HOST_ID = "host-hash-recovery-pin10a";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin10a" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    sendHashOnlyChatTestMessage(chat.handle);
+    refuseLastChatActionForMissingBytes({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    // Recovering: no pending action, no restoration - the two states the
+    // predicate knew about - and yet very much in flight.
+    const recovering = chat.handle.store.getState();
+    expect(Object.keys(recovering.hashOnlyRecoveries)).toHaveLength(1);
+    expect(recovering.failedSendRestoration).toBeNull();
+    expect(Object.keys(recovering.pendingActions)).toHaveLength(0);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin10a", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 10b, the other arm: the hold is released once the recovery reaches a
+  // terminal outcome. Proves the fix is not "never park a chat that ever
+  // recovered" - it is the same settle-not-observe rule pin 6b makes for the
+  // restoration slot. The retry's own send is a NEW outstanding action, so it
+  // has to be carried through accept + messageAccepted before the chat is
+  // genuinely idle; asserting straight after dispatch reports unsettled for a
+  // completely legitimate reason.
+  it("parks once the recovery has dispatched and its retry settles (pin 10b)", async () => {
+    const EPIC = "epic-park-chat-hash-recovery-pin10b";
+    const TAB = "tab-park-chat-hash-recovery-pin10b";
+    const CHAT_ID = "chat-hash-recovery-pin10b";
+    const HOST_ID = "host-hash-recovery-pin10b";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin10b" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    sendHashOnlyChatTestMessage(chat.handle);
+    refuseLastChatActionForMissingBytes({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    await vi.waitFor(() => {
+      expect(
+        Object.keys(chat.handle.store.getState().hashOnlyRecoveries),
+      ).toHaveLength(0);
+    });
+    acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    const retryFrame = lastOwnerActionFrame(chat.sent);
+    if (retryFrame.kind !== "send") throw new Error("expected a send frame");
+    confirmChatMessageAccepted(
+      chat.callbacks,
+      EPIC,
+      CHAT_ID,
+      retryFrame.messageId,
+    );
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin10b", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
     } finally {
       closeEpicTab(TAB);
     }

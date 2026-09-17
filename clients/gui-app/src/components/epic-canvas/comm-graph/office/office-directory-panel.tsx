@@ -16,6 +16,7 @@
  * member stranded on another host still carries its team's colour, and the
  * roster it names may no longer exist.
  */
+import type { CSSProperties } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { PanelLeftClose, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -386,8 +387,12 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
         // itself goes to the lead, and these go to the people under them.
         aria-label={`${member.name}, ${STATUS_LABELS[member.status]}`}
         data-testid={`comm-graph-office-directory-pip-${member.agentId}`}
-        className="relative size-3 shrink-0 rounded-xs leading-none disabled:opacity-50"
-        style={{ backgroundColor: officePipColor(member.status, palette) }}
+        className="relative size-3 shrink-0 rounded-xs bg-[var(--swatch)] leading-none disabled:opacity-50"
+        style={
+          {
+            "--swatch": officePipColor(member.status, palette),
+          } as CSSProperties
+        }
         disabled={disabled}
         onClick={() => onSelectAgent(member.agentId)}
         onPointerEnter={() => onHoverAgent(member.agentId)}
@@ -425,8 +430,12 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
         >
           <span
             aria-hidden
-            className="size-1.5 shrink-0 rounded-full"
-            style={{ backgroundColor: officePipColor(member.status, palette) }}
+            className="size-1.5 shrink-0 rounded-full bg-[var(--swatch)]"
+            style={
+              {
+                "--swatch": officePipColor(member.status, palette),
+              } as CSSProperties
+            }
           />
           <span className="min-w-0 flex-1 truncate">{member.name}</span>
           <span className="shrink-0 text-muted-foreground">
@@ -478,7 +487,8 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
           aria-label="Find someone in this office"
           data-testid="comm-graph-office-directory-search"
           placeholder="Find someone"
-          className="h-7 pl-7 text-ui-xs"
+          size="xs"
+          className="pl-7"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -520,8 +530,12 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
                       >
                         <span
                           aria-hidden
-                          className="size-1.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: accentColor(team.teamId) }}
+                          className="size-1.5 shrink-0 rounded-full bg-[var(--swatch)]"
+                          style={
+                            {
+                              "--swatch": accentColor(team.teamId),
+                            } as CSSProperties
+                          }
                         />
                         <button
                           type="button"

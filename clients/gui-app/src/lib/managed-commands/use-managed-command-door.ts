@@ -4,6 +4,17 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useOpenManagedCommandOutput } from "@/lib/managed-commands/use-open-managed-command-output";
 
 /**
+ * Opens a shell's output window. `hostId` is the host the shell RUNS on when
+ * that is not the tab's own - a shell the agent created through a cross-host
+ * dial keeps its log there, and the window streams from that host. `null` is
+ * every other shell: the tab's host, as before.
+ */
+export type ManagedCommandDoor = (
+  commandId: string,
+  hostId: string | null,
+) => void;
+
+/**
  * The door as a chat-side surface can use it. A chip and a resume divider sit
  * deep inside a chat transcript with neither the epic id nor the host in hand,
  * but both are already in scope as context: the tile's `TabHostProvider` names
@@ -13,20 +24,34 @@ import { useOpenManagedCommandOutput } from "@/lib/managed-commands/use-open-man
  * so the surface renders its plain marker rather than a button that would open
  * nothing.
  */
-export function useManagedCommandDoor(): ((commandId: string) => void) | null {
-  const hostId = use(TabHostContext);
+export function useManagedCommandDoor(): ManagedCommandDoor | null {
+  const tabHostId = use(TabHostContext);
   const epicHandle = useMaybeOpenEpicHandle();
   const epicId = epicHandle?.epicId ?? null;
   const openOutput = useOpenManagedCommandOutput(epicId ?? "");
 
-  const open = useCallback(
-    (commandId: string) => {
-      if (hostId === null) return;
-      openOutput({ commandId, hostId });
+  const open = useCallback<ManagedCommandDoor>(
+    (commandId, hostId) => {
+      if (tabHostId === null) return;
+      openOutput({ commandId, hostId: hostId ?? tabHostId });
     },
-    [hostId, openOutput],
+    [tabHostId, openOutput],
   );
 
-  if (hostId === null || epicId === null) return null;
+  if (tabHostId === null || epicId === null) return null;
   return open;
+}
+
+/**
+ * The door for a surface whose shells always run on the tab's own host - the
+ * start/restart cards and the running-work panel, which only ever list shells
+ * this host owns - so it takes the command id alone.
+ */
+export function localManagedCommandDoor(
+  door: ManagedCommandDoor | null,
+): ((commandId: string) => void) | null {
+  if (door === null) return null;
+  return (commandId) => {
+    door(commandId, null);
+  };
 }

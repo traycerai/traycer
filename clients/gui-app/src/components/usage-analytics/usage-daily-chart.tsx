@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useMemo, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import {
@@ -202,8 +203,12 @@ function UsageChartLegend(props: {
             >
               <span
                 aria-hidden
-                className="h-2 w-2 shrink-0 rounded-full"
-                style={{ backgroundColor: props.scale.colorVar(seriesKey) }}
+                className="h-2 w-2 shrink-0 rounded-full bg-[var(--swatch)]"
+                style={
+                  {
+                    "--swatch": props.scale.colorVar(seriesKey),
+                  } as CSSProperties
+                }
               />
               {props.scale.labelFor(seriesKey)}
             </button>

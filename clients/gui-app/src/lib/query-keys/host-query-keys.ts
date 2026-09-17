@@ -128,6 +128,33 @@ export const hostQueryKeys = {
       params,
     ),
   /**
+   * The account auto-mode policy read, for ONE viewer.
+   *
+   * `useAutoPolicyQuery` passes `cacheKeyIdentity: [viewerUserId]` because the
+   * record is ACCOUNT-owned while the key is host-shaped, and without the
+   * viewer segment a signed-out user's policy is served synchronously to
+   * whoever signs in next. This builder is the write side of that partition:
+   * `autoPolicy.set` folds its response into the read cache, and a
+   * `setQueriesData` on the bare method scope is a PREFIX match, so it would
+   * write the new body into every viewer's entry under this host - re-opening
+   * the same leak through the other door, with the saver's prose landing in the
+   * previous account's cached policy.
+   *
+   * Shape mirrors what `useHostQuery` produces (`epicTaskContexts` above is the
+   * same arrangement): `["host", hostId, method, params, userId]`, with the
+   * `{}` params `AUTO_POLICY_GET_PARAMS` sends. Keep the two in step - nothing
+   * type-checks a key against the hook that builds it.
+   */
+  autoPolicyForViewer: (hostId: string | null, userId: string) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "autoPolicy.get">(
+        hostId,
+        "autoPolicy.get",
+        {},
+      ),
+      userId,
+    ] as const,
+  /**
    * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
    * what `useHostQuery` / `useHostQueries` produce for that method with
    * `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.

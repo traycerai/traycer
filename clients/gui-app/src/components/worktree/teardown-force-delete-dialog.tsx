@@ -30,8 +30,9 @@ export function TeardownForceDeleteDialog(props: {
       }}
     >
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,34rem)] gap-0 overflow-hidden p-0 sm:max-w-xl"
+        className="w-[min(92vw,34rem)] overflow-hidden sm:max-w-xl"
         data-testid="teardown-force-delete-dialog"
       >
         <div className="flex min-w-0 items-start gap-3 p-5">
@@ -39,10 +40,10 @@ export function TeardownForceDeleteDialog(props: {
             <AlertTriangle className="size-4" aria-hidden />
           </div>
           <div className="min-w-0 flex-1 space-y-1.5">
-            <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+            <DialogTitle className="wrap-anywhere">
               Delete worktree {props.worktreeLabel}?
             </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+            <DialogDescription className="wrap-anywhere">
               Anything working in this worktree when the delete runs will be
               stopped.
             </DialogDescription>

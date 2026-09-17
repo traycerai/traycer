@@ -126,22 +126,22 @@ function VersionRow(props: {
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="font-mono text-code-xs">v{row.version}</span>
         {row.isLatest ? (
-          <VersionPill className="bg-emerald-900/40 text-emerald-300">
+          <VersionPill className="bg-success/40 text-success-foreground">
             latest
           </VersionPill>
         ) : null}
         {row.isInstalled ? (
-          <VersionPill className="bg-sky-900/40 text-sky-300">
+          <VersionPill className="bg-info/40 text-info-foreground">
             installed
           </VersionPill>
         ) : null}
         {row.yanked ? (
-          <VersionPill className="bg-rose-900/40 text-rose-300">
+          <VersionPill className="bg-destructive/40 text-destructive">
             yanked
           </VersionPill>
         ) : null}
         {row.newerData ? (
-          <VersionPill className="bg-rose-900/40 text-rose-300">
+          <VersionPill className="bg-destructive/40 text-destructive">
             newer data
           </VersionPill>
         ) : null}

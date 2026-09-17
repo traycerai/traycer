@@ -329,7 +329,7 @@ function StatusPillGlyph(props: { readonly icon: StatusIcon }): ReactNode {
   if (props.icon === "agent-spinner") {
     return (
       <AgentSpinningDots
-        className="text-current"
+        className={undefined}
         testId="file-autosave-spinner"
         variant={undefined}
       />

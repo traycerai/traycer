@@ -515,6 +515,73 @@ describe("row projection / renderer equivalence", () => {
     expectSameRows({ messages, events: [anchor, fork] });
   });
 
+  it("agrees on an unattended auto-mode refusal, which draws a row", () => {
+    const input = {
+      messages: [userMessage("u-1", 1000)],
+      events: [
+        event({
+          eventId: "e-denied",
+          type: "approval.denied",
+          timestamp: 2000,
+          message: "Auto mode: Force push. Rewrites shared history.",
+          metadata: {
+            toolName: "bash",
+            autoJudge: {
+              outcome: "block",
+              rule: "Force push",
+              reason: "Rewrites shared history.",
+              unattended: true,
+              attendanceReason: "agent-created",
+            },
+          },
+        }),
+      ],
+    };
+    const { rendered, projected } = bothEnumerations(input);
+    expect(projected).toEqual(rendered);
+    // Named, not just agreed on: two sides that both draw NOTHING agree too,
+    // and that is the failure this case exists to catch.
+    expect(rendered).toEqual(["u-1", "auto-judge-unattended-denial:e-denied"]);
+  });
+
+  // The gate that keeps every transcript already on disk at the ordinals it
+  // already has. `approval.denied` is an old, common event type - a human
+  // denying a card writes one - and NONE of those carry an attendance reason.
+  // If this row materialized on the event type alone, every chat with a denial
+  // in its history would silently renumber from that point down.
+  it("agrees that an approval.denied with no attendance reason draws NO row", () => {
+    const { rendered, projected } = bothEnumerations({
+      messages: [userMessage("u-1", 1000)],
+      events: [
+        event({
+          eventId: "e-denied-by-human",
+          type: "approval.denied",
+          timestamp: 2000,
+          message: "Denied.",
+          metadata: { toolName: "bash" },
+        }),
+        event({
+          eventId: "e-denied-attended",
+          type: "approval.denied",
+          timestamp: 2100,
+          message: "Auto mode: Force push. Rewrites shared history.",
+          metadata: {
+            toolName: "bash",
+            autoJudge: {
+              rule: "Force push",
+              reason: "Rewrites shared history.",
+              // The human WAS asked here - the card is the record, and a line
+              // beside it would be the same fact twice.
+              attendanceReason: "human-away-parked",
+            },
+          },
+        }),
+      ],
+    });
+    expect(projected).toEqual(rendered);
+    expect(rendered).toEqual(["u-1"]);
+  });
+
   it("agrees on an event whose metadata is present but EMPTY, which draws no row", () => {
     expectSameRows({
       messages: [userMessage("u-1", 1000)],
@@ -580,6 +647,20 @@ describe("row projection / renderer equivalence", () => {
           timestamp: 4100,
           turnId: "turn-2",
           message: "Stop requested by owner.",
+        }),
+        event({
+          eventId: "e-denied",
+          type: "approval.denied",
+          timestamp: 4500,
+          message: "Auto mode: Force push. Rewrites shared history.",
+          metadata: {
+            toolName: "bash",
+            autoJudge: {
+              rule: "Force push",
+              reason: "Rewrites shared history.",
+              attendanceReason: "agent-created",
+            },
+          },
         }),
         event({
           eventId: "e-import",

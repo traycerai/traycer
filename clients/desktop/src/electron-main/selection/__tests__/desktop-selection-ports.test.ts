@@ -1293,9 +1293,29 @@ describe("DesktopHostFleetSource", () => {
     const snapshots: HostFleetSnapshot[] = [];
     fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
+    // Observe each enrollment read the change signal starts, so the assertions
+    // wait on the read itself instead of a fixed timer (#1826's pattern).
+    let settledReads = 0;
+    const actualRead = localHostIdentityTestDoubles.actual;
+    localHostIdentityTestDoubles.readLastKnownLocalHostId.mockImplementation(
+      async (files) => {
+        try {
+          return await actualRead(files);
+        } finally {
+          settledReads += 1;
+        }
+      },
+    );
+
     // No-op: same id on disk, `host` fires "change" anyway.
     host.emitChange();
-    await flushIo();
+    // `vi.waitFor` polls on a real timer, and a timer callback runs after
+    // every pending microtask, so by the time the poll observes the settled
+    // read the source's post-await continuation (publish or not) has
+    // already run.
+    await vi.waitFor(() => {
+      expect(settledReads).toBe(1);
+    });
     expect(snapshots).toEqual([]);
 
     // Real change: rewrite the enrollment file, then fire the local-host
@@ -1306,10 +1326,12 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     host.emitChange();
-    await flushIo();
+    await vi.waitFor(() => {
+      expect(snapshots).toHaveLength(1);
+    });
 
-    expect(snapshots).toHaveLength(1);
     expect(snapshots[0].localHostId).toBe("local-host-2");
+    expect(settledReads).toBe(2);
     fleet.dispose();
   });
 });

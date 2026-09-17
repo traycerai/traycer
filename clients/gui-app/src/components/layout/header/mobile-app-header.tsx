@@ -63,12 +63,12 @@ export function MobileAppHeader(): ReactNode {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label="Open menu"
         data-testid="mobile-nav-trigger"
         onClick={() => setNavOpen(true)}
-        className="shrink-0 text-muted-foreground hover:text-foreground"
+        className="shrink-0"
       >
         <Menu className="size-4" />
       </Button>

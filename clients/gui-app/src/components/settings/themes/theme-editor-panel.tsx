@@ -74,7 +74,7 @@ function ThemeContrastStatus({ draft }: { draft: ThemeDefinition }) {
         "text-xs leading-relaxed",
         hasTransparency || contrast >= 4.5
           ? "text-[#bec6b5]"
-          : "text-amber-200",
+          : "text-warning-foreground",
       )}
     >
       {message} Only the main text and background colors are checked.
@@ -130,19 +130,20 @@ function ColorField({
         aria-invalid={invalid}
         aria-describedby={invalid ? errorId : undefined}
         value={text}
-        className="h-7 min-w-0 border-white/10 bg-transparent font-mono text-xs"
+        className="h-7 min-w-0 border-white/10 bg-transparent text-xs"
         onChange={(event) => {
           const value = event.target.value;
           const normalized = normalizeThemeColor(value);
           setInput({ rendered: normalized ?? color, text: value });
           if (normalized) onChange(token, value);
         }}
+        font="mono"
       />
       {invalid ? (
         <p
           id={errorId}
           role="alert"
-          className="col-span-full text-xs text-rose-300"
+          className="col-span-full text-xs text-destructive"
         >
           Enter a color such as #8AB4F8. This value has not been applied.
         </p>
@@ -409,7 +410,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
         aria-modal={false}
         aria-label="Theme editor"
         className={cn(
-          "fixed right-safe-right-gutter bottom-safe-bottom-gutter z-[110] flex w-[min(90vw,var(--container-sm))] max-w-safe-dvw flex-col overflow-hidden rounded-xl border shadow-xl",
+          "fixed right-safe-right-gutter bottom-safe-bottom-gutter z-110 flex w-[min(90vw,var(--container-sm))] max-w-safe-dvw flex-col overflow-hidden rounded-xl border shadow-xl",
           minimized
             ? "h-auto"
             : "max-h-[min(75svh,calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem))]",
@@ -532,10 +533,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                     variant="ghost"
                     size="sm"
                     aria-pressed={!advanced}
-                    className={cn(
-                      "rounded-md",
-                      !advanced && "bg-white/8 text-[#e0eccf]",
-                    )}
+                    className={cn(!advanced && "bg-white/8 text-[#e0eccf]")}
                     onClick={() => {
                       setAdvanced(false);
                       setQuery("");
@@ -547,10 +545,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
                     variant="ghost"
                     size="sm"
                     aria-pressed={advanced}
-                    className={cn(
-                      "rounded-md",
-                      advanced && "bg-white/8 text-[#e0eccf]",
-                    )}
+                    className={cn(advanced && "bg-white/8 text-[#e0eccf]")}
                     onClick={() => setAdvanced(true)}
                   >
                     All colors
@@ -621,7 +616,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
               </label>
               <ThemeContrastStatus draft={draft} />
               {error ? (
-                <p role="alert" className="text-sm text-rose-300">
+                <p role="alert" className="text-sm text-destructive">
                   {error}
                 </p>
               ) : null}

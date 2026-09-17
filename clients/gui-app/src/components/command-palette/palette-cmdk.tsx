@@ -121,11 +121,13 @@ function AgentTreeItemLabel(props: {
   if (row.activity === "turn") {
     statusLabel = "Agent in progress";
     icon = (
-      <AgentSpinningDots
-        className="size-3.5 text-primary"
-        testId={`agent-opener-running-${props.item.id}`}
-        variant="dots2"
-      />
+      <span className="inline-flex text-primary">
+        <AgentSpinningDots
+          className="size-3.5"
+          testId={`agent-opener-running-${props.item.id}`}
+          variant="dots2"
+        />
+      </span>
     );
   } else if (row.activity === "background") {
     statusLabel = "Agent working in background";
@@ -324,7 +326,7 @@ function ArtifactTreeItemLabel(props: {
               aria-label={statusLabel ?? undefined}
               className={cn(
                 "size-2 shrink-0 rounded-full",
-                STATUS_DOT_CLASSES[row.status] ?? "bg-slate-400",
+                STATUS_DOT_CLASSES[row.status] ?? "bg-muted-foreground",
               )}
               role="status"
             />
@@ -607,8 +609,8 @@ function PathSubpageRows(props: {
 function RowStatusBadge({ children }: { readonly children: string }) {
   return (
     <Badge
-      variant="outline"
-      className="ml-auto shrink-0 border-border/70 bg-background/60 text-muted-foreground"
+      variant="muted"
+      className="ml-auto shrink-0 border-border/70 bg-background/60"
     >
       {children}
     </Badge>
@@ -671,7 +673,7 @@ function BrowserSubpageView(props: {
         heading={
           hostLabel === undefined ? "Open tabs" : `Open tabs on ${hostLabel}`
         }
-        className="pt-3"
+        className="mt-2"
       >
         <FlatSubpageRows items={inventoryItems} onSelect={props.onSelect} />
       </CommandGroup>

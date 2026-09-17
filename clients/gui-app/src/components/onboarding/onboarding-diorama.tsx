@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { m, useReducedMotion } from "motion/react";
 import {
@@ -601,7 +602,7 @@ function WorkbenchPanelRail(props: { readonly className: string }) {
           >
             <Icon className="size-4" />
             {panel.active ? (
-              <span className="absolute inset-x-2 bottom-0 h-[2px] rounded-t bg-primary" />
+              <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-t bg-primary" />
             ) : null}
           </span>
         );
@@ -620,7 +621,7 @@ function CanvasTopRail(props: { readonly className: string }) {
       )}
     >
       <div className="flex items-center gap-1 text-code-xs italic text-muted-foreground/80">
-        <span className="size-1.5 rounded-full bg-emerald-400" />
+        <span className="size-1.5 rounded-full bg-success" />
         All changes synced
       </div>
     </div>
@@ -1363,7 +1364,7 @@ function OpencodeStoryBody(props: {
           <span className="flex items-center gap-1 text-overline uppercase tracking-wider text-muted-foreground">
             <span
               aria-hidden="true"
-              className="size-2 shrink-0 rounded-[2px] bg-[var(--term-ansi-blue)]"
+              className="size-2 shrink-0 rounded-xs bg-[var(--term-ansi-blue)]"
             />
             OpenCode
             {beat.to !== null ? (
@@ -1496,15 +1497,15 @@ function ThemeDock() {
         <span
           key={label}
           className={cn(
-            "relative size-6 overflow-hidden rounded-full border transition-transform duration-200",
+            "relative size-6 overflow-hidden rounded-full border bg-[var(--swatch)] transition-transform duration-200",
             index === 0 ? "scale-110 border-foreground" : "border-border",
           )}
-          style={{ backgroundColor: bg }}
+          style={{ "--swatch": bg } as CSSProperties}
         >
           <span
             aria-hidden="true"
-            className="absolute inset-x-0 bottom-0 h-1/3"
-            style={{ backgroundColor: accent }}
+            className="absolute inset-x-0 bottom-0 h-1/3 bg-[var(--swatch)]"
+            style={{ "--swatch": accent } as CSSProperties}
           />
         </span>
       ))}
@@ -1537,7 +1538,7 @@ function spotlightClass(scene: SceneId, region: SpotlightRegion): string {
   const active = activeRegionsFor(scene).includes(region);
   return cn(
     "transition-[opacity,filter,box-shadow] duration-500",
-    active ? "opacity-100 saturate-100" : "opacity-35 saturate-[0.45]",
+    active ? "opacity-100 saturate-100" : "opacity-35 saturate-45",
     active &&
       region !== "command-theme" &&
       scene !== "providers" &&

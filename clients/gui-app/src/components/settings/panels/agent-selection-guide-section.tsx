@@ -184,7 +184,7 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
               source: "Agent instructions",
             })}
             presentation="link"
-            className="ml-1 h-auto p-0"
+            className="ml-1"
           />
         </div>
       </AgentSelectionGuideMessage>
@@ -427,9 +427,10 @@ function SaveStatus(props: {
     return (
       <span className="inline-flex items-center gap-1.5 text-ui-xs text-muted-foreground">
         <AgentSpinningDots
-          className="text-muted-foreground"
+          className={undefined}
           testId="agents-selection-guide-saving-spinner"
           variant={undefined}
+          tone="muted"
         />
         Saving…
       </span>

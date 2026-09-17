@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   bindComposerDraftHost,
   collectDraftMirrorDirtyWrites,
@@ -220,5 +221,101 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
     expect(dirty).toHaveLength(1);
     expect(dirty[0]?.chatId).toBe("chat-synced");
     expect(dirty[0]?.draft.content).toEqual(EMPTY);
+  });
+});
+
+/**
+ * T4's race rule: a pending inline image node means its background hash
+ * rewrite has not landed yet, and publishing the draft NOW would put the
+ * whole base64 snapshot on the wire - the exact megabyte-draft failure this
+ * ticket exists to remove. The rewrite's own document change bumps
+ * `generation` again moments later, so the draft is collectable on the next
+ * pass regardless.
+ */
+describe("collectComposerDirtyWrites: pending inline image node race rule", () => {
+  const WITH_PENDING_IMAGE: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "imageAttachment",
+        attrs: {
+          id: "pending-1",
+          fileName: "shot.png",
+          b64content: "aGVsbG8=",
+          mimeType: "image/png",
+          size: 5,
+        },
+      },
+    ],
+  };
+
+  const WITH_HASH_ONLY_IMAGE: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "imageAttachment",
+        attrs: {
+          id: "pending-1",
+          fileName: "shot.png",
+          hash: "a".repeat(64),
+          mimeType: "image/png",
+          size: 5,
+        },
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
+  });
+
+  afterEach(() => {
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
+  });
+
+  function draftWith(content: JsonContent) {
+    return {
+      content,
+      selection: null,
+      browserAnnotations: [],
+      resetEpoch: 0,
+      revision: 1,
+      draftId: "draft-pending-image",
+      hostRevision: 0,
+      targetEpicId: "epic-1",
+      lastTouchedAt: 1,
+      generation: 1,
+      syncedGeneration: 0,
+      ownerHostId: null,
+      origin: null,
+      publication: null,
+      // `supersedes` names the ancestor a fork-only draft replaces (#1913);
+      // this fixture is an ordinary draft, which never has one.
+      supersedes: null,
+    };
+  }
+
+  it("does not collect a draft while it still holds a pending (b64content) image node", () => {
+    useComposerDraftStore.setState({
+      drafts: { "chat-pending": draftWith(WITH_PENDING_IMAGE) },
+    });
+
+    expect(collectComposerDirtyWrites()).toEqual([]);
+  });
+
+  it("collects the same draft once the rewrite has landed (hash-only)", () => {
+    useComposerDraftStore.setState({
+      drafts: { "chat-pending": draftWith(WITH_HASH_ONLY_IMAGE) },
+    });
+
+    const dirty = collectComposerDirtyWrites();
+    expect(dirty).toHaveLength(1);
+    expect(dirty[0]?.chatId).toBe("chat-pending");
   });
 });

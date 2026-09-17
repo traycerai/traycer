@@ -112,7 +112,7 @@ describe("composer draft store: composerDraftRememberSynced clears supersedes on
     if (newId === null) throw new Error("expected a forked draftId");
     expect(forked?.supersedes).not.toBeNull();
 
-    composerDraftRememberSynced(newId, 1, forked?.generation ?? 0);
+    composerDraftRememberSynced(newId, 1, forked?.generation ?? 0, "host-b");
 
     const after = useComposerDraftStore.getState().drafts[chatId];
     expect(after?.supersedes).toBeNull();
@@ -128,7 +128,7 @@ describe("composer draft store: composerDraftRememberSynced clears supersedes on
     if (newId === null) throw new Error("expected a forked draftId");
     expect(supersedesBefore).not.toBeNull();
 
-    composerDraftRememberSynced(newId, 0, forked?.generation ?? 0);
+    composerDraftRememberSynced(newId, 0, forked?.generation ?? 0, "host-b");
 
     const after = useComposerDraftStore.getState().drafts[chatId];
     expect(after?.supersedes).toBe(supersedesBefore);

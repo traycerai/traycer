@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { UsageHarnessSplitRow } from "@/lib/usage-analytics/usage-harness-split";
@@ -66,8 +67,8 @@ function UsageHarnessSplitItem(props: {
     >
       <span
         aria-hidden
-        className="h-2 w-2 shrink-0 rounded-full"
-        style={{ backgroundColor: color }}
+        className="h-2 w-2 shrink-0 rounded-full bg-[var(--swatch)]"
+        style={{ "--swatch": color } as CSSProperties}
       />
       <span className="w-24 min-w-0 shrink truncate text-ui-sm text-foreground">
         {scale.labelFor(row.harnessId)}
@@ -78,11 +79,13 @@ function UsageHarnessSplitItem(props: {
         aria-label={`${percentLabel} of cost`}
       >
         <span
-          className={cn("block h-full rounded-full")}
-          style={{
-            width: `${String(Math.min(100, row.shareOfCost * 100))}%`,
-            backgroundColor: color,
-          }}
+          className={cn("block h-full rounded-full bg-[var(--swatch)]")}
+          style={
+            {
+              width: `${String(Math.min(100, row.shareOfCost * 100))}%`,
+              "--swatch": color,
+            } as CSSProperties
+          }
         />
       </span>
       <span className="min-w-14 shrink-0 text-right tabular-nums text-ui-xs text-muted-foreground">

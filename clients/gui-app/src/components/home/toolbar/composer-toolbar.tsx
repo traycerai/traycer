@@ -1,6 +1,12 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { useStore } from "zustand";
 
+import {
+  autoModeOfferableHere,
+  catalogSupportedPermissionModes,
+} from "@/components/home/data/landing-options";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
 import { ComposerToolbarRight } from "@/components/home/toolbar/composer-toolbar-right";
 import { DictationRecordingBar } from "@/components/home/toolbar/dictation-recording-bar";
@@ -15,7 +21,6 @@ interface ComposerToolbarProps {
    *  left group renders, leaves stay presentational. */
   store: ComposerToolbarStore;
   onAttachImages: (files: ReadonlyArray<File>) => void;
-  showNextTurnPermissionNote: boolean;
   canSubmit: boolean;
   attachmentPending: boolean;
   onSubmit: () => void;
@@ -44,13 +49,19 @@ interface ComposerToolbarProps {
   /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  /**
+   * Whether THIS chat's negotiated `chat.subscribe` line can carry `auto`, or
+   * `null` on a composer with no chat session in scope (the landing composer).
+   * See {@link autoModeOfferableHere} for why the catalog line alone is not
+   * enough, and why this cannot be read per-host.
+   */
+  readonly chatLineCarriesAutoMode: boolean | null;
 }
 
 function ComposerToolbarImpl(props: ComposerToolbarProps) {
   const {
     store,
     onAttachImages,
-    showNextTurnPermissionNote,
     canSubmit,
     attachmentPending,
     onSubmit,
@@ -64,6 +75,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
+    chatLineCarriesAutoMode,
   } = props;
 
   // Left-group slices. The store is the single source for harness-level
@@ -75,6 +87,45 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   );
   const harnessLabel = useStore(store, (s) => s.harnessLabel);
   const setPermission = useStore(store, (s) => s.setPermission);
+  // The union across the WHOLE catalog, so the picker can tell "this host
+  // predates `auto`" from "this provider declines it". Memoized on the
+  // catalog's own array identity - the store keeps that reference stable
+  // across unrelated state changes, so this recomputes only when the host's
+  // harness list actually moves.
+  const harnesses = useStore(store, (s) => s.catalog.harnesses);
+  const catalogSupportedModes = useMemo(
+    () => catalogSupportedPermissionModes(harnesses),
+    [harnesses],
+  );
+  // The HOST capability the union cannot express: a catalog of unconstrained
+  // rows names no modes at all, and even a fully constrained one cannot tell
+  // "this machine predates `auto`" from "every provider here declines it".
+  // The negotiated catalog line answers the first question directly, and the
+  // picker's unsupported copy uses it to decide who to blame.
+  // `null` when no host is named: that is "no host in scope", not "the host
+  // cannot spell `auto`", and the two are different claims. A named host whose
+  // line is unreadable still answers `false` - the composer is about to send on
+  // it - which is what `catalogLineKnowsAutoMode(null)` gives.
+  //
+  // ANDed with this chat's own `chat.subscribe` line, because the catalog line
+  // is evidence about what the host can OFFER and the frame that CARRIES the
+  // value is a different method - see `autoModeOfferableHere`. On the landing
+  // composer that second half is `null` (no chat yet) and the catalog line
+  // decides alone, which is all this surface can know.
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    runTargetHostId,
+    "agent.gui.listHarnesses",
+  );
+  const hostKnowsAutoMode =
+    runTargetHostId === null
+      ? null
+      : autoModeOfferableHere(listHarnessesLine, chatLineCarriesAutoMode);
+  // The harness this composer will RUN, which decides the disclosure alongside
+  // the host's stored judge: a provider set to its own classifier bypasses
+  // Traycer's judge entirely. Read off the same store slice the picker shows,
+  // so the row and the trigger can never name different providers.
+  const runHarnessId = useStore(store, (s) => s.selection.harnessId);
+  const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);
 
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.
@@ -103,9 +154,14 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             onPermissionChange={setPermission}
             supportedPermissionModes={supportedPermissionModes}
             harnessLabel={harnessLabel}
-            showNextTurnPermissionNote={
-              showNextTurnPermissionNote ? !settingsLocked : false
-            }
+            catalogSupportedModes={catalogSupportedModes}
+            hostKnowsAutoMode={hostKnowsAutoMode}
+            // A turn the user can still switch a mode underneath - which the
+            // host honours IMMEDIATELY for the running turn, not from the next
+            // message; the picker's own mid-turn notice is what says so.
+            // `settingsLocked` surfaces cannot flip at all.
+            turnActive={activeTurnStatus !== null && !settingsLocked}
+            judgeBilling={judgeBilling}
             settingsLocked={settingsLocked}
           />
           <ComposerToolbarRight

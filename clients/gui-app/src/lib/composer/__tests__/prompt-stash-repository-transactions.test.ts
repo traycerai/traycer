@@ -186,6 +186,7 @@ describe("prompt-stash-repository transactions", () => {
     const sharedHash = await sha256Hex(shared);
     const onlyAHash = await sha256Hex(onlyA);
     const entryA: PromptStashEntry = {
+      annotations: [],
       id: "a",
       createdAt: 2,
       blobHashes: [sharedHash, onlyAHash],
@@ -308,6 +309,7 @@ describe("prompt-stash-repository transactions", () => {
     const first = textEntry("same", 10, "v1");
     const second = textEntry("other", 20, "other");
     const firstUpdated: PromptStashEntry = {
+      annotations: [],
       id: "same",
       createdAt: 30,
       content: textDoc("v2"),

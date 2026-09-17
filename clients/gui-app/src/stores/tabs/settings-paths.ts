@@ -36,6 +36,7 @@ export const SETTINGS_PATHS = new Set([
   "link-phone",
   "notifications",
   "opening-behavior",
+  "permissions",
   "providers",
   "service",
   "shell",

@@ -88,9 +88,9 @@ export function FallbackReturnBanner({
   return (
     <div
       data-testid="fallback-return-banner"
-      className="flex w-full flex-col gap-2 rounded-md border border-emerald-600/40 bg-emerald-600/5 px-3 py-2 text-ui-sm"
+      className="flex w-full flex-col gap-2 rounded-md border border-success/40 bg-success/5 px-3 py-2 text-ui-sm"
     >
-      <div className="flex items-center gap-2 text-ui-sm font-medium text-emerald-700 dark:text-emerald-300">
+      <div className="flex items-center gap-2 text-ui-sm font-medium text-success-foreground">
         <CheckCircle2 className="size-3.5 shrink-0" aria-hidden />
         <span className="min-w-0">
           {combinedHeadline(

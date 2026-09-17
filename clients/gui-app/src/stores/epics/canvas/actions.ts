@@ -1,3 +1,4 @@
+import { browserSessionTileId } from "./tile-schema/browser-tile";
 /**
  * Pure actions over `EpicCanvasState` (the N-ary split tree + decoupled tile
  * payloads). Every action:
@@ -215,11 +216,8 @@ export interface PaneTabLocation {
 }
 
 /**
- * Locate an open tab by content id. Every tile kind carries a deterministic
- * content `id` (artifact uuid, workspace-file path hash, git-diff payload
- * hash), so dedup is plain id equality across all kinds. Used by global
- * dedup - opening content already present anywhere focuses that tab instead
- * of cloning.
+ * Locate an open tab by content id. Rebound browsers retain their original
+ * node id, so their host identity is also accepted for sidebar/deep-link opens.
  *
  * For a host-bound kind, prefer {@link findPaneTabForRef}: ids minted by a
  * host (a chat, a shell) are unique per host, not globally.
@@ -232,12 +230,26 @@ export function findPaneTabByContentId(
     for (let index = 0; index < pane.tabInstanceIds.length; index += 1) {
       const instanceId = pane.tabInstanceIds[index];
       const ref = state.tilesByInstanceId[instanceId];
-      if (ref !== undefined && ref.id === contentId) {
+      if (
+        ref !== undefined &&
+        (ref.id === contentId || tileContentId(ref) === contentId)
+      ) {
         return { pane, index, instanceId, ref };
       }
     }
   }
   return null;
+}
+
+function tileContentId(ref: TileIdentity): string {
+  if (
+    ref.type === "browser-session" &&
+    typeof ref.sessionId === "string" &&
+    typeof ref.tabId === "string"
+  ) {
+    return browserSessionTileId({ sessionId: ref.sessionId, tabId: ref.tabId });
+  }
+  return ref.id;
 }
 
 /** The bound host of a tile kind that has one; null for the rest. */
@@ -248,6 +260,9 @@ export function findPaneTabByContentId(
  * callers holding a finished `EpicCanvasTileRef`.
  */
 export interface TileIdentity {
+  readonly type?: string;
+  readonly sessionId?: string | null;
+  readonly tabId?: string | null;
   readonly id: string;
   readonly hostId?: string | null;
 }
@@ -276,7 +291,11 @@ export function findPaneTabForRef(
       const instanceId = pane.tabInstanceIds[index];
       const ref = state.tilesByInstanceId[instanceId];
       if (ref === undefined) continue;
-      if (ref.id !== node.id || tileHostId(ref) !== hostId) continue;
+      if (
+        (ref.id !== node.id && tileContentId(ref) !== tileContentId(node)) ||
+        tileHostId(ref) !== hostId
+      )
+        continue;
       return { pane, index, instanceId, ref };
     }
   }
@@ -1531,6 +1550,22 @@ export function renameArtifact(
       }
       if (ref.name === name && ref.titleSource === "manual") return ref;
       return { ...ref, name, titleSource: "manual" };
+    },
+  );
+}
+
+export function rebindPendingBrowserTile(
+  state: EpicCanvasState,
+  requestId: string,
+  opened: { readonly sessionId: string; readonly tabId: string },
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) =>
+      ref.type === "browser-session" && ref.pending?.requestId === requestId,
+    (ref) => {
+      if (ref.type !== "browser-session") return ref;
+      return { ...ref, ...opened, pending: undefined };
     },
   );
 }

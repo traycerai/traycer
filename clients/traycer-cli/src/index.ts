@@ -2873,7 +2873,7 @@ function registerAgentCommands(
     agent
       .command("selection-guide", readonlyHidden)
       .description(
-        "Get the instructions for the agent selection guide. Instructs which child agents to create for different kinds of tasks.",
+        "Get instructions for choosing Traycer agents’ harnesses, models, and reasoning effort. Does not configure provider-native subagents.",
       ),
     () =>
       buildAgentSelectionGuideCommand({
@@ -3030,7 +3030,7 @@ function registerAgentCommands(
       )
       .option(
         "--response-id <id>",
-        "Close an open thread - one reply answers every message received on it",
+        "Answer a request received from this recipient; omit on your own follow-ups",
       ),
     (opts) =>
       buildAgentSendCommand({

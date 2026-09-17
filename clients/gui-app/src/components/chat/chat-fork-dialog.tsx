@@ -424,7 +424,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     // not the tab's. The per-host last-used buckets it keys describe the
     // machine the fork will run on, so a cross-host fork must read and write
     // the target's bucket, never the source tab's.
-    { hostClient: selectedHostClient, hostId: selectedHostId, tuiOnly: false },
+    {
+      hostClient: selectedHostClient,
+      hostId: selectedHostId,
+      tuiOnly: false,
+      // A fork CREATES a chat; nothing has negotiated a `chat.subscribe` line
+      // for it yet, so the harness-catalog line decides `auto` alone.
+      chatLineCarriesAutoMode: null,
+    },
   );
   // Cross-host asks the STRONGER question, and only cross-host.
   //
@@ -791,13 +798,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        layout="banded"
         // Capped and split into header / scroller / footer, the shape every
         // dialog with a form taller than a phone uses. The cap is what keeps
         // Fork reachable once a soft keyboard is up: both mobile shells shrink
         // the layout viewport for the keyboard (the app resizes the web view
         // natively, Android Chrome honours `interactive-widget=resizes-content`),
         // so `dvh` already resolves against what is left uncovered.
-        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(94vw,32rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(94vw,34rem)]"
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(94vw,32rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(94vw,34rem)]"
         ref={contentRef}
         onOpenAutoFocus={(event) => {
           // Focus moves to the dialog itself rather than being merely
@@ -832,7 +840,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         {capabilityProbeEntries.map((entry) => (
           <ChatForkHostCapabilityProbe key={entry.hostId} entry={entry} />
         ))}
-        <DialogHeader className="px-4 pt-4 pr-12 pb-2">
+        <DialogHeader>
           <DialogTitle>Fork agent</DialogTitle>
         </DialogHeader>
         <div
@@ -865,6 +873,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 key={modelPickerKey}
                 store={toolbarStore}
                 withServiceTier
+                withReasoning
                 tuiOnly={false}
                 lockedHarnessId={null}
                 disabled={createChat.isPending}
@@ -908,7 +917,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         </div>
         {/* `mx-0 mb-0`: the footer's own negative margins bleed it into a
             `p-4` content, and this one is `p-0`. */}
-        <DialogFooter className="mx-0 mb-0 px-4 py-3">
+        <DialogFooter>
           <Button
             type="button"
             variant="outline"
@@ -926,7 +935,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           >
             {createChat.isPending ? (
               <AgentSpinningDots
-                className="text-current"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
               />

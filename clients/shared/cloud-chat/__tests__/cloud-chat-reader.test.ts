@@ -533,13 +533,17 @@ describe("failing closed", () => {
 
 describe("the version gate", () => {
   it("refuses a head above this reader's minimum WITHOUT fetching a part", async () => {
-    // A 1.5 writer that declares older readers cannot safely INTERPRET this
-    // publication. The minimum may not exceed the head's own version, so
-    // exercising it at all requires publishing as a future writer.
+    // A writer one minor ahead of this reader that declares older readers
+    // cannot safely INTERPRET this publication. The minimum may not exceed the
+    // head's own version, so exercising it at all requires publishing as a
+    // future writer - derived from the live constant, because a literal here
+    // stops being "above" the moment the reader catches up to it (it was `5`,
+    // and chat-sync reached 1.5).
+    const futureMinor = CHAT_SYNC_SCHEMA_VERSION.minor + 1;
     const published = await publishCloudChat({
       ...DEFAULT_PUBLISH,
-      payloadMinor: 5,
-      minReaderVersion: { major: 1, minor: 5 },
+      payloadMinor: futureMinor,
+      minReaderVersion: { major: 1, minor: futureMinor },
     });
     const port = recordingPort(servingBehaviour(published));
 

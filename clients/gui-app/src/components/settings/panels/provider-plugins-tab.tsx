@@ -106,7 +106,7 @@ function PluginsNotices(props: {
   return (
     <>
       {props.sessionNotice !== null ? (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-xs text-amber-700 dark:text-amber-200">
+        <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-ui-xs text-warning-foreground">
           {props.sessionNotice}
         </div>
       ) : null}
@@ -172,8 +172,8 @@ function PluginsScopeToolbar(props: {
         {props.canAdd && !props.projectNeedsWorkspace ? (
           <Button
             type="button"
-            size="sm"
-            className="text-ui-xs"
+            size="xs"
+            className="h-7"
             disabled={props.isMutating}
             onClick={props.onToggleAdd}
           >
@@ -431,8 +431,9 @@ function PluginAddFromSource({
           value={sourceDraft}
           onChange={(e) => setSourceDraft(e.target.value)}
           placeholder="plugin@marketplace or /path/to/plugin"
-          className="min-w-0 flex-1 text-ui-xs"
+          className="min-w-0 flex-1"
           disabled={pending}
+          size="xs"
         />
         <Button
           type="button"

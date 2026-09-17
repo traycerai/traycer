@@ -42,19 +42,16 @@ export function SelectAllToggle(props: {
         <Button
           type="button"
           variant="outline"
-          size="sm"
+          size="xs"
           role="checkbox"
           aria-checked={checkedState}
           aria-label={props.accessibleLabel}
           data-testid={props.testId}
           disabled={props.disabled || props.selectableCount === 0}
           onClick={props.onToggle}
-          className={cn(
-            "text-ui-xs text-foreground",
-            // Checked fill per `ui/skeleton.tsx` - this toggle rides
-            // popover/card surfaces where `bg-muted` is the surface itself.
-            allSelected || indeterminate ? "bg-foreground/8" : null,
-          )}
+          // The checked fill (`mixed` included) is `outline`'s own
+          // `aria-checked:` state, keyed off the attribute already set above.
+          className="h-7"
         >
           <span
             aria-hidden
@@ -69,7 +66,9 @@ export function SelectAllToggle(props: {
           </span>
           <span>{props.actionLabel ?? "Select all"}</span>
           {props.shortcut === undefined ? null : (
-            <Kbd className="ml-0.5 font-mono">{props.shortcut}</Kbd>
+            <Kbd className="ml-0.5" variant="mono">
+              {props.shortcut}
+            </Kbd>
           )}
         </Button>
       </span>
