@@ -1776,23 +1776,50 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
- * Frozen `providers.list@9.0` provider state: the live shape as it stood
- * before `autoJudge`.
+ * Frozen `providers.list@9.1` provider state: the live shape as it stood
+ * before the login-capability markers.
  *
- * 9.0 stopped being the head line when 9.1 opened to publish the per-provider
- * auto-mode judge, and is frozen here exactly as 8.0 was frozen when 9.0
- * opened. Built by OMITTING the new key from the live shape rather than
- * hand-copying twenty fields: the freeze is one field wide, and a hand copy of
- * this particular object is what drifted twice before (see
- * `providerMutationCliStateSchemaV21`'s note). `.omit()` states the delta
- * itself, so it cannot fall out of step with the live shape it is a snapshot
- * of - and a SECOND field added to the live state fails the frozen-catalog
- * snapshot here rather than silently widening 8.0.
+ * 9.1 stopped being the head line when 9.2 opened to publish `remoteSafe` and
+ * `selfOpensBrowser`. It is frozen HERE, against the four-key login capability
+ * it actually shipped, and that pin is the whole point of this declaration.
  *
- * Do NOT add fields here. Add them to `providerCliStateBaseShape` above, which
- * only 9.1 (the head line) publishes.
+ * `.omit()` states a delta against the live shape, which is the right tool
+ * when the delta is a TOP-LEVEL key - but it is blind to a key added INSIDE a
+ * nested schema the frozen alias still points at. That is exactly how these
+ * two markers silently grew 9.0 and 9.1 after they had shipped: both lines
+ * reached `providerLoginCapabilitySchema` by reference, so widening the live
+ * capability widened two released lines with it, and the released host
+ * `host-v1.3.2-staging.39.g3a73077` publishes a `protocol-surface.json`
+ * advertising canonical 9.1 with only `oauthArgs` / `token` / `codePaste` /
+ * `terminalLogin`. Pinning `loginCapability` to the four-key
+ * `providerLoginCapabilitySchemaV70` is what makes this snapshot match the
+ * bytes those hosts actually send.
+ *
+ * Do NOT add fields here, and do not let a field reach this shape through a
+ * live nested schema either. Add them to `providerCliStateBaseShape` above,
+ * which only 9.2 (the head line) publishes.
  */
-export const providerCliStateSchemaV90 = providerCliStateSchema.omit({
+export const providerCliStateSchemaV91 = providerCliStateSchema.extend({
+  loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
+});
+export type ProviderCliStateV91 = z.infer<typeof providerCliStateSchemaV91>;
+
+export const providersListResponseSchemaV91 = z.object({
+  providers: z.array(providerCliStateSchemaV91),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV91 = z.infer<
+  typeof providersListResponseSchemaV91
+>;
+
+/**
+ * Frozen `providers.list@9.0` provider state: 9.1's shape without `autoJudge`.
+ *
+ * Derived from the 9.1 snapshot rather than from the live shape, so the
+ * capability pin above covers this line too - 9.0 shipped the same four-key
+ * capability and the same released host advertises it that way.
+ */
+export const providerCliStateSchemaV90 = providerCliStateSchemaV91.omit({
   autoJudge: true,
 });
 export type ProviderCliStateV90 = z.infer<typeof providerCliStateSchemaV90>;

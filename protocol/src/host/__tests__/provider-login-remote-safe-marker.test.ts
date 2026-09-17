@@ -11,6 +11,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV80,
+  providersListResponseSchemaV91,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -159,11 +160,16 @@ describe("remoteSafe is a major-9 login capability", () => {
   });
 });
 
-describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
-  // The frozen decode a v9 client actually performs against a v8.0 host. Built
-  // fresh per assertion, because the absence it carries is the whole premise.
-  function decodeOldHostThroughFrozenV80() {
-    return providersListResponseSchemaV80.parse({
+describe("providers.list 9.1->9.2 fills remoteSafe for a pre-marker host", () => {
+  // The frozen decode a 9.2 client actually performs against a 9.1 host, which
+  // is the pairing that matters: 9.1 is RELEASED without these markers
+  // (host-v1.3.2-staging.39.g3a73077 advertises canonical 9.1 with the
+  // four-key capability), and before 9.2 existed a 9.1 client and a 9.1 host
+  // agreed on the version, so the decoder returned the payload by cast and no
+  // schema or bridge ever ran. Built fresh per assertion, because the absence
+  // it carries is the whole premise.
+  function decodePreMarkerHostThroughFrozenV91() {
+    return providersListResponseSchemaV91.parse({
       providers: [
         { ...providerState("kimi"), loginCapability: OLD_HOST_CAPABILITY },
       ],
@@ -171,7 +177,7 @@ describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
     });
   }
 
-  it("the frozen v8.0 decode leaves the key genuinely ABSENT, not null", () => {
+  it("the frozen 9.1 decode leaves the key genuinely ABSENT, not null", () => {
     // The control for the test below, and the reason that test is written
     // against a frozen decode at all. The live schema's `.catch(null)` never
     // runs on this path: the client parses with the NEGOTIATED schema, and
@@ -179,24 +185,24 @@ describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
     // `null`, the two shapes have been collapsed and the bridge assertion below
     // has stopped proving anything.
     const capability =
-      decodeOldHostThroughFrozenV80().providers[0].loginCapability;
+      decodePreMarkerHostThroughFrozenV91().providers[0].loginCapability;
     expect(capability).not.toBeNull();
     expect(capability).not.toHaveProperty("remoteSafe");
   });
 
   it("fills null through the REGISTERED bridge, not just a hand-called helper", () => {
-    // `providersListUpgradeV80ToV90` is the first bridge whose TARGET models
-    // `remoteSafe`, because v7.0 and v8.0 are both pinned to the four-key
+    // `providersListUpgradeV91ToV92` is the first bridge whose TARGET models
+    // these markers: 7.0, 8.0, 9.0 and 9.1 are all pinned to the four-key
     // `providerLoginCapabilitySchemaV70`. Driving the registry rather than the
     // helper is what pins the fill to THAT hop: `upgradeResponseToVersion`
     // chains these callbacks by cast with no re-parse, so a fill placed on a
-    // hop whose target does not model the key (the v7->v8 one, say) is silently
+    // hop whose target does not model the key (the v8->v9 one, say) is silently
     // dropped and this goes red.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
-      { major: 8, minor: 0 },
-      { major: 9, minor: 0 },
-      decodeOldHostThroughFrozenV80(),
+      { major: 9, minor: 1 },
+      { major: 9, minor: 2 },
+      decodePreMarkerHostThroughFrozenV91(),
     );
     const capability = upgraded.providers[0].loginCapability;
     expect(capability).not.toBeNull();
@@ -204,7 +210,7 @@ describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
     expect(capability).toHaveProperty("selfOpensBrowser");
     // Kimi's legacy args are `["auth", "login"]` - no `--device-auth` - so
     // this row is the fail-closed half of the fill. An UNCONDITIONAL `{}`
-    // `remoteSafe` would declare every pre-9.0 provider remote-safe and offer
+    // `remoteSafe` would declare every pre-9.2 provider remote-safe and offer
     // sign-ins that cannot complete; the device-auth case is pinned separately
     // below. `selfOpensBrowser` is null for the opposite safety reason and has
     // no legacy proxy at all, which is why each is asserted rather than the
@@ -221,16 +227,16 @@ describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
     // The regression this projection exists to prevent. Before `remoteSafe`
     // existed, the GUI decided remote-safety by evaluating exactly this
     // predicate itself (`oauthArgs.includes("--device-auth")` in
-    // `provider-signin-availability.ts`). A v8.0 host still answers with those
-    // args and no marker, so filling `null` unconditionally would tell a
-    // signed-out user on a REMOTE v8.0 host that Codex sign-in needs a local
-    // host - withdrawing a recovery path that has always worked there, on a
-    // flow that prints a device code and never binds a loopback callback.
+    // `provider-signin-availability.ts`). A released 9.1 host still answers
+    // with those args and no marker, so filling `null` unconditionally would
+    // tell a signed-out user on a REMOTE 9.1 host that Codex sign-in needs a
+    // local host - withdrawing a recovery path that has always worked there,
+    // on a flow that prints a device code and never binds a loopback callback.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
-      { major: 8, minor: 0 },
       { major: 9, minor: 1 },
-      providersListResponseSchemaV80.parse({
+      { major: 9, minor: 2 },
+      providersListResponseSchemaV91.parse({
         providers: [
           {
             ...providerState("codex"),
@@ -252,14 +258,22 @@ describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
     expect(capability?.selfOpensBrowser).toBeNull();
   });
 
-  it("survives the chain all the way to the head line", () => {
-    // 9.0 -> 9.1 is identity, so the fill has to still be there at the head a
-    // current client negotiates.
+  it("an 8.0 host reaches the same fill by travelling the whole chain", () => {
+    // The reason the fill is NOT duplicated onto the v8->v9 hop. Every peer
+    // below 9.2 is upgraded along the chain, so an 8.0 payload passes through
+    // 9.0 and 9.1 and arrives at the 9.1 -> 9.2 fill on its own. One fill,
+    // every old line - and if the chain ever stops running it, this goes red
+    // while the narrower 9.1 test above still passes.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 8, minor: 0 },
-      { major: 9, minor: 1 },
-      decodeOldHostThroughFrozenV80(),
+      { major: 9, minor: 2 },
+      providersListResponseSchemaV80.parse({
+        providers: [
+          { ...providerState("kimi"), loginCapability: OLD_HOST_CAPABILITY },
+        ],
+        native: null,
+      }),
     );
     const capability = upgraded.providers[0].loginCapability;
     expect(capability?.remoteSafe).toBeNull();
@@ -271,9 +285,9 @@ describe("providers.list v8->v9 fills remoteSafe for an old host", () => {
     // capability object where the host reported none.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
-      { major: 8, minor: 0 },
-      { major: 9, minor: 0 },
-      providersListResponseSchemaV80.parse({
+      { major: 9, minor: 1 },
+      { major: 9, minor: 2 },
+      providersListResponseSchemaV91.parse({
         providers: [providerState("cursor")],
         native: null,
       }),

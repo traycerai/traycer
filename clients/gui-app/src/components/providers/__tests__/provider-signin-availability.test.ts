@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import type { ReceivedLoginCapability } from "@/components/providers/provider-signin-availability";
 import {
   hostIsLocalForLoginAutoOpen,
   providerLoginIsRemoteSafe,
@@ -308,38 +307,39 @@ describe("providerLoginIsRemoteSafe", () => {
     expect(providerLoginIsRemoteSafe(undefined)).toBe(false);
   });
 
-  it("treats a capability with no remoteSafe key as not remote-safe", () => {
-    // Not a hypothetical shape. Both response decoders return the payload by
-    // cast when the peers agree on the major and the client's minor is not
-    // ahead (`clientCanonical.minor <= hostCanonical.minor`), so no parse runs
-    // and `.catch(null)` never supplies its default. `providers.list@9.1` is
-    // unreleased and was widened in place, so a host built before these
-    // markers landed answers on that very same 9.1 with the key absent - and
-    // no upgrade bridge runs, because by version the two peers already agree.
+  it("reads the marker itself, so a pre-marker host's projected null is not remote-safe", () => {
+    // This helper used to guard against the key arriving ABSENT, and that was
+    // real: the markers were first added to the already-released
+    // `providers.list@9.1` in place, and both response decoders return the
+    // payload by cast when the peers agree on the major and the client's minor
+    // is not ahead - so on a 9.1/9.1 pairing no schema and no bridge ran.
     //
-    // No cast is needed to express this, which is the point of
-    // `ReceivedLoginCapability`: the wire shape is a real type, so a payload
-    // with the key genuinely absent is something the checker accepts and a
-    // reader can see. Writing `remoteSafe: undefined` would not be the same
-    // test - it satisfies the parsed type and describes a host that sent the
-    // key, rather than one that has never heard of it.
-    const unparsedFromOlderNinePointOneHost: ReceivedLoginCapability = {
-      oauthArgs: ["login"],
-      token: null,
-      codePaste: null,
-      terminalLogin: null,
-    };
-
-    expect(providerLoginIsRemoteSafe(unparsedFromOlderNinePointOneHost)).toBe(
-      false,
-    );
-
-    // The control: the same payload from a host that DOES send the marker is
-    // still remote-safe, so the guard above is refusing absence rather than
-    // refusing everything.
+    // The markers now ride 9.2, which puts such a host's payload back through
+    // 9.1's schema and then the 9.1 -> 9.2 bridge, so absence is no longer
+    // reachable and there is nothing here to defend against. What that bridge
+    // hands this function is a real `null` for a provider it could not
+    // establish, which must read as NOT remote-safe.
     expect(
       providerLoginIsRemoteSafe({
-        ...unparsedFromOlderNinePointOneHost,
+        oauthArgs: ["login"],
+        token: null,
+        codePaste: null,
+        terminalLogin: null,
+        remoteSafe: null,
+        selfOpensBrowser: null,
+      }),
+    ).toBe(false);
+
+    // The control: the same row from a host that DOES establish the marker -
+    // or the bridge's projection of a legacy `--device-auth` flow, which is
+    // the same `{}` - is remote-safe. So the branch above refuses a null
+    // rather than refusing everything.
+    expect(
+      providerLoginIsRemoteSafe({
+        oauthArgs: ["login"],
+        token: null,
+        codePaste: null,
+        terminalLogin: null,
         remoteSafe: {},
         selfOpensBrowser: null,
       }),

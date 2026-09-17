@@ -31,6 +31,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV90,
+  providersListResponseSchemaV91,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -157,34 +158,42 @@ const LIVE_FROZEN_EXPORTS = {
   // list and the snapshot's key set are held equal below, so deleting a row
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
-  // Two freezes here as well: 8.0 froze when 9.0 opened, and 9.0 froze at the
-  // pre-`autoJudge` provider state when 9.1 opened to publish the per-provider
-  // judge. Neither dump was changed BY its freeze.
+  // Three freezes here as well: 8.0 froze when 9.0 opened, 9.0 froze at the
+  // pre-`autoJudge` state when 9.1 opened, and 9.1 froze at the pre-marker
+  // login capability when 9.2 opened. None of those dumps was changed BY its
+  // freeze.
   //
-  // The two rows have since parted, and they are the two bullets above worked
-  // out on one field - the `remoteSafe` login-capability marker, which grew the
-  // LIVE capability:
+  // 9.0 and 9.1 DID move once, wrongly, and that is worth keeping rather than
+  // tidying away. An earlier revision of this comment licensed it: "Major 9 is
+  // unreleased: no tag contains the commit that opened 9.1, release candidates
+  // INCLUDED, and the newest non-rc OSS tag (`host-v1.3.1`) registers
+  // `providers.list` only to 8.0." Every clause of that was true and the
+  // conclusion was false, because it asked the wrong question. A line is
+  // released when a HOST that advertises it has been published, not when an OSS
+  // tag contains the commit that opened it: the host release
+  // `host-v1.3.2-staging.39.g3a73077` is published and not a draft, and its
+  // uploaded `protocol-surface.json` advertises `providers.list` canonical 9.1.
+  // So 9.0 and 9.1 were both already in users' hands, `providerCliStateSchemaV*`
+  // reached the LIVE capability by reference, and adding two keys to that
+  // capability silently widened two released lines - which this snapshot then
+  // recorded as the new truth instead of refusing.
   //
-  //  - 8.0 did NOT move, because `providerCliStateBaseShapeV80` was re-pointed
-  //    at the hand-frozen four-key `providerLoginCapabilitySchemaV70` in the
-  //    same change (so was v7.0's). `cli-v1.3.0` / `host-v1.3.0` shipped 8.0,
-  //    so the first bullet governs and the answer is a pin, never a
-  //    regeneration. That both released rows stayed byte-identical is the
-  //    evidence the pin worked.
-  //  - 9.0 DID move, and the second bullet is why. Major 9 is unreleased: no
-  //    tag contains the commit that opened 9.1, release candidates INCLUDED,
-  //    and the newest non-rc OSS tag (`host-v1.3.1`) registers
-  //    `providers.list` only to 8.0. `providerCliStateSchemaV90` is
-  //    `.omit({ autoJudge })` off the live state, so an unreleased 9.0 widens
-  //    with the live shape by construction. Its own "Do NOT add fields here"
-  //    governs the SCHEMA - the field goes on `providerCliStateBaseShape`,
-  //    which is where `remoteSafe` went - and not this row, which regenerates.
-  //    The same licence `agent.list@9.0` carries, for the same reason.
+  // Read the release status off published host releases (prereleases included),
+  // and treat a frozen alias that points at a live nested schema as unfrozen
+  // whatever its own docblock says. 8.0 is the worked example of getting it
+  // right: `providerCliStateBaseShapeV80` was re-pointed at the hand-frozen
+  // four-key `providerLoginCapabilitySchemaV70`, so it stayed byte-identical
+  // through the same change that moved the other two.
   "providers.list@8.0": providersListResponseSchemaV80,
   "providers.list@9.0": providersListResponseSchemaV90,
-  // The head line, holding 9.0's old job: it names the LIVE schema, so the next
-  // attempt to grow the provider state fails here first.
-  "providers.list@9.1": providersListResponseSchema,
+  "providers.list@9.1": providersListResponseSchemaV91,
+  // The head line, holding 9.1's old job: it names the LIVE schema, so the next
+  // attempt to grow the provider state fails here first. Note what that guard
+  // could NOT do while 9.1 held this row - it moves with the live schema by
+  // design, so the two markers landing on the live capability regenerated it
+  // without complaint. The rows above are the ones that refuse; a line earns
+  // one the moment a host advertising it is published.
+  "providers.list@9.2": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate

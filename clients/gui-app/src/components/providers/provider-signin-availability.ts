@@ -96,55 +96,37 @@ export function providerCanStartProfileOauth(
 }
 
 /**
- * A login capability as it can ARRIVE, which is not the same shape as one that
- * has been parsed. `remoteSafe` is a required key carrying `.catch(null)`, so
- * anything that went through the schema has it - but the response decoders skip
- * the parse entirely when the peers agree on the major and the client's minor
- * is not ahead (`rpc-codec.ts` / `ws-rpc-client.ts`, `clientCanonical.minor <=
- * hostCanonical.minor`), returning the payload by cast.
- *
- * `providers.list@9.1` is unreleased and was widened in place, so a host built
- * before the marker landed answers on that very same 9.1 with no `remoteSafe`
- * key at all, and no upgrade bridge runs to fill one - by version, the two
- * peers already agree. Spelling the marker optional here is what forces every
- * reader to decide what absence means instead of inheriting a promise the wire
- * does not keep.
- */
-export type ReceivedLoginCapability = Omit<
-  NonNullable<ProviderCliState["loginCapability"]>,
-  "remoteSafe" | "selfOpensBrowser"
-> &
-  Partial<
-    Pick<
-      NonNullable<ProviderCliState["loginCapability"]>,
-      "remoteSafe" | "selfOpensBrowser"
-    >
-  >;
-
-/**
  * Headless `providers.startLogin` that does not need a localhost callback on
  * the host: Claude's paste-code page, or a flow the host marks remote-safe.
  * Terminal login is a different button (composer), so it is not this.
+ *
+ * The declared type is the real one, and that is a fact about the WIRE rather
+ * than a convenience here. The markers ride `providers.list@9.2`, so every
+ * pairing supplies them: a 9.2 host sends them, and any older host's payload is
+ * parsed through its own frozen schema and then filled by the 9.1 -> 9.2
+ * bridge. The key cannot arrive absent.
+ *
+ * It was reachable, briefly, when these markers were added to the already
+ * released 9.1 IN PLACE. A 9.1 client and a 9.1 host agree on the version, and
+ * the response decoders skip the parse entirely on that agreement
+ * (`rpc-codec.ts` / `ws-rpc-client.ts`, `clientCanonical.minor <=
+ * hostCanonical.minor`), returning the payload by cast - so no schema and no
+ * bridge ran, and a reader that trusted this type was trusting a promise the
+ * wire did not keep. The fix was the version, not a defensive type: giving the
+ * markers their own minor is what puts that host's payload back through a
+ * schema. If you are ever tempted to widen a released line in place again, this
+ * is what it costs.
  */
 export function providerLoginIsRemoteSafe(
-  loginCapability: ReceivedLoginCapability | null | undefined,
+  loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): boolean {
   if (loginCapability === null || loginCapability === undefined) return false;
   if (loginCapability.codePaste !== null) return true;
-  // Compare against PRESENCE, not against `null` - see `ReceivedLoginCapability`
-  // for why absence is reachable on a wire this key is not guaranteed on. The
-  // tempting spelling is `remoteSafe !== null`, and it is wrong in the one
-  // direction that costs something: a capability that never carried the key at
-  // all satisfies it, advertising a remote sign-in for a provider whose
-  // callback lives on the machine the user is not sitting at. Refusing a
-  // sign-in that would have worked costs a click; offering one that cannot
-  // complete strands the user - so absence resolves to `false`.
-  //
-  // This reads the marker and nothing else. The `--device-auth` inference this
-  // replaced now lives in the v8->v9 upgrade bridge (`registry.ts`), which is
-  // where a fact about OLD hosts belongs; a host that models the key answers
+  // Reads the marker and nothing else. The `--device-auth` inference this
+  // replaced now lives on the 9.1 -> 9.2 upgrade bridge (`registry.ts`), which
+  // is where a fact about OLD hosts belongs; a host that models the key answers
   // for itself.
-  return Boolean(loginCapability.remoteSafe);
+  return loginCapability.remoteSafe !== null;
 }
 
 /**
