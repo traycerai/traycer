@@ -28,8 +28,16 @@ import { v4 as uuidv4 } from "uuid";
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
 import type {
   GuiHarnessId,
   TuiHarnessId,
@@ -37,6 +45,12 @@ import type {
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type {
+  EpicCloudFreshness,
+  EpicCloudFreshnessState,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
+} from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
@@ -59,7 +73,7 @@ import {
   type AgentActivityTier,
 } from "@/lib/agent-activity";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
-import { useEpicStore } from "@/hooks/use-epic-store";
+import { useEpicStore, useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
 import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
@@ -98,7 +112,7 @@ import type {
   TreeNode,
   TreeSlice,
 } from "@/stores/epics/open-epic/types";
-import { EMPTY_ARRAY } from "@/stores/epics/open-epic/types";
+import { EMPTY_ARRAY, EMPTY_TREE_SLICE } from "@/stores/epics/open-epic/types";
 
 // ─── Type re-exports ──────────────────────────────────────────────────────
 
@@ -154,6 +168,359 @@ export function useEpicSnapshotMeta(): SnapshotMetaEpic | null {
 
 export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);
+}
+
+// Maybe-scoped rather than throwing outside <EpicSessionProvider>: the
+// comment sidebar renders outside the session tree in some mounts, and "no
+// session" is honestly the same answer as "the host has not said" - null.
+export function useEpicDurabilityStatus(): NonNullable<
+  OpenEpicState["durabilityStatus"]
+> | null {
+  return useMaybeEpicStore((s) => s.durabilityStatus ?? null, null);
+}
+
+export function useEpicDurabilityPauseReason(): NonNullable<
+  OpenEpicState["durabilityPauseReason"]
+> | null {
+  return useMaybeEpicStore((s) => s.durabilityPauseReason ?? null, null);
+}
+
+/**
+ * Whether this epic has no usable comment room right now.
+ *
+ * ## Why a shared predicate and not `status === "local"` at each gate
+ *
+ * Local artifact rooms have their own disconnected thread provider backed by
+ * the same WAL-persisted Y.Doc as the artifact body, so `local` is usable.
+ * `promoting` is different: the reservation is recorded but the local manager
+ * has been retired before the cloud artifact-room provider is ready. Offering
+ * comments in that interval only produces `no_active_session`.
+ *
+ * `unknown` is deliberately NOT here. It means the host could not answer, and
+ * the honest response to that is the ordinary read path plus whatever it
+ * reports - not a confident claim that comments do not exist. Guessing in
+ * either direction on `unknown` is the class of defect `s5-status-truthfulness`
+ * exists to correct.
+ */
+export function commentsHaveNoUsableCommentRoom(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): boolean {
+  return unavailableCommentRoomKind(status, pauseReason) !== null;
+}
+
+/**
+ * {@link commentsHaveNoUsableCommentRoom}, held across a subscription cycle's
+ * reset.
+ *
+ * ## Why the raw predicate is not enough AT A GATE
+ *
+ * The open-epic store clears `durabilityStatus` and `durabilityPauseReason`
+ * whenever a subscription cycle starts, deliberately: last cycle's answer is
+ * not evidence about this cycle's peer. So between a reconnect and the
+ * replacement `cloudSyncStatus` frame the predicate sees `null` and answers
+ * `false`.
+ *
+ * For the sync pill an unknown collapses toward silence, which is the safe
+ * direction. Here it collapses the other way: `false` re-enables the comment
+ * shortcut, toolbar, popovers and thread query against an epic that is still
+ * promoting or preserving edits after its cloud room was deleted. A draft
+ * begun in that window is wiped by the very frame that restores the gate, and
+ * a request sent from it could only fail.
+ *
+ * The latch is sound because whether comments are temporarily unavailable is
+ * a property of the epic's durability state, not of the subscription cycle.
+ * Only a POSITIVE statement writes it, `null` leaves the previous answer
+ * standing, and it is keyed by epic so a different one never inherits it.
+ *
+ * ## Why the absent statement still splits two ways
+ *
+ * Treating every `null` as "gate it" would disable comments FOREVER on any
+ * peer below `@1.4`, which cannot emit the key at all - the population that
+ * has always had working comments. `durabilityLegsNegotiated` separates a peer
+ * that has not answered YET from one that CANNOT, exactly as it does in the
+ * sync pill: the first waits behind the conservative gate, the second keeps
+ * its released behaviour.
+ */
+export type EpicCommentRoomAvailability =
+  | { readonly kind: "available" }
+  | { readonly kind: "checking" }
+  | { readonly kind: "promoting" }
+  | { readonly kind: "orphaned" }
+  /**
+   * The room is cloud-backed and the session holds no cloud verdict. An
+   * `unverified` session is admitted to the epic (its document may be on
+   * this disk), but its comment room lives in the cloud-backed artifact room
+   * and every read (`epic.listCommentThreads` poll) and write goes through
+   * the local-host context, which does not carry the renderer's verdict.
+   * A local-homed room (`local` / `promoting`) is exempt. Found in review.
+   */
+  | { readonly kind: "unauthorized" };
+
+/**
+ * Whether a durability status names a LOCAL-HOMED epic - one whose rooms
+ * live on this machine's disk, so reading or writing them spends no cloud
+ * capability. `null` (cloud-backed epics leave the status unset), `offline`
+ * (a cloud mirror) and `paused` are not provably local and read as cloud.
+ * Shared by the comment-room gate, the comment write gate and the registry
+ * accessor `useRegisteredEpicLocalHome` so the exemption cannot drift.
+ */
+export function isLocalHomedDurabilityStatus(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+): boolean {
+  return status === "local" || status === "promoting";
+}
+
+function unavailableCommentRoomKind(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): "promoting" | "orphaned" | null {
+  if (status === "promoting") return "promoting";
+  return status === "paused" &&
+    pauseReason === "orphaned-local-edits-after-cloud-delete"
+    ? "orphaned"
+    : null;
+}
+
+interface EpicDurabilityStatement {
+  readonly status: NonNullable<OpenEpicState["durabilityStatus"]> | null;
+  readonly pauseReason: string | null;
+}
+
+/**
+ * Selects this subscription cycle's durability statement, falling back to the
+ * last positive statement retained across a reconnect only while this cycle
+ * is silent. Gates that answer a structural durability question must share
+ * this order so a reconnect cannot re-enable one of them transiently.
+ */
+function currentOrRetainedDurabilityStatement(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+  retainedStatus: NonNullable<OpenEpicState["retainedDurabilityStatus"]> | null,
+  retainedPauseReason: string | null,
+): EpicDurabilityStatement {
+  if (status !== null) return { status, pauseReason };
+  return { status: retainedStatus, pauseReason: retainedPauseReason };
+}
+
+/**
+ * The local-home exemption, read from a session handle OUTSIDE React - the
+ * dispatch-time gates (`assertCommentWriteAuthorized`, the chat-attachment
+ * fetcher) and the registry accessor `useRegisteredEpicLocalHome`.
+ *
+ * Reads the SAME current-then-retained statement
+ * `useEpicCommentRoomAvailability` renders from, so a gate cannot disagree
+ * with the control that offered the write. During a reconnect the cycle's own
+ * status is cleared while the retained pair still stands; a gate reading only
+ * the raw status refused a local-homed epic's write for exactly the beat its
+ * surface still showed the control as available. `null` handle is "not
+ * provably local", the cloud direction.
+ */
+export function isLocalHomedEpicHandle(
+  handle: OpenEpicStoreHandle | null,
+): boolean {
+  if (handle === null) return false;
+  const state = handle.store.getState();
+  const statement = currentOrRetainedDurabilityStatement(
+    state.durabilityStatus ?? null,
+    state.durabilityPauseReason ?? null,
+    state.retainedDurabilityStatus ?? null,
+    state.retainedDurabilityPauseReason ?? null,
+  );
+  return isLocalHomedDurabilityStatus(statement.status);
+}
+
+/**
+ * The comment-room gate together with the exact closed reason that justified
+ * it. Consumers must switch on this value rather than interpret raw status
+ * and pause fields independently: during a reconnect those raw fields are
+ * intentionally cleared while the retained durability statement still owns
+ * the gate and its user-facing explanation.
+ */
+export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
+  const status = useEpicDurabilityStatus();
+  const pauseReason = useEpicDurabilityPauseReason();
+  // Read reactively: a demotion (`signed-in` -> `unverified`) while the epic
+  // stays mounted must close the gate on the next render, not on the next
+  // subscription cycle.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  // `useMaybeEpicStore`, matching every sibling above: this gate renders in
+  // the comments sidebar, which mounts outside an Epic session in its own
+  // tests and in any host-scoped surface that has no open epic.
+  const retainedStatus = useMaybeEpicStore(
+    (s) => s.retainedDurabilityStatus ?? null,
+    null,
+  );
+  const retainedPauseReason = useMaybeEpicStore(
+    (s) => s.retainedDurabilityPauseReason ?? null,
+    null,
+  );
+  const durabilityStatusNegotiated = useMaybeEpicStore(
+    (s) => s.durabilityStatusNegotiated,
+    false,
+  );
+  const durabilityLegsNegotiated = useMaybeEpicStore(
+    (s) => s.durabilityLegsNegotiated,
+    false,
+  );
+  const hasFreshCloudSyncStatus = useMaybeEpicStore(
+    (s) => s.hasFreshCloudSyncStatus,
+    false,
+  );
+  const durabilityStatement = currentOrRetainedDurabilityStatement(
+    status,
+    pauseReason,
+    retainedStatus,
+    retainedPauseReason,
+  );
+  // The shared helper gives this cycle's statement precedence. When that
+  // statement is absent, its retained fallback is consulted BEFORE the
+  // legacy-peer check; that order is the whole point of the latch rather than
+  // a stylistic choice.
+  //
+  // `startedSubscriptionCycle` resets the cycle's durability statement but
+  // publishes the `@1.4` negotiation result before frames arrive. It
+  // deliberately does NOT clear the retained pair. So the exact state a
+  // reconnecting promoting or preserved-orphan epic passes through - no new
+  // status, retained still standing - remains protected by that retained
+  // statement rather than re-enabling comments while the new cycle settles.
+  //
+  // Reordering cannot regress the pre-`@1.4` population the legacy arm
+  // protects: `retainedDurabilityStatus` is written only from a STATED
+  // durability status, so only a peer that has actually emitted one can have
+  // it. A host that cannot speak the key never populates it, falls through,
+  // and still gets its released behaviour from the check below. And the
+  // retained pair cannot outlive a `@1.4`/`@1.5` peer's cloud answer either:
+  // the replica clears it on such a peer's fresh frame without the key (the
+  // omission IS that peer's cloud statement, read the same way in the
+  // `hasFreshCloudSyncStatus` arm below), so a finished promotion does not
+  // keep the local-home exemption alive through the retained fallback.
+  if (durabilityStatement.status !== null) {
+    const unavailable = unavailableCommentRoomKind(
+      durabilityStatement.status,
+      durabilityStatement.pauseReason,
+    );
+    if (unavailable !== null) return { kind: unavailable };
+    // The structural answer is "there is a room"; whether this session may
+    // reach it is the second question. A local-homed room is on this disk
+    // and needs no verdict; a cloud-backed one (unset status is the cloud
+    // case, `offline` is a cloud mirror) does.
+    if (
+      !cloudAuthorized &&
+      !isLocalHomedDurabilityStatus(durabilityStatement.status)
+    ) {
+      return { kind: "unauthorized" };
+    }
+    return { kind: "available" };
+  }
+  // No statement this cycle and none ever retained. A peer that never
+  // negotiated the durability-status minor cannot produce one at all, so
+  // gating on its silence would disable comments forever on every pre-`@1.4`
+  // host - the population that has always had them. The @1.6 legs are a
+  // separate capability and say nothing about whether @1.4/@1.5 peers can
+  // still report the status that this branch is waiting for.
+  if (!durabilityStatusNegotiated) {
+    // A pre-`@1.4` host has no local homes at all, so its comment room is
+    // cloud-backed by construction: the verdict gate applies unchanged.
+    return cloudAuthorized ? { kind: "available" } : { kind: "unauthorized" };
+  }
+  // A `@1.4` / `@1.5` peer that HAS spoken this cycle (a cloud-status frame
+  // arrived) and omitted the datum. Through `@1.5` the durability enum has no
+  // positive calm member: an ordinary cloud-homed epic served by such a peer
+  // is exactly the absent key, every frame, forever - so absence beside a
+  // frame is the cloud answer, not a pending one, and reading it as pending
+  // disabled comments on every healthy cloud epic those peers serve. A
+  // `@1.6` peer (`durabilityLegsNegotiated`) states `cloud` positively and
+  // its absence means UNKNOWN (see the protocol's `@1.6` widening), which
+  // stays pending below.
+  if (hasFreshCloudSyncStatus && !durabilityLegsNegotiated) {
+    return cloudAuthorized ? { kind: "available" } : { kind: "unauthorized" };
+  }
+  // A negotiated peer that has not spoken yet, about an epic nothing has ever
+  // said anything about. Withholding the affordance is the only direction
+  // here that cannot offer an action the host will reject.
+  return { kind: "checking" };
+}
+
+export function useEpicCommentsHaveNoUsableRoom(): boolean {
+  return useEpicCommentRoomAvailability().kind !== "available";
+}
+
+/**
+ * Whether this epic has no cloud task for its chats to back up into.
+ *
+ * Related to {@link commentsHaveNoUsableCommentRoom}, but deliberately
+ * separate: local comments use a WAL-backed artifact-room provider, while
+ * chat backup still needs the cloud task row the publisher addresses. The
+ * predicates share the promoting and preserved-orphan cases only.
+ *
+ * The consumer is the sidebar's backup-status indicator: on a local-homed
+ * epic every chat is honestly `behind` forever (there is nothing to publish
+ * into), so rendering "N chats not backed up" there presents a by-design
+ * state as an actionable failure. `unknown` is deliberately NOT gated, per
+ * the `s5-status-truthfulness` rule
+ * {@link commentsHaveNoUsableCommentRoom}:
+ * the host could not answer, so the ordinary surface renders what the backup
+ * query reports.
+ */
+export function chatBackupHasNoCloudTask(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): boolean {
+  if (status === "local" || status === "promoting") return true;
+  // Same fact as the comments predicate: the orphan pause means the cloud
+  // TASK ROW is deleted, so there is nothing for the publisher to back a
+  // chat up into and "N chats not backed up" would present a by-design
+  // preservation state as an actionable failure.
+  return (
+    status === "paused" &&
+    pauseReason === "orphaned-local-edits-after-cloud-delete"
+  );
+}
+
+/**
+ * Tolerant of a missing session on purpose: the only caller is the Epic
+ * sidebar's backup indicator, which is a sibling of the canvas and mounts on
+ * split surfaces that have no `<EpicSessionProvider>` above them. The strict
+ * read threw straight through the surface's error boundary and blanked it.
+ *
+ * With no open epic the answer is `false` - "nothing here says there is no
+ * cloud task" - which is the same fail-open direction the host-side gate uses:
+ * a wrong `true` silently hides a real backup failure, a wrong `false` only
+ * shows an indicator that the query then finds nothing to report.
+ */
+export function useEpicChatBackupHasNoCloudTask(): boolean {
+  const status = useMaybeEpicStore((s) => s.durabilityStatus ?? null, null);
+  const pauseReason = useMaybeEpicStore(
+    (s) => s.durabilityPauseReason ?? null,
+    null,
+  );
+  const retainedStatus = useMaybeEpicStore(
+    (s) => s.retainedDurabilityStatus ?? null,
+    null,
+  );
+  const retainedPauseReason = useMaybeEpicStore(
+    (s) => s.retainedDurabilityPauseReason ?? null,
+    null,
+  );
+  const durabilityStatement = currentOrRetainedDurabilityStatement(
+    status,
+    pauseReason,
+    retainedStatus,
+    retainedPauseReason,
+  );
+  return chatBackupHasNoCloudTask(
+    durabilityStatement.status,
+    durabilityStatement.pauseReason,
+  );
+}
+
+export function useEpicDurabilityPromotionState(): NonNullable<
+  OpenEpicState["durabilityPromotionState"]
+> | null {
+  return useEpicStore((s) => s.durabilityPromotionState ?? null);
 }
 
 /**
@@ -225,7 +592,176 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       hasUnsyncedDocClassChanges: s.isDirty,
       writeCommands: selectWriteCommandSummary(s),
       hasConnectedOnce: s.hasConnectedOnce,
+      // The two legs the pill used to ignore entirely. Without them the pill
+      // could derive `synced` from a `LocalRoomConnection` and render "All
+      // changes synced" beside the durability plane's "Stored locally" -
+      // `s5-status-truthfulness` instance 1.
+      durability: s.durabilityStatus ?? undefined,
+      localProtection: s.localProtection ?? undefined,
+      durabilityLegsNegotiated: s.durabilityLegsNegotiated,
+      // The ninth leg, and the one that is about the DOCUMENT rather than
+      // about where the work is going - `s5-mirror-first-serving`.
+      cloudFreshness: s.cloudFreshness ?? undefined,
     }),
+  );
+}
+
+/**
+ * The ONE reading of the `@1.4` durability pair, for every surface that
+ * renders it - `s5-status-truthfulness`.
+ *
+ * The class this closes is that the host derives honest state, the protocol
+ * used to drop it, and each renderer null-rendered into the calm value
+ * independently. Five instances of that were found; fixing them one at a time
+ * leaves the sixth for a user to find, so the reading lives here and the
+ * components render what it says.
+ *
+ * The `indeterminate` arm is the whole point: `unknown`, and an absence from a
+ * peer that CAN speak `@1.4`, both land there, and no surface may resolve
+ * either one as protected or synced.
+ */
+export type EpicDurabilityView =
+  /** A pre-`@1.4` peer. Renders exactly as it did before this minor. */
+  | { readonly kind: "legacy"; readonly status: EpicDurabilityStatusV15 | null }
+  /** The host stated where the epic is durable. */
+  | {
+      readonly kind: "stated";
+      readonly status: Exclude<EpicDurabilityStatusV15, "unknown" | "cloud">;
+      readonly protection: EpicLocalProtection;
+    }
+  /**
+   * Durable in the cloud. The calm arm - but calm about DURABILITY only:
+   * protection is the independent axis, and `unavailable` beside `cloud`
+   * still means offline edits die with the process, so the leg rides along
+   * for the risk copy instead of being swallowed by the calm verdict.
+   */
+  | { readonly kind: "cloudDurable"; readonly protection: EpicLocalProtection }
+  /** The host cannot say, or said it has no local protection. */
+  | {
+      readonly kind: "indeterminate";
+      readonly protection: EpicLocalProtection;
+    };
+
+export function deriveEpicDurabilityView(
+  status: EpicDurabilityStatusV15 | null,
+  protection: EpicLocalProtection | null,
+  peerSpeaksDurabilityLegs: boolean,
+): EpicDurabilityView {
+  // Which SILENCE this is, decided by the handshake rather than by the shape
+  // of the frame.
+  //
+  // The shipping host emits `localProtection` on every `@1.4` frame, so a
+  // presence probe agrees with the negotiated minor against it - but the
+  // schema marks every `@1.4` leg optional and states that an absent one means
+  // UNKNOWN, so a peer omitting one is speaking the contract, not failing it.
+  // Reading that omission as "old peer" resolves a stated unknown into the
+  // pre-`@1.4` silent rendering, which is the silence-as-reassurance inference
+  // this minor exists to break. `peerSpeaksDurabilityLegs` is `false` until the
+  // session's handshake settles, so an unheard peer still keeps its prior
+  // rendering and the additive minor stays additive.
+  //
+  // Presence is still honoured as the other direction: a peer that SENT the
+  // key demonstrably speaks it, whatever the negotiated version reader says.
+  if (protection === null && !peerSpeaksDurabilityLegs) {
+    return { kind: "legacy", status };
+  }
+  // Absence from a peer that speaks the legs is the wire contract's UNKNOWN.
+  const stated: EpicLocalProtection = protection ?? "unknown";
+  if (status === "cloud") {
+    // The POSITIVE cloud-durable statement the `@1.4` enum carries. Calm
+    // rests on this member alone - never on an absence. The protection leg is
+    // KEPT, not resolved by the calm: the axes are independent, and a stated
+    // `unavailable` beside `cloud` is exactly the "No local backup" risk the
+    // durability plane exists to surface.
+    return { kind: "cloudDurable", protection: stated };
+  }
+  if (status === null || status === "unknown") {
+    // The frame's absence rule, stated as code: an absent `durability` key
+    // from a `@1.4` peer means UNKNOWN, never synced. Review found the
+    // earlier arm here resolving absence-beside-`armed` into the calm
+    // rendering, which let a schema-permitted omission claim "All changes
+    // synced" - the silence-as-reassurance inference this minor exists to
+    // break. The shipping host now emits `"cloud"` explicitly, so the calm
+    // case lost nothing.
+    return { kind: "indeterminate", protection: stated };
+  }
+  // `stated` KEEPS its protection leg rather than collapsing to
+  // `indeterminate` when that leg is `unavailable`: the two are separate axes,
+  // and the concrete status is what gates the paused-only remedies (Upgrade,
+  // Export). Saying both is the durability plane's job.
+  return { kind: "stated", status, protection: stated };
+}
+
+/** The composed durability reading for the open epic. */
+export function useEpicDurabilityView(): EpicDurabilityView {
+  // `useShallow` per this file's own object-select rule: the derivation builds
+  // a fresh literal on every call, so a bare select hands `useSyncExternalStore`
+  // a new snapshot each read and the status row re-renders itself to the
+  // update-depth ceiling.
+  return useEpicStore(
+    useShallow((s) =>
+      deriveEpicDurabilityView(
+        s.durabilityStatus ?? null,
+        s.localProtection ?? null,
+        s.durabilityLegsNegotiated,
+      ),
+    ),
+  );
+}
+
+/** Raw `localProtection`, for surfaces that gate on protection alone. */
+export function useEpicLocalProtection(): EpicLocalProtection | null {
+  return useEpicStore((s) => s.localProtection ?? null);
+}
+
+/**
+ * The ONE reading of `@1.4`'s `freshness` datum - `s5-mirror-first-serving`.
+ *
+ * Deliberately the same shape of answer as {@link EpicDurabilityView}, and for
+ * the same reason: the host derives an honest state, every renderer used to
+ * null-render it into the calm value independently, and the fix is one reading
+ * that the components then render.
+ *
+ * `unknown` covers BOTH an absent key and a peer that cannot speak `@1.4`, and
+ * it is deliberately calm - the host omits `freshness` for a local-homed epic
+ * (there is no cloud copy for it to be behind) and for a cloud row it has no
+ * record of. Absence here therefore means "no freshness question applies",
+ * which is why it renders exactly as it did before this minor. The one
+ * inference this type refuses to let a caller make is the opposite one: there
+ * is no arm that turns silence into `current`.
+ */
+export type EpicCloudFreshnessView =
+  | { readonly kind: "unknown" }
+  | {
+      readonly kind: "stated";
+      readonly state: EpicCloudFreshnessState;
+      /**
+       * The last SUCCESSFUL full root reconciliation, or `null` when this host
+       * has never recorded one. `null` beside `current` is structurally
+       * impossible on the wire, which is why the union carries the two
+       * together rather than as independent optionals.
+       */
+      readonly reconciledAtEpochMs: number | null;
+    };
+
+export function deriveEpicCloudFreshnessView(
+  freshness: EpicCloudFreshness | null,
+): EpicCloudFreshnessView {
+  if (freshness === null) return { kind: "unknown" };
+  return freshness.kind === "lastCloudSyncAt"
+    ? {
+        kind: "stated",
+        state: freshness.state,
+        reconciledAtEpochMs: freshness.reconciledAtEpochMs,
+      }
+    : { kind: "stated", state: freshness.state, reconciledAtEpochMs: null };
+}
+
+/** The composed freshness reading for the open epic. */
+export function useEpicCloudFreshnessView(): EpicCloudFreshnessView {
+  // Object-shaped select; see {@link useEpicDurabilityView}.
+  return useEpicStore(
+    useShallow((s) => deriveEpicCloudFreshnessView(s.cloudFreshness ?? null)),
   );
 }
 
@@ -357,6 +893,34 @@ export function useRegisteredEpicPermissionRole(
     (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
     () => liveEpicPermissionRoleFromHandle(handle),
     () => null,
+  );
+}
+
+/**
+ * Whether the registered epic is LOCAL-HOMED (`local` or `promoting`), read
+ * through the same header-safe registry seam as the role, for surfaces that
+ * render outside the epic session tree. A local-homed epic's title lives on
+ * this machine's disk, so renaming it spends no cloud capability and stays
+ * admitted while the session is `unverified`.
+ *
+ * `false` covers a cloud-homed epic AND an unknown or `paused` status: a
+ * paused row says nothing about home, and a gate that must not spend the
+ * retained credential reads "not provably local" as cloud. Read through the
+ * current-then-retained statement ({@link isLocalHomedEpicHandle}), so a
+ * reconnect beat that clears the cycle's status does not flip the exemption
+ * off while the comment-room gate still shows the epic as available.
+ */
+export function useRegisteredEpicLocalHome(epicId: string | null): boolean {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => isLocalHomedEpicHandle(handle),
+    () => false,
   );
 }
 
@@ -674,6 +1238,59 @@ export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
   );
 }
 
+const maybeArchivedNodeIdsCache = new WeakMap<
+  OpenEpicStoreHandle,
+  { readonly ids: readonly string[]; readonly key: string }
+>();
+
+/**
+ * `useShallow` is not available under `useSyncExternalStore` - the snapshot has
+ * to be reference-stable already, not stabilized after the fact - so the
+ * bail-out the strict hook gets from it is preserved here by caching the array
+ * against the handle under its own join key, the same shape as
+ * {@link useRegisteredEpicLiveAgentIds}'s snapshot. Without it the constant
+ * churn of chat projections would hand back a new array on every read and
+ * re-walk the tree downstream.
+ */
+function archivedNodeIdsSnapshot(
+  handle: OpenEpicStoreHandle | null,
+): readonly string[] {
+  if (handle === null) return EMPTY_TREE_ID_ARRAY;
+  const s = handle.store.getState();
+  const archived = [
+    ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+    ...s.tuiAgents.allIds.filter(
+      (id) => s.tuiAgents.byId[id].archivedAt !== null,
+    ),
+  ];
+  if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
+  const ids = archived.sort();
+  const key = ids.join("\x00");
+  const cached = maybeArchivedNodeIdsCache.get(handle);
+  if (cached !== undefined && cached.key === key) return cached.ids;
+  const entry = { ids, key };
+  maybeArchivedNodeIdsCache.set(handle, entry);
+  return entry.ids;
+}
+
+/**
+ * The archived ids, or none when there is no open-epic session.
+ *
+ * The provider-optional sibling of {@link useEpicArchivedNodeIds}, and it
+ * exists for the same reason as {@link useMaybeEpicTreeIndex}: the chat picker
+ * resolves send targets both inside the canvas and inside a Start Page browser
+ * tile, which has no session. Same guidance - prefer the strict hook wherever
+ * the provider is structurally guaranteed.
+ */
+export function useMaybeEpicArchivedNodeIds(): readonly string[] {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => archivedNodeIdsSnapshot(handle),
+    () => EMPTY_TREE_ID_ARRAY,
+  );
+}
+
 /**
  * Every chat id this epic's projection holds, nested ones included.
  *
@@ -924,6 +1541,175 @@ export function useRegisteredEpicLiveAgents(
     () => JSON.stringify(refs.map(() => null)),
   );
   return useMemo(() => decodeRegisteredAgents(encodedAgents), [encodedAgents]);
+}
+
+/**
+ * How many terminal agents each named epic has running and how many are
+ * asleep, read from the epics this window has mounted.
+ *
+ * ## Why it is not derived from the resource plane
+ *
+ * The resource monitor's own projection lists owners that own PROCESSES, and
+ * a sleeping agent owns none - that is what asleep means. Counting from there
+ * would answer zero for every agent the count exists to surface, and the only
+ * way to make one appear would be to synthesize a process row for it, which
+ * the Resource Manager must not do: it stays honest about processes. So the
+ * count comes from the RECORD plane, where a sleeping agent is a row like any
+ * other.
+ *
+ * `stopped` and `null` are in neither number, and deliberately: `stopped` is
+ * an agent that is over as a record, and `null` is a row whose serving host
+ * cannot know (a peer host, a cloud replica, a host that predates the facet).
+ * Reporting either as running or asleep would be this client guessing.
+ *
+ * Epics this window has not mounted are absent from the map rather than zero -
+ * "we hold no session for it" and "it has no agents" are different answers,
+ * and the caller renders nothing for the first.
+ *
+ * ## Scoped to `hostId`, which is not optional
+ *
+ * A count of running and sleeping agents is a fact about one MACHINE, and the
+ * session this window holds for an epic belongs to whichever host that epic
+ * is open on - which need not be the host the caller is reading under. The
+ * Resource Manager is the caller and has its own picker, so an epic open on
+ * host A and viewed under host B printed A's numbers in B's section header,
+ * beside a process list correctly attributed to B.
+ *
+ * So the session's host must MATCH, the row's host must match, and anything
+ * unattributed is refused. Every refusal omits the epic rather than reporting
+ * zero, which the paragraph above already gives the caller a rendering for.
+ * A count that is absent is a count the user does not read; a count that is
+ * wrong is one they act on.
+ */
+export interface EpicAgentSessionCounts {
+  readonly running: number;
+  readonly sleeping: number;
+}
+
+export function useRegisteredEpicAgentSessionCounts(
+  epicIds: readonly string[],
+  hostId: string | null,
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const registry = getOpenEpicRegistry();
+  const encodedCounts = useSyncExternalStore(
+    (listener) => subscribeToRegisteredEpics(registry, epicIds, listener),
+    () => agentSessionCountsSnapshot(registry, epicIds, hostId),
+    () => JSON.stringify([]),
+  );
+  return useMemo(
+    () => decodeAgentSessionCounts(encodedCounts),
+    [encodedCounts],
+  );
+}
+
+/**
+ * Encoded `[epicId, running, sleeping]` triples, for the reason the live-agent
+ * snapshot below encodes its own: `useSyncExternalStore` compares by value,
+ * and every one of these stores notifies on changes that move neither count.
+ */
+function agentSessionCountsSnapshot(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  hostId: string | null,
+): string {
+  // No host to attribute the reading to: nothing here is true of anything.
+  if (hostId === null) return JSON.stringify([]);
+  return JSON.stringify(
+    epicIds.flatMap((epicId): Array<[string, number, number]> => {
+      const handle = registry.peek(epicId);
+      if (handle === null) return [];
+      // The session must be THIS host's. One window holds one session per
+      // epic, for whichever host that epic is open on - so a caller reading
+      // under a different host is being handed another machine's view, and
+      // "2 running / 3 sleeping" under host B's picker is not a number with
+      // a correct reading. `null` is refused with it: an unattributed handle
+      // is evidence for no host in particular, and counting it under the one
+      // on screen is the same guess by another route.
+      //
+      // Omitted, not zeroed, per this map's contract: absent means "no
+      // session held for it here", which is exactly the situation, and the
+      // caller already renders no count for that.
+      if (getEpicSessionHandleHostId(handle) !== hostId) return [];
+      const agents = handle.store.getState().tuiAgents;
+      let running = 0;
+      let sleeping = 0;
+      for (const id of agents.allIds) {
+        const agent = agents.byId[id];
+        // And the ROW's own host. A session on one host can hold rows for
+        // agents bound elsewhere (a peer-host row, a replica). Their facet is
+        // `null` today, so they already fall out of both branches below -
+        // this makes the count's scope a property of this loop rather than of
+        // the facet staying null for a row this host does not run.
+        if (agent.hostId !== hostId) continue;
+        const state = agent.sessionState;
+        if (state === "running") running += 1;
+        else if (state === "sleeping") sleeping += 1;
+      }
+      return [[epicId, running, sleeping]];
+    }),
+  );
+}
+
+function decodeAgentSessionCounts(
+  encodedCounts: string,
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const decoded: unknown = JSON.parse(encodedCounts);
+  const counts = new Map<string, EpicAgentSessionCounts>();
+  if (!Array.isArray(decoded)) return counts;
+  for (const entry of decoded) {
+    if (!Array.isArray(entry)) continue;
+    const epicId: unknown = entry[0];
+    const running: unknown = entry[1];
+    const sleeping: unknown = entry[2];
+    if (
+      typeof epicId !== "string" ||
+      typeof running !== "number" ||
+      typeof sleeping !== "number"
+    ) {
+      continue;
+    }
+    counts.set(epicId, { running, sleeping });
+  }
+  return counts;
+}
+
+/**
+ * Subscribes to the registry and to every currently-registered epic among
+ * `epicIds`, re-reconciling as sessions come and go. Shared by the two
+ * cross-epic readers here, which differ only in what they read out of the
+ * stores they are watching.
+ */
+function subscribeToRegisteredEpics(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  listener: () => void,
+): () => void {
+  const unsubscribeByHandle = new Map<object, () => void>();
+  const reconcileHandleSubscriptions = () => {
+    const currentHandles = new Set<object>();
+    for (const epicId of epicIds) {
+      const handle = registry.peek(epicId);
+      if (handle === null || currentHandles.has(handle)) continue;
+      currentHandles.add(handle);
+      if (!unsubscribeByHandle.has(handle)) {
+        unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+      }
+    }
+    for (const [handle, unsubscribe] of unsubscribeByHandle) {
+      if (currentHandles.has(handle)) continue;
+      unsubscribe();
+      unsubscribeByHandle.delete(handle);
+    }
+  };
+  reconcileHandleSubscriptions();
+  const unsubscribeRegistry = registry.subscribe(() => {
+    reconcileHandleSubscriptions();
+    listener();
+  });
+  return () => {
+    unsubscribeRegistry();
+    for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
+  };
 }
 
 /**
@@ -1354,6 +2140,32 @@ export function useEpicTreeIndex(): TreeSlice {
   return useEpicStore((s) => s.tree);
 }
 
+/**
+ * The tree, or the shared empty one when there is no open-epic session.
+ *
+ * The provider-optional sibling of {@link useEpicTreeIndex}, for the chat
+ * picker: the same picker resolves send targets inside the canvas AND inside a
+ * Start Page browser tile, which mounts at the app shell with no
+ * `<EpicSessionProvider>` because a Start Page browser tab belongs to no epic.
+ * The strict hook cannot be called conditionally to cover both, so the
+ * tolerance has to live in the read.
+ *
+ * Prefer {@link useEpicTreeIndex} anywhere the provider is structurally
+ * guaranteed - a missing session is a bug there, and the throw is how it gets
+ * found. Reach for this one only where "no epic" is a real, expected state.
+ *
+ * Returns {@link EMPTY_TREE_SLICE} rather than an empty tree of its own so the
+ * snapshot is reference-stable across renders. See RENDER_PERF_INVARIANTS.md.
+ */
+export function useMaybeEpicTreeIndex(): TreeSlice {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => (handle === null ? EMPTY_TREE_SLICE : handle.store.getState().tree),
+    () => EMPTY_TREE_SLICE,
+  );
+}
+
 export function useRootIds(): readonly string[] {
   return useEpicStore((s) => s.tree.rootIds);
 }
@@ -1381,6 +2193,44 @@ export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
       : EMPTY_ROLE_CLAIMS,
   );
   return enabled ? claims : EMPTY_ROLE_CLAIMS;
+}
+
+/**
+ * One node's session facet: whether its binding host says the agent is
+ * running, asleep or over, and why the last session ended.
+ *
+ * Both fields `null` for every node that is not a terminal agent this session
+ * holds a row for, and for a terminal agent whose serving host cannot know -
+ * a peer-host row, a cloud replica, a host that predates the facet. `null`
+ * NEVER means stopped, so a consumer renders it exactly as it rendered every
+ * row before the facet shipped.
+ *
+ * A two-field VIEW rather than the projection itself, so a row that renders
+ * only the badge does not re-render when the agent's title, worktree binding
+ * or launch metadata moves.
+ */
+export interface AgentSessionFacetView {
+  readonly sessionState: AgentSessionState | null;
+  readonly lastExit: AgentSessionLastExit | null;
+}
+
+const UNKNOWN_AGENT_SESSION_FACET: AgentSessionFacetView = Object.freeze({
+  sessionState: null,
+  lastExit: null,
+});
+
+export function useEpicAgentSessionFacet(
+  nodeId: string,
+): AgentSessionFacetView {
+  return useEpicStore(
+    useShallow((s): AgentSessionFacetView => {
+      if (!Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+        return UNKNOWN_AGENT_SESSION_FACET;
+      }
+      const agent = s.tuiAgents.byId[nodeId];
+      return { sessionState: agent.sessionState, lastExit: agent.lastExit };
+    }),
+  );
 }
 
 export function useEpicAgentRoleClaimsByAgentId(): Readonly<

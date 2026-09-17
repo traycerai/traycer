@@ -37,6 +37,7 @@ describe("useTabCloseCommand", () => {
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
+      appearance: null,
     });
 
     expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
@@ -57,6 +58,7 @@ describe("useTabCloseCommand", () => {
       icon: null,
       canDuplicate: false,
       canOpenInNewWindow: false,
+      appearance: null,
     });
 
     expect(

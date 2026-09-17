@@ -560,7 +560,7 @@ function installChatStreamFactory(
   __setChatStreamClientFactoryForTests((_epicId, chatId, callbacks) => {
     callbacksByChatId.set(chatId, callbacks);
     setTimeout(() => {
-      callbacks.onConnectionStatus("open", null);
+      callbacks.onConnectionStatus("open", null, null);
       const chat = ALL_CHATS.find((candidate) => candidate.id === chatId);
       if (chat !== undefined) {
         emitChatSnapshot(chat, callbacks, messagesStore.get(chat.id));
@@ -569,6 +569,7 @@ function installChatStreamFactory(
     const client: ChatStreamClientHandle = {
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
+      draftBlobBridgeSupported: () => true,
       requestTranscriptRange: () => undefined,
       requestResnapshot: () => undefined,
       close: () => {
@@ -879,7 +880,7 @@ async function waitForHostedChatLoaded(
     const record = queryHostedRecord(container, instanceId);
     expect(record).not.toBeNull();
     expect(
-      record?.querySelector('[data-testid="chat-tile-loading"]'),
+      record?.querySelector('[data-testid^="chat-tile-pre-content-"]'),
     ).toBeNull();
     expect(record?.querySelector('[data-testid="chat-tile"]')).not.toBeNull();
     expect(record?.querySelector("[data-message-id]")).not.toBeNull();

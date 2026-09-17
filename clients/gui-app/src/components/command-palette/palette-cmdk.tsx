@@ -52,7 +52,10 @@ import type {
  */
 function SubpageItemLabel({ label }: { label: string }) {
   const slash = label.lastIndexOf("/");
-  if (slash === -1) {
+  // The directory dimming is a file-path convention; a URL label (the
+  // Browser sub-page's "Open https://…" leaf) has slashes that are not
+  // directories, and a bare origin would otherwise dim entirely.
+  if (slash === -1 || label.includes("://")) {
     return <span className="truncate">{label}</span>;
   }
   return (
@@ -118,11 +121,13 @@ function AgentTreeItemLabel(props: {
   if (row.activity === "turn") {
     statusLabel = "Agent in progress";
     icon = (
-      <AgentSpinningDots
-        className="size-3.5 text-primary"
-        testId={`agent-opener-running-${props.item.id}`}
-        variant="dots2"
-      />
+      <span className="inline-flex text-primary">
+        <AgentSpinningDots
+          className="size-3.5"
+          testId={`agent-opener-running-${props.item.id}`}
+          variant="dots2"
+        />
+      </span>
     );
   } else if (row.activity === "background") {
     statusLabel = "Agent working in background";
@@ -321,7 +326,7 @@ function ArtifactTreeItemLabel(props: {
               aria-label={statusLabel ?? undefined}
               className={cn(
                 "size-2 shrink-0 rounded-full",
-                STATUS_DOT_CLASSES[row.status] ?? "bg-slate-400",
+                STATUS_DOT_CLASSES[row.status] ?? "bg-muted-foreground",
               )}
               role="status"
             />
@@ -604,8 +609,8 @@ function PathSubpageRows(props: {
 function RowStatusBadge({ children }: { readonly children: string }) {
   return (
     <Badge
-      variant="outline"
-      className="ml-auto shrink-0 border-border/70 bg-background/60 text-muted-foreground"
+      variant="muted"
+      className="ml-auto shrink-0 border-border/70 bg-background/60"
     >
       {children}
     </Badge>
@@ -635,15 +640,26 @@ function FlatSubpageRows(props: {
   ));
 }
 
+/**
+ * The Browser sub-page's action rows (vs. the open-tab inventory below them):
+ * host pick, blank new tab, and the pasted-URL leaf the sub-page emits only
+ * while the live query is an http(s) URL.
+ */
+const BROWSER_ACTION_IDS: ReadonlySet<string> = new Set([
+  "open:browser:host",
+  "open:browser:new",
+  "open:browser:url",
+]);
+
 function BrowserSubpageView(props: {
   readonly items: ReadonlyArray<CommandItemShape>;
   readonly onSelect: (item: CommandItemShape) => void;
 }) {
-  const browserActions = props.items.filter(
-    (item) => item.id === "open:browser:host" || item.id === "open:browser:new",
+  const browserActions = props.items.filter((item) =>
+    BROWSER_ACTION_IDS.has(item.id),
   );
   const inventoryItems = props.items.filter(
-    (item) => item.id !== "open:browser:host" && item.id !== "open:browser:new",
+    (item) => !BROWSER_ACTION_IDS.has(item.id),
   );
   const hostLabel = browserActions.find(
     (item) => item.id === "open:browser:host",
@@ -657,7 +673,7 @@ function BrowserSubpageView(props: {
         heading={
           hostLabel === undefined ? "Open tabs" : `Open tabs on ${hostLabel}`
         }
-        className="pt-3"
+        className="mt-2"
       >
         <FlatSubpageRows items={inventoryItems} onSelect={props.onSelect} />
       </CommandGroup>

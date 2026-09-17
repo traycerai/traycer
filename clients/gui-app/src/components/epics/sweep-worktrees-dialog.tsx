@@ -1,4 +1,6 @@
+import type { UseMutateFunction } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, Paintbrush } from "lucide-react";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -42,8 +44,12 @@ import {
   useEpicSweepWorktrees,
   useSweepingWorktreePaths,
   type SweepWorktreesResult,
+  type SweepWorktreesVariables,
 } from "@/hooks/epic/use-epic-sweep-worktrees-mutation";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useWorktreeAutoCleanupPolicy } from "@/hooks/worktree/use-worktree-auto-cleanup";
+import { openWorktreeAutoCleanupSettings } from "@/lib/worktree/open-auto-cleanup-settings";
 import { useWorktreeTaskTitles } from "@/components/settings/panels/use-worktree-task-titles";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
@@ -75,6 +81,10 @@ import {
   formatUncheckedInUseKnown,
   formatUncheckedInUseUnknown,
 } from "@/lib/worktree/teardown-holder-copy";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 const SWEEP_WORKTREES_REFRESH_TIMEOUT_MS = 20_000;
 
@@ -312,9 +322,15 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     row.note === "in-use" ? [...row.holders] : [],
   );
   const agentNames = useTeardownAgentNames(disclosedHolders);
+  // Tier 2 of the title lookup is a cloud spend (`epic.getTaskContexts`), so
+  // it follows the live verdict here exactly as in the Worktrees panel.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   const taskTitles = useWorktreeTaskTitles(
     props.hostClient,
     rows.map((row) => row.entry),
+    cloudAuthorized,
   );
   const kickoff = (targets: ReadonlyArray<EpicSweepWorktreeRow>): void => {
     const kickoffSessionKey = selectionKey;
@@ -434,6 +450,13 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         bulkSelectedCount={bulkSelectedCount}
         allBulkSelected={allBulkSelected}
         selectedCount={checkedRows.length}
+        hostClient={props.hostClient}
+        // The offer stands beside a concrete, visibly safe example - never on
+        // a census that proved nothing. `defaultChecked` is the proven-safe
+        // row set, read from the rows rather than from the live selection, so
+        // unchecking one does not retract a statement about the POLICY.
+        hasProvenSafeRow={rows.some((row) => row.defaultChecked)}
+        onCloseDialog={() => onOpenChange(false)}
         checkedAt={checkedAt}
         refreshing={refresh.refreshing}
         canRefresh={canRefresh}
@@ -472,8 +495,9 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   return (
     <Dialog open={taskCount > 0} onOpenChange={onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,45rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,45rem)] min-w-0 flex-col overflow-hidden sm:max-w-2xl"
         data-testid="sweep-worktrees-dialog"
       >
         {hostChoice === null ? (
@@ -761,7 +785,11 @@ function startSweepKickoff(input: {
   readonly hostId: string | null;
   readonly epicId: string | undefined;
   readonly targets: ReadonlyArray<EpicSweepWorktreeRow>;
-  readonly mutate: ReturnType<typeof useEpicSweepWorktrees>["mutate"];
+  readonly mutate: UseMutateFunction<
+    SweepWorktreesResult,
+    Error,
+    SweepWorktreesVariables
+  >;
   readonly onClose: () => void;
   readonly onSweepOutcome: (result: SweepWorktreesResult) => void;
 }): void {
@@ -877,6 +905,11 @@ function SweepWorktreesChoose(props: {
   readonly bulkSelectedCount: number;
   readonly allBulkSelected: boolean;
   readonly selectedCount: number;
+  /** The latched host's client, for the automatic-cleanup policy read. */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /** The proof settled with at least one row proven safe to delete. */
+  readonly hasProvenSafeRow: boolean;
+  readonly onCloseDialog: () => void;
   readonly checkedAt: number | null;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
@@ -967,6 +1000,16 @@ function SweepWorktreesChoose(props: {
             canRefresh={props.canRefresh}
             onRefresh={props.onRefresh}
           />
+          {/* Passive education, so it sits below the census and its refresh
+              footer and OUTSIDE the destructive action row - it must never
+              read as part of what Remove is about to do. */}
+          {props.proofReady && !props.isPending && props.hasProvenSafeRow ? (
+            <SweepAutoCleanupDiscovery
+              hostId={props.hostId}
+              hostClient={props.hostClient}
+              onCloseDialog={props.onCloseDialog}
+            />
+          ) : null}
         </section>
       </TooltipProvider>
       <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3 sm:flex sm:justify-end">
@@ -999,6 +1042,118 @@ function SweepWorktreesChoose(props: {
 }
 
 /**
+ * One quiet line offering the policy that would have removed these rows
+ * unattended - shown only to someone who is looking at proven-safe worktrees
+ * on a host that CAN run automatic cleanup and currently does not.
+ *
+ * The capability question is asked HERE, before any host read is mounted, for
+ * the same reason `WorktreeAutoCleanupSection` asks it above its own gate: a
+ * host that negotiated the method away has no policy to read, and a dialog
+ * whose whole job is a destructive confirmation must not acquire a query it
+ * would then have to wait on. Nothing here can delay or block the sweep - a
+ * policy read that is loading, failed, or unsupported renders nothing at all.
+ */
+function SweepAutoCleanupDiscovery(props: {
+  readonly hostId: string | null;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly onCloseDialog: () => void;
+}): ReactNode {
+  const supported = useHostMethodSupport(
+    props.hostId,
+    "worktree.getAutoCleanupPolicy",
+  );
+  // `null` is "no handshake yet", and it stays hidden exactly like `false`:
+  // hiding an affordance under an unknown strands nothing, and the line is
+  // education rather than a control anyone is waiting for.
+  //
+  // `supported === true` also settles the host id - the support registry
+  // answers `null` for a null host - which is why the policy read below can
+  // take a plain `string`.
+  if (supported !== true || props.hostId === null) return null;
+  if (props.hostClient === null) return null;
+  return (
+    <SweepAutoCleanupDiscoveryPolicy
+      hostId={props.hostId}
+      client={props.hostClient}
+      onCloseDialog={props.onCloseDialog}
+    />
+  );
+}
+
+/**
+ * The policy read, mounted only once the capability is proven present.
+ *
+ * Kept apart from the line it gates so the line - and the router hook it
+ * needs - exists only when there is something to render. A read that is
+ * loading or failed answers `null` here and nothing paints, which is also why
+ * no part of the sweep ever waits on it.
+ */
+function SweepAutoCleanupDiscoveryPolicy(props: {
+  readonly hostId: string;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly onCloseDialog: () => void;
+}): ReactNode {
+  const query = useWorktreeAutoCleanupPolicy(props.client, true);
+  // A read in flight or in error renders nothing even when a stale cached
+  // policy is still attached to it: TanStack keeps `data` through a background
+  // refetch and through its failure, and an offer to set up cleanup must not
+  // stand on a policy the host has not confirmed just now - another device may
+  // have enabled it since the cached read.
+  if (query.isError || query.isFetching) return null;
+  const policy = query.data ?? null;
+  if (policy === null || policy.enabled) return null;
+  return (
+    <SweepAutoCleanupDiscoveryLine
+      hostId={props.hostId}
+      onCloseDialog={props.onCloseDialog}
+    />
+  );
+}
+
+/**
+ * The line itself, mounted only when the offer actually stands.
+ *
+ * It owns the deep link, and therefore `useNavigate`, rather than taking a
+ * pre-built handler from the dialog: a Sweep dialog rendered outside a router
+ * (every direct-render suite) must not depend on TanStack warning and carrying
+ * on. Reaching the router is now a consequence of this line rendering, which
+ * only happens where a router exists.
+ *
+ * The copy describes the POLICY, never these rows: manual Sweep's green rows
+ * are examples of what stays proven safe, not a promise that automatic cleanup
+ * is about to take them (it applies its own inactivity threshold and re-proves
+ * at execution time). Enabling the policy is what retires the line - there is
+ * no dismissal and nothing persisted, because policy state is already the
+ * honest frequency cap.
+ */
+function SweepAutoCleanupDiscoveryLine(props: {
+  readonly hostId: string;
+  readonly onCloseDialog: () => void;
+}): ReactNode {
+  const navigate = useNavigate();
+  return (
+    <p
+      className="mt-2 text-ui-xs text-muted-foreground wrap-anywhere"
+      data-testid="sweep-worktrees-auto-cleanup-discovery"
+    >
+      Proven-safe worktrees can be removed automatically.{" "}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        className="align-baseline"
+        onClick={() => {
+          props.onCloseDialog();
+          openWorktreeAutoCleanupSettings(navigate, props.hostId);
+        }}
+      >
+        Set up automatic cleanup
+      </Button>
+    </p>
+  );
+}
+
+/**
  * What is being swept, and on which machine. The chip is the route to any
  * other machine; its popover says how many of these Tasks' worktrees each
  * one holds.
@@ -1015,10 +1170,10 @@ function SweepChooseHeader(props: {
         <Paintbrush className="size-4" aria-hidden />
       </div>
       <div className="min-h-0 min-w-0 flex-1 space-y-1.5">
-        <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+        <DialogTitle className="wrap-anywhere">
           {sweepDialogTitle(props.taskCount, props.taskTitle)}
         </DialogTitle>
-        <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+        <DialogDescription className="wrap-anywhere">
           Choose the worktrees to remove from this host. Proven-safe worktrees
           are selected for you.
         </DialogDescription>
@@ -1055,13 +1210,16 @@ function SweepWorktreesRefreshFooter(props: {
       >
         {props.refreshing ? (
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId="sweep-worktrees-refresh-spinner"
             variant={undefined}
+            tone="muted"
           />
         ) : null}
         Refresh
-        <Kbd className="ml-0.5 font-mono">R</Kbd>
+        <Kbd className="ml-0.5" variant="mono">
+          R
+        </Kbd>
       </Button>
     </div>
   );
@@ -1220,8 +1378,9 @@ function SweepRowList(props: {
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
           variant="dots"
-          className="text-muted-foreground"
+          className={undefined}
           testId="sweep-worktrees-fleet-pending-spinner"
+          tone="muted"
         />
         <span data-testid="sweep-worktrees-fleet-pending">
           Checking which hosts are available…
@@ -1254,8 +1413,9 @@ function SweepRowList(props: {
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots
           variant="dots"
-          className="text-muted-foreground"
+          className={undefined}
           testId={undefined}
+          tone="muted"
         />
         Checking worktrees…
       </div>
@@ -1482,7 +1642,7 @@ function sessionOutcomeHint(
   if (outcome.kind === "uncertain") {
     return (
       <span
-        className="mt-0.5 flex items-start gap-1 text-ui-xs text-amber-600 dark:text-amber-400"
+        className="mt-0.5 flex items-start gap-1 text-ui-xs text-warning-foreground"
         data-testid="sweep-worktrees-row-outcome"
       >
         <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
@@ -1534,9 +1694,7 @@ function SweepRowHint(props: {
     <span
       className={cn(
         "mt-0.5 flex items-start gap-1 text-ui-xs",
-        cautious
-          ? "text-amber-600 dark:text-amber-400"
-          : "text-muted-foreground",
+        cautious ? "text-warning-foreground" : "text-muted-foreground",
       )}
       data-testid="sweep-worktrees-hint"
     >

@@ -62,6 +62,16 @@ export function modLabel(): string {
   return isMac() ? "⌘" : "Ctrl";
 }
 
+/** Spoken name of the primary modifier for shortcut accessible labels. */
+export function modSpokenLabel(): string {
+  return isMac() ? "Command" : "Control";
+}
+
+/** Spoken name of the Alt/Option modifier for shortcut accessible labels. */
+export function altSpokenLabel(): string {
+  return isMac() ? "Option" : "Alt";
+}
+
 // The Control key specifically (⌃ on macOS, where it's distinct from ⌘). Used by
 // chords that bind to Control rather than the platform-primary `mod`.
 export function ctrlLabel(): string {
@@ -74,15 +84,4 @@ export function altLabel(): string {
 
 export function shiftLabel(): string {
   return isMac() ? "⇧" : "Shift";
-}
-
-/**
- * Compact glyph for the leader modifier used in digit badges - always a
- * single character so the badge width stays stable when Alt (⌥) is the
- * leader. Non-Mac `mod` falls back to `⌃` (Control) rather than the
- * 4-letter "Ctrl" that `modLabel()` returns.
- */
-export function leaderGlyph(modifier: "mod" | "alt"): string {
-  if (modifier === "alt") return "⌥";
-  return isMac() ? "⌘" : "⌃";
 }

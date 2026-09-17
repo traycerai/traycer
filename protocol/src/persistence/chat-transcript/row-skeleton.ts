@@ -130,6 +130,29 @@ const byteLengthSchema = z.number().int().nonnegative();
  * record identically produces the same digest, and that is the point. It
  * answers one question - "must I drop what I am holding for this ordinal" -
  * and a false "yes" costs one refetch while a false "no" is the bug above.
+ *
+ * That is also what lets the DERIVATION change without the schema changing,
+ * and on 10 September 2026 it did: `build-skeleton.ts` stopped feeding every
+ * record's whole encoding through the fingerprint's sequential lanes and now
+ * combines one fixed-width fingerprint per record, in row order. Same field,
+ * same width, different value for the same body - because a live chat rebuilds
+ * this on every commit, and re-encoding the whole transcript to answer for one
+ * changed record was O(transcript) work per streamed token batch.
+ *
+ * The price is one connection's worth of refetching, paid once. A client that
+ * is holding rows when its host restarts onto the new derivation compares its
+ * digests against digests computed the new way, finds every one of them
+ * different, and receives every row it holds in `updated` - so it drops those
+ * bodies and fetches them again. That is the ordinary, designed-for response to
+ * an `updated`; it costs one round of range requests and nothing renders wrong
+ * in the meantime. A digest that is a hint and not an identity is exactly a
+ * digest whose derivation may be replaced at this price.
+ *
+ * Two SOURCES may likewise disagree: a live chat and a published copy of it
+ * compute digests with and without a fingerprint memo respectively, and while
+ * that particular pair happens to agree today, nothing may depend on it. No
+ * reader compares a digest across two sources - a digest is only ever compared
+ * against the previous value for the same ordinal on the same connection.
  */
 const bodyDigestSchema = z.string().min(1).max(32);
 

@@ -40,9 +40,9 @@ import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import {
   isProviderLoginLandingTab,
-  useLandingTerminalStore,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { useLandingTerminalDurableLifecycle } from "./landing-terminal-durable-bootstrap";
@@ -59,6 +59,8 @@ import {
   peekXtermHostGridForSession,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
+import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 const TERMINAL_DEFAULT_COLS = 80;
@@ -126,7 +128,7 @@ export function LandingTerminalLegacyBootstrap(
   props: LandingTerminalTileProps,
 ): ReactNode {
   const handleExitedTab = useRemoveExitedLandingTab(props.landingPageId);
-  const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
+  const rekeyTab = useLandingPanelStore((state) => state.rekeyTab);
   // Derivation, not a coarse read. This gate replaces the tile with an explicit
   // "is offline" state, which is a claim about a machine — so it asks the one
   // hook that knows the difference between the cloud saying a host is gone and
@@ -322,7 +324,7 @@ function LandingTerminalDurableBootstrap(
   );
   const adopt = useCallback(
     (terminal: PlainTerminalProjection): void => {
-      useLandingTerminalStore
+      useLandingPanelStore
         .getState()
         .adoptHostTerminal(props.tab.instanceId, terminal);
     },
@@ -482,7 +484,7 @@ export function LandingTerminalTileLive(props: {
     handle.store,
     (state) => state.currentCwdReported,
   );
-  const syncDefaultTitle = useLandingTerminalStore(
+  const syncDefaultTitle = useLandingPanelStore(
     (state) => state.syncDefaultTitle,
   );
   const syncedTitle = resolveLandingTerminalSyncedTitle({
@@ -661,9 +663,26 @@ export function TerminalDeadState(props: {
 }): ReactNode {
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center bg-canvas p-4 text-center text-ui-sm text-muted-foreground">
-      {props.unavailability === "plan-restricted"
-        ? `${props.hostLabel} is local only on your current plan, so it can't be reached from here. Upgrade to use it remotely; this terminal stays bound to it.`
-        : `${props.hostLabel} is offline. This terminal stays bound to that host.`}
+      {terminalDeadStateMessage(props.hostLabel, props.unavailability)}
     </div>
   );
+}
+
+/**
+ * The fact is the same on every shell; only the remedy differs. The installed
+ * mobile app may not tell the reader to upgrade (App Store review guideline
+ * 3.1.1), so it points at the shell that may carry that offer, and keeps the
+ * note that the terminal stays bound either way.
+ */
+function terminalDeadStateMessage(
+  hostLabel: string,
+  unavailability: HostUnavailability | null,
+): string {
+  if (unavailability !== "plan-restricted") {
+    return `${hostLabel} is offline. This terminal stays bound to that host.`;
+  }
+  const reached = `${hostLabel} is local only on your current plan, so it can't be reached from here.`;
+  return isMobileApp()
+    ? `${reached} ${PLAN_RESTRICTED_MOBILE_REMEDY} This terminal stays bound to it.`
+    : `${reached} Upgrade to use it remotely; this terminal stays bound to it.`;
 }

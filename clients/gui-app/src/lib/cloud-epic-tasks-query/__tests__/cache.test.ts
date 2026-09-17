@@ -1,5 +1,5 @@
-import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { queryOptions, QueryClient } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it } from "vitest";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
@@ -9,18 +9,78 @@ import type {
 import { isFoundTaskContext } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   LIST_CLOUD_TASKS_REQUEST,
+  cloudEpicTasksFirstPageQueryOptions,
+  cloudEpicTasksLastKnownQueryKey,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import {
   readEpicTitlesFromCloudTaskCaches,
   removeDeletedEpicsFromCloudTaskCaches,
+  setEpicLocalHomeInCloudTaskCaches,
   setEpicPinnedInCloudTaskCaches,
   updateEpicTitleInCloudTaskCaches,
   updateEpicTitleInTaskContextsCaches,
+  writeCloudEpicTasksLastKnown,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  cloudEpicTasksPageGeneration,
+  cloudEpicTasksPageIdentity,
+  useCloudEpicTasksPagesStore,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 describe("removeDeletedEpicsFromCloudTaskCaches", () => {
+  beforeEach(() => {
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      generationByIdentity: {},
+      deletedEpicIdsByScope: {},
+    });
+  });
+
+  it("removes a local-home row without decrementing the cloud facets", () => {
+    // The facets are the CLOUD's aggregate: a `home: "local"` row is
+    // host-synthesized and prepended, never counted there. RED before the fix:
+    // removing it decremented the facet of a cloud epic that shares its repo,
+    // so that cloud epic's count under-read by one.
+    const queryClient = new QueryClient();
+    const key = cloudEpicTasksQueryKey(
+      "host-a",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const facets: ListTasksResponse["facets"] = {
+      repos: [
+        { repoIdentifier: { owner: "traycer", repo: "gui-app" }, count: 1 },
+      ],
+      workspaces: [],
+      ownershipScopes: [{ value: "mine", count: 1 }],
+    };
+    queryClient.setQueryData<ListTasksResponse>(key, {
+      tasks: [
+        {
+          ...taskLight("epic-local", "Local", "traycer/gui-app", "user-1"),
+          home: "local",
+        },
+        taskLight("epic-cloud", "Cloud", "traycer/gui-app", "user-1"),
+      ],
+      hasMore: false,
+      facets,
+    });
+
+    removeDeletedEpicsFromCloudTaskCaches(
+      queryClient,
+      { hostId: null, userId: "user-1" },
+      ["epic-local"],
+    );
+
+    const after = queryClient.getQueryData<ListTasksResponse>(key);
+    expect(after?.tasks.map((task) => task.epic?.light?.id)).toEqual([
+      "epic-cloud",
+    ]);
+    expect(after?.facets).toEqual(facets);
+  });
+
   it("removes deleted epic rows and decrements facets for matching user caches", () => {
     const queryClient = new QueryClient();
     const matchingKey = cloudEpicTasksQueryKey(
@@ -146,6 +206,198 @@ describe("removeDeletedEpicsFromCloudTaskCaches", () => {
     expect(
       queryClient.getQueryData<ListTasksResponse>(key)?.facets?.chatHosts,
     ).toEqual([{ hostId: "host-b", count: 1 }]);
+  });
+
+  it("clears an already-retained deleted tail and rejects its late response", () => {
+    const hostId = "host-a";
+    const userId = "user-1";
+    const identity = cloudEpicTasksPageIdentity(
+      hostId,
+      userId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const staleGeneration = cloudEpicTasksPageGeneration(identity);
+    const deletedTail: ListTasksResponse = {
+      tasks: [taskLight("epic-deleted", "Deleted", "traycer/gui-app", userId)],
+      hasMore: false,
+    };
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(identity, staleGeneration, deletedTail);
+
+    removeDeletedEpicsFromCloudTaskCaches(
+      new QueryClient(),
+      { hostId, userId },
+      ["epic-deleted"],
+    );
+
+    expect(
+      useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity],
+    ).toBeUndefined();
+    // This is the eventual cursor response from the request that captured
+    // `staleGeneration` before deletion. The store must refuse resurrection.
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(identity, staleGeneration, deletedTail);
+    expect(
+      useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity],
+    ).toBeUndefined();
+  });
+
+  it("removes a deleted epic from the host/user last-known fallback", () => {
+    const queryClient = new QueryClient();
+    const scope = { hostId: "host-a", userId: "user-1" };
+    const lastKnownKey = cloudEpicTasksLastKnownQueryKey(
+      scope.hostId,
+      scope.userId,
+    );
+    queryClient.setQueryData<ListTasksResponse>(lastKnownKey, {
+      tasks: [
+        taskLight("epic-deleted", "Deleted", "traycer/gui-app", "user-1"),
+      ],
+      hasMore: false,
+    });
+
+    removeDeletedEpicsFromCloudTaskCaches(queryClient, scope, ["epic-deleted"]);
+
+    expect(
+      queryClient
+        .getQueryData<ListTasksResponse>(lastKnownKey)
+        ?.tasks.map((task) => task.epic?.light?.id),
+    ).toEqual([]);
+  });
+
+  it("admits a late last-known fallback through the delete ledger", () => {
+    const queryClient = new QueryClient();
+    const scope = { hostId: "host-a", userId: "user-1" };
+    const lastKnownKey = cloudEpicTasksLastKnownQueryKey(
+      scope.hostId,
+      scope.userId,
+    );
+
+    // The delete finishes before a different settled first page attempts to
+    // refresh the shared fallback. The writer itself must remove the stale row
+    // rather than relying on the cache having existed when delete ran.
+    removeDeletedEpicsFromCloudTaskCaches(queryClient, scope, ["epic-deleted"]);
+    writeCloudEpicTasksLastKnown(queryClient, scope, {
+      tasks: [
+        taskLight("epic-deleted", "Deleted", "traycer/gui-app", "user-1"),
+      ],
+      hasMore: false,
+    });
+
+    expect(
+      queryClient
+        .getQueryData<ListTasksResponse>(lastKnownKey)
+        ?.tasks.map((task) => task.epic?.light?.id),
+    ).toEqual([]);
+  });
+
+  it("admits a preserved first page and cursor tail after a tombstone", () => {
+    const queryClient = new QueryClient();
+    const scope = { hostId: "host-a", userId: "user-1" };
+    const options = cloudEpicTasksFirstPageQueryOptions(
+      scope.hostId,
+      scope.userId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const normalPage: ListTasksResponse = {
+      tasks: [
+        taskLight("epic-orphan", "Orphan", "traycer/gui-app", scope.userId),
+      ],
+      hasMore: false,
+    };
+
+    // This is the already-cached first page at the moment a local deletion is
+    // processed. The ordinary row is removed immediately.
+    queryClient.getQueryCache().build(queryClient, {
+      queryKey: options.queryKey,
+      queryFn: options.queryFn,
+      structuralSharing: options.structuralSharing,
+    });
+    queryClient.setQueryData(options.queryKey, normalPage);
+    removeDeletedEpicsFromCloudTaskCaches(queryClient, scope, ["epic-orphan"]);
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(options.queryKey)?.tasks,
+    ).toEqual([]);
+
+    const preservedPage: ListTasksResponse = {
+      tasks: [
+        {
+          ...listTaskLight("epic-orphan", "Orphan", scope.userId),
+          preservation: "orphaned-local-edits",
+        },
+      ],
+      hasMore: false,
+    };
+
+    // A late first-page delivery must be allowed back through the same
+    // tombstone boundary when it carries the durable preservation marker.
+    queryClient.setQueryData(options.queryKey, preservedPage);
+    expect(
+      queryClient
+        .getQueryData<ListTasksResponse>(options.queryKey)
+        ?.tasks.map((task) => task.epic?.light?.id),
+    ).toEqual(["epic-orphan"]);
+
+    // Cursor pages use the retained-page store rather than TanStack's first
+    // page. The tombstone already exists, so this late tail must be admitted
+    // for the preserved row and remain rejected for an ordinary row.
+    const identity = cloudEpicTasksPageIdentity(
+      scope.hostId,
+      scope.userId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const generation = cloudEpicTasksPageGeneration(identity);
+    useCloudEpicTasksPagesStore.getState().appendPage(identity, generation, {
+      tasks: preservedPage.tasks,
+      hasMore: false,
+    });
+    const retained =
+      useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity];
+    // Assert the tail landed before reading through it, so a page that never
+    // arrived fails here rather than as an `undefined` in the row comparison.
+    expect(retained).toHaveLength(1);
+    expect(retained[0].tasks.map((task) => task.epic?.light?.id)).toEqual([
+      "epic-orphan",
+    ]);
+
+    // The other half of that sentence, at the CURRENT generation: an ordinary
+    // row for the tombstoned id is still refused. The earlier rejection in
+    // this file uses a stale generation and so exercises the generation
+    // guard; without this assertion a tombstone filter that admitted every
+    // late row at the current generation would pass the suite.
+    useCloudEpicTasksPagesStore.getState().appendPage(identity, generation, {
+      tasks: [listTaskLight("epic-orphan", "Orphan", scope.userId)],
+      hasMore: false,
+    });
+    const retainedAfterOrdinary =
+      useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity];
+    const ordinaryRows = retainedAfterOrdinary.flatMap((page) =>
+      page.tasks.filter((task) => task.preservation !== "orphaned-local-edits"),
+    );
+    expect(ordinaryRows).toEqual([]);
+  });
+});
+
+describe("setEpicLocalHomeInCloudTaskCaches", () => {
+  it("patches the matching row in the cloud.listTasks.lastKnown cache", () => {
+    const queryClient = new QueryClient();
+    const scope = { hostId: "host-a", userId: "user-1" };
+    const lastKnownKey = cloudEpicTasksLastKnownQueryKey(
+      scope.hostId,
+      scope.userId,
+    );
+    queryClient.setQueryData<ListTasksResponse>(lastKnownKey, {
+      tasks: [listTaskLight("epic-local", "Local epic", scope.userId)],
+      hasMore: false,
+    });
+
+    setEpicLocalHomeInCloudTaskCaches(queryClient, scope, "epic-local", true);
+
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(lastKnownKey)?.tasks[0]?.home,
+    ).toBe("local");
   });
 });
 
@@ -351,6 +603,79 @@ describe("setEpicPinnedInCloudTaskCaches", () => {
     expect(taskPinnedAt(queryClient, batchKey, "epic-a")).toBe(true);
     expect(taskPinnedAt(queryClient, batchKey, "epic-b")).toBe(false);
     expect(taskPinnedAt(queryClient, otherUserBatchKey, "epic-a")).toBe(false);
+  });
+});
+
+describe("cloudEpicTasksFirstPageQueryOptions cache writes", () => {
+  beforeEach(() => {
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      generationByIdentity: {},
+      deletedEpicIdsByScope: {},
+    });
+  });
+
+  it("keeps the previous empty page through an equal fetch", async () => {
+    const fetchQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const options = cloudEpicTasksFirstPageQueryOptions(
+      "host-a",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const firstEmptyPage: ListTasksResponse = { tasks: [], hasMore: false };
+    const equalEmptyPage: ListTasksResponse = { tasks: [], hasMore: false };
+
+    await fetchQueryClient.fetchQuery(
+      queryOptions({
+        ...options,
+        staleTime: 0,
+        queryFn: () => Promise.resolve(firstEmptyPage),
+      }),
+    );
+    await fetchQueryClient.fetchQuery(
+      queryOptions({
+        ...options,
+        staleTime: 0,
+        queryFn: () => Promise.resolve(equalEmptyPage),
+      }),
+    );
+
+    expect(fetchQueryClient.getQueryData(options.queryKey)).toBe(
+      firstEmptyPage,
+    );
+  });
+
+  it("keeps the previous populated page through equal primary setQueryData", () => {
+    const options = cloudEpicTasksFirstPageQueryOptions(
+      "host-a",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const firstPopulatedPage: ListTasksResponse = {
+      tasks: [listTaskLight("epic-a", "Alpha", "user-1")],
+      hasMore: false,
+    };
+    const equalPopulatedPage: ListTasksResponse = {
+      tasks: [listTaskLight("epic-a", "Alpha", "user-1")],
+      hasMore: false,
+    };
+    // `setQueryData` uses the existing Query's options. Build that primary
+    // Query with the production options first, matching the revalidation path
+    // where a pending first page has already installed them.
+    const setQueryClient = new QueryClient();
+    setQueryClient.getQueryCache().build(setQueryClient, {
+      queryKey: options.queryKey,
+      queryFn: () => Promise.resolve(firstPopulatedPage),
+      structuralSharing: options.structuralSharing,
+    });
+    setQueryClient.setQueryData(options.queryKey, firstPopulatedPage);
+    setQueryClient.setQueryData(options.queryKey, equalPopulatedPage);
+
+    expect(setQueryClient.getQueryData(options.queryKey)).toBe(
+      firstPopulatedPage,
+    );
   });
 });
 

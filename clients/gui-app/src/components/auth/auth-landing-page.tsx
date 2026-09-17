@@ -1,6 +1,10 @@
+import { AuthBrandSplash } from "@/components/auth/auth-brand-splash";
+import { useAuthSplashCover } from "@/hooks/auth/use-auth-splash-cover";
+import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
 import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
+import type { ShellAdmissionRefusal } from "@/hooks/auth/use-shell-local-plane-admission";
 import { cn } from "@/lib/utils";
 
 const SIGN_IN_COLOR_VARS =
@@ -8,11 +12,57 @@ const SIGN_IN_COLOR_VARS =
 const SIGN_IN_LANE_CLASS =
   "w-[min(100%,31rem)] pt-[clamp(0.35rem,1.2vh,0.8rem)]";
 
-export function AuthLandingPage() {
+/**
+ * The sentence for a session the STATUS would have admitted and the SHELL
+ * could not - one per refusal reason, keyed by the reason.
+ *
+ * Three things each sentence has to do, and the order is the reading order: name
+ * what is wrong with the session (the sign-in is unconfirmed, not rejected), say
+ * why that is fatal HERE and not on a laptop (nothing on this device to fall back
+ * to), and leave the user with the one action that helps. It deliberately does
+ * NOT claim the account is signed out - it is not - nor that the network is
+ * down, which may be perfectly false.
+ *
+ * A `Record` over the union rather than a `switch`, and for the same purpose the
+ * switch had: `Record<ShellAdmissionRefusal, string>` is exhaustive BY TYPE, so
+ * adding a refusal reason fails to compile here until someone writes its
+ * sentence - which is the whole reason the reason is a union rather than a
+ * boolean. The switch expressed that too, but while the union has exactly one
+ * member its single `case` compares two identical literal types, which
+ * `no-unnecessary-condition` reports; a mapped type has no comparison in it to be
+ * unnecessary, and keeps the guarantee at one member or ten.
+ */
+const REFUSAL_MESSAGES: Record<ShellAdmissionRefusal, string> = {
+  "unverified-relay-only":
+    "Your sign-in couldn't be confirmed, and this device has no Traycer host of its own — everything here is served from another device over the network. Sign in again to reconnect.",
+};
+
+function refusalMessage(refusal: ShellAdmissionRefusal): string {
+  return REFUSAL_MESSAGES[refusal];
+}
+
+export function AuthLandingPage(props: {
+  /**
+   * Why an otherwise-admitted session is on this surface, or `null` for the
+   * ordinary signed-out arrival. Required so a caller has to answer the
+   * question rather than inherit a silent default.
+   */
+  readonly refusal: ShellAdmissionRefusal | null;
+}) {
+  // The splash covers only the ordinary signed-out arrival: a refused shell is
+  // on this page to READ something, and an animation in front of that sentence
+  // delays the one thing the screen exists to say.
+  const covered = useAuthSplashCover() && props.refusal === null;
+
   return (
     // min-h-full, not min-h-svh: the standalone shell owns the viewport
     // height and reserves the Windows title-bar band above this page.
-    <main className="relative isolate flex min-h-full flex-1 overflow-hidden bg-zinc-950 text-white">
+    <main
+      className={cn(
+        "relative isolate flex min-h-full flex-1 overflow-hidden text-white",
+        BRAND_DARK_GROUND_CLASS,
+      )}
+    >
       <PhotoBloom />
 
       {/* The content layer of a full-bleed surface: the backdrop above is
@@ -23,12 +73,33 @@ export function AuthLandingPage() {
           being generous enough: they are today, by margins small enough that
           retuning one would silently put the sign-in control under the
           housing. */}
-      <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading">
+      {/* `inert` while the splash is opaque, not just `pointer-events: none`
+          on the layer above: hiding a control from the pointer says nothing
+          about the focus order, so a keyboard or a switch could still reach
+          "Sign in" underneath a screen that shows no sign of it. Released when
+          the layer unmounts, which is the frame the fade completes. */}
+      <section
+        inert={covered}
+        className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading"
+      >
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
           <BrandMark className="h-auto w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />
           <h1 className="mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
             Welcome to Traycer
           </h1>
+          {/* Above the button, not below it: this is the reason the button is
+              being shown at all, and a reader who has already pressed it has
+              no use for the explanation. Sized as body copy on the artwork's
+              own scale rather than as an alert - the session is intact and
+              nothing here is an error state. */}
+          {props.refusal === null ? null : (
+            <p
+              data-testid="auth-landing-refusal"
+              className="max-w-[min(88vw,28rem)] text-balance text-ui-sm leading-relaxed font-sans text-white/70"
+            >
+              {refusalMessage(props.refusal)}
+            </p>
+          )}
           <div className={cn(SIGN_IN_COLOR_VARS, SIGN_IN_LANE_CLASS)}>
             <SignInButton layout="hero" />
           </div>
@@ -37,6 +108,10 @@ export function AuthLandingPage() {
 
       {/* Pinned to the corner the home indicator shares, and in landscape the
           corner a right-side sensor housing shares too. */}
+      {/* Last child, so it stacks over the page without needing a higher
+          z-index than the surface it covers. */}
+      {covered ? <AuthBrandSplash /> : null}
+
       <footer className="pointer-events-none absolute right-0 bottom-0 z-10 flex items-center justify-end px-[clamp(1.25rem,4vw,4rem)] pr-[max(clamp(1.25rem,4vw,4rem),var(--safe-area-inset-right))] pb-[max(clamp(1rem,3vh,2rem),var(--safe-area-inset-bottom))] font-mono text-overline text-white/[0.42]">
         <span>{getClientAppVersionLabel()}</span>
       </footer>

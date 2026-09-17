@@ -42,6 +42,7 @@ export interface ComposerBodyProps {
   } | null;
   readonly canSubmit: boolean;
   readonly isSubmitting: boolean;
+  readonly editorReadOnly: boolean;
   readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
   readonly header: ReactNode;
@@ -95,7 +96,14 @@ export interface ComposerBodyProps {
    */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly onSubmit: () => void;
-  readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
+  /**
+   * `assembledFor` is the host the terminal panel assembled the launch for
+   * (its `hostId` at Start) - see `TerminalLaunchPanel`'s `onStart`.
+   */
+  readonly onStartTerminal: (
+    launch: TerminalAgentLaunch,
+    assembledFor: string | null,
+  ) => void;
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },
@@ -114,6 +122,7 @@ export function ComposerBody({
   initialSelection,
   canSubmit,
   isSubmitting,
+  editorReadOnly,
   attachmentPending,
   workspaceDisabledHint,
   header,
@@ -159,6 +168,11 @@ export function ComposerBody({
     createProfileHostId: hostId,
     runTargetHostId: hostId,
     terminalLoginSurface,
+    // The LANDING composer: there is no chat yet, so no `chat.subscribe` line
+    // has been negotiated and this surface genuinely cannot say. `null` leaves
+    // the harness-catalog line to decide alone, which is all it can know - the
+    // chat this creates negotiates its own line when it opens.
+    chatLineCarriesAutoMode: null,
   } as const;
 
   return (
@@ -186,7 +200,7 @@ export function ComposerBody({
                 hasPastedImageBytes={hasPastedImageBytes}
                 ingestPastedComposerImages={ingestPastedComposerImages}
                 isActive={chatEditorIsActive}
-                disabled={isSubmitting}
+                disabled={isSubmitting || editorReadOnly}
                 placeholder={COMPOSER_PLACEHOLDER}
                 editorClassName={editorClassName}
                 stabilizeImageAttachmentCaret
@@ -207,7 +221,11 @@ export function ComposerBody({
                 <TerminalLaunchPanel
                   store={toolbarStore}
                   pending={isSubmitting}
-                  disabledHint={workspaceDisabledHint}
+                  disabledHint={
+                    editorReadOnly
+                      ? "Take over this draft to start a terminal agent"
+                      : workspaceDisabledHint
+                  }
                   hostId={hostId}
                   terminalLoginSurface={terminalLoginSurface}
                   onStart={onStartTerminal}
@@ -222,10 +240,7 @@ export function ComposerBody({
               {toolbarLayout === "collapsed" ? (
                 <ComposerMobileToolbar {...sharedToolbarProps} />
               ) : (
-                <ComposerToolbar
-                  {...sharedToolbarProps}
-                  showNextTurnPermissionNote={false}
-                />
+                <ComposerToolbar {...sharedToolbarProps} />
               )}
             </SurfaceActivityProvider>
           </div>

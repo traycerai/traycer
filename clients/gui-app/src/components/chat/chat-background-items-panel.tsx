@@ -1,17 +1,8 @@
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import {
-  AlarmClock,
-  Bot,
-  ChevronDown,
-  Monitor,
-  PauseCircle,
-  Plug,
-  Square,
-  TerminalSquare,
-  Workflow,
-} from "lucide-react";
+import { ChevronDown, PauseCircle, Square } from "lucide-react";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
 import {
   Collapsible,
   CollapsibleContent,
@@ -22,6 +13,9 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
+import { fallbackProviderLabelFor } from "@/components/chat/fallback/fallback-identity";
+import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
+import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
@@ -32,7 +26,10 @@ import {
   useManagedCommandStopAllIsPending,
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
+import {
+  localManagedCommandDoor,
+  useManagedCommandDoor,
+} from "@/lib/managed-commands/use-managed-command-door";
 import {
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
   getManagedCommandOutputDragId,
@@ -55,33 +52,17 @@ import {
   INDENT_PX,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-guide";
-import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
-import type { TreeNodeNested } from "@/lib/tree-types";
+import {
+  backgroundHeaderSummary,
+  buildBackgroundTree,
+  buildRememberedBackgroundNodes,
+  dedupeByTaskId,
+  treeHasRunningTask,
+  type BackgroundTreeNode,
+  type RememberedBackgroundNode,
+} from "@/lib/chat/background-item-tree";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-interface RememberedBackgroundNode {
-  readonly kind: BackgroundItem["kind"];
-  readonly title: string;
-  readonly parentTaskId: string | null;
-}
-
-interface BackgroundTreeRecord {
-  readonly taskId: string;
-  readonly item: BackgroundItem | null;
-  readonly kind: BackgroundItem["kind"];
-  readonly title: string;
-  readonly parentTaskId: string | null;
-  readonly order: number;
-}
-
-interface BackgroundTreeNode {
-  readonly taskId: string;
-  readonly item: BackgroundItem | null;
-  readonly kind: BackgroundItem["kind"];
-  readonly title: string;
-  readonly children: ReadonlyArray<BackgroundTreeNode>;
-}
-
 function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
   switch (kind) {
     // A nested execution inside this turn, NOT a durable Agent in the Task.
@@ -98,6 +79,11 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
       return "Workflow";
     case "mcp":
       return "MCP tool";
+    // A chat parked on a provider rate-limit reset by the fallback engine.
+    // "Waiting" and not "Rate limit": the row's job is to say what the chat is
+    // DOING, the same as every label above it.
+    case "fallback-wait":
+      return "Waiting";
   }
   const unreachableKind: never = kind;
   return unreachableKind;
@@ -105,41 +91,16 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
 
 function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
   if (kind === "wakeup") return "Cancel wake";
+  // Not "Stop Waiting": stopping a wait abandons the reset it was waiting for
+  // and lets the failure stand, which is a decision, not a cancellation of
+  // work in flight.
+  if (kind === "fallback-wait") return "Stop waiting";
   return `Stop ${backgroundKindLabel(kind)}`;
 }
 
 function BackgroundKindIcon(props: { readonly kind: BackgroundItem["kind"] }) {
-  switch (props.kind) {
-    case "subagent":
-      return <Bot aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
-    case "command":
-      return (
-        <TerminalSquare
-          aria-hidden
-          className="size-3.5 shrink-0 text-primary/80"
-        />
-      );
-    case "monitor":
-      return (
-        <Monitor aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-      );
-    case "wakeup":
-      return (
-        <AlarmClock aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-      );
-    case "workflow":
-      return (
-        <Workflow aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-      );
-    case "mcp":
-      return <Plug aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
-  }
-  const unreachableKind: never = props.kind;
-  return unreachableKind;
-}
-
-function itemParentTaskId(item: BackgroundItem): string | null {
-  return item.parentTaskId ?? null;
+  const Icon = BACKGROUND_KIND_ICONS[props.kind];
+  return <Icon aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
 }
 
 function itemScheduledFor(item: BackgroundItem): number | null {
@@ -163,24 +124,6 @@ function workflowRowSummary(
   return parts.length === 0 ? null : parts.join(" · ");
 }
 
-function rememberBackgroundItem(
-  item: BackgroundItem,
-): RememberedBackgroundNode {
-  return {
-    kind: item.kind,
-    title: item.title,
-    parentTaskId: itemParentTaskId(item),
-  };
-}
-
-function rememberMissingParent(taskId: string): RememberedBackgroundNode {
-  return {
-    kind: "subagent",
-    title: taskId,
-    parentTaskId: null,
-  };
-}
-
 function formatWakeupTime(scheduledFor: number): string {
   const date = new Date(scheduledFor);
   const hours = date.getHours().toString().padStart(2, "0");
@@ -188,7 +131,7 @@ function formatWakeupTime(scheduledFor: number): string {
   return `${hours}:${minutes}`;
 }
 
-function backgroundItemDisplayTitle(item: BackgroundItem): string {
+function backgroundItemDisplayTitle(item: BackgroundItem, now: number): string {
   if (item.kind === "wakeup") {
     const scheduledFor = itemScheduledFor(item);
     const time =
@@ -203,6 +146,27 @@ function backgroundItemDisplayTitle(item: BackgroundItem): string {
     // The structured MCP identity beats the freeform title (which mirrors the
     // CLI's "server/tool" description and degrades with old hosts).
     return `${item.serverName} · ${item.toolName}`;
+  }
+  if (item.kind === "fallback-wait") {
+    // The account being waited on, from the row's own wire fields, so this
+    // never joins against a providers list to title itself. `profileLabel` is
+    // null for the ambient profile - a real state, not a missing one - and the
+    // provider alone is the honest title then.
+    //
+    // The DISPLAY name, never the raw wire id: the copy table fixes "Claude
+    // Code", and `claude-code` is a value the user has no reason to recognise.
+    const providerLabel = fallbackProviderLabelFor(item.providerId);
+    const account =
+      item.profileLabel === null
+        ? providerLabel
+        : `${providerLabel} · ${item.profileLabel}`;
+    // `scheduledFor` is REQUIRED on this variant (a wait exists because a
+    // verified reset boundary was read), so the time is never conditional the
+    // way the wakeup row's is - and it is the SHARED 12-hour format, never
+    // `formatWakeupTime`'s zero-padded 24-hour one. That distinction is the
+    // point: a fallback wait and a scheduled wake are different things, and a
+    // wait rendered in the wake row's shape reads as a wake the user set.
+    return `Waiting for ${account}'s limit · resumes ${formatWaitTime(item.scheduledFor, now)}`;
   }
   return item.title;
 }
@@ -259,182 +223,6 @@ function BackgroundStopButton(props: {
       </span>
     </TooltipWrapper>
   );
-}
-
-// Collapse the host list to one row per task id. The host broadcasts a
-// running-only list and removes an item atomically at its terminal, so this is
-// a defensive guard: a transient duplicate (same `taskId`) must not render two
-// rows with the same React key or two stop affordances for one task.
-function dedupeByTaskId(
-  items: ReadonlyArray<BackgroundItem>,
-): ReadonlyArray<BackgroundItem> {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (seen.has(item.taskId)) return false;
-    seen.add(item.taskId);
-    return true;
-  });
-}
-
-function parentChainContains(
-  startTaskId: string,
-  targetTaskId: string,
-  recordByTaskId: ReadonlyMap<string, BackgroundTreeRecord>,
-): boolean {
-  let cursor: string | null = startTaskId;
-  const seen = new Set<string>();
-  while (cursor !== null) {
-    if (cursor === targetTaskId) return true;
-    if (seen.has(cursor)) return false;
-    seen.add(cursor);
-    cursor = recordByTaskId.get(cursor)?.parentTaskId ?? null;
-  }
-  return false;
-}
-
-function buildRememberedBackgroundNodes(
-  items: ReadonlyArray<BackgroundItem>,
-  previous: ReadonlyMap<string, RememberedBackgroundNode>,
-): ReadonlyMap<string, RememberedBackgroundNode> {
-  const next = new Map(
-    items.map((item) => [item.taskId, rememberBackgroundItem(item)]),
-  );
-  const pendingParentIds: string[] = [];
-  const queuedParentIds = new Set<string>();
-  const enqueueParent = (taskId: string): void => {
-    if (next.has(taskId) || queuedParentIds.has(taskId)) return;
-    queuedParentIds.add(taskId);
-    pendingParentIds.push(taskId);
-  };
-  items.forEach((item) => {
-    const parentTaskId = itemParentTaskId(item);
-    if (parentTaskId !== null) enqueueParent(parentTaskId);
-  });
-  let pendingIndex = 0;
-  while (pendingIndex < pendingParentIds.length) {
-    const taskId = pendingParentIds[pendingIndex];
-    pendingIndex += 1;
-    const remembered = previous.get(taskId) ?? rememberMissingParent(taskId);
-    next.set(taskId, remembered);
-    if (remembered.parentTaskId !== null) {
-      enqueueParent(remembered.parentTaskId);
-    }
-  }
-  return next;
-}
-
-function backgroundTreeNodeFromNested(
-  node: TreeNodeNested<BackgroundTreeRecord>,
-): BackgroundTreeNode {
-  const data = node.data;
-  return {
-    taskId: data.taskId,
-    item: data.item,
-    kind: data.kind,
-    title: data.title,
-    children: Array.from(node.children ?? [])
-      .sort(compareBackgroundTreeRecords)
-      .map((child) => backgroundTreeNodeFromNested(child)),
-  };
-}
-
-function compareBackgroundTreeRecords(
-  left: TreeNodeNested<BackgroundTreeRecord>,
-  right: TreeNodeNested<BackgroundTreeRecord>,
-): number {
-  return left.data.order - right.data.order;
-}
-
-function buildBackgroundTree(
-  items: ReadonlyArray<BackgroundItem>,
-  rememberedByTaskId: ReadonlyMap<string, RememberedBackgroundNode>,
-): ReadonlyArray<BackgroundTreeNode> {
-  const itemByTaskId = new Map(items.map((item) => [item.taskId, item]));
-  const itemOrderByTaskId = new Map(
-    items.map((item, index) => [item.taskId, index]),
-  );
-  const records = Array.from(rememberedByTaskId.entries()).map(
-    ([taskId, remembered], index): BackgroundTreeRecord => {
-      const item = itemByTaskId.get(taskId) ?? null;
-      const order = itemOrderByTaskId.get(taskId) ?? items.length + index;
-      if (item === null) {
-        return {
-          taskId,
-          item,
-          kind: remembered.kind,
-          title: remembered.title,
-          parentTaskId: remembered.parentTaskId,
-          order,
-        };
-      }
-      return {
-        taskId,
-        item,
-        kind: item.kind,
-        title: item.title,
-        parentTaskId: itemParentTaskId(item),
-        order,
-      };
-    },
-  );
-  const recordByTaskId = new Map(
-    records.map((record) => [record.taskId, record]),
-  );
-
-  return buildTreeFromFlatRecords(records, {
-    getId: (record) => record.taskId,
-    getParentId: (record) => {
-      const parentTaskId = record.parentTaskId;
-      if (parentTaskId === null) return null;
-      if (parentChainContains(parentTaskId, record.taskId, recordByTaskId)) {
-        return null;
-      }
-      return parentTaskId;
-    },
-    getData: (record) => record,
-  })
-    .sort(compareBackgroundTreeRecords)
-    .map((node) => backgroundTreeNodeFromNested(node));
-}
-
-function treeHasRunningTask(node: BackgroundTreeNode): boolean {
-  if (node.item !== null && node.item.kind !== "wakeup") return true;
-  return node.children.some((child) => treeHasRunningTask(child));
-}
-
-/**
- * What "Background" actually holds, counted the way the rows below render.
- * Managed commands join the running total rather than standing apart: "Stop
- * all" reaches them, and the rows below say which is which.
- *
- * Held shells get their own part instead of joining that total, and NOT because
- * nothing is running - a shell can be held and still running. It is because the
- * panel renders such a shell ONCE, as held, so counting it as running would
- * name a row that is not on screen. Every number here counts a group of rows a
- * person can see, which is the only version of this summary that stays true
- * however the two sets overlap.
- *
- * That does leave the running total narrower than "Stop all"'s reach, which
- * still covers every running shell including a held one. A superset is the safe
- * direction: the button never leaves a process alive that the header implied it
- * would stop.
- */
-function backgroundHeaderSummary(input: {
-  readonly runningCount: number;
-  readonly heldCount: number;
-  readonly waitingWakeCount: number;
-}): string {
-  const parts: string[] = [];
-  if (input.runningCount > 0) {
-    parts.push(`${input.runningCount} running`);
-  }
-  if (input.heldCount > 0) {
-    parts.push(`${input.heldCount} held`);
-  }
-  if (input.waitingWakeCount > 0) {
-    parts.push(`${input.waitingWakeCount} waiting`);
-  }
-  return parts.length === 0 ? "0 running" : parts.join(" · ");
 }
 
 /**
@@ -686,8 +474,25 @@ function BackgroundTreeRow(props: {
 }) {
   const { node } = props;
   const item = node.item;
+  // `now` matters only on the `fallback-wait` branch of
+  // `backgroundItemDisplayTitle` (whether the resume time is far enough out
+  // to need its weekday, via `formatWaitTime`) - every other kind ignores the
+  // parameter entirely, so `0` here is never a stand-in for "the wrong time",
+  // it is simply unread. Keeping the minute clock out of THIS component is
+  // the point: `BackgroundTreeRow` renders for every item in the panel, and
+  // subscribing here repainted every command, monitor, subagent, workflow,
+  // MCP and wake row each tick to change nothing. `BackgroundWaitTitle` below
+  // is where a fallback-wait row gets the live clock instead, isolated the
+  // same way `FallbackGraceHeadline` isolates its own countdown from
+  // `FallbackGraceCard`.
   const displayTitle =
-    item === null ? node.title : backgroundItemDisplayTitle(item);
+    item === null ? node.title : backgroundItemDisplayTitle(item, 0);
+  const titleNode: ReactNode =
+    item !== null && item.kind === "fallback-wait" ? (
+      <BackgroundWaitTitle item={item} />
+    ) : (
+      displayTitle
+    );
 
   return (
     <li className="m-0">
@@ -720,7 +525,7 @@ function BackgroundTreeRow(props: {
         ) : (
           <>
             <TooltipWrapper
-              label={displayTitle}
+              label={titleNode}
               side="top"
               sideOffset={undefined}
               align={undefined}
@@ -732,7 +537,7 @@ function BackgroundTreeRow(props: {
               >
                 <BackgroundKindIcon kind={item.kind} />
                 <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
-                  {displayTitle}
+                  {titleNode}
                 </span>
                 {item.kind === "mcp" && item.startedAt !== null ? (
                   <LiveElapsed startedAt={item.startedAt} />
@@ -778,6 +583,30 @@ function BackgroundTreeRow(props: {
   );
 }
 
+/**
+ * A fallback-wait row's title, isolated in its own leaf.
+ *
+ * The minute clock lives HERE and nowhere else in the row: this is the only
+ * kind whose title reads `now` (whether the resume time is far enough out to
+ * need its weekday, via `formatWaitTime`), so subscribing at this depth means
+ * the tick repaints this leaf alone - not the icon, the badge, the stop
+ * button, or any sibling row in the panel. Same shape `FallbackGraceHeadline`
+ * uses to isolate its own countdown from `FallbackGraceCard`.
+ *
+ * Returns a bare fragment rather than a `<span>`: the caller renders this
+ * both as the row's visible title AND as the tooltip's `label` (which takes a
+ * `ReactNode` for exactly this reason), and neither call site wants an extra
+ * wrapping element.
+ */
+function BackgroundWaitTitle({
+  item,
+}: {
+  readonly item: Extract<BackgroundItem, { kind: "fallback-wait" }>;
+}) {
+  const now = useSampledNow();
+  return <>{backgroundItemDisplayTitle(item, now)}</>;
+}
+
 export function BackgroundItemsPanel(props: {
   readonly items: ReadonlyArray<BackgroundItem>;
   readonly epicId: string;
@@ -799,7 +628,9 @@ export function BackgroundItemsPanel(props: {
   readonly onStopAll: () => string | null;
   readonly onStopSession: () => string | null;
 }) {
-  const [open, setOpen] = useState(false);
+  // Open on arrival when a chip click is what put this row back in the dock.
+  const revealedByChip = useChatDockSectionRevealed("background");
+  const [open, setOpen] = useState(revealedByChip);
   const [committedRememberedByTaskId, setCommittedRememberedByTaskId] =
     useState<ReadonlyMap<string, RememberedBackgroundNode>>(() => new Map());
   // A harness background item is stopped over the chat's own stream, so it
@@ -882,7 +713,9 @@ export function BackgroundItemsPanel(props: {
   const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
     props.chatId,
   );
-  const openManagedCommand = useManagedCommandDoor();
+  // The panel lists the shells this host runs for the chat, never a
+  // remote one, so its doors open on the tab's host.
+  const openManagedCommand = localManagedCommandDoor(useManagedCommandDoor());
   const stopAllManagedCommands = useManagedCommandStopAll(props.chatId);
   // Cross-instance: the same chat can be open in two tiles, and each panel
   // owns its own mutation observer - the shared read is what keeps the second
@@ -966,14 +799,15 @@ export function BackgroundItemsPanel(props: {
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className={cn(
-        "bg-muted/30",
-        props.separated ? "border-t border-border/50" : null,
-      )}
+      className={cn(props.separated ? "border-t border-border/50" : null)}
       data-testid="background-items-panel"
+      variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger className="group/background flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        <CollapsibleTrigger
+          className="group/background flex min-w-0 flex-1 items-center text-left"
+          variant="panel"
+        >
           <ChevronDown
             aria-hidden
             className={cn(

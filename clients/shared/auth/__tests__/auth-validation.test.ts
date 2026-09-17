@@ -294,7 +294,13 @@ describe("refreshOnceAbortable", () => {
       signal: null,
     });
 
-    expect(result).toEqual({ kind: "rejected" });
+    // 401 classifies CREDENTIAL-scoped, with no `revocation_scope` on the
+    // body - so `revocation` is null, which is the same value an
+    // unrecognised scope would produce. See `readRefreshRejectionScope`.
+    expect(result).toEqual({
+      kind: "rejected",
+      rejection: { kind: "credential", revocation: null },
+    });
     expect(calls).toHaveLength(1);
   });
 

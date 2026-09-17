@@ -34,6 +34,11 @@ export interface SystemTab {
 
 export type TabIcon = ComponentType<{ className: string | undefined }>;
 
+export interface HeaderTabAppearance {
+  readonly color: string | null;
+  readonly icon: string | null;
+}
+
 /**
  * Canonical, render-ready tab projected by `useHeaderTabs`. The strip
  * iterates this. Each variant is fully self-contained - all display
@@ -43,7 +48,7 @@ export type TabIcon = ComponentType<{ className: string | undefined }>;
  * per-concern dispatch fns (`tabRequestClose`, `tabDuplicate`,
  * `tabResolveIntent`, `tabRouteOptions`, `tabActivate`) in the registry.
  */
-export type HeaderTab =
+export type HeaderTab = { readonly appearance?: HeaderTabAppearance | null } & (
   | {
       readonly kind: "epic";
       readonly id: string;
@@ -101,7 +106,28 @@ export type HeaderTab =
       readonly canDuplicate: boolean;
       readonly canOpenInNewWindow: boolean;
       readonly lastPath: string | null;
-    };
+    }
+  /**
+   * The fixed Home tab. Unlike every other variant this one is NOT projected
+   * from a strip ref - it has no source record and never appears in `items`,
+   * `systemTabs` or `stripOrder`. The strip renders it structurally and the
+   * surface host mounts it unconditionally; the variant exists so Home flows
+   * through the same registry dispatch, intents and route options as the rest.
+   */
+  | {
+      readonly kind: "home";
+      readonly id: "home";
+      readonly route: string;
+      readonly name: string;
+      readonly icon: TabIcon | null;
+      readonly canDuplicate: boolean;
+      readonly canOpenInNewWindow: boolean;
+    }
+);
+
+export function tabAppearance(tab: HeaderTab): HeaderTabAppearance | null {
+  return tab.appearance ?? null;
+}
 
 export interface TabContextMenuCtx {
   readonly tab: HeaderTab;

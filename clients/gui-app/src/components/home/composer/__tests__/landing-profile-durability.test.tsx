@@ -176,6 +176,7 @@ function createLandingToolbarStore(
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: "host-a",
   });
 }

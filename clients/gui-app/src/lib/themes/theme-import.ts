@@ -11,6 +11,7 @@ import { z } from "zod";
 import { THEME_PRESETS } from "@/lib/theme-presets";
 import {
   deriveThemeColors,
+  ensureVisibleThemeBorders,
   isThemeToken,
   themeSyntaxSchema,
   themeDefinitionSchema,
@@ -24,6 +25,10 @@ const MAX_EXPANDED_BYTES = 32 * 1024 * 1024;
 const MAX_THEMES = 100;
 const vsCodeTokenRuleSchema =
   themeSyntaxSchema.shape.tokenColors.element.extend({
+    name: z
+      .string()
+      .transform((value) => value.slice(0, 256))
+      .optional(),
     settings: themeSyntaxSchema.shape.tokenColors.element.shape.settings.extend(
       {
         // VS Code ignores unknown styles; Dracula uses both "normal" and "regular" to reset them.
@@ -51,14 +56,23 @@ const vsCodeThemeSchema = z.object({
   type: z.string().max(32).optional(),
   include: z.string().max(1024).optional(),
   colors: z
-    .preprocess((value) => {
-      const record = z.record(z.string(), z.unknown()).safeParse(value);
-      return record.success
-        ? Object.fromEntries(
-            Object.entries(record.data).filter(([, color]) => color !== null),
-          )
-        : value;
-    }, themeSyntaxSchema.shape.colors)
+    .preprocess(
+      (value) => {
+        const record = z.record(z.string(), z.unknown()).safeParse(value);
+        return record.success
+          ? Object.fromEntries(
+              Object.entries(record.data).filter(([, color]) => color !== null),
+            )
+          : value;
+      },
+      z.record(
+        themeSyntaxSchema.shape.colors.keyType,
+        z.union([
+          z.literal("default"),
+          themeSyntaxSchema.shape.colors.valueType,
+        ]),
+      ),
+    )
     .default({}),
   tokenColors: z.array(vsCodeTokenRuleSchema).max(4096).default([]),
 });
@@ -224,7 +238,10 @@ const FOREGROUND_SURFACES: Partial<Record<ThemeToken, ThemeToken>> = {
 };
 
 function workbenchColor(theme: VsCodeTheme, key: string): string | undefined {
-  return Object.hasOwn(theme.colors, key) ? theme.colors[key] : undefined;
+  const value = Object.hasOwn(theme.colors, key)
+    ? theme.colors[key]
+    : undefined;
+  return value === "default" ? undefined : value;
 }
 
 function vsCodeAppearance(theme: VsCodeTheme): "light" | "dark" {
@@ -253,11 +270,18 @@ function applyWorkbenchColors(
 ): void {
   for (const [token, candidates] of Object.entries(WORKBENCH_COLORS)) {
     if (!isThemeToken(token)) continue;
-    const key = candidates.find((candidate) =>
-      Object.hasOwn(theme.colors, candidate),
-    );
-    if (key === undefined) continue;
-    const value = key === "editor.background" ? canvas : theme.colors[key];
+    let key: string | undefined;
+    let resolved: string | undefined;
+    for (const candidate of candidates) {
+      const color = workbenchColor(theme, candidate);
+      if (color !== undefined) {
+        key = candidate;
+        resolved = color;
+        break;
+      }
+    }
+    if (key === undefined || resolved === undefined) continue;
+    const value = key === "editor.background" ? canvas : resolved;
     const surface = FOREGROUND_SURFACES[token];
     let base = canvas;
     if (surface) base = colors[surface] ?? canvas;
@@ -307,6 +331,7 @@ function convertVsCodeTheme(
   );
   applyWorkbenchColors(theme, colors, canvas);
   ensureReadableText(colors, canvas);
+  const visibleBorders = ensureVisibleThemeBorders(colors);
   return themeDefinitionSchema.parse({
     version: 1,
     id: crypto.randomUUID(),
@@ -317,9 +342,11 @@ function convertVsCodeTheme(
     ).slice(0, 80),
     appearance,
     base: "neutral",
-    colors,
+    colors: { ...colors, ...visibleBorders },
     syntax: {
-      colors: theme.colors,
+      colors: Object.fromEntries(
+        Object.entries(theme.colors).filter(([, color]) => color !== "default"),
+      ),
       tokenColors: theme.tokenColors,
     },
   });

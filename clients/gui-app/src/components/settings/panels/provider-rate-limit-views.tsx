@@ -34,6 +34,12 @@ import {
 } from "@/components/settings/panels/opencode-go-actions";
 import { contextUsageTone } from "@/components/chat/context-usage";
 import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
+import { grokPeriodLabel } from "@/lib/rate-limits/grok-period-label";
+import {
+  MINUTES_PER_DAY,
+  MINUTES_PER_HOUR,
+  namedCadenceForDuration,
+} from "@/lib/rate-limits/window-duration-cadence";
 import {
   formatUnavailableReason,
   resolveProviderRateLimitViewState,
@@ -47,6 +53,8 @@ import {
   useSampledNow,
 } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
   selectEarliestExpiringCodexResetCredit,
   visibleCodexResetCredits,
@@ -128,12 +136,9 @@ type OpenCodeRateLimits = Extract<
   { provider: "opencode"; available: true }
 >;
 
-const MINUTES_PER_HOUR = 60;
 // A manual reset expiring inside this window is tinted `text-destructive` in the
 // Settings list - use it or lose it.
 const RESET_CREDIT_WARNING_MS = 48 * 60 * 60 * 1000;
-const MINUTES_PER_DAY = MINUTES_PER_HOUR * 24;
-const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
 const MINUTES_PER_SESSION = MINUTES_PER_HOUR * 5;
 const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -147,15 +152,54 @@ const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
  * the well-known 5-hour rolling window both Codex and Claude use reads as
  * "Current session" - a provider-reported 6-hour window still falls back to
  * the generic "6h" form, since that isn't the same known quota.
+ *
+ * The named cadences come from `namedCadenceForDuration`, shared with the
+ * strip's `formatCompactWindowDuration`, so "Monthly" and `mo` are answers to
+ * one question. A calendar month is what makes that worth sharing: it answers
+ * "month" across the whole 28-to-31-day range, because a billing period IS a
+ * calendar month and its length depends on which one it is. A rule that
+ * recognised only exactly 30 days would read a January period as "31d" and the
+ * February one as "28d", renaming a cadence that never changed.
  */
 function formatWindowDuration(minutes: number | null): string {
   if (minutes === null || minutes <= 0) return "Usage";
-  if (minutes === MINUTES_PER_WEEK) return "Weekly";
+  // Ahead of the cadence: 5 hours IS an hour multiple, and this product name
+  // is the more specific answer for the one quota that carries it.
   if (minutes === MINUTES_PER_SESSION) return "Current session";
+  switch (namedCadenceForDuration(minutes)) {
+    case "week":
+      return "Weekly";
+    case "month":
+      return "Monthly";
+    case "day":
+      // `namedCadenceForDuration` answers `day` at EXACTLY one day, so this is
+      // the daily cadence itself and takes the page's word for it. A 2- or
+      // 14-day period names no cadence, falls past this switch, and keeps the
+      // plain `Nd` count below - `2 days` is a length, not a rhythm.
+      return "Daily";
+    case "hours":
+      return `${minutes / MINUTES_PER_HOUR}h`;
+    case null:
+      break;
+  }
   if (minutes % MINUTES_PER_DAY === 0) return `${minutes / MINUTES_PER_DAY}d`;
   if (minutes % MINUTES_PER_HOUR === 0) return `${minutes / MINUTES_PER_HOUR}h`;
   return `${minutes}m`;
 }
+
+/**
+ * Grok's period types in the provider page's vocabulary - full words, matching
+ * the "Weekly" / "Current session" rows they sit among. Reached only when the
+ * duration named no cadence.
+ *
+ * INFORMATIONAL, not a contract: `periodType` is `z.string().nullable()` on the
+ * wire, so an unseen value gets the neutral word rather than being parsed.
+ */
+const GROK_PERIOD_TYPE_PAGE_LABELS: ReadonlyMap<string, string> = new Map([
+  ["USAGE_PERIOD_TYPE_DAILY", "Daily"],
+  ["USAGE_PERIOD_TYPE_WEEKLY", "Weekly"],
+  ["USAGE_PERIOD_TYPE_MONTHLY", "Monthly"],
+]);
 
 /** $-denominated value (credits, balance, spend). */
 function formatProviderCurrency(value: number): string {
@@ -236,14 +280,21 @@ function plausibleResetTimestamp(resetsAt: number, now: number): boolean {
 }
 
 /**
- * The right-hand `detail` slot for a window row: "{percent}% used" followed
- * by the reset line (a relative countdown for a near window - "Resets in 4h
- * 7m" - or an absolute calendar date/time for a far one,
- * since "Resets in 3d" is too coarse to act on), separated by a middle dot -
- * dropped entirely when there's no reset to show. `tone` is left to
- * `MeterRow`'s own wrapping span (this slot never overrides it), unlike
- * `CodexSpendControlRow`'s reset line, which needs its own severity-driven
- * tone outside a `MeterRow`.
+ * The right-hand `detail` slot for a window row: "{percent}% used" (or
+ * "{percent}% remaining") followed by the reset line (a relative countdown
+ * for a near window - "Resets in 4h 7m" - or an absolute calendar date/time
+ * for a far one, since "Resets in 3d" is too coarse to act on), separated by
+ * a middle dot - dropped entirely when there's no reset to show. `tone` is
+ * left to `MeterRow`'s own wrapping span (this slot never overrides it),
+ * unlike `CodexSpendControlRow`'s reset line, which needs its own
+ * severity-driven tone outside a `MeterRow`.
+ *
+ * The words follow Layout's Used / Remaining setting through the strip's own
+ * `windowPercentText`, so the popover under the footer and the footer itself
+ * can never state one limit two ways (feedback: "this overlay should also
+ * respect Used vs Remaining"). Only the WORDS flip: `MeterRow`'s fill stays
+ * used-based in both modes, because the strip's mini bars do too, and a bar
+ * that inverted here alone would be two readings of one fact.
  */
 function WindowMeterDetail({
   resetsAt,
@@ -252,10 +303,12 @@ function WindowMeterDetail({
   readonly resetsAt: number | null;
   readonly usedPercent: number;
 }): ReactNode {
-  const percent = Math.round(Math.min(100, Math.max(0, usedPercent)));
+  const percentMode = useLayoutStore(
+    (state) => state.statusBar.rateLimits.percentMode,
+  );
   return (
     <span className="flex items-center gap-1">
-      <span>{percent}% used</span>
+      <span>{windowPercentText(usedPercent, percentMode)}</span>
       {resetsAt !== null ? (
         <>
           <span aria-hidden="true">·</span>
@@ -1222,24 +1275,6 @@ export function OpenCodeRateLimitView({
 }
 
 /**
- * Grok's period bar label: the billing period's cadence taken from the
- * provider's `periodType` token (e.g. `"USAGE_PERIOD_TYPE_WEEKLY"` -> "Weekly"),
- * falling back to the synthesized window's own duration when the type token is
- * absent. Only the last `_`-segment carries the cadence, so the leading
- * `USAGE_PERIOD_TYPE_` scaffolding is dropped before title-casing.
- */
-function formatGrokPeriodLabel(
-  periodType: string | null,
-  durationMinutes: number | null,
-): string {
-  if (periodType !== null) {
-    const parts = periodType.split("_").filter((part) => part.length > 0);
-    if (parts.length > 0) return titleCaseFromToken(parts[parts.length - 1]);
-  }
-  return formatWindowDuration(durationMinutes);
-}
-
-/**
  * Compact calendar date ("Jul 22, 2026") for a billing-period bound. Shared by
  * grok's billing period and Cursor's billing cycle - both render a plain epoch
  * range, so neither provider owns this formatter.
@@ -1306,7 +1341,8 @@ function GrokPeriodFallback({
  * rolling-utilization windows, so three shapes are handled:
  *
  * - `period` present -> the period usage bar, reusing the shared `RateLimitWindowRow`
- *   so its "% used · Resets <date>" reads identically to codex/claude; the bar's
+ *   so its "% used · Resets <date>" (or "% remaining", per Layout's setting)
+ *   reads identically to codex/claude; the bar's
  *   label is the period cadence ("Weekly").
  * - `period` null -> the unmeasured-period fallback (`GrokPeriodFallback`): the
  *   plan tier and the billing period's dates.
@@ -1330,10 +1366,15 @@ export function GrokRateLimitView({
     <div className="flex flex-col gap-3">
       {data.period !== null ? (
         <RateLimitWindowRow
-          label={formatGrokPeriodLabel(
-            data.periodType,
-            data.period.durationMinutes,
-          )}
+          label={grokPeriodLabel({
+            durationMinutes: data.period.durationMinutes,
+            periodType: data.periodType,
+            formatDuration: formatWindowDuration,
+            periodTypeLabels: GROK_PERIOD_TYPE_PAGE_LABELS,
+            // What `formatWindowDuration(null)` answered before this helper
+            // existed, so an unmeasured, untyped period keeps its old row.
+            fallbackLabel: "Usage",
+          })}
           window={data.period}
         />
       ) : (
@@ -1375,7 +1416,8 @@ export function GrokRateLimitView({
 /**
  * Cursor's usage detail. Structurally grok's twin - synthesized billing-cycle
  * windows plus money rows - so it reuses the same `RateLimitWindowRow`, and
- * its "% used · Resets <date>" reads identically to codex/claude.
+ * its "% used · Resets <date>" (or "% remaining", per Layout's setting) reads
+ * identically to codex/claude.
  *
  * The two bars are the two buckets Cursor's own Spending page renders -
  * "Cursor Models" (Cursor Grok + Composer) and "Other Models" (named
@@ -1534,7 +1576,7 @@ export function ProviderRateLimitBody(
             source: "Provider usage limits",
           })}
           presentation="link"
-          className="ml-1 h-auto p-0 text-current"
+          className="ml-1"
         />
       </div>
     );

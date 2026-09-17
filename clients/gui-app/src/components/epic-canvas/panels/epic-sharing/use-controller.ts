@@ -28,6 +28,7 @@ import type {
   SharingPendingAction,
 } from "./types";
 import type { AssignableCollaboratorRole } from "@/lib/epic-collaborator-roles";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import {
   buildExistingInviteIndex,
@@ -40,9 +41,32 @@ import {
 } from "@/lib/epic-invites";
 import { toast } from "sonner";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 const EMPTY_DIRECT_USERS: ReadonlyArray<EpicCollaboratorView> = [];
 const EMPTY_TEAMS: ReadonlyArray<EpicTeamCollaboratorView> = [];
+
+/**
+ * The cloud verdict AS OF NOW, read imperatively at gesture time.
+ *
+ * The rendered affordances are already gated on the subscribed value, and for a
+ * button that is enough - a render moves it out of reach. This is for the gap
+ * that a render cannot close: the revoke dialog and the queued-invite send are
+ * both unbounded pauses with a human in them, and `unverified` arrives
+ * asynchronously (a wake, an authn outage, a refused refresh). The session that
+ * opened the confirmation is not necessarily the one that confirms it, and by
+ * then the handler is running off a closure the re-render never touched.
+ *
+ * `useAuthStore.getState()` rather than a subscription on purpose: subscribing
+ * would re-run these handlers' identity on every auth transition for a value
+ * only the gesture needs, and the point is precisely to read LATER than render.
+ */
+function readCloudAuthorizedNow(): boolean {
+  return authorizesCloudCapability(useAuthStore.getState().status);
+}
 
 interface SharingPanelState {
   readonly inviteInput: string;
@@ -112,8 +136,20 @@ export function useEpicSharingPanelController(
   epicId: string,
 ): SharingPanelController {
   const currentRole = useEpicPermissionRole();
-  const isOwner = currentRole === "owner";
-  const canInvitePeople = currentRole === "owner" || currentRole === "editor";
+  // Every affordance below is a CLOUD grant operation - `epic.grantAccess`,
+  // `epic.batchUpdateRoles`, `epic.revokeCollaborator`, `epic.sendInvites` all
+  // act on the account, not on this device. The role says what this user is
+  // entitled to do; the verdict says whether this session may act on that
+  // entitlement at all, and the panel needs BOTH. Role alone kept the whole
+  // panel live under `unverified`, which is the widened admission reaching a
+  // surface that was only ever gated on the first question.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const { isOwner, canInvitePeople } = buildSharingCapabilities({
+    currentRole,
+    cloudAuthorized,
+  });
   const shareableTeams = useEpicShareableTeams();
 
   // The Epic SESSION's client, and the mutations below moved with it: the
@@ -125,6 +161,7 @@ export function useEpicSharingPanelController(
   const collaboratorsHostClient = useEpicSessionHostClient();
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
     client: collaboratorsHostClient,
+    enabled: cloudAuthorized,
     poll: true,
     staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
   });
@@ -132,7 +169,15 @@ export function useEpicSharingPanelController(
     collaboratorsQuery.query.dataUpdatedAt > 0
       ? collaboratorsQuery.query.dataUpdatedAt
       : null;
-  const handleRefresh = () => collaboratorsQuery.query.refetch();
+  // Re-read at gesture time, not from the render that mounted the panel. This
+  // panel is long-lived - it is a canvas tile, not a dialog - so the verdict
+  // can be withdrawn while it sits open, and `refetch()` on a disabled query
+  // still dispatches: TanStack treats an explicit refetch as a caller override
+  // of `enabled`, so the declarative gate above does NOT cover this button.
+  const handleRefresh = (): Promise<unknown> => {
+    if (!readCloudAuthorizedNow()) return Promise.resolve(undefined);
+    return collaboratorsQuery.query.refetch();
+  };
 
   const batchUpdateRoles = useEpicBatchUpdateRoles();
   const revokeCollaborator = useEpicRevokeCollaborator();
@@ -155,6 +200,7 @@ export function useEpicSharingPanelController(
   const loadState = buildSharingAccessLoadState(
     isLoading,
     collaboratorsQuery.isError,
+    cloudAuthorized,
   );
   const directOwnerCount = directUsers.reduce(
     (count, collaborator) =>
@@ -185,6 +231,7 @@ export function useEpicSharingPanelController(
   const handleSendInvites = async () => {
     if (!canInvitePeople || state.queuedInvites.length === 0 || isInvitePending)
       return;
+    if (!readCloudAuthorizedNow()) return;
 
     let result;
     try {
@@ -233,6 +280,7 @@ export function useEpicSharingPanelController(
     newRole: AssignableCollaboratorRole,
   ) => {
     if (!isOwner) return;
+    if (!readCloudAuthorizedNow()) return;
     if (collaborator.userId === null) return;
     dispatch({
       type: "set-pending-action",
@@ -259,6 +307,7 @@ export function useEpicSharingPanelController(
     newRole: AssignableCollaboratorRole,
   ) => {
     if (!isOwner) return;
+    if (!readCloudAuthorizedNow()) return;
     if (team.kind !== "shared") return;
     dispatch({
       type: "set-pending-action",
@@ -287,6 +336,7 @@ export function useEpicSharingPanelController(
 
   const handleShareTeam = (team: TeamRow) => {
     if (!isOwner) return;
+    if (!readCloudAuthorizedNow()) return;
     if (team.kind !== "unshared") return;
     const role = state.teamRolesById[team.teamId] ?? "editor";
     dispatch({
@@ -319,6 +369,8 @@ export function useEpicSharingPanelController(
 
   const handleRevokeConfirm = () => {
     if (!isOwner) return;
+    // The dialog outlives the render that opened it; see `readCloudAuthorizedNow`.
+    if (!readCloudAuthorizedNow()) return;
     const target = state.revokeTarget;
     if (target === null) return;
     if (target.kind === "user") {
@@ -372,7 +424,16 @@ export function useEpicSharingPanelController(
 
   return {
     canInvitePeople,
-    showTeams: isLoading || collaboratorsQuery.isError || teamRows.length > 0,
+    // `loadState === "unauthorized"` belongs here beside the other two
+    // non-`ready` states, or the section that carries the "can't be checked"
+    // message is hidden by the very condition that produces it: `teamRows` is
+    // empty precisely because the grant list was never fetched, so a
+    // rows-only gate would silently drop the explanation.
+    showTeams:
+      isLoading ||
+      collaboratorsQuery.isError ||
+      loadState === "unauthorized" ||
+      teamRows.length > 0,
     inviteCardProps: {
       inviteInput: state.inviteInput,
       inputError,
@@ -401,6 +462,7 @@ export function useEpicSharingPanelController(
       isLoading,
       collaboratorsQuery.isError,
       directUsers.length,
+      cloudAuthorized,
     ),
     peopleProps: {
       loadState,
@@ -418,12 +480,13 @@ export function useEpicSharingPanelController(
         });
       },
     },
-    teamHint: buildTeamHint(
+    teamHint: buildTeamHint({
       isLoading,
-      collaboratorsQuery.isError,
-      teams.length,
-      isOwner ? shareableTeams.length : 0,
-    ),
+      isError: collaboratorsQuery.isError,
+      sharedCount: teams.length,
+      availableCount: isOwner ? shareableTeams.length : 0,
+      cloudAuthorized,
+    }),
     teamsProps: {
       loadState,
       rows: teamRows,
@@ -555,21 +618,68 @@ function buildPeopleHint(
   isLoading: boolean,
   isError: boolean,
   count: number,
+  cloudAuthorized: boolean,
 ): string {
   if (isLoading) return "Loading collaborators...";
   if (isError) return "Couldn't load collaborators.";
+  // Ahead of the count, because the count is the lie. An unauthorized session
+  // never dispatched the list, so `count` is 0 for every epic - including one
+  // shared with a dozen people - and "0 people have direct access." states that
+  // as fact.
+  if (!cloudAuthorized)
+    return "Sign-in couldn't be confirmed, so access can't be checked.";
   const subject = count === 1 ? "person has" : "people have";
   return `${count} ${subject} direct access.`;
 }
 
-function buildTeamHint(
-  isLoading: boolean,
-  isError: boolean,
-  sharedCount: number,
-  availableCount: number,
-): string {
-  if (isLoading) return "Loading teams...";
-  if (isError) return "Couldn't load teams.";
+interface SharingCapabilities {
+  /** Owner-only affordances: team sharing, role changes, revoke. */
+  readonly isOwner: boolean;
+  /** Owner AND editor may invite. */
+  readonly canInvitePeople: boolean;
+}
+
+/**
+ * Both capability answers, derived from BOTH questions at once.
+ *
+ * Kept together and out of the hook body because they are one decision made
+ * twice, not two: each is `role && verdict`, and a later affordance that
+ * consulted only the role is exactly the widened-admission defect this panel
+ * was gated for. Reading them from one helper makes the pairing the obvious
+ * thing to copy.
+ */
+function buildSharingCapabilities(input: {
+  readonly currentRole: PermissionRole | null;
+  readonly cloudAuthorized: boolean;
+}): SharingCapabilities {
+  const { currentRole, cloudAuthorized } = input;
+  return {
+    isOwner: currentRole === "owner" && cloudAuthorized,
+    canInvitePeople:
+      (currentRole === "owner" || currentRole === "editor") && cloudAuthorized,
+  };
+}
+
+/**
+ * Object-shaped rather than positional, like {@link buildTeamPendingState}:
+ * five same-typed arguments in a row (two booleans, two numbers, a boolean)
+ * are silently swappable at the call site, and swapping the two counts still
+ * type-checks while inverting which hint the user reads.
+ */
+function buildTeamHint(input: {
+  readonly isLoading: boolean;
+  readonly isError: boolean;
+  readonly sharedCount: number;
+  readonly availableCount: number;
+  readonly cloudAuthorized: boolean;
+}): string {
+  const { sharedCount, availableCount, cloudAuthorized } = input;
+  if (input.isLoading) return "Loading teams...";
+  if (input.isError) return "Couldn't load teams.";
+  // Same as the people hint: both counts below are zero for want of a request,
+  // and "No teams available." is the false statement that falls out of that.
+  if (!cloudAuthorized)
+    return "Sign-in couldn't be confirmed, so team access can't be checked.";
   if (sharedCount > 0) {
     const subject = sharedCount === 1 ? "team has" : "teams have";
     return `${sharedCount} ${subject} access.`;
@@ -605,9 +715,16 @@ function computeIsLoading(query: {
 function buildSharingAccessLoadState(
   isLoading: boolean,
   isError: boolean,
+  cloudAuthorized: boolean,
 ): SharingAccessLoadState {
   if (isLoading) return "loading";
   if (isError) return "error";
+  // Last, not first: `loading` and `error` are both states this query can only
+  // reach by having RUN, so if either is set the verdict was held when it did
+  // and their copy is the more specific truth. Only a query that never
+  // dispatched falls through to here, and `ready` would announce its empty
+  // result as an answer.
+  if (!cloudAuthorized) return "unauthorized";
   return "ready";
 }
 

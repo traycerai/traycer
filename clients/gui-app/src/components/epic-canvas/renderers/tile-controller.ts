@@ -1,6 +1,6 @@
+import type { BrowserViewportController } from "@/components/browser-tile/use-browser-viewport";
 import type { SyntheticEvent } from "react";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
-import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 
 /**
@@ -13,7 +13,6 @@ export interface TileChromeCapabilities {
   readonly forward: boolean;
   readonly reload: boolean;
   readonly zoom: boolean;
-  readonly viewportPreset: boolean;
   readonly devtools: boolean;
   readonly find: boolean;
   readonly siteInfo: boolean;
@@ -21,6 +20,7 @@ export interface TileChromeCapabilities {
 }
 
 export interface TileController {
+  readonly viewport: BrowserViewportController | null;
   readonly capabilities: TileChromeCapabilities;
   /**
    * The session's credential-sharing profile. `isolated` is a private
@@ -38,7 +38,6 @@ export interface TileController {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
-  readonly viewportPreset: BrowserViewViewportPresetId;
   readonly disabled: boolean;
   readonly zoomLocked: boolean;
   readonly annotation: BrowserAnnotationSessionController | null;
@@ -58,9 +57,6 @@ export interface TileController {
   readonly onZoomOut: () => void;
   readonly onZoomIn: () => void;
   readonly onResetZoom: () => void;
-  readonly onViewportPresetChange: (
-    preset: BrowserViewViewportPresetId,
-  ) => void;
   readonly onOpenDevTools: () => void;
   /**
    * "Clear cookies for this site" (spec §6.5): removes this tile's registrable
@@ -80,7 +76,6 @@ export const PRIMARY_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   forward: true,
   reload: true,
   zoom: true,
-  viewportPreset: true,
   devtools: true,
   find: true,
   siteInfo: true,

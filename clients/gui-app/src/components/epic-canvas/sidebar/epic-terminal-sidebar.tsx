@@ -150,7 +150,7 @@ function TerminalsPanelBodyLive(props: {
 
   return (
     <SidebarContent className="min-h-0">
-      <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+      <SidebarGroup className="min-h-0 flex-1">
         <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
           <TerminalSidebarBody
             panel={panel}
@@ -307,8 +307,8 @@ function TerminalRow(props: TerminalRowProps) {
     durable,
     authority,
   });
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
   );
   const label = actions.label;
   const [isRenaming, setIsRenaming] = useState(false);
@@ -441,7 +441,8 @@ function TerminalRow(props: TerminalRowProps) {
                   onChange={(event) => setRenameValue(event.target.value)}
                   onBlur={commitRename}
                   onKeyDown={handleRenameKeyDown}
-                  className="h-7 flex-1 min-w-0 px-1 text-ui-sm"
+                  className="h-7 flex-1 min-w-0 px-1"
+                  size="sm"
                 />
               </div>
             ) : (
@@ -474,12 +475,13 @@ function TerminalRow(props: TerminalRowProps) {
                       </span>
                     ) : null}
                   </div>
-                  {showNavigatorResourceStats ? (
+                  {navigatorResourceMetrics.length > 0 ? (
                     <OwnerResourceChip
                       epicId={epicId}
                       kind="terminal"
                       ownerId={session.sessionId}
                       hostId={hostId}
+                      metrics={navigatorResourceMetrics}
                       className={undefined}
                     />
                   ) : null}

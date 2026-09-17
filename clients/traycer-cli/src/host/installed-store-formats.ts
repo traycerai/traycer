@@ -8,7 +8,7 @@
  * rather than fetching them, which is what lets its own suites run against a
  * temp host home without ever touching the developer's real `~/.traycer`.
  */
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
 import { readExtractedStoreFormats } from "../installer/version-sidecar";
 import {
@@ -88,12 +88,34 @@ export async function readInstalledFloorOperands(
  * hand-edited `install.json` looks like on the machine that most needs this
  * command to work.
  */
-async function readInstalledDeclaration(
+export async function readInstalledDeclaration(
   record: HostInstallRecord,
   environment: Environment,
   logger: ILogger,
 ): Promise<HostStoreFormats | null> {
+  // Only an ABSOLUTE executable path names a runtime directory. The record
+  // schema admits any string, and `dirname("")` is `"."` - so a truncated or
+  // hand-edited `install.json` would make this read `version.json` out of the
+  // CLI's CURRENT WORKING DIRECTORY and report a stray file as what the
+  // installed tree declares. That is not a missing declaration, it is an
+  // invented one, and it is the operand the floor clears moves with: a
+  // fabricated `chatDb: 8` clears a target the stores on disk would refuse.
+  //
+  // The host's own reader guards this identically (`host-status-install.ts`);
+  // this is the CLI counterpart, and every installed-side read goes through
+  // here so the two ends cannot diverge.
   try {
+    // INSIDE the try, deliberately. A record whose `executablePath` is absent
+    // is outside `HostInstallRecord`'s type but is exactly what a truncated
+    // `install.json` looks like, and `isAbsolute(undefined)` throws - the
+    // same throw the catch below already existed to absorb.
+    if (!isAbsolute(record.executablePath)) {
+      logger.warn(
+        "Host store-format floor: the install record's executable path is not absolute, so the installed tree declares nothing",
+        { environment },
+      );
+      return null;
+    }
     return await readExtractedStoreFormats(
       dirname(record.executablePath),
       environment,

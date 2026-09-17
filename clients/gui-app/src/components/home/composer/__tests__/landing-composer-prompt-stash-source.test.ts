@@ -169,6 +169,7 @@ function useLandingPromptStashController(args: {
     readHashImage: () => Promise.resolve(null),
     source,
     destination,
+    hostId: null,
   });
 }
 

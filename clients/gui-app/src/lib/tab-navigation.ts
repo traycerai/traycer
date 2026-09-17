@@ -17,6 +17,7 @@ import {
   existingEpicTabIntent,
   existingEpicTabIntentWithNestedFocus,
   historyTabIntent,
+  homeTabIntent,
   openEpicTabIntent,
   settingsTabIntent,
   type EpicPostResolvePreparation,
@@ -38,10 +39,13 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import {
+  isOpenLandingDraft,
   newestLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
+import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
 import {
   tabCommandCoordinator,
   type CoordinatedTabActivation,
@@ -66,6 +70,7 @@ export {
   existingEpicTabIntent,
   existingEpicTabIntentWithNestedFocus,
   historyTabIntent,
+  homeTabIntent,
   newDraftTabIntent,
   openEpicFromListIntent,
   openExactEpicTabIntent,
@@ -286,7 +291,24 @@ function intentRef(intent: TabNavigationIntent): TabRef {
       return { kind: "history", id: "history" };
     case "settings":
       return { kind: "settings", id: "settings" };
+    case "home":
+      return HOME_TAB_REF;
   }
+}
+
+/**
+ * Home's ref when Home is the active surface, `null` otherwise.
+ *
+ * Home holds `activeItemId === null`, which the item lookups below read as "no
+ * active item" and answer with `null` - the same answer they give an empty
+ * strip. Every seam that resolves the CURRENT surface (route backing, focus,
+ * re-activation) therefore has to consult this first, or a repair issued while
+ * Home is up would aim at `/` instead of at `/home`.
+ */
+function homeRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
+  return layout.activeItemId === null && isHomeTabEnabled()
+    ? HOME_TAB_REF
+    : null;
 }
 
 function refsEqual(left: TabRef | null, right: TabRef): boolean {
@@ -305,6 +327,8 @@ function currentLayout(): PersistedTabStripLayout {
 }
 
 function backingRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
+  const home = homeRefOfLayout(layout);
+  if (home !== null) return home;
   const active = layout.items.find((item) => item.id === layout.activeItemId);
   if (active === undefined) return null;
   if (active.kind === "tab") return active.ref;
@@ -320,6 +344,8 @@ function backingRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
  * not a no-op.
  */
 function focusedRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
+  const home = homeRefOfLayout(layout);
+  if (home !== null) return home;
   const active = layout.items.find((item) => item.id === layout.activeItemId);
   if (active === undefined) return null;
   if (active.kind === "tab") return active.ref;
@@ -331,6 +357,7 @@ function activeItemContainsRef(
   layout: PersistedTabStripLayout,
   ref: TabRef,
 ): boolean {
+  if (ref.kind === "home") return homeRefOfLayout(layout) !== null;
   const active = layout.items.find((item) => item.id === layout.activeItemId);
   if (active === undefined) return false;
   if (active.kind === "tab") return refsEqual(active.ref, ref);
@@ -400,7 +427,20 @@ function routedTabTarget(pathname: string): RoutedTabTarget | null {
   if (isHistoryPath(pathname)) {
     return { ref: { kind: "history", id: "history" }, epicId: null };
   }
+  // Gated on the flag, so with Home off `/home` is an unroutable path that
+  // corrects back to whatever the strip is showing - the same treatment any
+  // other unknown route gets. The route guard redirects it first; this is the
+  // backstop for a location that reaches the resolver another way.
+  if (isHomePath(pathname) && isHomeTabEnabled()) {
+    return { ref: HOME_TAB_REF, epicId: null };
+  }
   return null;
+}
+
+function isOpenLandingDraftId(draftId: string): boolean {
+  return useLandingDraftStore
+    .getState()
+    .drafts.some((draft) => draft.id === draftId && isOpenLandingDraft(draft));
 }
 
 function intentForRef(
@@ -425,12 +465,10 @@ function intentForRef(
     });
   }
   if (ref.kind === "draft") {
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === ref.id);
-    return exists ? draftTabIntent(ref.id) : null;
+    return isOpenLandingDraftId(ref.id) ? draftTabIntent(ref.id) : null;
   }
   if (ref.kind === "history") return historyTabIntent();
+  if (ref.kind === "home") return homeTabIntent();
   return settingsTabIntent(settingsSectionFromPath(pathname));
 }
 
@@ -483,10 +521,10 @@ function refIsMaterialized(ref: TabRef): boolean {
     return useEpicCanvasStore.getState().tabsById[ref.id] !== undefined;
   }
   if (ref.kind === "draft") {
-    return useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === ref.id);
+    return isOpenLandingDraftId(ref.id);
   }
+  // Home has no source record to materialize: the flag is the whole condition.
+  if (ref.kind === "home") return isHomeTabEnabled();
   return useTabsStore.getState().systemTabs[ref.kind] !== null;
 }
 
@@ -985,6 +1023,7 @@ export class TabNavigationController {
     if (intent.kind === "history" || intent.kind === "settings") {
       return systemActivationTarget(intent);
     }
+    if (intent.kind === "home") return { kind: "home" };
     return { kind: "ref", ref: intentRef(intent) };
   }
 
@@ -1003,7 +1042,10 @@ export class TabNavigationController {
         : null;
     }
     if (requested.kind === "new-draft") {
-      return ref.kind === "draft" ? draftTabIntent(ref.id) : null;
+      if (ref.kind !== "draft") return null;
+      if (requested.groupId !== undefined)
+        useTabsStore.getState().setTabGroup(ref, requested.groupId);
+      return draftTabIntent(ref.id);
     }
     if (requested.kind === "open-epic") {
       if (ref.kind !== "epic") return null;
@@ -1510,7 +1552,7 @@ export class TabNavigationController {
     const routed = routedTabTarget(location.pathname);
     if (routed === null) {
       if (isLandingPath(location.pathname)) {
-        if (historyStep) this.resolveSteppedLanding();
+        if (historyStep) this.resolveSteppedLanding(location, navigate);
         return;
       }
       this.issueLandingCorrection(location, navigate);
@@ -1533,7 +1575,28 @@ export class TabNavigationController {
       case "history":
       case "settings":
         this.resolveExternalSystem(location, ref.kind, navigate);
+        return;
+      case "home":
+        this.resolveExternalHome(location, navigate);
     }
+  }
+
+  /**
+   * `/home` arrived from outside this controller (a deep link, a restored
+   * location, a back step). Activating is a no-op when Home already holds the
+   * selection, and `activateExternalTarget` swallows the coordinator's
+   * re-entrancy refusal the same way every other arm here does.
+   */
+  private resolveExternalHome(
+    location: TabNavigationLocation,
+    navigate: NavigateFn,
+  ): void {
+    const activation = this.activateExternalTarget({ kind: "home" });
+    if (activation === null) {
+      this.issueLandingCorrection(location, navigate);
+      return;
+    }
+    this.rememberRoute(HOME_TAB_REF, homeTabIntent(), location.search);
   }
 
   /**
@@ -1671,10 +1734,7 @@ export class TabNavigationController {
     navigate: NavigateFn,
   ): void {
     const ref: TabRef = { kind: "draft", id: draftId };
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === draftId);
-    if (!exists) {
+    if (!isOpenLandingDraftId(draftId)) {
       this.issueLandingCorrection(location, navigate);
       return;
     }
@@ -1719,7 +1779,42 @@ export class TabNavigationController {
    * the one Home instead of stacking a new draft per press; only a session that
    * has never had one mints, through the same activation `/draft/new` runs.
    */
-  private resolveSteppedLanding(): void {
+  private resolveSteppedLanding(
+    location: TabNavigationLocation,
+    navigate: NavigateFn,
+  ): void {
+    // With the Home tab on, `/` IS Home, so a step back onto the landing selects
+    // Home rather than minting a draft - otherwise every back press to `/` would
+    // leave a new Start Page behind.
+    //
+    // The URL then has to follow, which the draft arm never needed: `/` and the
+    // landing draft surface are the same place, while `/` and `/home` are not.
+    // Leaving the two disagreeing would render Home under a `/` URL, and
+    // `isProjectionCoherent` - which requires `/home` whenever Home holds the
+    // selection - would refuse to schedule ANY desktop layout write until the
+    // next navigation that lands on something else. That is not an exotic
+    // state: the phone shell boots its WebView at `/` and keeps it as the first
+    // history entry, so the system back gesture from Home lands here every
+    // time. A `replace` correction, the same shape `resolveDraftEntry` issues,
+    // swaps that entry for `/home` and leaves the next back doing exactly what
+    // it did before (exiting).
+    if (isHomeTabEnabled()) {
+      if (this.activateExternalTarget({ kind: "home" }) === null) return;
+      const intent = homeTabIntent();
+      this.rememberRoute(HOME_TAB_REF, intent, location.search);
+      this.issueCorrection(navigate, {
+        navigation: {
+          destination: destinationForRef(HOME_TAB_REF),
+          intent,
+          ref: HOME_TAB_REF,
+          options: { ...tabRouteOptions(intent), replace: true },
+        },
+        kind: "external-replace",
+        attempt: 0,
+        correctionKey: locationIdentity(location),
+      });
+      return;
+    }
     this.activateExternalTarget({
       kind: "draft",
       draftId: newestLandingDraftId(),

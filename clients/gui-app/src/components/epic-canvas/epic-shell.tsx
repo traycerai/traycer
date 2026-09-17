@@ -9,6 +9,8 @@ import { use, useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import { WorkspaceFileIconSpriteSheet } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
+import { useEpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
+import { EpicDurabilityRemedies } from "@/components/epic-canvas/panels/epic-durability-remedies";
 import { EpicWriteCommandsEntryPoint } from "@/components/epic-canvas/panels/epic-write-commands-entry-point";
 import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
@@ -210,19 +212,46 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
       className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground max-md:hidden"
     >
       {props.sessionReady ? (
-        <>
-          <EpicConnectionPill epicId={props.epicId} />
-          {/* Beside the pill, not inside it: the pill claims, this one acts. */}
-          <EpicWriteCommandsEntryPoint />
-        </>
+        <EpicShellSessionStatus
+          epicId={props.epicId}
+          snapshotLoaded={props.snapshotLoaded}
+        />
       ) : null}
       {props.snapshotLoaded ? (
         <>
           <EpicUsageEntryPoint epicId={props.epicId} />
+          {/* The durability plane's only in-row presence: its paused-only
+              actions. Its statement is the connection pill's tooltip. */}
+          <EpicDurabilityRemedies />
           <EpicSweepAction epicId={props.epicId} tabId={props.tabId} />
         </>
       ) : null}
     </output>
+  );
+}
+
+/**
+ * The session-bound half of the status row. Its own component because the
+ * durability plane is read off the open-epic store, which exists only once
+ * the session has resolved - the loading arm renders the row without it.
+ */
+function EpicShellSessionStatus(props: {
+  readonly epicId: string;
+  readonly snapshotLoaded: boolean;
+}) {
+  const durability = useEpicDurabilityPlane();
+  return (
+    <>
+      <EpicConnectionPill
+        epicId={props.epicId}
+        // Gated on the snapshot, as the old badge was: before it loads the
+        // store's legs are unset, and "Storage status unknown" for the second
+        // an epic takes to open is a warning about nothing.
+        durability={props.snapshotLoaded ? durability : null}
+      />
+      {/* Beside the pill, not inside it: the pill claims, this one acts. */}
+      <EpicWriteCommandsEntryPoint />
+    </>
   );
 }
 

@@ -3,6 +3,7 @@
  */
 import { vi, type Mock } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { RefObject } from "react";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -93,6 +94,7 @@ export function makeSource(
         identity?: string;
         surface?: PromptStashSurface;
         clearIfUnchanged?: (token: PromptStashSourceToken) => boolean;
+        annotations?: ReadonlyArray<BrowserAnnotationRecord>;
       }
     | undefined,
 ): MutableSource {
@@ -103,6 +105,7 @@ export function makeSource(
 
   const capture: Mock<PromptStashSourceAdapter["capture"]> = vi.fn(
     (): PromptStashSourceSnapshot | null => ({
+      annotations: options?.annotations ?? [],
       content,
       token: { surface, identity, revision },
     }),
@@ -341,6 +344,7 @@ export function hookArgs(partial: {
   active?: boolean;
   disabled?: boolean;
   readHashImage?: (hash: string) => Promise<Uint8Array<ArrayBuffer> | null>;
+  hostId?: string | null;
 }) {
   return {
     active: partial.active ?? true,
@@ -349,5 +353,6 @@ export function hookArgs(partial: {
     readHashImage: partial.readHashImage ?? (() => Promise.resolve(null)),
     source: partial.source ?? makeSource({ content: emptyDoc() }),
     destination: partial.destination,
+    hostId: partial.hostId ?? null,
   };
 }

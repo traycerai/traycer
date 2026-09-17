@@ -16,7 +16,7 @@ import {
   type NetworkHeartbeat,
   waitForWriterDrain,
 } from "../fetch-resource";
-import { CliError } from "../../runner/errors";
+import { CLI_ERROR_CODES, cliError, CliError } from "../../runner/errors";
 import {
   closeFaultServer,
   sha256,
@@ -468,6 +468,49 @@ describe("downloadToFile resume and integrity policy", () => {
       ).rejects.toBeInstanceOf(CliError);
 
       expect(readFileSync(destPath, "utf8")).toBe("abc");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a resumable partial when staging authentication fails",
+    async () => {
+      const destPath = join(workDir, "auth-failure.tar.gz");
+      writeFileSync(destPath, "abc");
+      globalThis.fetch = vi.fn(async () => {
+        throw cliError({
+          code: CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
+          message: "staging release authentication required",
+          details: null,
+          exitCode: 1,
+        });
+      }) as typeof globalThis.fetch;
+
+      await expect(
+        settleRetryTimers(downloadToFile(downloadOptions(destPath, "abcdef"))),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
+      });
+
+      expect(readFileSync(destPath, "utf8")).toBe("abc");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "deletes the partial when the streaming size cap is exceeded",
+    async () => {
+      const destPath = join(workDir, "oversized.tar.gz");
+      writeFileSync(destPath, "abc");
+      globalThis.fetch = vi.fn(async () =>
+        response("a".repeat(1031), 200, {}),
+      ) as typeof globalThis.fetch;
+
+      await expect(
+        settleRetryTimers(downloadToFile(downloadOptions(destPath, "abcdef"))),
+      ).rejects.toBeInstanceOf(CliError);
+
+      expect(() => readFileSync(destPath, "utf8")).toThrow();
     },
     SETTLE_RETRY_TEST_TIMEOUT_MS,
   );
@@ -1067,4 +1110,62 @@ describe("HTTP client shutdown", () => {
     // the next invocation resumes them.
     expect(readFileSync(destPath, "utf8")).toBe("abc");
   });
+});
+
+describe("a failing body cancellation cannot replace the HTTP status diagnosis", () => {
+  // `httpStatusFailure` releases the unread socket BEFORE it constructs the
+  // error it returns, so `throw await httpStatusFailure(...)` threw whatever
+  // `cancel()` rejected with and the status the caller needed was never built.
+  // `cancel()` rejects when the underlying connection has already errored -
+  // exactly the condition a 5xx with an unread body arrives under - so this is
+  // the reachable case, not a contrived one.
+  //
+  // The CLI keeps its own `cancelResponseBody` rather than importing the shared
+  // one; this pins that the copy honours the same non-throwing contract, since
+  // a same-named helper that can throw is worse than no helper at all.
+  function bodyThatFailsToCancel(): ReadableStream<Uint8Array> {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("upstream is unhappy"));
+      },
+      cancel() {
+        throw new Error("cancel failed: connection already gone");
+      },
+    });
+  }
+
+  it(
+    "reports the 500 after the attempts are exhausted, not the cancellation",
+    async () => {
+      vi.useFakeTimers();
+      globalThis.fetch = vi.fn(async () =>
+        response(bodyThatFailsToCancel(), 500, {}),
+      );
+
+      const outcome = await settleRetryTimers(
+        fetchText(RESOURCE_URL, {
+          signal: null,
+          onHeartbeat: (heartbeat: NetworkHeartbeat) => {
+            if (heartbeat.phase === "backoff") retryBackoffSignal.notify();
+          },
+        }).then(
+          () => ({ kind: "ok" as const }),
+          (error: unknown) => ({ kind: "error" as const, error }),
+        ),
+      );
+
+      expect(outcome.kind).toBe("error");
+      if (outcome.kind === "error") {
+        const error = outcome.error;
+        expect(error).toBeInstanceOf(CliError);
+        if (error instanceof CliError) {
+          // The status is the diagnosis the user needs; the cleanup failure is
+          // noise that used to take its place.
+          expect(error.message).toContain("returned 500");
+          expect(error.message).not.toContain("cancel failed");
+        }
+      }
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 });

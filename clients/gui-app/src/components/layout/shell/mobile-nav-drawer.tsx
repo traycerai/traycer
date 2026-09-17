@@ -1,6 +1,12 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { LogOut, Pin, Settings, SquareArrowOutUpRight } from "lucide-react";
+import {
+  House,
+  LogOut,
+  Pin,
+  Settings,
+  SquareArrowOutUpRight,
+} from "lucide-react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -8,6 +14,10 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import {
+  historyRowProvenance,
+  historyRowProvenanceLabel,
+} from "@/components/epics/history-row-provenance";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
@@ -22,8 +32,10 @@ import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
 import {
   activateTabIntent,
+  homeTabIntent,
   openPhaseMigrationIntent,
 } from "@/lib/tab-navigation";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
@@ -47,10 +59,11 @@ const LIST_FADE_CLASS =
  * that the desktop header carries (Settings, identity / account) into a single
  * menu, plus a "New task" entry and an inline recent task list (the same
  * `useHistoryQuery` source the landing page renders), since the tab strip and
- * header right-cluster are hidden on phones. Manage subscription and Sign out
- * ride the identity row as icons; notifications stay in the header next to the
- * other status controls (`MobileNotificationsButton`). Every action reuses the
- * same helper the desktop surfaces call. Mounted only on mobile (see
+ * header right-cluster are hidden on phones. Sign out rides the identity row as
+ * an icon, joined by Manage subscription on every shell EXCEPT the installed
+ * mobile app (see the identity row below); notifications stay in the header
+ * next to the other status controls (`MobileNotificationsButton`). Every action
+ * reuses the same helper the desktop surfaces call. Mounted only on mobile (see
  * AppShell), so desktop is untouched.
  */
 export function MobileNavDrawer(): ReactNode {
@@ -62,6 +75,7 @@ export function MobileNavDrawer(): ReactNode {
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
   const installedApp = isMobileApp();
@@ -72,6 +86,10 @@ export function MobileNavDrawer(): ReactNode {
   const handleNewTask = () => {
     close();
     activateTabIntent(navigate, openNewEpicIntent(), undefined);
+  };
+  const handleHome = () => {
+    close();
+    activateTabIntent(navigate, homeTabIntent(), undefined);
   };
   const handleSettings = () => {
     close();
@@ -100,12 +118,17 @@ export function MobileNavDrawer(): ReactNode {
   // differs, so it is built once rather than duplicated per branch.
   const panel = (
     <>
-      {/* Identity plus the two account actions as icons beside the name -
-            the same pair the desktop `UserMenu` offers behind the avatar, both
-            one tap here. Manage subscription takes the slot the notification
-            bell vacated when it moved to the header.
-
-            `px-5` is the nav rows' effective inset below (`p-2` + `px-3`), so
+      {/* Identity plus the account actions as icons beside the name - the same
+            pair the desktop `UserMenu` offers behind the avatar, both one tap
+            here. Manage subscription took the slot the notification bell
+            vacated when it moved to the header, and it is WITHHELD from the
+            installed app: App Store review guideline 3.1.1 forbids linking out
+            to a subscription that cannot be bought through Apple, and this
+            link opens exactly that page. It stays for the other shell that
+            renders this drawer - a narrow DESKTOP window, which is why this is
+            a branch rather than a deletion, and why it reads the product flag
+            rather than the viewport. Sign out is unaffected. */}
+      {/* `px-5` is the nav rows' effective inset below (`p-2` + `px-3`), so
             the avatar shares a left edge with their glyphs; no bottom padding
             beyond `pb-2` because the `nav` supplies the rest of the gap. */}
       {profile === null ? null : (
@@ -126,25 +149,26 @@ export function MobileNavDrawer(): ReactNode {
               {profile.email}
             </span>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Manage subscription"
-            data-testid="mobile-nav-manage-subscription"
-            onClick={handleManageSubscription}
-          >
-            <SquareArrowOutUpRight className="size-4" />
-          </Button>
+          {installedApp ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Manage subscription"
+              data-testid="mobile-nav-manage-subscription"
+              onClick={handleManageSubscription}
+            >
+              <SquareArrowOutUpRight className="size-4" />
+            </Button>
+          )}
           {/* Opens the confirm rather than signing out: unlike its
                 neighbours this control doesn't `close()` first, so cancelling
                 puts the user back in the drawer where they were. */}
           <Button
             type="button"
-            variant="ghost"
+            variant="destructive-ghost"
             size="icon-sm"
             aria-label="Sign out"
-            className="text-destructive hover:text-destructive"
             data-testid="mobile-nav-sign-out"
             onClick={() => {
               setSignOutOpen(true);
@@ -157,6 +181,22 @@ export function MobileNavDrawer(): ReactNode {
       {/* "New task" sits outside the scroll container so it stays pinned
             while the recent-task list below it scrolls. */}
       <nav className="flex min-h-0 flex-1 flex-col p-2">
+        {/* Above "New task": on the phone this row is the whole tab strip's
+            job - the one way back to what is happening across every task. It
+            stays a flat ghost row so the create action keeps the drawer's only
+            resting fill. */}
+        {homeTabEnabled ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(ROW_CLASS, "mb-1 shrink-0")}
+            data-testid="mobile-nav-home"
+            onClick={handleHome}
+          >
+            <House className="size-4" />
+            <span className="flex-1 text-left">Home</span>
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="default"
@@ -167,7 +207,7 @@ export function MobileNavDrawer(): ReactNode {
           // Visually a compact h-9 pill, but the tap target must still meet
           // the 44px touch floor: the ::after overlay extends the hit area
           // invisibly without growing the rendered button.
-          className="relative h-9 w-full shrink-0 justify-center gap-2 rounded-md px-4 font-semibold after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-['']"
+          className="relative h-9 w-full shrink-0 justify-center px-4 after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-['']"
           data-testid="mobile-nav-new-task"
           onClick={handleNewTask}
         >
@@ -224,7 +264,7 @@ export function MobileNavDrawer(): ReactNode {
           <SheetContent
             side="left"
             showCloseButton={false}
-            className="gap-0 p-0 pb-safe-bottom"
+            className="gap-0 pb-safe-bottom"
             data-testid="mobile-nav-drawer"
             data-mobile-shell-touch-scope=""
           >
@@ -260,6 +300,30 @@ interface DrawerTaskListProps {
  * the list the way the user last filtered it, with no filter/sort/selection
  * chrome of its own; the full surface stays one tap away on the landing page.
  */
+/**
+ * The visible half of a drawer row's provenance: "Not synced" or "Deleted,
+ * edits kept" after the timestamp, on the rows that have one. Rendered as
+ * plain text rather than a tooltip because this row's tap opens the task,
+ * which leaves a tooltip nothing to open on.
+ */
+function DrawerRowProvenanceLabel(props: {
+  readonly item: HistoryItem;
+}): ReactNode {
+  const provenance = historyRowProvenance(props.item);
+  if (provenance === null) return null;
+  return (
+    <span
+      data-testid={`mobile-nav-task-provenance-label-${provenance}`}
+      className={cn(
+        "shrink-0 text-ui-xs text-muted-foreground",
+        provenance === "preserved-orphan" && "text-destructive",
+      )}
+    >
+      {historyRowProvenanceLabel(provenance)}
+    </span>
+  );
+}
+
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -277,6 +341,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    cloudPagePending,
   } = useHistoryQuery({ search, nowMs: null });
   // Memoized so the id list below only changes when the page does, not on
   // every render's fresh empty array.
@@ -359,6 +424,33 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
         ))}
       </div>
     );
+  } else if (cloudPagePending) {
+    body = (
+      <div
+        className="flex flex-col gap-1 px-1"
+        data-testid="mobile-nav-task-list-loading"
+        aria-busy="true"
+        aria-label="Loading tasks"
+      >
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  } else if (data?.hostRequiresCloudToList === true) {
+    // No listing was requested: no cloud verdict, and a host too old to list
+    // from this device. `items` is empty because nothing was asked, so the
+    // "No tasks yet" arm below would state as fact something this session has
+    // no evidence for. The full explanation lives on History proper; this
+    // drawer is a shortcut list, so it says only what it can stand behind.
+    body = (
+      <p
+        className="px-3 py-2 text-ui-sm text-muted-foreground"
+        data-testid="mobile-nav-task-list-host-requires-cloud"
+      >
+        Tasks can&apos;t be listed until your sign-in is confirmed
+      </p>
+    );
   } else if (items.length === 0) {
     body = (
       <p className="px-3 py-2 text-ui-sm text-muted-foreground">No tasks yet</p>
@@ -371,7 +463,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             key={item.id}
             type="button"
             variant="ghost"
-            className="h-10 w-full justify-start gap-3 px-3"
+            className="h-10 w-full justify-start gap-3"
             data-testid="mobile-nav-task-row"
             onClick={() => {
               openItem(item);
@@ -410,6 +502,10 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             <span className="shrink-0 text-ui-xs text-muted-foreground">
               {formatRelativeTimestamp(item.updatedAtMs, now)}
             </span>
+            {/* A tap on this row opens the task, so the status dot's sentence
+                has no hover to live in. The two-word label is the visible
+                half; the dot keeps the full sentence as its accessible name. */}
+            <DrawerRowProvenanceLabel item={item} />
           </Button>
         ))}
         {hasNextPage ? (
@@ -427,8 +523,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             {isFetchingNextPage ? (
               <AgentSpinningDots
                 variant="dots"
-                className="text-muted-foreground"
+                className={undefined}
                 testId={undefined}
+                tone="muted"
               />
             ) : null}
             Show more

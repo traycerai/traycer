@@ -1,6 +1,7 @@
 import { useCallback, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
+import { disposingForIdentityTeardown } from "@/stores/chats/chat-session-store";
 import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-registry";
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
@@ -9,8 +10,7 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
-import { useResourceMonitorStore } from "@/stores/resources/resource-monitor-store";
+import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import {
   useAuthIdentityTransition,
@@ -40,7 +40,20 @@ export function EpicSessionLifecycleBridge(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
-    if (transition.kind === "signedOut" || transition.kind === "userSwitched") {
+    if (transition.kind !== "signedOut" && transition.kind !== "userSwitched") {
+      return;
+    }
+    // The whole teardown runs with the cross-account prompt handoff
+    // suppressed. A disposing chat session otherwise writes its unrecorded
+    // prompt into the prompt stash - one global IndexedDB database, no
+    // per-account partition - so the outgoing account's text would be waiting
+    // in the next account's composer. That is the same leak this bridge
+    // already closes for the retained-draft TOAST at the bottom of this
+    // function, by the same argument; the durable copy has to go the same way.
+    //
+    // Wrapping everything, not just `disposeAllChatSessions`, because an epic
+    // session going down here takes its chat sessions with it.
+    disposingForIdentityTeardown(() => {
       disposeAllOpenEpicSessions();
       disposeAllChatSessions();
       disposeAllTerminalSessions();
@@ -64,17 +77,14 @@ export function EpicSessionLifecycleBridge(
       // it is "follow the active host", so this returns the surface to its
       // default rather than emptying it.
       useSettingsHostScopeStore.getState().setScopedHostId(null);
-      // The Usage popover pins a host id on the same account-owned terms, and
-      // it PERSISTS — left standing it survives the restart into the next
-      // sign-in and opens Usage on a `vanished` host the new account has never
-      // seen. Same rule, same `null`-means-follow default. Tab and size stay:
-      // they are window habits, not account facts.
-      useRateLimitPopoverStore.getState().setScopedHostId(null);
-      // The resource monitor pins a host id on exactly the same persisted,
-      // account-owned terms, so it needs the same reset - otherwise it survives
-      // the restart into the next sign-in and opens on a `vanished` host the
-      // new account has never seen.
-      useResourceMonitorStore.getState().setScopedHostId(null);
+      // The shared watch pick — the one host the usage gauge and the resource
+      // monitor READ — is a host id on the same account-owned terms, and it
+      // PERSISTS: left standing it survives the restart into the next sign-in
+      // and opens both surfaces on a `vanished` host the new account has never
+      // seen. Same rule, same `null`-means-follow default. Each surface's own
+      // habits (the popover's tab and size, the panel's ordering) stay: those
+      // are window habits, not account facts.
+      useWatchHostStore.getState().setScopedHostId(null);
       // The Add-host dialog is module-level too, and it carries more than a
       // boolean: `knownHostIds` is the snapshot the arrival watcher diffs
       // against to decide which machine is NEW. Left standing across a switch
@@ -98,7 +108,7 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
-    }
+    });
   }, []);
 
   useAuthIdentityTransition(status, userId, onTransition);

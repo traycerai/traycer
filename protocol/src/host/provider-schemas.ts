@@ -11,6 +11,7 @@
  */
 import { z } from "zod";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import { autoJudgeKindSchema } from "@traycer/protocol/host/auto-mode/contracts";
 import {
   providerIdSchema,
   providerIdSchemaV10,
@@ -404,9 +405,12 @@ export type ProviderManagedInstallErrorReason = z.infer<
  * observer reports `downloading` with no percent and the renderer shows an
  * indeterminate indicator. Every percent consumer must handle null.
  *
- * The `error` arm and the nullable percent are ADDITIVE ON THE UNRELEASED 6.0
- * LINE. No released tag (`host-v*`/`cli-v*`/`desktop-v*` through 1.1.8) ships
- * `providers.list@6.0`, which is what makes growing this union legal at all;
+ * The `error` arm and the nullable percent were ADDITIVE ON THE THEN-UNRELEASED
+ * 6.0 LINE. No released tag through 1.1.8 shipped `providers.list@6.0`, which
+ * is what made growing this union legal AT THE TIME. It no longer is:
+ * `released-baseline-surface.json` carries `providers.list` at canonical 8.0
+ * with every major from 1 through 8 installed, so 6.0 is frozen like the rest
+ * and a further arm opens a new major.
  * the released 5.0 and earlier lines are frozen and their downgrade bridges
  * strip the field wholesale. Accepted, stated plainly: a client old enough to
  * negotiate 6.0 but predating the `error` arm normalizes it to `null` through
@@ -1255,13 +1259,11 @@ const providerProfileShapeV70 = {
   // blocked (see the decision log's "Identity key" row); the GUI renders
   // "same account as <label>".
   duplicateOfProfileId: z.string().nullable().catch(null),
-  // Only ever non-null on the ambient profile entry. Set when the ambient
-  // login's identity changed behind Traycer's back (a user ran `/login` in a
-  // terminal) - carries the pre-change email and when the drift was detected
-  // so the GUI can rebadge and show a one-time dismissable notice ("Terminal
-  // account is now bob@, was alice@"). See the decision log's "Ambient
-  // identity drift" row; dismissal handling is host/GUI-side, this field only
-  // carries the notice.
+  // Only ever non-null on the ambient profile entry historically. Current
+  // hosts always project `null`: the GUI no longer renders ambient identity
+  // drift. The field stays on the wire so older peers still parse. Dismissal
+  // via `acknowledgeAmbientDrift` remains a no-op-capable host action for
+  // those older clients.
   ambientDriftNotice: z
     .object({
       previousEmail: z.string().nullable(),
@@ -1327,8 +1329,10 @@ export const providerProfileSchema = z.object({
   apiKey: providerProfileApiKeyStateSchema.nullable().catch(null).optional(),
   // Copyable command for opening this managed account directly in its CLI.
   // The host owns the absolute config path and shell quoting; ambient rows and
-  // hosts that predate this field omit it. Kept inside v8.0 because that line
-  // is still the unreleased live head opened by profile eligibility.
+  // hosts that predate this field omit it. Landed inside v8.0 while that line
+  // was the unreleased live head opened by profile eligibility; the baseline
+  // now carries `providers.list` at canonical 8.0, so it is the released head
+  // and the next field here opens v9.0 rather than widening this one.
   launchCommand: z
     .object({
       command: z.string(),
@@ -1428,12 +1432,15 @@ export type ProvidersClearProfileApiKeyResponse = z.infer<
  * Rename/recolor apply to managed profiles and the ambient profile sentinel;
  * remove remains managed-only. `acknowledgeAmbientDrift` durably clears the
  * ambient profile's pending
- * `ambientDriftNotice` (see that field's comment below). No `profileId`:
+ * `ambientDriftNotice`. Current GUI never sends it (no drift UI); the
+ * variant stays so older clients can still ack. No `profileId`:
  * there is exactly one ambient identity per provider. It rides the same
  * `@2.1` minor as the other actions because
- * `@2.1` itself is unreleased (the released surface, host-v1.0.0, is `@2.0`)
- * - versions exist to protect released peers, so an unreleased minor widens
- * in place instead of minting `@2.2`.
+ * `@2.1` was still unreleased WHEN THIS LANDED (the released surface was then
+ * `@2.0`) - versions exist to protect released peers, so an unreleased minor
+ * widens in place instead of minting `@2.2`. That window has since closed:
+ * `released-baseline-surface.json` now carries this family at canonical
+ * `@2.1`, so the line is frozen and the next field here costs `@2.2`.
  */
 export const providerProfileActionSchema = z.discriminatedUnion("type", [
   z.object({
@@ -1483,6 +1490,22 @@ const providerCliStateBaseShape = {
   // as a terminal agent (the host tokenizes and appends them to the spawned
   // argv). Only meaningful for terminal-agent-capable providers; "" when unset.
   terminalAgentArgs: z.string().catch(""),
+  // Which classifier decides this provider's `auto`-mode approvals. Persisted
+  // beside `terminalAgentArgs` in `provider-overrides.json` and written by
+  // `providers.setAutoJudge`; this is the READ half, without which the
+  // Providers > General switch could not show its own stored value after a
+  // reload.
+  //
+  // `.optional()`, NOT `.default("traycer")` / `.catch(...)` - and the choice
+  // is load-bearing in two directions. On the wire it is the `authStatus`
+  // shape: a host too old to know about auto mode omits the key, and absent
+  // stays distinguishable from a real verdict. In the TYPE it is what keeps
+  // this field off every construction site: a defaulted field is required on
+  // OUTPUT, so it would have forced a fill into every `ProviderCliState`
+  // fixture in the renderer, which is the churn `nativeAutoJudge` caused on
+  // the harness row. Readers spell the fallback themselves
+  // (`state.autoJudge ?? "traycer"`), matching the documented default.
+  autoJudge: autoJudgeKindSchema.optional(),
   // Per-provider environment overrides applied when the host spawns this
   // provider's harness. Sorted by key for stable rendering; `[]` when unset.
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
@@ -1657,6 +1680,28 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
+ * Frozen `providers.list@9.0` provider state: the live shape as it stood
+ * before `autoJudge`.
+ *
+ * 9.0 stopped being the head line when 9.1 opened to publish the per-provider
+ * auto-mode judge, and is frozen here exactly as 8.0 was frozen when 9.0
+ * opened. Built by OMITTING the new key from the live shape rather than
+ * hand-copying twenty fields: the freeze is one field wide, and a hand copy of
+ * this particular object is what drifted twice before (see
+ * `providerMutationCliStateSchemaV21`'s note). `.omit()` states the delta
+ * itself, so it cannot fall out of step with the live shape it is a snapshot
+ * of - and a SECOND field added to the live state fails the frozen-catalog
+ * snapshot here rather than silently widening 8.0.
+ *
+ * Do NOT add fields here. Add them to `providerCliStateBaseShape` above, which
+ * only 9.1 (the head line) publishes.
+ */
+export const providerCliStateSchemaV90 = providerCliStateSchema.omit({
+  autoJudge: true,
+});
+export type ProviderCliStateV90 = z.infer<typeof providerCliStateSchemaV90>;
+
+/**
  * Canonical (live) `providers.list` request. Optional `native` list/discover
  * query folds the mcp/plugins/skills list verbs onto this carrier. Callers on
  * any earlier line predate it, so the v6.0 -> v7.0 upgrade fills `native: null`
@@ -1738,6 +1783,24 @@ export const providersListResponseSchema = z.object({
   native: nativeListResultSchema.nullable().default(null),
 });
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+/**
+ * Frozen `providers.list@9.0` response - the pre-`autoJudge` provider state.
+ *
+ * A 9.0 peer needs no bridge to reach it: `autoJudge` is a new KEY, and a
+ * within-major re-parse through this shape strips an unknown key rather than
+ * rejecting it (unlike a new ENUM MEMBER, which is what forced
+ * `responseGrowthProjectionGated` on `agent.gui.listHarnesses@9.1`). The
+ * cross-major bridges get it free for the same reason: every one of them
+ * re-parses through a frozen `providerCliStateSchemaV*`.
+ */
+export const providersListResponseSchemaV90 = z.object({
+  providers: z.array(providerCliStateSchemaV90),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV90 = z.infer<
+  typeof providersListResponseSchemaV90
+>;
 
 // ── Frozen protocol-v2.0 provider state + list response (before Amp) ───────
 // `providers.list` always returns every provider; v2.0 shipped without Amp, so
@@ -2611,10 +2674,12 @@ export type ProvidersAwaitLoginRequestV20 = z.infer<
  * selected for this provider, no profile dir override) - so old clients that
  * predate profiles are unaffected.
  *
- * `createProfile.shareSkillsAndPlugins` is an in-place additive field (this
- * whole surface is still unreleased, so a bare in-place addition rather than
- * a version bump is the established precedent here - see `profileId`/
- * `createProfile` themselves, added the same way onto the v1.0 base). Claude
+ * `createProfile.shareSkillsAndPlugins` was added in place while this surface
+ * was unreleased, which was the established precedent then - see `profileId`/
+ * `createProfile` themselves, added the same way onto the v1.0 base. It is
+ * NOT precedent now: `released-baseline-surface.json` carries
+ * `providers.startLogin` at canonical `@1.1` with this exact field in its
+ * request, so the line is frozen and a further field costs a new minor. Claude
  * profile creation only: dir-symlinks `skills/`/`plugins/` to ambient instead
  * of copying (shadow-home plan §6). Defaults to `false` (copy, today's
  * behavior) so old clients that predate the checkbox are unaffected; every
@@ -2654,6 +2719,41 @@ export const providersStartLoginResponseSchemaV11 =
   });
 export type ProvidersStartLoginResponseV11 = z.infer<
   typeof providersStartLoginResponseSchemaV11
+>;
+
+/**
+ * Why a headless login did not start, when `started` is false for a reason
+ * the GUI can act on. Null on success and on the generic "did not start"
+ * path (unresolvable binary, cancelled before spawn, …).
+ *
+ * `device_auth_unavailable`: we spawned `login --device-auth` and the CLI
+ * printed the localhost-callback flow instead. Codex does this when ChatGPT
+ * device-code login is not enabled for the account/workspace.
+ *
+ * `device_code_missing`: we scraped an external device URL but no user code
+ * before the URL-grace timer. A slow Codex print must not read as "the
+ * provider tooling is unavailable".
+ */
+export const providerLoginFailureSchema = z.enum([
+  "device_auth_unavailable",
+  "device_code_missing",
+]);
+export type ProviderLoginFailure = z.infer<typeof providerLoginFailureSchema>;
+
+/**
+ * `providers.startLogin@1.2` response - adds the device-code user code and a
+ * typed failure. Request is unchanged from v1.1. Codex `--device-auth` prints
+ * `https://auth.openai.com/codex/device` and a separate one-time code; stuffing
+ * the code into `url` would break `openLink`. `.default(null)` so a v1.1 body
+ * is a valid v1.2 body.
+ */
+export const providersStartLoginResponseSchemaV12 =
+  providersStartLoginResponseSchemaV11.extend({
+    userCode: z.string().nullable().default(null),
+    failure: providerLoginFailureSchema.nullable().default(null),
+  });
+export type ProvidersStartLoginResponseV12 = z.infer<
+  typeof providersStartLoginResponseSchemaV12
 >;
 
 /**
@@ -2702,10 +2802,13 @@ export const providersAwaitLoginResponseSchema = z.object({
   // the default outcome (a successful re-probe, or nothing was in flight).
   // The GUI uses this to drive its bounded auto-restart (decision log's
   // "Bad-code recovery" row) instead of surfacing a generic failed state.
-  // Bare additive field on the still-unreleased 2.1 line (same precedent as
-  // `providers.startLogin@1.1`'s `createProfile.shareSkillsAndPlugins`):
-  // old hosts never emit it and `.default(false)` keeps old-client parses
-  // byte-identical to today.
+  // Added as a bare additive field while the 2.1 line was unreleased (same
+  // precedent as `providers.startLogin@1.1`'s
+  // `createProfile.shareSkillsAndPlugins`): old hosts never emit it and
+  // `.default(false)` keeps old-client parses byte-identical to today.
+  // `providers.awaitLogin` is now in `released-baseline-surface.json` at
+  // canonical 2.1, so 2.1 is frozen and the next field here costs 2.2 - do
+  // not read this as a standing licence to widen in place.
   codeRejected: z.boolean().default(false),
 });
 export const providersAwaitLoginResponseSchemaV20 = z.object({
@@ -3687,9 +3790,12 @@ export function downgradeProviderCliStateToV10(
   // every provider fails the parse and silently vanishes from the downgraded
   // payload for v1.0 clients.
   // - `availabilityPending` (v2.0+)
-  // - `profiles` (unreleased) — must never reach a v1.0 caller; also keeps
+  // - `profiles` (v4.0+) — must never reach a v1.0 caller; also keeps
   //   profile identity (email, label) off the wire for peers that never
-  //   negotiated profile support.
+  //   negotiated profile support. Labelled "unreleased" until the baseline
+  //   caught up; it is in every released major from 4.0 through the canonical
+  //   8.0, which is exactly why this drop is load-bearing rather than
+  //   defensive.
   // - `nativeCapabilities` (v3.1 / v2.1+) — CRITICAL silent-data-loss trap
   // - `managedInstallState` / `versionVisibility` / `advisory` — the
   //   provider-pack-registry fields.

@@ -62,9 +62,20 @@ const notificationFeedModeRef = vi.hoisted(() => ({
   value: "local",
 }));
 
-vi.mock("@/lib/notifications/notification-feed-mode", () => ({
-  useNotificationFeedMode: () => notificationFeedModeRef.value,
-}));
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  // Spread the real module: production reads the PARTITIONED_* floor constants
+  // from here, and a factory that returns only the two hooks makes every one of
+  // them a missing export - which surfaces as a failed RPC, not as a mock error.
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => notificationFeedModeRef.value,
+    useNotificationFeedModeSettling: () => false,
+  };
+});
 
 const activeHostIdRef = vi.hoisted(() => ({
   value: null as string | null,
@@ -78,6 +89,18 @@ const directoryRef = vi.hoisted(() => ({
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostIdRef.value,
+}));
+
+// The notification centre reads its host from `useNotificationResolveHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => activeHostIdRef.value,
+  useNotificationResolveHost: () => ({
+    hostId: activeHostIdRef.value,
+    client: null,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -631,14 +654,27 @@ describe("cloud feed projection authority", () => {
     useCloudNotificationsStore.getState().reset();
   });
 
-  it("merges renderer-local failures and Notifications-room collaboration rows with the cloud snapshot", () => {
+  it("interleaves the local lane - host local-home rows, renderer-local failures, collaboration rows - with the cloud partition by recency", () => {
+    // Mixed mode keeps the host feed as the exact local durable-home
+    // partition and the cloud relay as the complementary partition. App-local
+    // failures and Notifications-room collaboration rows are this machine's
+    // client-side state no feed can reproduce, so they ride in the LOCAL lane
+    // beside the partition rows; but the merged list is ONE newest-first order
+    // across both planes - `createdAt` is the origin clock in each lane, so a
+    // fresher cloud row lands ahead of a staler local-lane row and vice versa.
+    // The protocol home order (`local` before `cloud`) only breaks a tie at
+    // the exact same `createdAt`, and ascending `feedId` breaks whatever tie
+    // is left. The cloud row's `createdAt` (95) sits strictly between the
+    // host row's (100) and the app-local row's (90) below, so this only
+    // passes if the merge genuinely interleaves by date rather than grouping
+    // all local-lane rows ahead of the cloud partition.
     applyHostSnapshot([hostDone("local-host", 100, null)], {
       unreadCount: 1,
       attentionCount: 0,
     });
     seedAppLocal([appLocalEntry("local-app", 90, null)]);
     seedGlobal([globalEntry("local-global", 80, null)]);
-    const cloud = cloudDone("entry-cloud", 7, null);
+    const cloud = cloudDone("entry-cloud", 95, null);
     useCloudNotificationsStore.getState().applySnapshot({
       rows: [cloud],
       summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
@@ -647,24 +683,108 @@ describe("cloud feed projection authority", () => {
 
     const { result } = renderHook(() => ({
       ids: useMergedNotificationIds(),
-      row: useMergedNotificationRow(cloudNotificationFeedId(cloud.entryId)),
+      hostRow: useMergedNotificationRow(hostFeedId("local-host")),
+      cloudRow: useMergedNotificationRow(
+        cloudNotificationFeedId(cloud.entryId),
+      ),
       unreadCount: useMergedNotificationUnreadCount(),
       bell: useNotificationBellState(),
       hostState: useNotificationCenterHostState(),
     }));
 
     expect(result.current.ids).toEqual([
+      hostFeedId("local-host"),
+      cloudNotificationFeedId(cloud.entryId),
       appLocalFeedId("local-app"),
       globalFeedId("local-global"),
-      cloudNotificationFeedId(cloud.entryId),
     ]);
-    expect(result.current.row?.sourceId).toBe("entry-cloud");
-    expect(result.current.unreadCount).toBe(3);
+    expect(result.current.hostRow?.source).toBe("host");
+    expect(result.current.cloudRow?.sourceId).toBe("entry-cloud");
+    expect(result.current.unreadCount).toBe(4);
+    // The unread app-local failure counts as attention, exactly as it does in
+    // local mode.
     expect(result.current.bell).toEqual({ kind: "attention", count: 1 });
     expect(result.current.hostState.isPartial).toBe(false);
   });
 
+  it("sums exact mixed unread and attention from both partition summaries without double counting", () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("local-prompt", 200, null),
+        hostDone("local-done", 150, null),
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("cloud-done", 9, null),
+        {
+          ...cloudDone("cloud-prompt", 10, null),
+          entry: {
+            ...cloudDone("cloud-prompt", 10, null).entry,
+            kind: "approval.requested",
+            severity: "needs_action",
+            outcome: null,
+            resolvedAt: null,
+            readAt: null,
+          },
+          coalesceKey: "approval.requested:cloud-prompt",
+        },
+      ],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 12,
+    });
+
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      attention: useAttentionNotificationIds(),
+    }));
+
+    // Newest-first by createdAt across both planes - this fixture's local
+    // rows (200, 150) simply happen to be newer than the cloud rows (10, 9),
+    // so this order falls out of recency, not out of the local plane being
+    // listed first.
+    expect(result.current.ids).toEqual([
+      hostFeedId("local-prompt"),
+      hostFeedId("local-done"),
+      cloudNotificationFeedId("cloud-prompt"),
+      cloudNotificationFeedId("cloud-done"),
+    ]);
+    expect(result.current.unreadCount).toBe(4);
+    expect(result.current.bell).toEqual({ kind: "attention", count: 2 });
+    expect(result.current.attention).toEqual([
+      hostFeedId("local-prompt"),
+      cloudNotificationFeedId("cloud-prompt"),
+    ]);
+  });
+
+  it("treats a null host or cloud summary as partial rather than understating the mixed total", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", 7, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() => ({
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      hostState: useNotificationCenterHostState(),
+    }));
+
+    // Host summary is still null (no local partition snapshot landed).
+    expect(result.current.unreadCount).toBe(0);
+    expect(result.current.bell).toEqual({ kind: "unknown" });
+    expect(result.current.hostState.isPartial).toBe(true);
+  });
+
   it("never keeps the attention bell after optimistically marking every cloud failure read", () => {
+    // An EMPTY host snapshot, not an absent one. Mixed mode now reports
+    // `unknown` while either partition's summary is missing rather than
+    // understating the total from the one it has, so a cloud-only arrangement
+    // would assert the partial state instead of this test's subject.
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 0 });
     const failure = cloudFailure("entry-failure", 7, null);
     useCloudNotificationsStore.getState().applySnapshot({
       rows: [failure],
@@ -726,6 +846,75 @@ describe("cloud feed projection authority", () => {
     expect(result.current.ids).toEqual([cloudNotificationFeedId("entry-b")]);
     expect(result.current.reopened?.readAt).toBeNull();
     expect(result.current.superseded).toBeNull();
+  });
+
+  it("orders Recent by recency across planes, not by plane - a fresh cloud row beats a stale local row and vice versa", () => {
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1_000;
+    applyHostSnapshot(
+      [
+        hostDone("host-week-old", now - 7 * oneDayMs, null),
+        hostDone("host-today", now - 1_000, null),
+      ],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("cloud-today", now, null),
+        cloudDone("cloud-yesterday", now - oneDayMs, null),
+      ],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 9,
+    });
+
+    const { result } = renderHook(() => useRecentNotificationIds());
+
+    // Newest first purely by createdAt across planes: today's cloud row beats
+    // last week's local row (cloud-over-local), and today's local row beats
+    // yesterday's cloud row (local-over-cloud) - both driven by recency alone,
+    // never by which plane a row belongs to.
+    expect(result.current).toEqual([
+      cloudNotificationFeedId("cloud-today"),
+      hostFeedId("host-today"),
+      cloudNotificationFeedId("cloud-yesterday"),
+      hostFeedId("host-week-old"),
+    ]);
+  });
+
+  it("orders Attention within the same severity tier by recency across planes - a newer cloud row precedes an older local row", () => {
+    applyHostSnapshot([hostPrompt("local-prompt-old", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const cloudPromptRowBase = cloudDone("cloud-prompt-new", 200, null);
+    const cloudPromptRow: HostNotificationsCloudFeedRow = {
+      ...cloudPromptRowBase,
+      entry: {
+        ...cloudPromptRowBase.entry,
+        kind: "approval.requested",
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        readAt: null,
+      },
+      coalesceKey: "approval.requested:cloud-prompt-new",
+    };
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudPromptRow],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 11,
+    });
+
+    const { result } = renderHook(() => useAttentionNotificationIds());
+
+    // Both rows land in the same "blocking" tier (needs_action). Severity
+    // tier is still the outer sort key, but within a tier the newer cloud row
+    // precedes the older local row purely by `createdAt` - plane only breaks
+    // an exact tie, it is never the primary order.
+    expect(result.current).toEqual([
+      cloudNotificationFeedId("cloud-prompt-new"),
+      hostFeedId("local-prompt-old"),
+    ]);
   });
 });
 
@@ -944,8 +1133,14 @@ describe("useNotificationBellState", () => {
       readonly state: NotificationBellState;
       readonly expected: string;
     }> = [
-      // unknown shares clear's label — both render a plain bell with no indicator.
-      { state: { kind: "unknown" }, expected: "Notifications" },
+      // A THIRD sibling of the flipped false-clear assertion (`s5-parity-gaps`
+      // gap 3): unknown used to share clear's label because both rendered a
+      // plain bell with no indicator. It renders its own indicator now, so a
+      // shared label would be the same false-clear for a screen-reader user.
+      {
+        state: { kind: "unknown" },
+        expected: "Notifications, status unavailable",
+      },
       { state: { kind: "clear" }, expected: "Notifications" },
       {
         state: { kind: "quietDot" },

@@ -600,9 +600,7 @@ export function ActiveHostWorkspaceControls(
           data-testid="host-workspace-selector-folders-section"
           className="w-full max-w-full min-w-0"
         >
-          <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
-            Workspaces
-          </DropdownMenuLabel>
+          <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
           <HomeWorkspaceRows
             workspaceSource={workspaceSource}
             resolvedFolders={resolved.folders}
@@ -1254,9 +1252,6 @@ function HomeWorkspaceRows(props: {
           discardDisabled={false}
           onEditEnvironment={handleEditEnvironment}
           readOnly={false}
-          // Rendered inline in the fork / add-node dialogs, never inside a
-          // popover, so nested branch/source dropdowns portal to the body.
-          nestedInPopover={false}
           // Home folder list is a synchronous local draft, never an async binding
           // snapshot — an empty list is a genuine "no folders linked yet", so the
           // row shows the add affordance rather than an indefinite spinner.
@@ -1316,7 +1311,7 @@ function HomeWorkspaceSummaryControl(props: {
           onEditEnvironment={props.onEditEnvironment}
           refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
-          popoverSide="top"
+          popoverSide="bottom"
           recentWorkspaces={props.recentWorkspaces}
           recentWorkspaceCount={props.recentWorkspaceCount}
           moveToRecent={props.moveToRecent}
@@ -1891,7 +1886,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ptyLive: surface.kind === "terminal-agent" && surface.isOwnerActive,
   });
   const stopManagedCommand = useManagedCommandStop();
-  const stopAgent = useAgentStop();
+  const stopAgent = useAgentStop(props.hostClient);
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly choice: TeardownCommitChoice;
     readonly holders: readonly WorktreeBusyHolder[];
@@ -2172,10 +2167,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     surface.binding,
   ]);
   const applyStagedFoldersAndResume = useCallback(
-    (
-      capture: WorktreeCommitCapture,
-      isCancelled: () => boolean = () => false,
-    ): void => {
+    (capture: WorktreeCommitCapture, isCancelled: () => boolean): void => {
       const settleRun = (): void => {
         setCommitRunPending(false);
       };

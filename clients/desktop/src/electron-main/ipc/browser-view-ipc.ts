@@ -295,17 +295,10 @@ export function registerBrowserViewIpc(
       now: () => Date.now(),
       isForgottenPendingAck: isBrowserForgetLedgerPendingAck,
       isHeadlessOriginKey: isHeadlessOriginCookieKey,
-      // The observer first, then the durable record: the observer is what
-      // stops this applier's own inserts from handing the keys straight back
-      // to the desktop, and the record is what lets the sending host update
-      // them again later.
-      //
-      // The applier calls neither for a write bound for the ephemeral jar,
-      // which is why both may write the durable ledger unconditionally.
-      claimHeadlessOriginKeys: async (keys) => {
-        noteBrowserPrimaryProfileAppliedKeys(keys);
-        await recordHeadlessOriginCookieKeys(keys);
-      },
+      // Durable ownership precedes the merge; insert marks precede only real
+      // writes, so an unchanged replay cannot mask a later desktop edit.
+      claimHeadlessOriginKeys: recordHeadlessOriginCookieKeys,
+      noteAppliedKeys: noteBrowserPrimaryProfileAppliedKeys,
       // The mirror image, for the keys Chromium refused: the observer mark
       // first (no insert is coming to spend it), then the durable claim.
       releaseHeadlessOriginKeys: async (keys) => {
@@ -461,6 +454,12 @@ export function registerBrowserViewIpc(
       if (profile !== "primary") return;
       primaryProfileSnapshots.observe(url, webContents);
     },
+    // Fire-and-forget on purpose, and safe to be: the clear's completion is
+    // owed to whoever next materializes that partition, not to this caller,
+    // and `releaseBrowserViewSession` publishes it as a per-partition barrier
+    // that the guest birth awaits. Threading a promise back through here
+    // instead would give the manager an await it has nothing to do with, and
+    // would still not cover the release the ROUND-9 owed-debt path starts.
     releaseSessionStorage: (request) => {
       void releaseBrowserViewSession(
         partitionForProfile(request.profile, request.sessionId),
@@ -616,6 +615,7 @@ export function registerBrowserViewIpc(
             identity: { userId: principal.userId },
           };
         },
+        cloudAuthorized: () => jarPlanePrincipal() !== null,
         appVersion: app.getVersion(),
       }),
     jar: {
@@ -715,10 +715,10 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSessionsOpen,
     (event, payload) => {
-      sessions.open(
-        readSenderWindowId(bridge, event),
-        browserViewIpcPayload.sessionsStreamKey.parse(payload),
-      );
+      const windowId = readSenderWindowId(bridge, event);
+      const key = browserViewIpcPayload.sessionsStreamKey.parse(payload);
+      manager.windows.ensureResetListener(windowId);
+      sessions.open(windowId, key);
     },
   );
 
@@ -773,13 +773,26 @@ export function registerBrowserViewIpc(
     },
   );
 
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewGuestViewportResult,
+    (event, payload) => {
+      manager.viewport.reportPresentation(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.guestViewportResult.parse(payload),
+      );
+    },
+  );
+
   // BT-302/BT-303: the renderer is the source of truth for the guest-focused
   // input policy - which chords outrank guest keystrokes and what each one
   // means. It pushes the whole table at startup.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSetReservedChords,
-    (_event, payload) => {
-      manager.chords.setReservedChords(parseReservedChords(payload));
+    (event, payload) => {
+      manager.chords.setReservedChords(
+        readSenderWindowId(bridge, event),
+        parseReservedChords(payload),
+      );
     },
   );
 
@@ -857,17 +870,6 @@ export function registerBrowserViewIpc(
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
       return manager.capturePage(
-        windowId,
-        browserViewIpcPayload.tileKey.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewGetDebugSnapshot,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.getDebugSnapshot(
         windowId,
         browserViewIpcPayload.tileKey.parse(payload),
       );

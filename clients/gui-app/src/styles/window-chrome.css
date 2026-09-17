@@ -1,0 +1,13 @@
+/* Native window controls sit above renderer layers and cannot be dimmed by
+   modal backdrops. Keep the entire header on the same undimmed surface while
+   a modal owns focus; its content remains blocked by the modal focus/pointer
+   trap. Fullscreen and browser shells retain the full-viewport backdrop.
+   The spacing expression matches APP_HEADER_HEIGHT_CLASS (h-10). */
+.wco
+  :is(
+    [data-slot="dialog-overlay"],
+    [data-slot="sheet-overlay"],
+    [data-slot="drawer-overlay"]
+  ) {
+  top: max(env(titlebar-area-height, 0px), calc(var(--spacing) * 10));
+}

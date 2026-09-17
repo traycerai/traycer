@@ -24,6 +24,7 @@ import {
   HostRuntimeProvider,
   type HostRpcRegistry,
 } from "@/lib/host";
+import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
@@ -63,6 +64,7 @@ function makeMessengerFactory(): (args: {
             updateOperation: null,
             updateTransaction: null,
             storeFormats: null,
+            install: null,
           }),
       },
     });
@@ -148,6 +150,7 @@ describe("<UserMenu />", () => {
 
   afterEach(() => {
     cleanup();
+    setMobileApp(false);
     useAuthStore.getState().setSignedOut();
     useTitleBarDragStore.setState({ suppressors: new Set() });
     restoreFetch();
@@ -171,6 +174,50 @@ describe("<UserMenu />", () => {
     const identity = await screen.findByTestId("user-menu-identity");
     expect(identity.textContent).toContain("Ada Lovelace");
     expect(identity.textContent).toContain("ada@example.com");
+    result.cleanupClient();
+  });
+
+  it("withholds Manage subscription in the installed mobile app, keeping settings and sign-out", async () => {
+    // App Store review guideline 3.1.1: the installed app must not link out to
+    // a subscription that cannot be bought through Apple. The other two
+    // actions are unaffected by that rule and must stay.
+    setMobileApp(true);
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    await screen.findByTestId("user-menu-identity");
+
+    expect(screen.queryByTestId("user-menu-manage-subscription")).toBeNull();
+    expect(screen.getByTestId("user-menu-app-settings")).toBeTruthy();
+    expect(screen.getByTestId("user-menu-sign-out")).toBeTruthy();
+    result.cleanupClient();
+  });
+
+  it("offers Manage subscription outside the installed mobile app", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    await screen.findByTestId("user-menu-identity");
+
+    expect(screen.getByTestId("user-menu-manage-subscription")).toBeTruthy();
     result.cleanupClient();
   });
 

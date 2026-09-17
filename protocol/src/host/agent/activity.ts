@@ -15,6 +15,19 @@
  * CLAIM: a local-plane frame, or a `1.0` host that predates the field. A
  * consumer must never read `null` as "connected".
  *
+ * `1.3` changes no schema; it changes what a `state` frame's stamp MEANS on a
+ * `servedBy: "local"` frame. A host serving the MERGED plane (origin store
+ * plus other hosts' entries) uses the same two words: `servedBy: "cloud"`
+ * only while its union reaches the fleet (`cloudSyncStatus: "connected"`),
+ * and `servedBy: "local"` under the real link stamp otherwise - so on `1.3`
+ * a `"local"` frame may carry a non-null status. Read `servedBy` together
+ * with the stamp: fleet coverage is the `"cloud"` + `connected` pair, and a
+ * `"local"` frame stays authoritative for the sending host's own agents
+ * whatever the stamp says about its link. The released `1.1`/`1.2` readers
+ * consult the stamp alone, so a host sends them a `"local"` frame with the
+ * stamp projected to `null` - the local plane they already understand - and
+ * the real stamp only to a peer that negotiated `1.3`.
+ *
  * `1.0` is frozen below (`agentActivitySubscribeServerFrameSchemaV10`) - it
  * has shipped, and `canBridgeStream()` needs the `{1,0}` line registered to
  * bridge a `1.1` client down to a `1.0` host. Do not add fields to it.
@@ -26,7 +39,50 @@ import {
   type EpicCloudSyncStatus,
 } from "@traycer/protocol/host/epic/subscribe";
 
-export const agentActivitySubscribeOpenRequestSchema = z.object({});
+// ─── Frozen `agent.activity.subscribe@1.0`/`@1.1` open request ──────────────
+//
+// Its own literal object, and the schema BOTH released contracts point at.
+// The live request below extends it, so growing the request cannot reach a
+// released line by accident: a `@1.0`/`@1.1` peer's contract strips `plane` in
+// the dispatcher, which is what makes absence mean "today's behaviour" on
+// every host that shipped before the selector existed.
+export const agentActivitySubscribeOpenRequestSchemaPre12 = z.object({});
+export type AgentActivitySubscribeOpenRequestPre12 = z.infer<
+  typeof agentActivitySubscribeOpenRequestSchemaPre12
+>;
+
+/**
+ * The one plane a subscriber may ASK for.
+ *
+ * Deliberately a single value rather than a `"local-only" | "host-choice"`
+ * pair: absence already spells "host chooses", and a second spelling for
+ * today's behaviour is a second thing to keep in agreement. Asking is only
+ * ever a DOWNGRADE - the local view reads this machine's own tracker and
+ * acquires no cloud room - so honouring it can never widen what a caller
+ * reaches, which is why the host may honour it without consulting anything
+ * else.
+ */
+export const agentActivityPlaneSelectorSchema = z.enum(["local-only"]);
+export type AgentActivityPlaneSelector = z.infer<
+  typeof agentActivityPlaneSelectorSchema
+>;
+
+// ─── Live `agent.activity.subscribe@1.2` open request ───────────────────────
+//
+// `@1.2` lets a subscriber that holds NO cloud verdict ask for the local
+// plane. Without it the renderer's only options are "open the stream and let
+// the host acquire a cloud room on a bearer the cloud stopped vouching for" or
+// "open nothing", and it correctly chose nothing - which costs an unverified
+// session all agent activity, including the activity of agents running on the
+// very machine it is talking to.
+//
+// `servedBy` on the `state` frame is NOT a substitute: it is the host's report
+// of a choice already made, and it arrives after the stream is open. The
+// decision this selector exists for is made BEFORE that.
+export const agentActivitySubscribeOpenRequestSchema =
+  agentActivitySubscribeOpenRequestSchemaPre12.extend({
+    plane: agentActivityPlaneSelectorSchema.optional(),
+  });
 export type AgentActivitySubscribeOpenRequest = z.infer<
   typeof agentActivitySubscribeOpenRequestSchema
 >;
@@ -123,7 +179,7 @@ export type AgentActivitySubscribeClientFrame = z.infer<
 export const agentActivitySubscribeV10 = defineStreamRpcContract({
   method: "agent.activity.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
-  openRequestSchema: agentActivitySubscribeOpenRequestSchema,
+  openRequestSchema: agentActivitySubscribeOpenRequestSchemaPre12,
   serverFrameSchema: agentActivitySubscribeServerFrameSchemaV10,
   clientFrameSchema: agentActivitySubscribeClientFrameSchema,
 });
@@ -131,6 +187,35 @@ export const agentActivitySubscribeV10 = defineStreamRpcContract({
 export const agentActivitySubscribeV11 = defineStreamRpcContract({
   method: "agent.activity.subscribe",
   schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: agentActivitySubscribeOpenRequestSchemaPre12,
+  serverFrameSchema: agentActivitySubscribeServerFrameSchema,
+  clientFrameSchema: agentActivitySubscribeClientFrameSchema,
+});
+
+// `@1.2` grows only the OPEN REQUEST - its server frame is `@1.1`'s, byte for
+// byte. A subscriber that asks for `local-only` receives ordinary `state`
+// frames stamped `servedBy: "local"`, a value every released line on this
+// method already carries, so nothing downstream of the open needs to know
+// which minor asked.
+export const agentActivitySubscribeV12 = defineStreamRpcContract({
+  method: "agent.activity.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: agentActivitySubscribeOpenRequestSchema,
+  serverFrameSchema: agentActivitySubscribeServerFrameSchema,
+  clientFrameSchema: agentActivitySubscribeClientFrameSchema,
+});
+
+// `@1.3` grows NOTHING on the wire - open request, server frame and client
+// frame are `@1.2`'s, byte for byte. It exists so a host can tell which
+// readers understand a `servedBy: "local"` frame's stamp as the sending host's
+// real link status (the merged plane's "own agents authoritative, fleet
+// unknown" frame) and project that stamp to `null` for the ones that do not.
+// A minor rather than a note because the difference is in what the PEER does
+// with a frame, and the negotiated version is the only fact about the peer a
+// host holds.
+export const agentActivitySubscribeV13 = defineStreamRpcContract({
+  method: "agent.activity.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: agentActivitySubscribeOpenRequestSchema,
   serverFrameSchema: agentActivitySubscribeServerFrameSchema,
   clientFrameSchema: agentActivitySubscribeClientFrameSchema,

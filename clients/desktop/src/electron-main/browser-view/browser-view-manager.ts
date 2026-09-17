@@ -3,18 +3,18 @@ import type { BrowserWindowConstructorOptions } from "electron";
 import type {
   BrowserCdpResult,
   BrowserStorageState,
+  BrowserViewportGeometry,
 } from "@traycer/protocol/host/browser/contracts";
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import type {
   BrowserViewAttachSurface,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewDebugSnapshot,
-  BrowserViewDebugSnapshotData,
   BrowserViewDetachSurface,
   BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
   BrowserViewElectronTabControl,
+  BrowserViewElectronViewport,
   BrowserViewNativeTabCapability,
   BrowserViewTileKey,
   PipCaptureStartInput,
@@ -39,6 +39,7 @@ import type {
   BrowserViewGuestAttachRequest,
   BrowserViewGuestAttachResult,
   BrowserViewDevToolsWindow,
+  BrowserViewNativeTabTransfer,
   BrowserViewNavigationHistory,
   BrowserViewPopupCreateWindowOptions,
   BrowserViewPopupWebContents,
@@ -59,7 +60,6 @@ import {
 } from "./manager/browser-view-entry";
 import {
   BrowserViewEntryFactory,
-  applyEntryZoom,
   steppedEntryZoom,
 } from "./manager/browser-view-entry-factory";
 import {
@@ -78,6 +78,7 @@ import {
 } from "./manager/browser-view-provisioning";
 import { BrowserViewWindowAttachment } from "./manager/browser-view-window-attachment";
 import { BrowserViewDebugSessions } from "./manager/debug-session-for";
+import { BrowserViewViewport } from "./manager/browser-view-viewport";
 
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
 
@@ -140,6 +141,12 @@ interface BrowserViewManagerOptions {
    * Drops an isolated session's partition once its last native tab is gone.
    * Only ever called with `profile: "isolated"`; the shared jars outlive
    * every guest.
+   *
+   * `void` rather than a promise, and that is not an oversight: the clear only
+   * STARTS here, and the step that must not run before it finishes is a later
+   * guest birth into the same partition, which is nowhere near this call.
+   * `browser-session.ts` publishes the in-flight clear per partition and
+   * provisioning waits on it there - see `pendingBrowserViewPartitionRelease`.
    */
   readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
@@ -167,6 +174,13 @@ export class BrowserViewManager {
   private readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
+  /**
+   * Isolated sessions whose partition has been released and that have had no
+   * guest born since. Two paths can decide "the last guest is gone" for one
+   * session - a guest's own failed birth, and the replacement that guest was
+   * meant to succeed - and the partition is released once, not once each.
+   */
+  private readonly releasedIsolatedSessionKeys = new Set<string>();
   private readonly localHostId: () => string | null;
   private readonly offWindowChange: () => void;
   private readonly offDownloadChange: () => void;
@@ -175,18 +189,22 @@ export class BrowserViewManager {
   private readonly nativeTabStatusListeners = new Set<
     (change: BrowserViewNativeTabStatusChange) => void
   >();
+  private readonly nativeTabTransferListeners = new Set<
+    (transfer: BrowserViewNativeTabTransfer) => void
+  >();
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
-  private readonly windows: BrowserViewWindowAttachment;
   private readonly entryFactory: BrowserViewEntryFactory;
   private readonly provisioning: BrowserViewProvisioning;
   // Collaborators are part of the manager's public surface: the IPC layer
   // calls them directly (`manager.find.find(...)`) rather than through
   // pass-through methods that add no policy.
+  readonly windows: BrowserViewWindowAttachment;
   readonly annotations: BrowserViewAnnotationHost;
   readonly find: BrowserViewFind;
   readonly chords: BrowserViewChords;
   readonly pip: BrowserViewPipCapture;
+  readonly viewport: BrowserViewViewport;
 
   constructor(options: BrowserViewManagerOptions) {
     this.createDevToolsWindow = options.createDevToolsWindow;
@@ -204,6 +222,11 @@ export class BrowserViewManager {
       send: options.send,
       debugSessions: this.debugSessions,
     });
+    this.viewport = new BrowserViewViewport(
+      this.entries,
+      this.annotations,
+      options.send,
+    );
     this.find = new BrowserViewFind({
       entries: this.entries,
       send: options.send,
@@ -225,9 +248,7 @@ export class BrowserViewManager {
         void this.closeEntry(entry);
       },
     });
-    this.pip = new BrowserViewPipCapture({
-      debugSessions: this.debugSessions,
-    });
+    this.pip = new BrowserViewPipCapture();
     this.popups = new BrowserViewPopups({
       createPopupWindowOptions: options.createPopupWindowOptions,
       createPopupWindow: options.createPopupWindow,
@@ -240,13 +261,34 @@ export class BrowserViewManager {
       find: this.find,
       popups: this.popups,
       chords: this.chords,
-      debugSessions: this.debugSessions,
       observePrimaryProfileOrigin: options.observePrimaryProfileOrigin,
       setStatus: (entry, status, reason) => {
         this.setStatus(entry, status, reason);
       },
       emitStatus: (entry) => {
         this.emitStatus(entry);
+      },
+      requestZoom: (entry, factor) => {
+        void this.trySetEntryZoom(entry, factor).catch((error: unknown) => {
+          log.warn("[browser-view] page zoom failed", {
+            error: describeLogError(error),
+          });
+        });
+      },
+      refreshViewport: (entry) => {
+        void this.viewport
+          .refreshAfterNavigation(entry)
+          .then((zoomChanged) => {
+            if (zoomChanged) this.emitStatus(entry);
+          })
+          .catch((error: unknown) => {
+            log.warn(
+              "[browser-view] viewport recovery after navigation failed",
+              {
+                error: describeLogError(error),
+              },
+            );
+          });
       },
       emitFocus: (entry) => {
         if (entry.surface === null) return;
@@ -269,20 +311,32 @@ export class BrowserViewManager {
         identity,
         profile,
         webContents,
-      ) =>
-        this.entryFactory.createFromWebContents(
+      ) => {
+        // A new guest of a released isolated session starts that session's
+        // partition over, so its own last close must release it again.
+        this.releasedIsolatedSessionKeys.delete(nativeSessionKey(identity.key));
+        return this.entryFactory.createFromWebContents(
           requestedUrl,
           identity,
           profile,
           webContents,
-        ),
+        );
+      },
       attachRendererGuest: options.attachRendererGuest,
       releaseRendererGuest: options.releaseRendererGuest,
       seedStorageState: options.seedStorageState,
       closeEntry: (entry) => this.closeEntry(entry),
+      releaseIsolatedSessionStorage: (entry) => {
+        this.releaseIsolatedSessionStorage(entry);
+      },
       navigate: (entry, url) => this.navigate(entry, url),
       emitStatus: (entry) => {
         this.emitStatus(entry);
+      },
+      notifyNativeTabTransferred: (transfer) => {
+        for (const listener of this.nativeTabTransferListeners) {
+          listener(transfer);
+        }
       },
     });
     this.offWindowChange = options.onWindowChange(() => {
@@ -405,18 +459,30 @@ export class BrowserViewManager {
         this.moveEntryInHistory(entry, "forward");
         return true;
       case "zoomIn":
-        this.applyZoomStep(entry, 1);
+        await this.applyZoomStep(entry, 1);
         return true;
       case "zoomOut":
-        this.applyZoomStep(entry, -1);
+        await this.applyZoomStep(entry, -1);
         return true;
       case "resetZoom":
-        this.trySetEntryZoom(entry, 1);
+        await this.trySetEntryZoom(entry, 1);
         return true;
       case "openDevTools":
         this.openEntryDevTools(entry, windowId);
         return true;
     }
+  }
+
+  applyElectronTabViewport(
+    input: BrowserViewElectronViewport,
+  ): Promise<BrowserViewportGeometry> {
+    const entry = this.findExactNativeEntry(input);
+    if (entry === null)
+      return Promise.reject(new Error("The browser tab is unavailable."));
+    return this.viewport.apply(entry, input).then((applied) => {
+      this.emitStatus(entry);
+      return applied;
+    });
   }
 
   canTrustCertificateError(
@@ -502,24 +568,6 @@ export class BrowserViewManager {
     return registrableDomainForUrl(entry.currentUrl);
   }
 
-  getDebugSnapshot(
-    windowId: string,
-    input: BrowserViewTileKey,
-  ): BrowserViewDebugSnapshot {
-    const entry = this.entries.getTile(windowId, input);
-    if (entry === undefined) {
-      return {
-        ...input,
-        consoleEntries: [],
-        networkEntries: [],
-      };
-    }
-    return {
-      ...toTileKey(requireSurface(entry)),
-      ...this.readDebugSnapshot(entry),
-    };
-  }
-
   async dispatchElectronTabCdp(
     input: BrowserViewElectronTabCdpDispatch,
   ): Promise<BrowserCdpResult> {
@@ -556,12 +604,18 @@ export class BrowserViewManager {
       };
     }
     const debugSession = this.debugSessions.ensure(entry);
-    await debugSession.enableAfterCommit().catch(() => undefined);
+    // The first agent command attaches this tab's debugger for the rest of its
+    // incarnation. There is no "agent is done with the tab" signal on the wire,
+    // and a detach between two commands of one sequence would invalidate the
+    // frame routes that sequence resolved.
+    entry.agentCdpLease ??= debugSession.acquire();
+    await entry.agentCdpLease.ready().catch(() => undefined);
     return debugSession.dispatch(input.target, input.command);
   }
 
   dispose(): void {
     this.offWindowChange();
+    this.windows.dispose();
     this.offDownloadChange();
     this.offCertificateError();
     for (const entry of Array.from(this.entries.guestValues())) {
@@ -613,21 +667,24 @@ export class BrowserViewManager {
     );
   }
 
+  /**
+   * Closes the native guests the closing window OWNS, and only those.
+   *
+   * It used to widen: one guest in this window pulled in every guest of that
+   * guest's whole session, in every window. That was safe while a session's
+   * native tabs could only ever live in one window. They cannot now - the host
+   * elects a native route per scope AND window, so one session's tabs are
+   * split across windows by design - and the widened close would destroy the
+   * other window's live tabs, while the host is rebinding onto them.
+   *
+   * Ownership is per guest, and `lifecycleWindowId` is precisely who owns one.
+   */
   async closeNativeSessionsForWindow(windowId: string): Promise<void> {
-    const entries = Array.from(this.entries.guestValues());
-    const sessionKeys = new Set(
-      entries
-        .filter((entry) => entry.identity.lifecycleWindowId === windowId)
-        .map((entry) => nativeSessionKey(entry.identity.key)),
+    const owned = Array.from(this.entries.guestValues()).filter(
+      (entry) => entry.identity.lifecycleWindowId === windowId,
     );
-    if (sessionKeys.size === 0) return;
-    await Promise.all(
-      entries
-        .filter((entry) =>
-          sessionKeys.has(nativeSessionKey(entry.identity.key)),
-        )
-        .map((entry) => this.closeEntry(entry)),
-    );
+    if (owned.length === 0) return;
+    await Promise.all(owned.map((entry) => this.closeEntry(entry)));
   }
 
   private findExactNativeEntry(
@@ -647,9 +704,6 @@ export class BrowserViewManager {
       this.annotations.end(entry, "tile-close");
     }
     this.entries.bindSurface(entry, key);
-    if (previousSurface !== null && previousSurface.windowId !== key.windowId) {
-      this.windows.detachResetListenerIfUnused(previousSurface.windowId);
-    }
   }
 
   private detachEntrySurface(entry: BrowserViewEntry): void {
@@ -660,7 +714,6 @@ export class BrowserViewManager {
     this.entries.detachSurface(entry);
     entry.surfaceBindingId = null;
     entry.rendererResetPending = false;
-    this.windows.detachResetListenerIfUnused(surface.windowId);
     // LAST, once every field the reading depends on has moved: `viewed` is
     // read off the entry now (H10), so a detach that emitted nothing would
     // leave the host believing a tile is still showing this guest. `attachSurface`
@@ -703,6 +756,8 @@ export class BrowserViewManager {
     }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;
+    entry.navigationAttempt += 1;
+    const attempt = entry.navigationAttempt;
     entry.status = "loading";
     entry.statusReason = null;
     entry.certificateError = null;
@@ -714,7 +769,14 @@ export class BrowserViewManager {
         error: describeLogError(err),
         url,
       });
-      if (this.entries.isCurrent(entry)) {
+      // Settle only the attempt that failed. `loadURL` rejects for the OLDER
+      // of two overlapping navigations (ERR_ABORTED) after the newer one has
+      // already set `loading`; an entry-identity check alone would report
+      // `ready` for a page still in flight.
+      if (
+        this.entries.isCurrent(entry) &&
+        entry.navigationAttempt === attempt
+      ) {
         this.setStatus(entry, "ready", "Navigation failed");
       }
       throw err;
@@ -722,8 +784,24 @@ export class BrowserViewManager {
   }
 
   private reloadEntry(entry: BrowserViewEntry): void {
-    this.setStatus(entry, "loading", null);
+    this.startNavigationAttempt(entry);
     entry.webContents.reload();
+  }
+
+  /**
+   * Opens a new loading episode for a host-driven reload or history move.
+   * `setStatus` dedupes on (status, reason), so a move issued while the entry
+   * is ALREADY loading would bump the attempt and tell nobody - and the
+   * renderer's stall clock, keyed on the attempt, would keep running down
+   * for the old episode. Emit unconditionally instead.
+   */
+  private startNavigationAttempt(entry: BrowserViewEntry): void {
+    entry.navigationAttempt += 1;
+    if (entry.status !== "loading" || entry.statusReason !== null) {
+      this.setStatus(entry, "loading", null);
+      return;
+    }
+    this.emitStatus(entry);
   }
 
   private moveEntryInHistory(
@@ -748,7 +826,7 @@ export class BrowserViewManager {
       this.emitStatus(entry);
       return;
     }
-    this.setStatus(entry, "loading", null);
+    this.startNavigationAttempt(entry);
     try {
       if (direction === "back") {
         navigationHistory.goBack();
@@ -760,16 +838,28 @@ export class BrowserViewManager {
         error: describeLogError(err),
         webContentsId: entry.webContents.id,
       });
-      this.emitStatus(entry);
+      // Nothing will commit for a move that threw synchronously; re-emitting
+      // `loading` here left the tile spinning for good.
+      this.setStatus(entry, "ready", "Navigation failed");
     }
   }
 
-  private applyZoomStep(entry: BrowserViewEntry, direction: 1 | -1): void {
-    this.trySetEntryZoom(entry, steppedEntryZoom(entry, direction));
+  private applyZoomStep(
+    entry: BrowserViewEntry,
+    direction: 1 | -1,
+  ): Promise<void> {
+    return this.trySetEntryZoom(entry, steppedEntryZoom(entry, direction));
   }
 
-  private trySetEntryZoom(entry: BrowserViewEntry, factor: number): void {
-    if (applyEntryZoom(entry, factor)) this.emitStatus(entry);
+  private async trySetEntryZoom(
+    entry: BrowserViewEntry,
+    factor: number,
+  ): Promise<void> {
+    try {
+      await this.viewport.setZoom(entry, factor);
+    } finally {
+      this.emitStatus(entry);
+    }
   }
 
   private openEntryDevTools(entry: BrowserViewEntry, windowId: string): void {
@@ -842,8 +932,9 @@ export class BrowserViewManager {
    * A tile's CDP debugger can detach for reasons outside our control - the
    * target being destroyed, a renderer crash, or an explicit
    * `Debugger.detach`. BrowserDebugSession synchronously drops its ready
-   * state; the next native ensure or CDP dispatch reattaches and enables
-   * domains before using the existing incarnation.
+   * state; a native ensure re-enables the domains only while a lease is still
+   * out, and the next CDP dispatch takes one and reattaches. A tab nobody is
+   * driving stays a plain Chromium tab.
    *
    * Verified 2026-07-28, live: opening DevTools does NOT trigger this path
    * on Electron 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
@@ -862,17 +953,6 @@ export class BrowserViewManager {
     });
     this.annotations.end(entry, "crash");
     if (this.pip.isCapturing(entry)) this.pip.stop();
-  }
-
-  private readDebugSnapshot(
-    entry: BrowserViewEntry,
-  ): BrowserViewDebugSnapshotData {
-    return (
-      entry.debugSession?.snapshot() ?? {
-        consoleEntries: [],
-        networkEntries: [],
-      }
-    );
   }
 
   private setStatus(
@@ -908,6 +988,7 @@ export class BrowserViewManager {
       canGoBack: readings.canGoBack,
       canGoForward: readings.canGoForward,
       zoomPercent: readings.zoomPercent,
+      navigationAttempt: entry.navigationAttempt,
       viewed: entry.surface !== null && entry.desiredVisible,
     };
     this.send(
@@ -931,6 +1012,27 @@ export class BrowserViewManager {
     this.nativeTabStatusListeners.add(listener);
     return () => {
       this.nativeTabStatusListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Main-side subscription to guests moving between windows. Every window's
+   * lifecycle object hears every transfer and matches on
+   * `previousRegistrationId`, because the window that LOST a guest is the one
+   * with bookkeeping to drop and the manager does not know which one that is -
+   * `lifecycleWindowId` has already been read by then, and a birth's id is the
+   * only thing that identifies its holder.
+   *
+   * Its own disposer, for the reason `onNativeTabStatusChange` has one: a
+   * stream that closes stops hearing without touching another stream's
+   * subscription.
+   */
+  onNativeTabTransferred(
+    listener: (transfer: BrowserViewNativeTabTransfer) => void,
+  ): () => void {
+    this.nativeTabTransferListeners.add(listener);
+    return () => {
+      this.nativeTabTransferListeners.delete(listener);
     };
   }
 
@@ -973,49 +1075,96 @@ export class BrowserViewManager {
     return settled.promise;
   }
 
+  /**
+   * Every step runs, and the entry ALWAYS leaves the registry, whatever an
+   * earlier step throws. This path is the `destroyed` handler of a guest that
+   * may already be gone - a renderer restart takes its `<webview>` with it -
+   * and a destroyed WebContents' native getters throw "Object has been
+   * destroyed" instead of degrading. A throw that escaped here left the entry
+   * registered behind a rejected `closePromise`, every later ensure of the
+   * same tab chained behind that rejection (provisioning's "wait for the
+   * in-flight close" branch), and the session was wedged until the app
+   * relaunched. A failed step is a WARN line, never a reason to keep the
+   * corpse: the close resolves because the guest is gone from the registry,
+   * which is the fact the waiters read.
+   */
   private async destroyEntry(entry: BrowserViewEntry): Promise<void> {
     const surface = entry.surface;
     const keyId = surface === null ? null : entryKeyId(surface);
+    const step = (name: string, run: () => void): void => {
+      try {
+        run();
+      } catch (error) {
+        log.warn("[browser-view] view destroy step failed", {
+          keyId,
+          step: name,
+          error: describeLogError(error),
+        });
+      }
+    };
+    step("viewport", () => this.viewport.forget(entry));
     log.info("[browser-view] view destroy started", {
       keyId,
       status: entry.status,
     });
-    this.destroyDevToolsWindow(entry);
-    this.annotations.failPendingForEntry(entry);
+    step("devtools", () => this.destroyDevToolsWindow(entry));
+    step("annotations", () => this.annotations.failPendingForEntry(entry));
     this.entries.detachSurface(entry);
-    if (surface !== null) {
-      this.windows.detachResetListenerIfUnused(surface.windowId);
-    }
     const webContents = entry.webContents;
-    for (const [event, handler] of Object.entries(entry.listeners)) {
-      webContents.off(event, handler);
-    }
-    entry.annotationSession?.dispose("tile-close");
+    step("listeners", () => {
+      for (const [event, handler] of Object.entries(entry.listeners)) {
+        webContents.off(event, handler);
+      }
+    });
+    step("annotation-session", () => {
+      entry.annotationSession?.dispose("tile-close");
+    });
     entry.annotationSession = null;
-    this.pip.forget(entry);
-    entry.debugSession?.dispose();
+    step("pip", () => this.pip.forget(entry));
+    // Disposing the session ends every lease this guest handed out; the fields
+    // go with it so nothing can release into the next incarnation's session.
+    entry.seedLease = null;
+    entry.agentCdpLease = null;
+    step("debug-session", () => {
+      entry.debugSession?.dispose();
+    });
     entry.debugSession = null;
-    this.releaseRendererGuest(
-      entry.identity.registrationId,
-      entry.identity.lifecycleWindowId,
+    step("renderer-guest", () =>
+      this.releaseRendererGuest(
+        entry.identity.registrationId,
+        entry.identity.lifecycleWindowId,
+      ),
     );
     this.entries.remove(entry);
-    this.releaseIsolatedSessionStorage(entry);
-    this.windows.detachResetListenerIfUnused(entry.identity.lifecycleWindowId);
+    step("isolated-storage", () => this.releaseIsolatedSessionStorage(entry));
     log.info("[browser-view] view destroy requested", { keyId });
   }
 
   /**
    * An isolated session's partition is throwaway by construction, so it dies
    * with the session's last native tab - not with each tab, because siblings
-   * of the same session share the one partition.
+   * of the same session share the one partition. A guest closed to be re-born
+   * in another window is not the last tab either, even though its successor
+   * is not in the registry yet; see `succeededByReplacement`.
    */
   private releaseIsolatedSessionStorage(entry: BrowserViewEntry): void {
-    if (entry.profile !== "isolated") return;
+    if (entry.profile !== "isolated" || entry.succeededByReplacement) return;
     const sessionKey = nativeSessionKey(entry.identity.key);
+    if (this.releasedIsolatedSessionKeys.has(sessionKey)) return;
     for (const remaining of this.entries.guestValues()) {
       if (nativeSessionKey(remaining.identity.key) === sessionKey) return;
     }
+    // The scan above only sees REGISTERED guests, and a sibling tab whose
+    // birth has minted its `<webview>` but not yet run `onAttached` has no
+    // entry - so a close that is not the session's last still reads as one,
+    // and the jar is emptied under a guest that is already living in it. The
+    // debt is handed to provisioning, which re-asks when that birth ends.
+    if (
+      this.provisioning.deferIsolatedReleaseWhileEnsuring(entry, sessionKey)
+    ) {
+      return;
+    }
+    this.releasedIsolatedSessionKeys.add(sessionKey);
     this.releaseSessionStorage({
       profile: entry.profile,
       sessionId: entry.identity.key.sessionId,

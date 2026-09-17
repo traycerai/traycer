@@ -100,6 +100,7 @@ export const epicSchemaSurfaceBaseline = {
                       "enum": [
                         "supervised",
                         "auto_accept_edits",
+                        "auto",
                         "full_access"
                       ]
                     },
@@ -3275,7 +3276,12 @@ export const epicSchemaSurfaceBaseline = {
                                             "model_rerouted",
                                             "model_verification",
                                             "safety_buffering",
-                                            "harness_message"
+                                            "harness_message",
+                                            "fallback_applied",
+                                            "fallback_returned",
+                                            "fallback_return_blocked",
+                                            "fallback_wait_resumed",
+                                            "fallback_settled"
                                           ]
                                         },
                                         "tone": {
@@ -5150,6 +5156,55 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "failure": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "reason": {
+                                          "type": "string",
+                                          "enum": [
+                                            "auth",
+                                            "rate_limit",
+                                            "billing",
+                                            "model_unavailable",
+                                            "provider_unavailable",
+                                            "provider_connection_failed",
+                                            "context_exhausted",
+                                            "request_rejected",
+                                            "turn_start_timeout",
+                                            "missing_terminal_event",
+                                            "background_work_failed",
+                                            "session_budget"
+                                          ]
+                                        },
+                                        "resetsAt": {
+                                          "type": "number"
+                                        },
+                                        "resetsAtSource": {
+                                          "type": "string",
+                                          "enum": [
+                                            "provider",
+                                            "probe"
+                                          ]
+                                        },
+                                        "scope": {
+                                          "type": "string"
+                                        },
+                                        "providerDetail": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reason"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -5411,6 +5466,17 @@ export const epicSchemaSurfaceBaseline = {
                                               "monitoring": {
                                                 "default": false,
                                                 "type": "boolean"
+                                              },
+                                              "hostId": {
+                                                "default": null,
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
                                               }
                                             },
                                             "required": [
@@ -6517,6 +6583,35 @@ export const epicSchemaSurfaceBaseline = {
                             }
                           ]
                         }
+                      },
+                      "turnProfile": {
+                        "type": "object",
+                        "properties": {
+                          "profileId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "labelSnapshot": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "profileId",
+                          "labelSnapshot"
+                        ]
                       }
                     },
                     "required": [
@@ -7158,6 +7253,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -7194,19 +7362,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -7216,8 +7441,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ]
             },
             {
@@ -7246,19 +7470,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -7268,8 +7549,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ]
             },
             {
@@ -7297,6 +7577,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -8299,6 +8652,7 @@ export const epicSchemaSurfaceBaseline = {
                       "enum": [
                         "supervised",
                         "auto_accept_edits",
+                        "auto",
                         "full_access"
                       ]
                     },
@@ -11681,7 +12035,12 @@ export const epicSchemaSurfaceBaseline = {
                                             "model_rerouted",
                                             "model_verification",
                                             "safety_buffering",
-                                            "harness_message"
+                                            "harness_message",
+                                            "fallback_applied",
+                                            "fallback_returned",
+                                            "fallback_return_blocked",
+                                            "fallback_wait_resumed",
+                                            "fallback_settled"
                                           ]
                                         },
                                         "tone": {
@@ -13643,6 +14002,56 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "failure": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "reason": {
+                                          "type": "string",
+                                          "enum": [
+                                            "auth",
+                                            "rate_limit",
+                                            "billing",
+                                            "model_unavailable",
+                                            "provider_unavailable",
+                                            "provider_connection_failed",
+                                            "context_exhausted",
+                                            "request_rejected",
+                                            "turn_start_timeout",
+                                            "missing_terminal_event",
+                                            "background_work_failed",
+                                            "session_budget"
+                                          ]
+                                        },
+                                        "resetsAt": {
+                                          "type": "number"
+                                        },
+                                        "resetsAtSource": {
+                                          "type": "string",
+                                          "enum": [
+                                            "provider",
+                                            "probe"
+                                          ]
+                                        },
+                                        "scope": {
+                                          "type": "string"
+                                        },
+                                        "providerDetail": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -13652,7 +14061,8 @@ export const epicSchemaSurfaceBaseline = {
                                 "type",
                                 "message",
                                 "recoverable",
-                                "code"
+                                "code",
+                                "failure"
                               ],
                               "additionalProperties": false
                             },
@@ -13908,11 +14318,23 @@ export const epicSchemaSurfaceBaseline = {
                                               "monitoring": {
                                                 "default": false,
                                                 "type": "boolean"
+                                              },
+                                              "hostId": {
+                                                "default": null,
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
                                               }
                                             },
                                             "required": [
                                               "commandId",
-                                              "monitoring"
+                                              "monitoring",
+                                              "hostId"
                                             ],
                                             "additionalProperties": false
                                           },
@@ -15011,6 +15433,36 @@ export const epicSchemaSurfaceBaseline = {
                             }
                           ]
                         }
+                      },
+                      "turnProfile": {
+                        "type": "object",
+                        "properties": {
+                          "profileId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "labelSnapshot": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "profileId",
+                          "labelSnapshot"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [
@@ -15677,6 +16129,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -15714,19 +16239,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -15736,8 +16318,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ],
               "additionalProperties": false
             },
@@ -15767,19 +16348,76 @@ export const epicSchemaSurfaceBaseline = {
                 "deletedAt": {
                   "type": "string"
                 },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "status": {
                   "anyOf": [
                     {
-                      "type": "number",
-                      "const": 0
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
                     },
                     {
-                      "type": "number",
-                      "const": 1
-                    },
-                    {
-                      "type": "number",
-                      "const": 2
+                      "type": "null"
                     }
                   ]
                 }
@@ -15789,8 +16427,7 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt",
-                "status"
+                "deletedAt"
               ],
               "additionalProperties": false
             },
@@ -15819,6 +16456,79 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "deletedAt": {
                   "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [

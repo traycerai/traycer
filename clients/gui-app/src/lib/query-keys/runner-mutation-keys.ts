@@ -104,6 +104,7 @@ export const runnerMutationKeys = {
   // Re-open a file the desktop save dialog just wrote (`fileDrops.openSavedFile`).
   openSavedFile: () => ["runner.fileDrops.openSavedFile"] as const,
   // Windows frameless title-bar menu strip: pop up a top-level native submenu.
+  executeMenuItem: () => ["runner.menu.executeItem"] as const,
   openTopLevelMenu: () => ["runner.menu.openTopLevel"] as const,
   zoomSet: (scope: string | null) => ["runner.zoom.set", scope] as const,
   zoomStepIn: (scope: string | null) => ["runner.zoom.stepIn", scope] as const,
@@ -119,7 +120,7 @@ export const runnerMutationKeys = {
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>
     ["runner.globalShortcuts.set", id] as const,
-  // Settings → Notifications → "This phone". Both act on the ONE device this
+  // Settings → Sounds → "This phone". Both act on the ONE device this
   // renderer runs on, so a static key is the whole scope - there is no second
   // OS permission to hold a separate entry for.
   pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
@@ -151,6 +152,8 @@ export function runnerHostQueryScopeId(runnerHost: object): number {
 }
 
 export const runnerQueryKeys = {
+  applicationMenu: (scope: number | null) =>
+    ["runner.menu.snapshot", scope] as const,
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
   /**
@@ -347,7 +350,7 @@ export const runnerQueryKeys = {
     target: string,
   ) =>
     ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
-  // This phone's OS push permission (Settings → Notifications → "This
+  // This phone's OS push permission (Settings → Sounds → "This
   // phone"). Machine-local and singular - one renderer, one OS switch - so a
   // static key suffices, like `logLevels` and `installedFonts` above.
   pushPermission: () => ["runner.pushPermission"] as const,

@@ -673,6 +673,10 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import {
+  DEFAULT_COMPOSER_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
@@ -687,6 +691,7 @@ const CODEX_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -699,6 +704,7 @@ const CLAUDE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -711,6 +717,7 @@ const OPENCODE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -723,6 +730,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -735,6 +743,7 @@ const DROID_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -747,6 +756,7 @@ const CURSOR_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
   availabilityPending: false,
 };
 
@@ -976,6 +986,7 @@ interface RenderPickerInput {
    */
   readonly storeModels?: ReadonlyArray<ModelOption>;
   readonly withServiceTier?: boolean;
+  readonly withReasoning?: boolean;
   readonly tuiOnly?: boolean;
   readonly lockedHarnessId?: ProviderId | null;
   readonly disabled?: boolean;
@@ -1011,6 +1022,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
+    chatLineCarriesAutoMode: null,
     hostId: TEST_HOST_ID,
   });
   if (resolvedInput.storeModels !== undefined) {
@@ -1021,6 +1033,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       models: resolvedInput.storeModels,
       modelsLoaded: true,
       tuiOnly: resolvedInput.tuiOnly ?? false,
+      chatLineCarriesAutoMode: null,
     });
   }
   const selections: HarnessModelSelection[] = [];
@@ -1049,6 +1062,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
+          withReasoning={resolvedInput.withReasoning ?? true}
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}
@@ -1144,6 +1158,7 @@ describe("<HarnessModelPicker />", () => {
     // seeded record can't leak between tests.
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
+    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
   });
 
   afterEach(() => {
@@ -1253,6 +1268,84 @@ describe("<HarnessModelPicker />", () => {
     expect(tooltipText).toContain(shortcut);
   });
 
+  // Layout ▸ Composer ▸ Reasoning level. The picker reads it and both chips
+  // that mount this picker follow, so the setting is proven where it is read
+  // rather than only on the trigger in isolation.
+  it("draws the effort as bars, and spells the position out in the tooltip, when the layout setting asks for bars", async () => {
+    useLayoutStore.getState().setComposerReasoningIndicator("bars");
+    renderPicker({
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-5.5",
+        profileId: null,
+      },
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "minimal", label: "Minimal", description: null },
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+            { id: "max", label: "Max", description: null },
+          ],
+        }),
+      ],
+    });
+
+    const glyph = screen.getByRole("img", { name: "Thinking: High (3 of 4)" });
+    expect(
+      Array.from(glyph.querySelectorAll("rect")).map((bar) =>
+        bar.getAttribute("data-filled"),
+      ),
+    ).toEqual(["true", "true", "true", "false"]);
+
+    const trigger = screen.getByRole("button", {
+      name: "GPT-5.5, Thinking High",
+    });
+    expect(trigger.textContent).not.toContain("High");
+    fireEvent.focus(trigger);
+
+    const tooltipText = (await screen.findByRole("tooltip")).textContent;
+    expect(tooltipText).toContain("Effort");
+    expect(tooltipText).toContain("High (3 of 4)");
+  });
+
+  it("draws no glyph, and the bare effort in the tooltip, on the default text setting", async () => {
+    renderPicker({
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-5.5",
+        profileId: null,
+      },
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "minimal", label: "Minimal", description: null },
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+            { id: "max", label: "Max", description: null },
+          ],
+        }),
+      ],
+    });
+
+    expect(screen.queryByRole("img")).toBeNull();
+    const trigger = screen.getByRole("button", {
+      name: "GPT-5.5, Thinking High",
+    });
+    expect(trigger.textContent).toContain("High");
+    fireEvent.focus(trigger);
+
+    const tooltipText = (await screen.findByRole("tooltip")).textContent;
+    expect(tooltipText).toContain("Effort");
+    expect(tooltipText).not.toContain("3 of 4");
+  });
+
   // Seed the per-harness memory so a switch / pick restores a known record.
   function recordMemory(input: {
     readonly harnessId: ProviderId;
@@ -1286,6 +1379,7 @@ describe("<HarnessModelPicker />", () => {
         models,
         modelsLoaded: true,
         tuiOnly: false,
+        chatLineCarriesAutoMode: null,
       });
     });
   }
@@ -1361,6 +1455,159 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(claudeRail);
     expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
     expect(claudeRail.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("shows 'Loading models' - never the Add API key CTA - for a cold, still-pending API-key provider with no settled verdict yet", async () => {
+    // Unlike `OPENROUTER_HARNESS`'s default fixture (settled unavailable, an
+    // attached error), this provider has never settled: still probing, no
+    // error yet. `ModelRowsState` must resolve this as "loading", not
+    // "unavailable" - the CTA is for a settled negative, and showing it here
+    // would send the user to add a key for a provider that might turn out to
+    // be available a moment later.
+    //
+    // A harness this unsettled (`availabilityPending && !available`) renders
+    // its rail tab INERT (`harnessAvailabilityUnsettled` in
+    // `harness-rail-providers.ts`) - a spinner, an accessible name suffixed
+    // "— loading…", and no click that switches/browses it - so this lands on
+    // it via the composer's OWN initial selection instead of opening
+    // elsewhere and clicking its tab. `resolveActiveProviderId` still lands
+    // there because a keyless `requiresApiKey` provider counts as "degraded"
+    // (browsable without committing) independent of `availabilityPending`.
+    const pendingOpenRouter: HarnessOption = {
+      ...OPENROUTER_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: null,
+    };
+    queryMock.harnesses = [CODEX_HARNESS, CLAUDE_HARNESS, pendingOpenRouter];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+      catalogHarness(pendingOpenRouter, []),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codexModels()],
+      ["claude", claudeModels()],
+      ["openrouter", []],
+    ]);
+
+    renderPicker({
+      selection: { harnessId: "openrouter", modelSlug: "", profileId: null },
+    });
+    // No model resolves for the cold selection, so the trigger falls back to
+    // its generic label - the same one "falls back to a RUNNABLE provider
+    // rather than the first degraded one" above opens through.
+    await openPickerByTriggerName("Select model");
+
+    // The unsettled tab's accessible name is suffixed ("OpenRouter —
+    // loading…"), not the plain label - match the start rather than the
+    // full string.
+    expect(
+      screen
+        .getByRole("tab", { name: /^OpenRouter/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByText("Loading models")).not.toBeNull();
+    expect(screen.queryByText("Connect OpenRouter")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add API key" })).toBeNull();
+  });
+
+  it("shows the Add API key CTA - not the loading spinner - for a still-pending provider that already carries an error", async () => {
+    // Same unsettled shape as the previous test (`availabilityPending: true`,
+    // `available: false`), but this probe has already come back with a
+    // reason. `ModelRowsState`'s pending-loading branch now requires
+    // `provider.error === null`, so a pending row that already carries an
+    // error must fall through to `unavailableProviderState`'s CTA instead of
+    // spinning forever on a verdict that already arrived.
+    const pendingWithError: HarnessOption = {
+      ...OPENROUTER_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: "OpenRouter needs an API key",
+    };
+    queryMock.harnesses = [CODEX_HARNESS, CLAUDE_HARNESS, pendingWithError];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+      catalogHarness(pendingWithError, []),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codexModels()],
+      ["claude", claudeModels()],
+      ["openrouter", []],
+    ]);
+
+    renderPicker({
+      selection: { harnessId: "openrouter", modelSlug: "", profileId: null },
+    });
+    await openPickerByTriggerName("Select model");
+
+    expect(
+      screen
+        .getByRole("tab", { name: /^OpenRouter/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.queryByText("Loading models")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add API key" })).not.toBeNull();
+  });
+
+  it("targeted-fetches a cold provider that reports available while still revalidating (no cached models yet), but skips the fetch for one that already carries retained warm models", async () => {
+    // `useBrowsedProviderCatalogEntry`'s fetch gate: `entry.available &&
+    // (!entry.availabilityPending || entry.models.length === 0)`. A
+    // synthesized positive from pending-retention (models already cached)
+    // must not re-fetch; a genuine positive verdict with nothing cached yet
+    // (e.g. the host's FIRST probe already reports available while still
+    // finishing up) still needs this targeted cold-cache load, or the row
+    // would sit "available" with an empty list forever.
+    const coldPendingPositive: HarnessOption = {
+      ...DROID_HARNESS,
+      availabilityPending: true,
+    };
+    const warmPendingPositive: HarnessOption = {
+      ...CURSOR_HARNESS,
+      availabilityPending: true,
+    };
+    const cursorModels = [
+      model({
+        harnessId: "cursor",
+        slug: "cursor-fast",
+        label: "Cursor Fast",
+      }),
+    ];
+    queryMock.harnesses = [
+      CODEX_HARNESS,
+      CLAUDE_HARNESS,
+      coldPendingPositive,
+      warmPendingPositive,
+    ];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+      catalogHarness(coldPendingPositive, []),
+      catalogHarness(warmPendingPositive, cursorModels),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codexModels()],
+      ["claude", claudeModels()],
+      ["droid", []],
+      ["cursor", cursorModels],
+    ]);
+
+    renderPicker(undefined);
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Droid" }));
+    expect(
+      queryMock.calls.models.filter((call) => call.harnessId === "droid").at(-1)
+        ?.enabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Cursor" }));
+    expect(
+      queryMock.calls.models
+        .filter((call) => call.harnessId === "cursor")
+        .at(-1)?.enabled,
+    ).toBe(false);
   });
 
   it("shows a deprecated-model badge with its notice as a tooltip", async () => {
@@ -2621,14 +2868,18 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("button", { name: "Codex profile: Personal" }),
     ).toBeDefined();
+    // `--swatch`, not `background-color`: the profile dot carries its colour as
+    // a custom property and paints with `bg-[var(--swatch)]` (ticket 02's
+    // inline-style migration), so a `background-color` selector matches nothing
+    // and this assertion passed on an empty list.
     const swatchStyles = Array.from(
-      container.querySelectorAll<HTMLElement>(
-        'span[style*="background-color"]',
-      ),
+      container.querySelectorAll<HTMLElement>('span[style*="--swatch"]'),
     ).map((element) => element.getAttribute("style") ?? "");
-    expect(swatchStyles.some((style) => style.includes("16, 185, 129"))).toBe(
-      true,
-    );
+    // The hex as written, not jsdom's `rgb(16, 185, 129)`: a custom property
+    // is serialized verbatim, unlike the `background-color` this used to read.
+    expect(
+      swatchStyles.some((style) => style.toLowerCase().includes("#10b981")),
+    ).toBe(true);
   });
 
   it("closes the picker and opens the global add-profile flow from the dropdown's create-new-profile row", async () => {
@@ -3540,7 +3791,7 @@ describe("<HarnessModelPicker />", () => {
     // digits (⌥) are untouched, disjoint index spaces - this never collides
     // with `model.provider.byDigit` / `model.reasoning.byDigit`.
     act(() => {
-      fireLeaderDigit(2, "modShift");
+      fireLeaderDigit(2, "modShift", false);
     });
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
@@ -3611,7 +3862,7 @@ describe("<HarnessModelPicker />", () => {
     // A disabled row refuses a click; the digit shortcut must refuse the
     // same way, or it bypasses the exact gate the row enforces.
     act(() => {
-      fireLeaderDigit(2, "modShift");
+      fireLeaderDigit(2, "modShift", false);
     });
 
     expect(selections.at(-1)).toBe(baselineSelection);
@@ -3673,7 +3924,7 @@ describe("<HarnessModelPicker />", () => {
     // Only 2 profiles exist - digit 5 is out of range and must no-op, exactly
     // mirroring the provider rail's own overflow behavior.
     act(() => {
-      fireLeaderDigit(5, "modShift");
+      fireLeaderDigit(5, "modShift", false);
     });
 
     expect(selections.at(-1)).toBe(baselineSelection);
@@ -3741,7 +3992,7 @@ describe("<HarnessModelPicker />", () => {
     // dropdown's row clicks use, so the lock rule applies identically - no
     // second commit path to keep in sync.
     act(() => {
-      fireLeaderDigit(2, "modShift");
+      fireLeaderDigit(2, "modShift", false);
     });
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
@@ -3854,7 +4105,36 @@ describe("<HarnessModelPicker />", () => {
     expect(selections.at(-1)?.harnessId).toBe("claude");
   });
 
-  it("renders thinking effort controls in the picker footer", async () => {
+  it("renders the thinking-effort slider in the picker footer", async () => {
+    const { reasoningChanges } = renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+
+    expect(
+      screen.getByRole("group", { name: "Thinking effort" }),
+    ).not.toBeNull();
+    const slider = screen.getByRole("slider", { name: "Thinking effort" });
+    expect(slider.getAttribute("aria-valuetext")).toBe("High");
+
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+
+    expect(reasoningChanges).toEqual(["low"]);
+  });
+
+  it("renders thinking effort buttons in the picker footer under the list setting", async () => {
+    useLayoutStore.getState().setComposerReasoningFooterControl("list");
     const { reasoningChanges } = renderPicker({
       reasoning: "high",
       storeModels: [
@@ -3999,7 +4279,7 @@ describe("<HarnessModelPicker />", () => {
     // ⌘2 → the 2nd rail provider (Claude). Now COMMITS the switch (was
     // browse-only), exactly like clicking the rail icon; the popover stays open.
     act(() => {
-      fireLeaderDigit(2, "mod");
+      fireLeaderDigit(2, "mod", false);
     });
 
     await waitFor(() => {
@@ -4032,10 +4312,72 @@ describe("<HarnessModelPicker />", () => {
     // ⌥2 → second thinking level. The browsed provider (Codex) matches the
     // selected model's, so the footer is actionable.
     act(() => {
-      fireLeaderDigit(2, "alt");
+      fireLeaderDigit(2, "alt", false);
     });
 
     expect(reasoningChanges).toEqual(["high"]);
+  });
+
+  it("lights the slider's max treatment when the sub-leader digit lands on the last stop", async () => {
+    // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
+    // never touching the slider - so this is the route that proves the max
+    // treatment is a reading of the VALUE inside a presented picker, not of
+    // a gesture some handler in the strip happened to see. The sparkle field
+    // is gated on the picker's own `visibleOpen`, which only the real picker
+    // threads through.
+    renderPicker({
+      reasoning: "low",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
+
+    act(() => {
+      fireLeaderDigit(2, "alt", false);
+    });
+
+    const slider = screen.getByTestId("model-reasoning-slider");
+    expect(slider.getAttribute("data-max")).toBe("true");
+    expect(screen.getByTestId("model-reasoning-max-sparkles")).not.toBeNull();
+    expect(screen.getByTestId("model-reasoning-range").className).toContain(
+      "reasoning-effort-max-range",
+    );
+  });
+
+  it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
+    renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(1, "alt", false);
+    });
+
+    expect(
+      screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
+    ).toBeNull();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
   });
 
   it("sets the thinking level on the now-committed model after a rail switch", async () => {
@@ -4072,10 +4414,191 @@ describe("<HarnessModelPicker />", () => {
       }),
     ]);
     act(() => {
-      fireLeaderDigit(2, "alt");
+      fireLeaderDigit(2, "alt", false);
     });
 
     expect(reasoningChanges.at(-1)).toBe("high");
+  });
+
+  it("toggles fast mode with the sub-leader digit 0, mirroring the click toggle", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    const input = await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    expect(serviceTierChanges).toEqual(["fast"]);
+    // A pure state write, same as the rail/reasoning digits above - the
+    // search box keeps focus and the popover stays open.
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByRole("textbox", { name: /^Search/ })).toBe(input);
+  });
+
+  it("toggles fast mode off with a second sub-leader digit 0", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      serviceTier: "fast",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    expect(serviceTierChanges).toEqual([""]);
+  });
+
+  it("toggles fast mode with the sub-leader digit 0 on a model with no thinking levels", async () => {
+    const { serviceTierChanges, reasoningChanges } = renderPicker({
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [],
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    expect(serviceTierChanges).toEqual(["fast"]);
+    expect(reasoningChanges).toEqual([]);
+  });
+
+  it("no-ops the sub-leader digit 0 when the selected model reports no service tiers", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      reasoning: "low",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+          supportedServiceTiers: [],
+        }),
+      ],
+    });
+
+    await openPicker();
+
+    // The footer config is present (`withServiceTier: true`) - this is the
+    // per-model conditional case, not a caller that disabled Fast outright:
+    // `findUpgradeServiceTierForModel` has nothing to offer, so no Fast
+    // button renders at all.
+    expect(screen.queryByRole("button", { name: "Fast mode" })).toBeNull();
+
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+
+    // `toggleServiceTier` bails out on the missing upgrade tier rather than
+    // throwing.
+    expect(serviceTierChanges).toEqual([]);
+  });
+
+  it("reserves the sub-leader digit 0 for Fast - it no longer reaches a tenth thinking level", async () => {
+    const tenLevels = Array.from({ length: 10 }, (_, i) => ({
+      id: `l${i + 1}`,
+      label: `Level ${i + 1}`,
+      description: null,
+    }));
+    const { reasoningChanges, serviceTierChanges } = renderPicker({
+      reasoning: "l1",
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: tenLevels,
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    // ⌥9 still reaches the 9th (and now last reachable) level.
+    act(() => {
+      fireLeaderDigit(9, "alt", false);
+    });
+    expect(reasoningChanges).toEqual(["l9"]);
+
+    // ⌥0 toggles Fast instead of the 10th level ("l10") the old
+    // `digit === 0 ? 9 : digit - 1` mapping used to reach.
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+    expect(reasoningChanges).toEqual(["l9"]);
+    expect(serviceTierChanges).toEqual(["fast"]);
+  });
+
+  it("consumes a repeated sub-leader digit 0 keydown without re-toggling fast mode", async () => {
+    const { serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedServiceTiers: [
+            { id: "standard", label: "Standard", description: null },
+            { id: "fast", label: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(0, "alt", false);
+    });
+    expect(serviceTierChanges).toEqual(["fast"]);
+
+    // OS key-repeat while the chord is held must not flip the toggle again.
+    act(() => {
+      fireLeaderDigit(0, "alt", true);
+    });
+    expect(serviceTierChanges).toEqual(["fast"]);
   });
 
   it("does not commit a degraded provider (browse + reauth CTA only)", async () => {
@@ -4275,6 +4798,7 @@ describe("<HarnessModelPicker />", () => {
 function fireLeaderDigit(
   digit: number,
   modifier: "mod" | "alt" | "modShift",
+  repeat: boolean,
 ): void {
   const match = matchDigitAction(
     new KeyboardEvent("keydown", {
@@ -4282,6 +4806,7 @@ function fireLeaderDigit(
       metaKey: modifier === "mod" || modifier === "modShift",
       shiftKey: modifier === "modShift",
       altKey: modifier === "alt",
+      repeat,
     }),
   );
   match?.run();

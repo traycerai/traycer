@@ -1539,3 +1539,1328 @@ export const TREADMILL_MAP: SpriteMap = [
   "..OWWWWWWWWWWO..",
   "..OOOOOOOOOOOO..",
 ];
+
+// ---- Oblique storeys ------------------------------------------------- //
+
+export const FACE_MAP: SpriteMap = [
+  "LLLLLLLLLLLLLLLL",
+  "llllllllllllllll",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "lllllllllllllllL",
+  "LLLLLLLLLLLLLLLL",
+];
+
+export const SLAB_MAP: SpriteMap = [
+  "mmmmmmmmmmmmmmmm",
+  "MMMMMMMMMMMMMMMM",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "FFFFFFFFFFFFFFFF",
+  "FFFFFFFFFFFFFFFF",
+];
+
+export const DESK_FRONT_MAP: SpriteMap = [
+  "................................",
+  "................................",
+  "................................",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "..OMMO....................OMMO..",
+  "..OMMO....................OMMO..",
+  "..OMMO....................OMMO..",
+  "..OMMO....................OMMO..",
+  "..OMMO....................OMMO..",
+  "..OMMO....................OMMO..",
+  "..OOOO....................OOOO..",
+];
+
+export const LAMP_MAP: SpriteMap = [
+  "..yyyy..",
+  ".yyyyyy.",
+  "yyyyyyyy",
+  "...MM...",
+  "...MM...",
+  "...MM...",
+  "..mmmm..",
+  ".MMMMMM.",
+];
+
+export const STAIRS_SIDE_MAP: SpriteMap = [
+  "MMMMMMMMMMMMMMMM",
+  "mmmmmmmmmmmmmmmm",
+  "mmmmmmmmmmmmmmmm",
+  "LLLLLLLLLLLLLLLL",
+  "MMMMMMMMMMMMMMMM",
+  "mmmmmmmmmmmmmmmm",
+  "mmmmmmmmmmmmmmmm",
+  "LLLLLLLLLLLLLLLL",
+  "MMMMMMMMMMMMMMMM",
+  "mmmmmmmmmmmmmmmm",
+  "mmmmmmmmmmmmmmmm",
+  "LLLLLLLLLLLLLLLL",
+  "MMMMMMMMMMMMMMMM",
+  "mmmmmmmmmmmmmmmm",
+  "mmmmmmmmmmmmmmmm",
+  "LLLLLLLLLLLLLLLL",
+];
+
+/**
+ * A CARREL, and the bottom four rows are why.
+ *
+ * It used to be a hollow metal frame - a tinted lintel, an outline, and twelve
+ * rows of nothing - with the occupant drawn behind it showing straight
+ * through. A row of those reads as people standing in glass boxes rather than
+ * sitting at desks, which is what feedback round 1 said in as many words:
+ * "these transparent desks look weird".
+ *
+ * So the lower band is a DESK: one row of `woodLight` for the top edge over
+ * three of `woodDark` for the front, closing the booth at the height a desk
+ * closes one. The cubby is drawn above the character (`foot + 0.1` against the
+ * scene's `foot`), so this band passes in FRONT of the occupant's legs and
+ * leaves head and shoulders in the opening - which is the whole reading, and
+ * the reason the eight rows above it stay empty.
+ *
+ * The lintel keeps its `Z`: it is the one part of a cubby tinted with its
+ * occupant's colour, and it is how a dense quiet storey stays legible at a
+ * zoom where the person inside is four pixels tall.
+ */
+export const CUBBY_MAP: SpriteMap = [
+  "ZZZZZZZZZZZZZZZZ",
+  "OMMMMMMMMMMMMMMO",
+  "OM............MO",
+  "OM............MO",
+  "OM............MO",
+  "OM............MO",
+  "OM............MO",
+  "OM............MO",
+  "OM............MO",
+  "OM............MO",
+  "OMwwwwwwwwwwwwMO",
+  "OMWWWWWWWWWWWWMO",
+  "OMWWWWWWWWWWWWMO",
+  "OMWWWWWWWWWWWWMO",
+  "OMMMMMMMMMMMMMMO",
+  "OOOOOOOOOOOOOOOO",
+];
+
+export const SILHOUETTE_MAP: SpriteMap = [
+  "................",
+  "................",
+  ".....MMMMMM.....",
+  "....MMMMMMMM....",
+  "....MMMMMMMM....",
+  ".....MMMMMM.....",
+  "......MMMM......",
+  "....MMMMMMMM....",
+  "...MMMMMMMMMM...",
+  "...MMMMMMMMMM...",
+  "...MMMMMMMMMM...",
+  "....MMMMMMMM....",
+  ".....MM..MM.....",
+  ".....MM..MM.....",
+  "................",
+  "................",
+];
+
+export const SKYBRIDGE_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "vvvvvvvvvvvvvvvv",
+  "VVVVVVVVVVVVVVVV",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "mmmmmmmmmmmmmmmm",
+  "MMMMMMMMMMMMMMMM",
+  "ffffffffffffffff",
+  "ffffffffffffffff",
+  "FFFFFFFFFFFFFFFF",
+];
+
+export const BOARD_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "OMMMMMMMMMMMMMMO",
+  "OMbbbbbbbbbbbbMO",
+  "OMbbccccbbbbbbMO",
+  "OMbbbbbbbbbbbbMO",
+  "OMbbccccccccbbMO",
+  "OMbbbbbbbbbbbbMO",
+  "OMbbccccbbbbbbMO",
+  "OMbbbbbbbbbbbbMO",
+  "OMbbbbbbbbbbbbMO",
+  "OMMMMMMMMMMMMMMO",
+  "OOOOOOOOOOOOOOOO",
+];
+
+export const ROOF_EDGE_MAP: SpriteMap = [
+  "mmmmmmmmmmmmmmmm",
+  "MMMMMMMMMMMMMMMM",
+  "LLLLLLLLLLLLLLLL",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "LLLLLLLLLLLLLLLL",
+];
+
+/** One-tile riser under a Mission control console row. */
+export const TIER_STEP_MAP: SpriteMap = [
+  "................",
+  "................",
+  "................",
+  "................",
+  "LLLLLLLLLLLLLLLL",
+  "LffffffffffffffL",
+  "LfFFFFFFFFFFFFfL",
+  "LffffffffffffffL",
+  "LLLLLLLLLLLLLLLL",
+  "LllllllllllllllL",
+  "LlLLLLLLLLLLLLlL",
+  "LllllllllllllllL",
+  "LLLLLLLLLLLLLLLL",
+  "................",
+  "................",
+  "................",
+];
+
+/**
+ * The orchestrator's station: wood like a desk, but a raised lip and no
+ * keyboard mug, so it reads as a lectern rather than another console.
+ */
+export const PODIUM_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwWWWWWWWWWWWWWWWWWWWWWWWWWWWWwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwWWWWWWWWWWWWWWWWWWWWWWWWWWWWwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwwOOOOOOOOOOOOOOOOOOOOOOOOOOwwO",
+  "OwwOmmmmmmmmmmmmmmmmmmmmmmmmOwwO",
+  "OwwOmMmMmMmMmMmMmMmMmMmMmMmMOwwO",
+  "OwwOmmmmmmmmmmmmmmmmmmmmmmmmOwwO",
+  "OwwOOOOOOOOOOOOOOOOOOOOOOOOOOwwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];
+
+/**
+ * A Mission control workstation. Metal rather than wood, dual wells along the
+ * back edge for the monitor the painter sits there, keyboard on the left tile
+ * where the chair is.
+ */
+export const CONSOLE_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMO",
+  "OMmmmmmmmmmmmmmmmmmmmmmmmmmmmmMO",
+  "OMmOOOOOOOOOOOmmOOOOOOOOOOOOmmMO",
+  "OMmOdddddddddOmmOddddddddddOmmMO",
+  "OMmOdccccccdOOmmOdcccccccdOOmmMO",
+  "OMmOdddddddddOmmOddddddddddOmmMO",
+  "OMmOOOOOOOOOOOmmOOOOOOOOOOOOmmMO",
+  "OMmmmmmmmmmmmmmmmmmmmmmmmmmmmmMO",
+  "OMmOOOOOOOOOOOOOOOOOmmmmmmmmmmMO",
+  "OMmOMMMMMMMMMMMMMMMOmmmmmmmmmmMO",
+  "OMmOMmmmmmmmmmmmmmMOmmmmmmmmmmMO",
+  "OMmOOOOOOOOOOOOOOOOOmmmmmmmmmmMO",
+  "OMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMO",
+  "OMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];
+
+// ---- Isometric ------------------------------------------------------- //
+//
+// A tile projects to a 32 x 16 diamond, so every ground piece here is that
+// diamond and every upright piece is a parallelogram sheared to match its
+// edge. The two faces of a City storey are 8 px of vertical rise each, which
+// is the pitch `ISO_STOREY_HEIGHT` stacks them at; a Campus back wall is the
+// same shear carried 24 px up.
+
+/** Paving, seen from the corner; the rim is the neighbouring tone. */
+export const FLOOR_ISO_A_MAP: SpriteMap = [
+  "...............FF...............",
+  ".............FffffF.............",
+  "...........FffffffffF...........",
+  ".........FffffffffffffF.........",
+  ".......FffffffffffffffffF.......",
+  ".....FffffffffffffffffffffF.....",
+  "...FffffffffffffffffffffffffF...",
+  ".FffffffffffffffffffffffffffffF.",
+  ".FffffffffffffffffffffffffffffF.",
+  "...FffffffffffffffffffffffffF...",
+  ".....FffffffffffffffffffffF.....",
+  ".......FffffffffffffffffF.......",
+  ".........FffffffffffffF.........",
+  "...........FffffffffF...........",
+  ".............FffffF.............",
+  "...............FF...............",
+];
+
+/** The checker's other square: the same diamond with the tones swapped. */
+export const FLOOR_ISO_B_MAP: SpriteMap = [
+  "...............ff...............",
+  ".............fFFFFf.............",
+  "...........fFFFFFFFFf...........",
+  ".........fFFFFFFFFFFFFf.........",
+  ".......fFFFFFFFFFFFFFFFFf.......",
+  ".....fFFFFFFFFFFFFFFFFFFFFf.....",
+  "...fFFFFFFFFFFFFFFFFFFFFFFFFf...",
+  ".fFFFFFFFFFFFFFFFFFFFFFFFFFFFFf.",
+  ".fFFFFFFFFFFFFFFFFFFFFFFFFFFFFf.",
+  "...fFFFFFFFFFFFFFFFFFFFFFFFFf...",
+  ".....fFFFFFFFFFFFFFFFFFFFFf.....",
+  ".......fFFFFFFFFFFFFFFFFf.......",
+  ".........fFFFFFFFFFFFFf.........",
+  "...........fFFFFFFFFf...........",
+  ".............fFFFFf.............",
+  "...............ff...............",
+];
+
+/** A courtyard's lawn, in leaf tones rather than a palette letter of its own. */
+export const FLOOR_GRASS_ISO_A_MAP: SpriteMap = [
+  "...............GG...............",
+  ".............GggggG.............",
+  "...........GggggggggG...........",
+  ".........GggggggggggggG.........",
+  ".......GggggggggggggggggG.......",
+  ".....GggggggggggggggggggggG.....",
+  "...GggggggggggggggggggggggggG...",
+  ".GggggggggggggggggggggggggggggG.",
+  ".GggggggggggggggggggggggggggggG.",
+  "...GggggggggggggggggggggggggG...",
+  ".....GggggggggggggggggggggG.....",
+  ".......GggggggggggggggggG.......",
+  ".........GggggggggggggG.........",
+  "...........GggggggggG...........",
+  ".............GggggG.............",
+  "...............GG...............",
+];
+
+/** The lawn's other square. */
+export const FLOOR_GRASS_ISO_B_MAP: SpriteMap = [
+  "...............gg...............",
+  ".............gGGGGg.............",
+  "...........gGGGGGGGGg...........",
+  ".........gGGGGGGGGGGGGg.........",
+  ".......gGGGGGGGGGGGGGGGGg.......",
+  ".....gGGGGGGGGGGGGGGGGGGGGg.....",
+  "...gGGGGGGGGGGGGGGGGGGGGGGGGg...",
+  ".gGGGGGGGGGGGGGGGGGGGGGGGGGGGGg.",
+  ".gGGGGGGGGGGGGGGGGGGGGGGGGGGGGg.",
+  "...gGGGGGGGGGGGGGGGGGGGGGGGGg...",
+  ".....gGGGGGGGGGGGGGGGGGGGGg.....",
+  ".......gGGGGGGGGGGGGGGGGg.......",
+  ".........gGGGGGGGGGGGGg.........",
+  "...........gGGGGGGGGg...........",
+  ".............gGGGGg.............",
+  "...............gg...............",
+];
+
+/**
+ * The back wall along a room's top-LEFT edge: a 24 px slab sheared so its foot
+ * follows the diamond's upper-left edge, rising to the right.
+ */
+export const WALL_ISO_LEFT_MAP: SpriteMap = [
+  "...............l",
+  ".............lll",
+  "...........lllll",
+  ".........lllllll",
+  ".......lllllllll",
+  ".....lllllllllll",
+  "...lllllllllllll",
+  ".lllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "lllllllllllllllL",
+  "lllllllllllllLL.",
+  "lllllllllllLL...",
+  "lllllllllLL.....",
+  "lllllllLL.......",
+  "lllllLL.........",
+  "lllLL...........",
+  "lLL.............",
+  "L...............",
+];
+
+/** The same wall along the top-RIGHT edge: the mirror of it. */
+export const WALL_ISO_RIGHT_MAP: SpriteMap = [
+  "l...............",
+  "lll.............",
+  "lllll...........",
+  "lllllll.........",
+  "lllllllll.......",
+  "lllllllllll.....",
+  "lllllllllllll...",
+  "lllllllllllllll.",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "Llllllllllllllll",
+  ".LLlllllllllllll",
+  "...LLlllllllllll",
+  ".....LLlllllllll",
+  ".......LLlllllll",
+  ".........LLlllll",
+  "...........LLlll",
+  ".............LLl",
+  "...............L",
+];
+
+/**
+ * The gate a district is entered through. It stands free on its own tile, so
+ * the opening is transparent and the ground under it shows through.
+ */
+export const DOOR_ISO_MAP: SpriteMap = [
+  "WWWWWWWWWWWWWWWW",
+  "WWWWWWWWWWWWWWWW",
+  "WWWWWWWWWWWWWWWW",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+];
+
+/**
+ * A campus desk: the diamond of its surface raised over a skirt that follows
+ * the tile's front edges. The monitor is a separate sprite the painter stands
+ * on the surface's back edge.
+ */
+export const DESK_ISO_MAP: SpriteMap = [
+  "...............WW...............",
+  ".............WwwwwW.............",
+  "...........WwwwwwwwwW...........",
+  ".........WwwwwwwwwwwwwW.........",
+  ".......WwwwwwwwwwwwwwwwwW.......",
+  ".....WwwwwwwwwwwwwwwwwwwwwW.....",
+  "...WwwwwwwwwwwwwwwwwwwwwwwwwW...",
+  ".WwwwwwwwwwwwwwwwwwwwwwwwwwwwwW.",
+  ".WwwwwwwwwwwwwwwwwwwwwwwwwwwwwW.",
+  ".WWWwwwwwwwwwwwwwwwwwwwwwwwwWWW.",
+  ".WWWWWwwwwwwwwwwwwwwwwwwwwWWWWW.",
+  ".WWWWWWWwwwwwwwwwwwwwwwwWWWWWWW.",
+  ".WWWWWWWWWwwwwwwwwwwwwWWWWWWWWW.",
+  ".WWWWWWWWWWWwwwwwwwwWWWWWWWWWWW.",
+  ".WWWWWWWWWWWWWwwwwWWWWWWWWWWWWW.",
+  ".WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.",
+  ".WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.",
+  "...WWWWWWWWWWWWWWWWWWWWWWWWWW...",
+  ".....WWWWWWWWWWWWWWWWWWWWWW.....",
+  ".......WWWWWWWWWWWWWWWWWW.......",
+  ".........WWWWWWWWWWWWWW.........",
+  "...........WWWWWWWWWW...........",
+  ".............WWWWWW.............",
+  "...............WW...............",
+];
+
+/**
+ * One storey of a City building's lower-LEFT face: 8 px of rise, sheared to
+ * the diamond's edge, with its own top line shaded so a stack of seven reads
+ * as seven floors rather than one column.
+ */
+export const BLOCK_LEFT_MAP: SpriteMap = [
+  "Ll..............",
+  "Llll............",
+  "Llllll..........",
+  "Llllllll........",
+  "Llllllllll......",
+  "Llllllllllll....",
+  "Llllllllllllll..",
+  "Llllllllllllllll",
+  "Llllllllllllllll",
+  "..Llllllllllllll",
+  "....Llllllllllll",
+  "......Llllllllll",
+  "........Llllllll",
+  "..........Llllll",
+  "............Llll",
+  "..............Ll",
+];
+
+/** The same storey's lower-RIGHT face, darker: one light source, two sides. */
+export const BLOCK_RIGHT_MAP: SpriteMap = [
+  "..............Ll",
+  "............LLLl",
+  "..........LLLLLl",
+  "........LLLLLLLl",
+  "......LLLLLLLLLl",
+  "....LLLLLLLLLLLl",
+  "..LLLLLLLLLLLLLl",
+  "LLLLLLLLLLLLLLLl",
+  "LLLLLLLLLLLLLLLl",
+  "LLLLLLLLLLLLLl..",
+  "LLLLLLLLLLLl....",
+  "LLLLLLLLLl......",
+  "LLLLLLLl........",
+  "LLLLLl..........",
+  "LLLl............",
+  "Ll..............",
+];
+
+/** A roof: the tile's own diamond in metal, capping the column under it. */
+export const BLOCK_TOP_MAP: SpriteMap = [
+  "...............MM...............",
+  ".............MmmmmM.............",
+  "...........MmmmmmmmmM...........",
+  ".........MmmmmmmmmmmmmM.........",
+  ".......MmmmmmmmmmmmmmmmmM.......",
+  ".....MmmmmmmmmmmmmmmmmmmmmM.....",
+  "...MmmmmmmmmmmmmmmmmmmmmmmmmM...",
+  ".MmmmmmmmmmmmmmmmmmmmmmmmmmmmmM.",
+  ".MmmmmmmmmmmmmmmmmmmmmmmmmmmmmM.",
+  "...MmmmmmmmmmmmmmmmmmmmmmmmmM...",
+  ".....MmmmmmmmmmmmmmmmmmmmmM.....",
+  ".......MmmmmmmmmmmmmmmmmM.......",
+  ".........MmmmmmmmmmmmmM.........",
+  "...........MmmmmmmmmM...........",
+  ".............MmmmmM.............",
+  "...............MM...............",
+];
+
+/** A lit window on a City storey. */
+export const WINDOW_LIT_MAP: SpriteMap = [
+  "OOOOOOOO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OOOOOOOO",
+];
+
+/** An unlit one. */
+export const WINDOW_DARK_MAP: SpriteMap = [
+  "OOOOOOOO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OOOOOOOO",
+];
+
+/** The mast on the HQ tower: the one building that is taller than the rule. */
+export const SPIRE_MAP: SpriteMap = [
+  "...mm...",
+  "...mm...",
+  "...mm...",
+  "...mm...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+];
+
+// ---- The civic rooms -------------------------------------------------- //
+//
+// The infirmary's beds and the lounge's chairs are FURNITURE AN AGENT IS ON
+// rather than beside, like the nap room's bags: their tile stays walkable, so
+// the character's own sprite lands on top of the art below.
+
+/** A hospital bed seen from above: pillow at the head end, blanket over the rest. */
+export const BED_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OWOOOOOOOOOOWOOOOOOOOOOOOOOOOOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWObbbbbbbbOWOqqqqqqqqqqqqqqqOWO",
+  "OWOOOOOOOOOOWOOOOOOOOOOOOOOOOOWO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];
+
+/**
+ * The sheet turned down over an occupied bed, drawn ON the bed art.
+ *
+ * An OVERLAY rather than a second whole bed, because the two are drawn
+ * together and a second full map would be thirty-two columns of duplicated
+ * frame that could drift out of line with the first.
+ */
+export const BED_OCCUPIED_MAP: SpriteMap = [
+  "................................",
+  "................................",
+  "................................",
+  "..............ObbbO.............",
+  ".............ObbbbbO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OVVVVVO............",
+  ".............OOOOOOO............",
+  "................................",
+  "................................",
+];
+
+/**
+ * A padded lounge chair. Deliberately symmetric top to bottom: the lounge
+ * seats two rows facing each other across the table, and one chair that reads
+ * from either side is one sprite rather than a pair that can disagree.
+ */
+export const LOUNGE_CHAIR_MAP: SpriteMap = [
+  "................",
+  "...OOOOOOOOOO...",
+  "...OXXXXXXXXO...",
+  "..OOXXXXXXXXOO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OXOxxxxxxOXO..",
+  "..OOOOOOOOOOOO..",
+  "...OXXXXXXXXO...",
+  "...OOOOOOOOOO...",
+  "....OWO..OWO....",
+  "....OOO..OOO....",
+  "................",
+];
+
+/** The lounge's low table, two tiles wide, with something to read on it. */
+export const LOW_TABLE_MAP: SpriteMap = [
+  "................................",
+  "................................",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "..OwwwwwwwwwwwwwwwwwwwwwwwwwwO..",
+  "..OwwwwwwwwwObbbbbbOwwwwwwwwwO..",
+  "..OwwwwwwwwwObbbbbbOwwwwwwwwwO..",
+  "..OwwwwwwwwwOnnnnnnOwwwwwwwwwO..",
+  "..OwwwwwwwwwOOOOOOOOwwwwwwwwwO..",
+  "..OwwwwwwwwwwwwwwwwwwwwwwwwwwO..",
+  "..OWWWWWWWWWWWWWWWWWWWWWWWWWWO..",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOOO..",
+  "...OWO....................OWO...",
+  "...OWO....................OWO...",
+  "...OOO....................OOO...",
+  "................................",
+  "................................",
+];
+
+/** The archive: a door of filing drawers, in the outer wall beside the entrance. */
+export const RECORDS_DOOR_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "OWWWWWWWWWWWWWWO",
+  "OWOOOOOOOOOOOOWO",
+  "OWOwwwwwwwwwwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwObbbbbbOwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwwwwwwwwwwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwObbbbbbOwOWO",
+  "OWOwOOOOOOOOwOWO",
+  "OWOwwwwwwwwwwOWO",
+  "OWOwwwwwwmmwwOWO",
+  "OWOOOOOOOOOOOOWO",
+  "OWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOO",
+];
+
+/** The red cross over the infirmary's door, so the room is read at a glance. */
+export const CROSS_SIGN_MAP: SpriteMap = [
+  "................",
+  "..OOOOOOOOOOOO..",
+  "..ObbbbbbbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbnnnnnnbbO..",
+  "..ObbnnnnnnbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbnnbbbbO..",
+  "..ObbbbbbbbbbO..",
+  "..OOOOOOOOOOOO..",
+  "....OMO..OMO....",
+  "....OOO..OOO....",
+  "................",
+];
+
+// ---- The civic rooms in the five other views -------------------------- //
+//
+// ONE SECTION, appended whole, so that K3's vehicle art lands under it rather
+// than interleaved through it.
+//
+// The isometric pieces follow `desk-iso`'s anchoring, not their own: a sprite
+// standing on a tile is drawn by `isoPropOrigin`, which lands its BOTTOM CENTRE
+// on the diamond's centre, so a piece meant to cover a tile is a 32-wide
+// diamond with its rise above it and nothing below.
+
+/**
+ * The dispensary's glazed screen: the plaza looks at the ward through it.
+ *
+ * Taller in the glass than `partition`, which is a divider between two desk
+ * clusters and stops at chest height. This one is a full screen, so the beds
+ * behind it read as a room rather than as furniture in the open.
+ */
+export const GLASS_PARTITION_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "OMMMMMMMMMMMMMMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMOvvvvvvvvvvOMO",
+  "OMOvvvvvvvvvvOMO",
+  "OMOvvvvvvvvvvOMO",
+  "OMOvvvvVVvvvvOMO",
+  "OMOvvvVVVVvvvOMO",
+  "OMOvvvVVVVvvvOMO",
+  "OMOvvvvVVvvvvOMO",
+  "OMOvvvvvvvvvvOMO",
+  "OMOvvvvvvvvvvOMO",
+  "OMOvvvvvvvvvvOMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMMMMMMMMMMMMMMO",
+  "OOOOOOOOOOOOOOOO",
+];
+
+/**
+ * THE MEDBAY LIGHT, FRAME 0 - THE LENS UNLIT - and frame 1 below.
+ *
+ * THE FRAME ORDER IS A CONTRACT, NOT A CHOICE: frame 0 is dark and frame 1 is
+ * lit, in that order, and swapping them breaks the sign that drives them. K4's
+ * pass holds frame 0 while the ward is empty, alternates 0/1 while a bed is
+ * taken, and holds frame 1 - not frame 0 - under reduced motion, so a steady
+ * beacon still reads as occupied. Two LIT frames would make "empty" and
+ * "occupied, reduced motion" the same picture, which is the one distinction the
+ * sign exists to draw.
+ *
+ * `d` is this art's "off": `MONITOR_OFF_MAP` is solid `d`, and it is the
+ * unlit-display colour in both themes rather than a flat dark that would read
+ * as a hole punched in a light-theme wall.
+ *
+ * Only the LENS differs between the frames - one silhouette, housing and base
+ * included - so the alternation reads as a lamp blinking rather than a fixture
+ * changing shape. 8 px and not a compositing anchor because a vehicle's lights
+ * are part of the vehicle's own art (K3); this pair is the hall's sign alone.
+ */
+export const SIREN_LIGHT_MAP: SpriteMap = [
+  "..OOOO..",
+  ".OddddO.",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OdddddO.",
+  ".OMMMO..",
+  "..OOO...",
+];
+
+/** Frame 1: the same lamp lit - an amber core with the warm rim it throws. */
+export const SIREN_LIGHT_B_MAP: SpriteMap = [
+  "..OOOO..",
+  ".OnyynO.",
+  "OnyyyynO",
+  "OnyyyynO",
+  "OnyyyynO",
+  "OnyyynO.",
+  ".OMMMO..",
+  "..OOO...",
+];
+
+/**
+ * An infirmary bed, seen from the corner: `desk-iso`'s box with the blanket on
+ * top of it and the pillow at the back corner.
+ *
+ * The occupant is drawn by the scene at its own tile, ON this, which is why
+ * there is no isometric `bed-occupied`: a character lying on the diamond hides
+ * the half of the blanket a turned-down sheet would have shown.
+ */
+export const BED_ISO_MAP: SpriteMap = [
+  "...............bb...............",
+  ".............bbbbbb.............",
+  "...........bbbbbbbbbb...........",
+  ".........bbbbbbbbbbbbbb.........",
+  ".......bbbbbbbvvvvbbbbbbb.......",
+  ".....bbbbbbbvvvvvvvvbbbbbbb.....",
+  "...bbbbbbbvvvvvvvvvvvvbbbbbbb...",
+  ".bbbbbbbvvvvvvvvvvvvvvvvbbbbbbb.",
+  ".OOOOOOvvvvvvvvvvvvvvvvvvOOOOOO.",
+  ".MMMOOOOvvvvvvvvvvvvvvOOOOOMMMM.",
+  ".MMMMMOOOOvvvvvvvvvvOOOOMMMMMMM.",
+  ".MMMMMMMOOOOvvvvvvOOOOMMMMMMMMM.",
+  ".MMMMMMMMMOOOvvvvOOOMMMMMMMMMMM.",
+  ".MMMMMMMMMMMOOvvOOMMMMMMMMMMMMM.",
+  ".MMMMMMMMMMMMMOOMMMMMMMMMMMMMMM.",
+  ".MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM.",
+  ".MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM.",
+  "...MMMMMMMMMMMMMMMMMMMMMMMMMM...",
+  ".....MMMMMMMMMMMMMMMMMMMMMM.....",
+  ".......MMMMMMMMMMMMMMMMMM.......",
+  ".........MMMMMMMMMMMMMM.........",
+  "...........MMMMMMMMMM...........",
+  ".............MMMMMM.............",
+  "...............MM...............",
+];
+
+/**
+ * A waiting-room chair from the corner: the seat diamond, a back on its far
+ * edge, and two legs. One tile, so the sitter's own sprite covers the seat.
+ */
+export const LOUNGE_CHAIR_ISO_MAP: SpriteMap = [
+  "....OOOOOOOO....",
+  "...OXXXXXXXXO...",
+  "..OXXXXXXXXXXO..",
+  "..OXXXXXXXXXXO..",
+  "...OOOOOOOOOO...",
+  "..OxxxxxxxxxxO..",
+  ".OxxxxxxxxxxxxO.",
+  "OxxxxxxxxxxxxxxO",
+  "OxxxxxxxxxxxxxxO",
+  ".OxxxxxxxxxxxxO.",
+  "..OxxxxxxxxxxO..",
+  "...OOOOOOOOOO...",
+  "....OWO..OWO....",
+  "....OWO..OWO....",
+  "....OOO..OOO....",
+  "................",
+];
+
+/**
+ * The cross on a City hospital's roof: a red cross clipped to the roof
+ * diamond, drawn OVER `block-top` rather than instead of it, so the building
+ * keeps its own roof and gains a marking.
+ */
+export const HOSPITAL_ROOF_CROSS_MAP: SpriteMap = [
+  "................................",
+  "................................",
+  "................................",
+  "..............nnnn..............",
+  ".............OnnnnO.............",
+  "............OOnnnnOO............",
+  "..........OOnnnnnnnnOO..........",
+  "........OOnnnnnnnnnnnnOO........",
+  "........OOnnnnnnnnnnnnOO........",
+  "..........OOnnnnnnnnOO..........",
+  "............OOnnnnOO............",
+  ".............OnnnnO.............",
+  "..............nnnn..............",
+  "................................",
+  "................................",
+  "................................",
+];
+
+/**
+ * The bus stop: a roof on two posts with a bench under it, one tile.
+ *
+ * The lounge seats it carries are the tiles BESIDE it, not this one - a
+ * shelter somebody stands inside is a shelter that hides them, and the whole
+ * point of the stop is that the wait is visible from the street.
+ */
+export const BUS_SHELTER_MAP: SpriteMap = [
+  "...............mm...............",
+  ".............mmmmmm.............",
+  "...........mmmmmmmmmm...........",
+  ".........mmmmmmmmmmmmmm.........",
+  ".......mmmmmmmmmmmmmmmmmm.......",
+  ".....mmmmmmmmmmmmmmmmmmmmmm.....",
+  "...MMMMMMMMMMMMMMMMMMMMMMMMMM...",
+  ".MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM.",
+  ".OM..........................MO.",
+  ".OM..........................MO.",
+  ".OM..........................MO.",
+  ".OM.....OOOOOOOOOOOOOO.......MO.",
+  ".OM....OwwwwwwwwwwwwwwO......MO.",
+  ".OM....OWWWWWWWWWWWWWWO......MO.",
+  ".OM....OOOOOOOOOOOOOOOO......MO.",
+  ".OM......OWO......OWO........MO.",
+  ".OM......OWO......OWO........MO.",
+  ".OM......OOO......OOO........MO.",
+  ".OM..........................MO.",
+  ".OM..........................MO.",
+  ".OMO........................OMO.",
+  "..OO........................OO..",
+  "................................",
+  "................................",
+];
+
+/**
+ * The warehouse's roller door: slats of metal in a frame, standing free on its
+ * tile exactly as `door-iso` does, so the block it marks reads as a depot
+ * rather than as another stand of offices.
+ */
+export const WAREHOUSE_DOOR_ISO_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOO",
+  "OMMMMMMMMMMMMMMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOMMMMMMMMMMOMO",
+  "OMOmmmmmmmmmmOMO",
+  "OMOOOOOOOOOOOOMO",
+  "OMmmmmmmmmmmmmMO",
+  "OMMMMMMMMMMMMMMO",
+  "OOOOOOOOOOOOOOOO",
+];
+
+/**
+ * A medbay trolley on the amphitheatre floor, a console's two tiles wide.
+ *
+ * Its own sprite rather than the Floor's `bed` because Mission control's beds
+ * stand in a row facing the console with nothing around them: the rail at the
+ * head end is what stops a row of them reading as a row of tables.
+ */
+export const MEDBAY_BED_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmO",
+  "OmOMOMOMOMOmOOOOOOOOOOOOOOOOOOmO",
+  "OmOMOMOMOMOmObbbbbbbbbbbbbbbbOmO",
+  "OmOMOMOMOMOmObbbbbbbbbbbbbbbbOmO",
+  "OmOOOOOOOOOmOqqqqqqqqqqqqqqqqOmO",
+  "OmmmmmmmmmmmOqqqqqqqqqqqqqqqqOmO",
+  "OmmmmmmmmmmmOqqqqqqqqqqqqqqqqOmO",
+  "OmmmmmmmmmmmOqqqqqqqqqqqqqqqqOmO",
+  "OmmmmmmmmmmmOqqqqqqqqqqqqqqqqOmO",
+  "OmmmmmmmmmmmOqqqqqqqqqqqqqqqqOmO",
+  "OmmmmmmmmmmmOqqqqqqqqqqqqqqqqOmO",
+  "OmmmmmmmmmmmOOOOOOOOOOOOOOOOOOmO",
+  "OmMMmmmmmmMMmmmmmmmmmmMMmmmmMMmO",
+  "OmMMmmmmmmMMmmmmmmmmmmMMmmmmMMmO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];
+
+/**
+ * A gallery seat in the side aisle, seen from behind: the amphitheatre's own
+ * seats face the board, so this is a tip-up back and two arms and no cushion
+ * the viewer could see.
+ */
+export const GALLERY_SEAT_MAP: SpriteMap = [
+  "................",
+  "..OOOOOOOOOOOO..",
+  "..OXXXXXXXXXXO..",
+  "..OXXXXXXXXXXO..",
+  "..OXXXXXXXXXXO..",
+  "..OXXXXXXXXXXO..",
+  "..OXXXXXXXXXXO..",
+  "..OXXXXXXXXXXO..",
+  "OOOXXXXXXXXXXOOO",
+  "OxOOOOOOOOOOOOxO",
+  "OxxxxxxxxxxxxxxO",
+  "OOOOOOOOOOOOOOOO",
+  "..OMO......OMO..",
+  "..OMO......OMO..",
+  "..OOO......OOO..",
+  "................",
+];
+
+// ---- Civic vehicles --------------------------------------------------- //
+//
+// Three kinds, each in two light frames and two projections. `left` is never
+// authored: the rasterizer mirrors `right`, the same convention every
+// character body follows. The two frames of a kind differ in their LAMPS
+// rather than in brightness - a bar whose lamps swap is what a siren looks
+// like, and it makes the difference a pixel a test can name.
+/** ambulance, oblique side view, lamps left-lit. */
+export const AMBULANCE_MAP: SpriteMap = [
+  ".........OOOOOO.................",
+  ".........OnnqqO.................",
+  "..OOOOOOOOOOOOOOOOOO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbOOOOOOOOOO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOO...",
+  ".....OBBO.............OBBO......",
+  ".....OBBO.............OBBO......",
+  "......OO...............OO.......",
+];
+
+/** ambulance, isometric three-quarter view, lamps left-lit. */
+export const AMBULANCE_ISO_MAP: SpriteMap = [
+  "........................................",
+  ".................OOOOOO.................",
+  ".................OnnqqO.................",
+  ".................OOOOOO.................",
+  "..............OOOOOOOOOOOO..............",
+  "............ObbbbbbbbbbbbbbO............",
+  "..........ObbbbbbbbbbbbbbbbbbO..........",
+  "........ObbbbbbbbbbbbbbbbbbbbbbO........",
+  "......ObbbbbbbbbbbbbbbbbbbbbbbbbbO......",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  ".....ObbbbbbbbbbbbbbbbbbvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  "........OBBO..............OBBO..........",
+  "........OBBO..............OBBO..........",
+  ".........OO................OO...........",
+  "........................................",
+];
+
+/** ambulance, oblique side view, lamps right-lit. */
+export const AMBULANCE_B_MAP: SpriteMap = [
+  ".........OOOOOO.................",
+  ".........OqqnnO.................",
+  "..OOOOOOOOOOOOOOOOOO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbOOOOOOOOOO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOO...",
+  ".....OBBO.............OBBO......",
+  ".....OBBO.............OBBO......",
+  "......OO...............OO.......",
+];
+
+/** ambulance, isometric three-quarter view, lamps right-lit. */
+export const AMBULANCE_ISO_B_MAP: SpriteMap = [
+  "........................................",
+  ".................OOOOOO.................",
+  ".................OqqnnO.................",
+  ".................OOOOOO.................",
+  "..............OOOOOOOOOOOO..............",
+  "............ObbbbbbbbbbbbbbO............",
+  "..........ObbbbbbbbbbbbbbbbbbO..........",
+  "........ObbbbbbbbbbbbbbbbbbbbbbO........",
+  "......ObbbbbbbbbbbbbbbbbbbbbbbbbbO......",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  ".....ObbbbbbbbbbbbbbbbbbvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  "........OBBO..............OBBO..........",
+  "........OBBO..............OBBO..........",
+  ".........OO................OO...........",
+  "........................................",
+];
+
+/** police-car, oblique side view, lamps left-lit. */
+export const POLICE_CAR_MAP: SpriteMap = [
+  ".........OOOOOO.................",
+  ".........OqqBBO.................",
+  "..OOOOOOOOOOOOOOOOOO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbOOOOOOOOOO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..OqqqqqqqqqqqqqqqqOOqqqqqqqO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOO...",
+  ".....OBBO.............OBBO......",
+  ".....OBBO.............OBBO......",
+  "......OO...............OO.......",
+];
+
+/** police-car, isometric three-quarter view, lamps left-lit. */
+export const POLICE_CAR_ISO_MAP: SpriteMap = [
+  "........................................",
+  ".................OOOOOO.................",
+  ".................OqqBBO.................",
+  ".................OOOOOO.................",
+  "..............OOOOOOOOOOOO..............",
+  "............ObbbbbbbbbbbbbbO............",
+  "..........ObbbbbbbbbbbbbbbbbbO..........",
+  "........ObbbbbbbbbbbbbbbbbbbbbbO........",
+  "......ObbbbbbbbbbbbbbbbbbbbbbbbbbO......",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  ".....ObbbbbbbbbbbbbbbbbbvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OqqqqqqqqqqqqqqqqqqqqqqqqqqqqO.....",
+  ".....OqqqqqqqqqqqqqqqqqqqqqqqqqqqqO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  "........OBBO..............OBBO..........",
+  "........OBBO..............OBBO..........",
+  ".........OO................OO...........",
+  "........................................",
+];
+
+/** police-car, oblique side view, lamps right-lit. */
+export const POLICE_CAR_B_MAP: SpriteMap = [
+  ".........OOOOOO.................",
+  ".........OBBqqO.................",
+  "..OOOOOOOOOOOOOOOOOO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbO............",
+  "..ObbbbbbbbbbbbbbbbOOOOOOOOOO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..ObbbbbbbbbbbbbbbbOOvvvvvvvO...",
+  "..OqqqqqqqqqqqqqqqqOOqqqqqqqO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..ObbbbbbbbbbbbbbbbOObbbbbbbO...",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOO...",
+  ".....OBBO.............OBBO......",
+  ".....OBBO.............OBBO......",
+  "......OO...............OO.......",
+];
+
+/** police-car, isometric three-quarter view, lamps right-lit. */
+export const POLICE_CAR_ISO_B_MAP: SpriteMap = [
+  "........................................",
+  ".................OOOOOO.................",
+  ".................OBBqqO.................",
+  ".................OOOOOO.................",
+  "..............OOOOOOOOOOOO..............",
+  "............ObbbbbbbbbbbbbbO............",
+  "..........ObbbbbbbbbbbbbbbbbbO..........",
+  "........ObbbbbbbbbbbbbbbbbbbbbbO........",
+  "......ObbbbbbbbbbbbbbbbbbbbbbbbbbO......",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  ".....ObbbbbbbbbbbbbbbbbbvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OqqqqqqqqqqqqqqqqqqqqqqqqqqqqO.....",
+  ".....OqqqqqqqqqqqqqqqqqqqqqqqqqqqqO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....ObbbbbbbbbbbbbbbbbbbbbbbbbbbbO.....",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  "........OBBO..............OBBO..........",
+  "........OBBO..............OBBO..........",
+  ".........OO................OO...........",
+  "........................................",
+];
+
+/** fire-engine, oblique side view, lamps left-lit. */
+export const FIRE_ENGINE_MAP: SpriteMap = [
+  ".........OOOOOO.................",
+  ".........OyynnO.................",
+  "..OOOOOOOOOOOOOOOOOO............",
+  "..OnnnnnnnnnnnnnnnnO............",
+  "..OnnnnnnnnnnnnnnnnO............",
+  "..OnnnnnnnnnnnnnnnnOOOOOOOOOO...",
+  "..OnnnnnnnnnnnnnnnnOOvvvvvvvO...",
+  "..OnnnnnnnnnnnnnnnnOOvvvvvvvO...",
+  "..OyyyyyyyyyyyyyyyyOOyyyyyyyO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOO...",
+  ".....OBBO.............OBBO......",
+  ".....OBBO.............OBBO......",
+  "......OO...............OO.......",
+];
+
+/** fire-engine, isometric three-quarter view, lamps left-lit. */
+export const FIRE_ENGINE_ISO_MAP: SpriteMap = [
+  "........................................",
+  ".................OOOOOO.................",
+  ".................OyynnO.................",
+  ".................OOOOOO.................",
+  "..............OOOOOOOOOOOO..............",
+  "............OnnnnnnnnnnnnnnO............",
+  "..........OnnnnnnnnnnnnnnnnnnO..........",
+  "........OnnnnnnnnnnnnnnnnnnnnnnO........",
+  "......OnnnnnnnnnnnnnnnnnnnnnnnnnnO......",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  ".....OnnnnnnnnnnnnnnnnnnvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OyyyyyyyyyyyyyyyyyyyyyyyyyyyyO.....",
+  ".....OyyyyyyyyyyyyyyyyyyyyyyyyyyyyO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  "........OBBO..............OBBO..........",
+  "........OBBO..............OBBO..........",
+  ".........OO................OO...........",
+  "........................................",
+];
+
+/** fire-engine, oblique side view, lamps right-lit. */
+export const FIRE_ENGINE_B_MAP: SpriteMap = [
+  ".........OOOOOO.................",
+  ".........OnnyyO.................",
+  "..OOOOOOOOOOOOOOOOOO............",
+  "..OnnnnnnnnnnnnnnnnO............",
+  "..OnnnnnnnnnnnnnnnnO............",
+  "..OnnnnnnnnnnnnnnnnOOOOOOOOOO...",
+  "..OnnnnnnnnnnnnnnnnOOvvvvvvvO...",
+  "..OnnnnnnnnnnnnnnnnOOvvvvvvvO...",
+  "..OyyyyyyyyyyyyyyyyOOyyyyyyyO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..OnnnnnnnnnnnnnnnnOOnnnnnnnO...",
+  "..OOOOOOOOOOOOOOOOOOOOOOOOOOO...",
+  ".....OBBO.............OBBO......",
+  ".....OBBO.............OBBO......",
+  "......OO...............OO.......",
+];
+
+/** fire-engine, isometric three-quarter view, lamps right-lit. */
+export const FIRE_ENGINE_ISO_B_MAP: SpriteMap = [
+  "........................................",
+  ".................OOOOOO.................",
+  ".................OnnyyO.................",
+  ".................OOOOOO.................",
+  "..............OOOOOOOOOOOO..............",
+  "............OnnnnnnnnnnnnnnO............",
+  "..........OnnnnnnnnnnnnnnnnnnO..........",
+  "........OnnnnnnnnnnnnnnnnnnnnnnO........",
+  "......OnnnnnnnnnnnnnnnnnnnnnnnnnnO......",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  ".....OnnnnnnnnnnnnnnnnnnvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvvvvvvvvvvvO.....",
+  ".....OvvvvvvvvvvvvvvvvvvnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OyyyyyyyyyyyyyyyyyyyyyyyyyyyyO.....",
+  ".....OyyyyyyyyyyyyyyyyyyyyyyyyyyyyO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OnnnnnnnnnnnnnnnnnnnnnnnnnnnnO.....",
+  ".....OOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....",
+  "........OBBO..............OBBO..........",
+  "........OBBO..............OBBO..........",
+  ".........OO................OO...........",
+  "........................................",
+];

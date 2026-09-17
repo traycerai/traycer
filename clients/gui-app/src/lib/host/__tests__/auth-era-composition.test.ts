@@ -17,6 +17,10 @@
  * while the request underneath it is wrong; that is precisely the bug.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AUTH_FETCH_MAX_ATTEMPTS,
+  authRetryDelayMs,
+} from "@traycer-clients/shared/auth/auth-validation";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -552,6 +556,109 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     // The refusal really went out (and went out under the current bearer) -
     // without this, a refresh that silently joined an older in-flight read
     // would make the retention assertion below pass vacuously.
+    expect(bearersSince(endpoint, mark)).toEqual([TOKEN_A]);
+    expect(await directoryHostIds(composition.directory)).toEqual([
+      "account-a-host",
+    ]);
+  });
+});
+
+/**
+ * The unverified→signed-in PROMOTION, for the SAME user.
+ *
+ * THE BUG this guards: `applySignedIn` rotates the credential lease IN PLACE
+ * for a same-user promotion (`contextProvider.rotateCurrentBearer(...)`), so
+ * `RequestContextProvider.onChange` never fires - and `HostRuntime` only
+ * wires `directory.refreshForEra(era)` to `onChange`. Because an `unverified`
+ * directory read is refused (`AuthService.cloudBearer()` answers `null` while
+ * `status !== "signed-in"`, so the fetch returns `{ kind: "failed" }` and the
+ * directory retains its last-known - empty - answer), a cold start that lands
+ * on `unverified` stays with NO remote hosts until the ~60s registry poll.
+ *
+ * THE TRAP a naive fix falls into: hooking a directory refresh off the
+ * EXISTING `onBearerRotated` callback compiles and runs, but does not fix
+ * anything - `rotateCurrentBearer` fires its listeners SYNCHRONOUSLY, BEFORE
+ * `useAuthStore`'s `setSignedIn` commits, so a refresh driven from there still
+ * reads `status` as `unverified`, is refused, and reproduces the identical
+ * empty directory. A call-count assertion on "some refresh function ran"
+ * passes against that broken version too. So every assertion below is on the
+ * RESULT: the bearer that actually reached `GET /api/v3/hosts`, and the host
+ * ids the directory actually holds afterward - never on whether a refresh was
+ * merely invoked.
+ */
+describe("auth-era composition — an unverified session promotes to signed-in and the directory catches up", () => {
+  let restoreFetch: () => void = () => undefined;
+
+  beforeEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
+  afterEach(() => {
+    while (built.length > 0) {
+      const composition = built.pop();
+      composition?.runtime.dispose();
+      composition?.directory.dispose();
+      composition?.auth.dispose();
+    }
+    useAuthStore.getState().setSignedOut();
+    restoreFetch();
+    restoreFetch = () => undefined;
+    vi.useRealTimers();
+  });
+
+  it("issues the mandatory unverified→signed-in refresh under the live bearer and fills the directory, without waiting for the registry poll", async () => {
+    vi.useFakeTimers();
+    const endpoint = hostsEndpoint();
+    // Authn is unreachable for TOKEN_A's identity probe until flipped, so
+    // startup lands on `unverified` exactly the way a cold start with a dead
+    // network does - a THROWN fetch, not a rejection verdict, which is what
+    // `validateToken` collapses to `network-error` rather than `rejected`.
+    let authnReachable = false;
+    const handler = (
+      input: unknown,
+      init: FetchInit | undefined,
+    ): Promise<Response> => {
+      if (requestUrl(input) === VALIDATION_URL && !authnReachable) {
+        return Promise.reject(new Error("authn unreachable"));
+      }
+      return endpoint.handler(input, init);
+    };
+    restoreFetch = installFetch(handler);
+    const composition = buildComposition();
+
+    // `startSignedInAs` normally awaits `auth.start()` to completion, but
+    // under fake timers that await would hang on the retry backoff's
+    // `setTimeout` - so it is kicked off here and drained by hand, the same
+    // shape the offline-startup case in `auth-service.test.ts` uses.
+    const startPromise = startSignedInAs(composition, TOKEN_A, "user-a");
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await startPromise;
+
+    expect(useAuthStore.getState().status).toBe("unverified");
+    // The directory landed empty: `unverified` refuses the read outright, so
+    // this is the P2's starting condition, not yet its assertion.
+    expect(await directoryHostIds(composition.directory)).toEqual([]);
+
+    const mark = endpoint.bearers.length;
+
+    // Authn comes back, and the recovery loop's next tick (armed by
+    // `startSignedInAs` → `auth.start()` → `scheduleSessionRecovery`) revalidates
+    // the SAME stored token and finds it valid: a same-user PROMOTION through
+    // `adoptRecoveredStoredSession` → `applySignedIn`, not a rotation.
+    authnReachable = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+
+    // THE ASSERTION THIS TICKET EXISTS FOR, asserted immediately after the
+    // promotion's own tick - before any poll interval could fire, else this
+    // would pass for the wrong reason (the ~60s registry poll eventually
+    // heals the same empty directory on its own, which is exactly the
+    // symptom this fix exists to shorten away). Not "a refresh ran" - which
+    // (VALIDATION_URL) `Authorization` header actually reached `fetch`, and
+    // which host ids the directory actually resolved from it.
     expect(bearersSince(endpoint, mark)).toEqual([TOKEN_A]);
     expect(await directoryHostIds(composition.directory)).toEqual([
       "account-a-host",

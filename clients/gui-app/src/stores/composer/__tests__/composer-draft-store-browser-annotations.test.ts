@@ -514,10 +514,12 @@ describe("composer draft store browserAnnotations", () => {
       userId: null,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -526,9 +528,12 @@ describe("composer draft store browserAnnotations", () => {
     handle.store.setState({
       pendingActions: {
         "action-m2": {
+          wireContent: null,
           clientActionId: "action-m2",
           action: "send",
           queueItemId: null,
+          checkpointId: null,
+          revertArtifacts: null,
           interviewBlockId: null,
           interviewDeliveryRetry: null,
           messageId: "msg-m2",
@@ -540,6 +545,7 @@ describe("composer draft store browserAnnotations", () => {
           messageConfirmedByHost: false,
           accountContext: null,
           deliveryPolicy: null,
+          hashOnlyRetry: false,
           createdAt: 1,
           connectionEpoch: 0,
         },

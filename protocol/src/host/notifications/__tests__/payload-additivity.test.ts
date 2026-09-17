@@ -14,6 +14,7 @@ import {
   hostNotificationInterviewPayloadSchema,
   hostNotificationKnownPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
+  hostNotificationWorktreeAutoCleanupPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
   type HostNotificationKnownPayloadKind,
 } from "@traycer/protocol/host/notifications/payloads";
@@ -38,6 +39,7 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   approval: hostNotificationApprovalPayloadSchema,
   interview: hostNotificationInterviewPayloadSchema,
   worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
+  worktree_auto_cleanup: hostNotificationWorktreeAutoCleanupPayloadSchema,
   browser_human_needed: hostNotificationBrowserHumanNeededPayloadSchema,
 };
 
@@ -49,6 +51,7 @@ const KINDS = [
   "approval",
   "interview",
   "worktree_deletion",
+  "worktree_auto_cleanup",
   "browser_human_needed",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 

@@ -28,7 +28,11 @@ import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSchemaVersion,
+  useHostSupportsMethod,
+} from "@/hooks/host/use-host-supports-method";
+import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
 import {
   useProviderProfileEnablementPending,
   useProvidersSetProfileEnabledForClient,
@@ -68,6 +72,7 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
+import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -85,6 +90,7 @@ import {
   type ProviderRailView,
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
+import { ProviderAutoJudgeSection } from "./provider-auto-judge-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
@@ -114,6 +120,7 @@ type ProvidersListQuery = UseQueryResult<
 // label now names its own content.
 const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
   general: "CLI & Args",
+  permissions: "Permissions",
   account: "Account",
   usage: "Profiles & Limits",
   env: "Env",
@@ -145,10 +152,11 @@ function initialActiveProviderId(
 function initialActiveTab(
   providers: readonly ProviderCliState[],
   providerId: ProviderId,
+  permissionsTab: boolean,
 ): ProviderTabKey {
   const state =
     providers.find((p) => p.providerId === providerId) ?? providers[0];
-  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  const tabs = resolveSupportedTabs(providerTabInputs(state, permissionsTab));
   // `focusTab` is a plain `string` in the store, so a deep link CAN name the
   // client-only `account` tab even though it is absent from the wire enum -
   // the match below is against the resolved tab list, not the schema. When no
@@ -169,8 +177,9 @@ function initialActiveTab(
 function resolveTabForProvider(
   state: ProviderCliState,
   preferred: ProviderTabKey,
+  permissionsTab: boolean,
 ): ProviderTabKey {
-  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  const tabs = resolveSupportedTabs(providerTabInputs(state, permissionsTab));
   if (tabs.includes(preferred)) return preferred;
   return tabs[0] ?? "general";
 }
@@ -615,7 +624,7 @@ function ProvidersPanelBody({
             source: "Providers",
           })}
           presentation="link"
-          className="ml-1 h-auto p-0 text-current"
+          className="ml-1"
         />
       </div>
     );
@@ -685,10 +694,51 @@ function ProvidersRailLayout({
   // one field the CTA exists to reach. When the deep link is not consumed (no
   // focus, or a different host) `initialFocus.harnessId` is already null, so
   // this stays the rail's first provider.
+  // Whether the Permissions tab is drawn at all: only a host that supports
+  // auto mode has a judge to name. Every provider gets the tab then - the
+  // section inside decides between a switch, a read-only line and the
+  // can't-write panel - so the flag is one boolean for the whole rail, not a
+  // per-provider lookup. While the catalog is loading it reads `false` and the
+  // tab appears when the rows land; the active tab is re-resolved against the
+  // live list on every render.
+  //
+  // **Derived from the negotiated catalog LINE, not from `autoJudge.get` and
+  // not from the rows.** Two corrections, in order.
+  //
+  // It first gated on `autoJudge.get`, which is a different question one method
+  // over: that method names the HOST-WIDE judge (which agent runs Traycer's
+  // judge on this machine), while the tab's own content is the PER-PROVIDER
+  // classifier choice behind `providers.setAutoJudge`. RPC support is
+  // negotiated per method, so a host answering the setter and a
+  // `nativeAutoJudge` row while not advertising the host-wide getter had the
+  // tab removed above the section that handles exactly that case.
+  //
+  // It then gated on `auto` appearing in the catalog's UNION of
+  // `supportedPermissionModes`, which is wrong for a reason the empty-array
+  // work made visible: an unconstrained row (`[]`) is one the host accepts
+  // every mode on, and it contributes nothing to a union - so a catalog of
+  // unconstrained rows names no modes and the union test hides the tab on
+  // precisely the host that would run Auto.
+  //
+  // The line is the fact that survives both. `auto` became expressible in
+  // `supportedPermissionModes` at `agent.gui.listHarnesses@9.1`, so the
+  // negotiated minor says whether this machine HAS Auto mode, independently of
+  // what any row chooses to constrain. Whether a given provider then declines
+  // the mode is a per-provider fact the tab's own content already answers -
+  // switch, read-only line, or can't-write panel.
+  //
+  // An unrecorded handshake reads `false` and the tab appears once the first
+  // RPC to this host lands, which is the same hold the previous two gates had.
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    hostId,
+    "agent.gui.listHarnesses",
+  );
+  const permissionsTab = catalogLineKnowsAutoMode(listHarnessesLine);
   const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,
       initialActiveProviderId(orderedProviders, initialFocus.harnessId),
+      permissionsTab,
     ),
   );
   useEffect(() => {
@@ -699,7 +749,7 @@ function ProvidersRailLayout({
   const active =
     orderedProviders.find((p) => p.providerId === activeId) ??
     orderedProviders[0];
-  const resolvedTab = resolveTabForProvider(active, activeTab);
+  const resolvedTab = resolveTabForProvider(active, activeTab, permissionsTab);
 
   // The rail's own view state. Resolved against `orderedProviders` for the ROWS
   // only - `active` above is deliberately unaffected, so narrowing the rail
@@ -721,7 +771,7 @@ function ProvidersRailLayout({
     const next =
       orderedProviders.find((p) => p.providerId === providerId) ??
       orderedProviders[0];
-    setActiveTab(resolveTabForProvider(next, activeTab));
+    setActiveTab(resolveTabForProvider(next, activeTab, permissionsTab));
   };
 
   return (
@@ -798,6 +848,7 @@ function ProvidersRailLayout({
           isSelectedHostLocal={isSelectedHostLocal}
           initialProfileId={initialFocus.profileId}
           initialSignIn={initialFocus.startSignIn}
+          permissionsTab={permissionsTab}
         />
       </div>
     </div>
@@ -981,6 +1032,7 @@ function ProviderDetail({
   isSelectedHostLocal,
   initialProfileId,
   initialSignIn,
+  permissionsTab,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
@@ -990,6 +1042,8 @@ function ProviderDetail({
   readonly isSelectedHostLocal: boolean;
   readonly initialProfileId: string | null;
   readonly initialSignIn: boolean;
+  /** Whether the host supports auto mode, which is what draws the Permissions tab. */
+  readonly permissionsTab: boolean;
 }) {
   const providerId = state.providerId;
   // Whichever host `useHostClient()` currently resolves to - the app-wide
@@ -1079,7 +1133,7 @@ function ProviderDetail({
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
-  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  const tabs = resolveSupportedTabs(providerTabInputs(state, permissionsTab));
   // Bundled once here (rather than threaded as eight separate props) since
   // only the "usage" ("Profiles & Limits") tab body needs the profile-
   // management surface - the other tabs never see it.
@@ -1212,10 +1266,10 @@ function ProviderDetail({
                transparent, so there is nothing left to look empty. */
             <TabsList
               variant="line"
-              className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+              className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start"
             >
               {tabs.map((tab) => (
-                <TabsTrigger key={tab} value={tab} className="flex-none px-3">
+                <TabsTrigger key={tab} value={tab} className="flex-none">
                   {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
                 </TabsTrigger>
               ))}
@@ -1290,6 +1344,7 @@ function ProviderDetail({
           key={state.providerId}
           state={state}
           client={hostClient}
+          isLocalHost={isSelectedHostLocal}
           open
           onOpenChange={setAddProfileOpen}
           onFailedAttempt={setFailedProfileAttempt}
@@ -1365,6 +1420,11 @@ function ProviderTabBody({
           />
         </div>
       );
+    case "permissions":
+      // Keyed by provider, not by the stored value: this section holds a local
+      // echo of the user's choice while the host's read-back is in flight, and
+      // that echo belongs to one provider. Switching providers must discard it.
+      return <ProviderAutoJudgeSection key={state.providerId} state={state} />;
     case "env":
       return (
         <ProviderEnvOverridesSection
@@ -1425,6 +1485,9 @@ function ProviderTabBody({
               />
             ) : null}
           </div>
+          {/* Outside the inert block: it is not profile-scoped, so dimming it
+              while a profile switch settles would suggest it is. */}
+          <FallbackCrossLinkRow />
         </div>
       );
     case "mcp": {

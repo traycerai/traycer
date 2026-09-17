@@ -98,6 +98,9 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
       buildUsageSummaryRequest({
         windowDays,
         epicId,
+        // Same as the chat dialog: an epic-scoped surface that has not been
+        // given the verdict-less cohort, so the host keeps picking the reader.
+        plane: null,
       }),
     [epicId, windowDays],
   );
@@ -134,7 +137,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
         // `sm:max-w-sm` cap (load-bearing, same reason the earlier shape
         // carried `sm:max-w-lg`).
         className={cn(
-          "flex h-[min(88dvh,46rem)] w-[min(92vw,48rem)] min-w-0 flex-col gap-4 overflow-hidden sm:max-w-3xl",
+          "flex h-[min(88dvh,46rem)] w-[min(92vw,48rem)] min-w-0 flex-col overflow-hidden sm:max-w-3xl",
           USAGE_DIALOG_SHEET_CLASSES,
           "max-[28rem]:h-[94dvh]",
         )}

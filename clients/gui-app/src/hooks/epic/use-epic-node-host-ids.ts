@@ -1,9 +1,29 @@
 import { useMemo } from "react";
-import {
-  useEpicChatRecords,
-  useEpicTerminalAgentRecords,
-} from "@/lib/epic-selectors";
+import { createSelector } from "reselect";
+import { useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { parseHostIdStamp, stampHostIds } from "@/lib/host/host-id-stamp";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+
+const selectNodeHostStamp = createSelector(
+  [
+    (state: OpenEpicState) => state.chats,
+    (state: OpenEpicState) => state.tuiAgents,
+  ],
+  (chats, terminalAgents) =>
+    stampHostIds([
+      ...chats.allIds.map((id) => chats.byId[id].hostId),
+      ...terminalAgents.allIds.map((id) => terminalAgents.byId[id].hostId),
+    ]),
+);
+
+/** The same task default for callers outside the Epic context, such as the palette. */
+export const selectSoleEpicNodeHostId = createSelector(
+  [selectNodeHostStamp],
+  (stamp): string | null => {
+    const hostIds = parseHostIdStamp(stamp);
+    return hostIds.length === 1 ? hostIds[0] : null;
+  },
+);
 
 /**
  * The hosts the OPEN Epic's node records name - every GUI chat and terminal
@@ -34,20 +54,12 @@ import { parseHostIdStamp, stampHostIds } from "@/lib/host/host-id-stamp";
  * falling back to the app's active host - the same rule the comm graph
  * follows, and for the same reason: a badge that moved when you switched
  * hosts somewhere else in the app would be describing the app, not the Task.
+ * Outside an Epic session the set is empty, including while its sidebar loads.
  */
 export function useEpicNodeHostIds(): ReadonlySet<string> {
-  const chats = useEpicChatRecords();
-  const terminalAgents = useEpicTerminalAgentRecords();
   // Through a sorted string stamp so the returned Set's IDENTITY only changes
   // when the SET does. Chat projections churn constantly (titles, `updatedAt`,
   // streaming settings) and consumers key memos and dialogs on this value.
-  const stamp = useMemo(
-    () =>
-      stampHostIds([
-        ...chats.map((chat) => chat.hostId),
-        ...terminalAgents.map((agent) => agent.hostId),
-      ]),
-    [chats, terminalAgents],
-  );
+  const stamp = useMaybeEpicStore(selectNodeHostStamp, "[]");
   return useMemo(() => new Set(parseHostIdStamp(stamp)), [stamp]);
 }

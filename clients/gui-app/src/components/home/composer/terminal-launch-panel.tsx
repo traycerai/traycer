@@ -48,10 +48,15 @@ interface TerminalLaunchPanelProps {
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   /**
    * Fires on Start with the fully-assembled launch (harness/model/effort/agent
-   * mode + CLI args). The panel owns assembly so the caller only gates the
-   * workspace and dispatches.
+   * mode + CLI args) and the host it was assembled for - this panel's
+   * `hostId`, the one its picker and saved-args read resolved against. The
+   * panel owns assembly so the caller only gates the workspace, checks the
+   * launch still names the host it is about to dispatch to, and dispatches.
    */
-  readonly onStart: (launch: TerminalAgentLaunch) => void;
+  readonly onStart: (
+    launch: TerminalAgentLaunch,
+    assembledFor: string | null,
+  ) => void;
 }
 
 // Body for the landing composer's "terminal" mode. Reuses the same
@@ -154,17 +159,21 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
     // `selectionIsTuiCapable` (folded into `startDisabled`) is the real gate;
     // this schema narrows `harnessId` to `TuiHarnessId` for the launch payload.
     if (!isTuiHarnessId(harnessId)) return;
-    onStart({
-      harnessId,
-      model: selection.modelSlug.length > 0 ? selection.modelSlug : null,
-      reasoningEffort: reasoning.length > 0 ? reasoning : null,
-      terminalAgentArgs: argsTouched ? argsDraft : null,
-      profileId: selection.profileId,
-    });
+    onStart(
+      {
+        harnessId,
+        model: selection.modelSlug.length > 0 ? selection.modelSlug : null,
+        reasoningEffort: reasoning.length > 0 ? reasoning : null,
+        terminalAgentArgs: argsTouched ? argsDraft : null,
+        profileId: selection.profileId,
+      },
+      hostId,
+    );
   }, [
     argsDraft,
     argsTouched,
     harnessId,
+    hostId,
     onStart,
     reasoning,
     selection.modelSlug,
@@ -184,6 +193,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           labelDisplay="responsive"
           store={store}
           withServiceTier={false}
+          withReasoning
           tuiOnly
           lockedHarnessId={null}
           disabled={pending}
@@ -198,7 +208,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
         />
         <Input
           aria-label="Terminal interface CLI arguments"
-          className="h-8 min-w-0 flex-1 font-mono text-ui-xs"
+          className="h-8 min-w-0 flex-1"
           placeholder="CLI arguments (optional)"
           value={argsDraft}
           onChange={(event) =>
@@ -213,6 +223,8 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
             event.preventDefault();
             start();
           }}
+          font="mono"
+          size="xs"
         />
       </div>
       <div className="flex items-center justify-between gap-2 px-0.5 pb-2.5 pt-1">

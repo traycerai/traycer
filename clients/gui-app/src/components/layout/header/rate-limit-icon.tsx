@@ -21,6 +21,7 @@ import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
+  RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
@@ -101,11 +102,11 @@ function ScopedRateLimitIconButton({
     [],
   );
   useTitleBarDragSuppression("rate-limits", open);
-  // One subscription bridge owns active-chat + per-harness profile state for
-  // both the always-mounted glyph and the lazily-mounted popover. Passing the
-  // same snapshot down avoids N duplicate chat-store subscriptions when the
-  // Overview renders several multi-profile provider blocks.
-  const profileSelection = useRateLimitProfileSelection();
+  // One subscription bridge owns the checked-account + per-harness profile
+  // state for both the always-mounted glyph and the lazily-mounted popover,
+  // keyed by the host this surface is watching - the accounts it names are
+  // that host's, not the app-wide one's.
+  const profileSelection = useRateLimitProfileSelection(scope.hostId);
   // A PICK that has not resolved to its own client leaves this subtree on the
   // AMBIENT binding, so mounting the bars here would draw one host's usage
   // under a glyph that stands for another - and the glyph, unlike every panel
@@ -146,7 +147,7 @@ function ScopedRateLimitIconButton({
             size="sm"
             aria-label="Usage limits"
             data-testid="rate-limit-header-button"
-            className="gap-1.5 bg-muted/30 px-2 text-muted-foreground shadow-xs hover:text-foreground"
+            className="shadow-xs"
           >
             {scopedToOwnHost ? (
               <LiveRateLimitGlyph profileSelection={profileSelection} />
@@ -157,6 +158,8 @@ function ScopedRateLimitIconButton({
         </PopoverTrigger>
       </TooltipWrapper>
       <RateLimitPopover
+        side="bottom"
+        align="end"
         onClose={() => setOpen(false)}
         profileSelection={profileSelection}
         scope={scope}
@@ -191,10 +194,7 @@ function RateLimitGlyph({
     <>
       <Gauge
         data-testid="rate-limit-gauge-icon"
-        className={cn(
-          "size-3.5",
-          isDegraded && "text-amber-600 dark:text-amber-400",
-        )}
+        className={cn("size-3.5", isDegraded && RUNNING_LOW_TEXT_CLASS_NAME)}
         aria-hidden
       />
       <span
@@ -206,19 +206,19 @@ function RateLimitGlyph({
               <span
                 key={key}
                 data-testid="rate-limit-bar-track"
-                className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+                className="relative h-1 w-4 overflow-hidden rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
               />
             ))
           : bars.map((bar) => (
               <span
                 key={`${bar.providerId}-${bar.windowLabel}`}
                 data-testid="rate-limit-bar-track"
-                className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+                className="relative h-1 w-4 overflow-hidden rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
               >
                 <span
                   data-testid="rate-limit-bar-fill"
                   className={cn(
-                    "absolute inset-y-0 left-0 rounded-[2px]",
+                    "absolute inset-y-0 left-0 rounded-xs",
                     rateLimitWindowSeverityBarClassName(bar.severity),
                   )}
                   style={{

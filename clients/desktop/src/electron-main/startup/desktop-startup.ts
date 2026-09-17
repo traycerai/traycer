@@ -1013,6 +1013,7 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     // renderer coalesces them, and a frozen/hidden renderer queues the IPC
     // until it unfreezes - i.e. it fires the moment the user views the window.
     installHostWakeRecovery(services.host, installPowerMonitorListeners, () => {
+      state.bridge?.notifySystemResumed();
       state.bridge?.fanOut(RunnerHostEvent.systemResumed, undefined);
       checkForUpdatesAfterResume(state.config.isDev);
       // `force: true` - matches `checkForUpdatesAfterResume` above: a real

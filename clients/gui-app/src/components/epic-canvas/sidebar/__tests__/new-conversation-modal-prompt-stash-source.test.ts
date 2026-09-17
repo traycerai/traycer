@@ -153,6 +153,7 @@ function useModalPromptStashController(args: {
     readHashImage: () => Promise.resolve(null),
     source,
     destination,
+    hostId: null,
   });
 }
 

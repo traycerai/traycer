@@ -44,6 +44,7 @@ export const HOST_NOTIFICATION_STOPPED_REASONS = [
   "turn_start_timeout",
   "missing_terminal_event",
   "background_work_failed",
+  "session_budget",
 ] as const;
 export type HostNotificationStoppedReason =
   (typeof HOST_NOTIFICATION_STOPPED_REASONS)[number];
@@ -67,8 +68,33 @@ export function deriveHostNotificationStoppedReason(
       return "auth";
     case "rate_limit":
     case "usage_limit_exceeded":
-    case "session_budget_exceeded":
       return "rate_limit";
+    // Its own reason rather than joining the two above, and it is worth saying
+    // why each of the three neighbouring answers is wrong.
+    //
+    // Codex emits it with "Start a new session or compact the conversation,
+    // then try again" - a SESSION-local stop, whose remedy is a fresh session
+    // on the SAME account. Calling it `rate_limit` made it fallback-eligible
+    // (`REASON_ELIGIBLE_RUNGS.rate_limit` admits profile, tier and wait), so a
+    // budget stop could automatically relaunch the turn on a DIFFERENT account
+    // that was never the problem - and the rate-limit branch of
+    // `buildTurnFailurePayload` reads an existing gauge, so it could also hand
+    // this failure an unrelated window's `resetsAt` and offer a wait on it.
+    //
+    // It is not `context_exhausted` either: "budget" is ambiguous between spend
+    // and context, and we have not established which Codex means. The name here
+    // deliberately claims neither - it repeats the provider's own noun, scoped
+    // to the session it is about.
+    //
+    // And it is not `null`. Declining to classify does stop the switching, but
+    // a turn with no typed failure gets no failed-attempt envelope
+    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`),
+    // so the error card loses its manual `retry` / `switch` / `wait_once` rungs
+    // - and a fresh session is exactly what `retry` performs, i.e. the one
+    // affordance that fixes this failure. What actually stops the automatic
+    // traversal is `EXCLUDED_FALLBACK_REASONS`, which this reason is in.
+    case "session_budget_exceeded":
+      return "session_budget";
     case "billing_error":
       return "billing";
     case "model_not_found":
@@ -358,6 +384,55 @@ export type HostNotificationWorktreeDeletionPayload = z.infer<
 >;
 
 /**
+ * The `operation` identifier of the automatic worktree-cleanup scheduler.
+ *
+ * Distinct from `worktree.deletion` on purpose: that operation is a deletion
+ * the user asked for and is waiting on, this one is an unattended background
+ * pass they authorized once. They differ in severity (this arm is always
+ * informational, including for failures - the detail lives in cleanup history),
+ * in addressing (per RUN, not per command), and in cadence, so collapsing them
+ * into one operation would make both harder to reason about.
+ */
+export const HOST_OPERATION_WORKTREE_AUTO_CLEANUP = "worktree.autoCleanup";
+
+/**
+ * `host.operation.finished` payload for one automatic-cleanup run.
+ *
+ * ONE row per run that had candidates - never one per deleted worktree, and
+ * none at all for the ordinary no-op daily check. An unattended feature that
+ * notifies on every quiet pass trains the user to ignore it, which is exactly
+ * when the one interesting run arrives.
+ *
+ * `hostId` is carried because the run is host-scoped and the reader may be
+ * looking at a different host: routing has to name WHICH host's cleanup history
+ * to open. `runId` is the focus hint, and the row id derived from it is what
+ * makes minting idempotent per run.
+ *
+ * Excludes, for the same reason the worktree-deletion arm does: worktree paths,
+ * teardown output, and raw errors. A durable row outlives the filesystem it
+ * describes. `interruptedCount` is reported alongside the other three because a
+ * host that stopped mid-cleanup must say so rather than silently round the run
+ * down to what it could confirm.
+ */
+export const hostNotificationWorktreeAutoCleanupPayloadSchema = z
+  .object({
+    kind: z.literal("worktree_auto_cleanup"),
+    operation: z.literal(HOST_OPERATION_WORKTREE_AUTO_CLEANUP),
+    title: z.string().min(1),
+    message: z.string().min(1),
+    runId: idSchema,
+    hostId: idSchema,
+    deletedCount: z.number().int().nonnegative(),
+    skippedCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+    interruptedCount: z.number().int().nonnegative(),
+  })
+  .catchall(z.unknown());
+export type HostNotificationWorktreeAutoCleanupPayload = z.infer<
+  typeof hostNotificationWorktreeAutoCleanupPayloadSchema
+>;
+
+/**
  * `browser.human.needed` payload: the parked session's tile plus the agent's
  * own reason for parking.
  *
@@ -389,6 +464,7 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationApprovalPayloadSchema,
   hostNotificationInterviewPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
+  hostNotificationWorktreeAutoCleanupPayloadSchema,
   hostNotificationBrowserHumanNeededPayloadSchema,
 ]);
 export type HostNotificationKnownPayload = z.infer<
@@ -445,12 +521,15 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "approval";
     case "interview.requested":
       return payloadKind === "interview";
-    // One operation arm exists so far. A FUTURE operation adds its arm above
-    // and its kind to this list; until a client learns that kind, its rows
-    // degrade to the common-field tier rather than failing - which is the
-    // property the whole payload tier exists to provide.
+    // Two operation arms so far. A FUTURE operation adds its arm above and its
+    // kind to this list; until a client learns that kind, its rows degrade to
+    // the common-field tier rather than failing - which is the property the
+    // whole payload tier exists to provide.
     case "host.operation.finished":
-      return payloadKind === "worktree_deletion";
+      return (
+        payloadKind === "worktree_deletion" ||
+        payloadKind === "worktree_auto_cleanup"
+      );
     case "browser.human.needed":
       return payloadKind === "browser_human_needed";
   }

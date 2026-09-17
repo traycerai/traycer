@@ -24,6 +24,7 @@ import {
   setActiveTab,
   splitPaneAtEdge,
   splitPaneEmpty,
+  rebindPendingBrowserTile,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
   updateBrowserTileViewportPreset,
@@ -58,6 +59,7 @@ import {
   rootPane,
 } from "./canvas-test-fixtures";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
+import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 
 /** Permanent (pinned) open - `openTile` with `preview: false`. */
 function openPinned(
@@ -462,6 +464,45 @@ describe("closeTab cascade", () => {
     expect(pane.activationHistory).toEqual([]);
     expect(next.activePaneId).toBe(pane.id);
     expectCanvasInvariants(next);
+  });
+
+  it("preserves a non-root pane when its last tab is a blank picker", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    const blank = makeBlankTileRef();
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: blank,
+    });
+    if (state.activePaneId === null) throw new Error("expected active pane");
+    const blankPaneId = state.activePaneId;
+
+    const next = closeTab(state, blankPaneId, blank.instanceId);
+
+    expect(paneById(next, blankPaneId).tabInstanceIds).toEqual([]);
+    expect(next.tilesByInstanceId[blank.instanceId]).toBeUndefined();
+    expect(collectPanes(next.root).map((item) => item.id)).toContain(
+      blankPaneId,
+    );
+  });
+
+  it("preserves a blank-only pane when closing all tabs", () => {
+    const blank = makeBlankTileRef();
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: blank,
+    });
+    if (state.activePaneId === null) throw new Error("expected active pane");
+    const blankPaneId = state.activePaneId;
+
+    const next = closeAllTabs(state, blankPaneId);
+
+    expect(paneById(next, blankPaneId).tabInstanceIds).toEqual([]);
+    expect(collectPanes(next.root).map((item) => item.id)).toContain(
+      blankPaneId,
+    );
   });
 
   it("collapses non-root pane when its last tab closes; sibling absorbs into root pane", () => {
@@ -1116,6 +1157,98 @@ describe("updateBrowserTileViewportPreset", () => {
   });
 });
 
+describe("rebindPendingBrowserTile", () => {
+  function pendingPointer(requestId: string): BrowserSessionTileRef {
+    return {
+      id: `browser-session:pending:${requestId}`,
+      instanceId: `inst-${requestId}`,
+      type: "browser-session",
+      name: "Browser",
+      hostId: TEST_HOST_ID,
+      sessionId: null,
+      tabId: null,
+      viewportPreset: "responsive",
+      pending: {
+        requestId,
+        hostId: TEST_HOST_ID,
+        scope: { kind: "epic", epicId: "epic-1" },
+        requestedUrl: "about:blank",
+        clickedAt: 0,
+      },
+    };
+  }
+
+  it("rebinds the matching pending tile in place, preserving id/instanceId/pane", () => {
+    const pointer = pendingPointer("req-1");
+    const state = openPinned(createEmptyCanvas(), pointer);
+    const paneBefore = collectPanes(state.root).find((pane) =>
+      pane.tabInstanceIds.includes(pointer.instanceId),
+    );
+
+    const next = rebindPendingBrowserTile(state, "req-1", {
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+
+    expect(next.tilesByInstanceId[pointer.instanceId]).toEqual({
+      ...pointer,
+      sessionId: "sess-1",
+      tabId: "tab-1",
+      pending: undefined,
+    });
+    const paneAfter = collectPanes(next.root).find((pane) =>
+      pane.tabInstanceIds.includes(pointer.instanceId),
+    );
+    expect(paneAfter?.id).toBe(paneBefore?.id);
+    expect(next.tilesByInstanceId[pointer.instanceId]?.id).toBe(pointer.id);
+    expectCanvasInvariants(next);
+  });
+
+  it("only rebinds the tile whose requestId matches - a second pending tile is untouched", () => {
+    const first = pendingPointer("req-1");
+    const second = pendingPointer("req-2");
+    let state = openPinned(createEmptyCanvas(), first);
+    state = openPinned(state, second);
+
+    const next = rebindPendingBrowserTile(state, "req-1", {
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+
+    expect(next.tilesByInstanceId[first.instanceId]).toMatchObject({
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+    // The other pending tile's own request never resolved, so it must stay
+    // exactly as it was - not dropped, not rebound onto the wrong tab.
+    expect(next.tilesByInstanceId[second.instanceId]).toEqual(second);
+  });
+
+  it("no-ops when no tile is waiting on that requestId", () => {
+    const pointer = pendingPointer("req-1");
+    const state = openPinned(createEmptyCanvas(), pointer);
+
+    expect(
+      rebindPendingBrowserTile(state, "req-does-not-exist", {
+        sessionId: "sess-1",
+        tabId: "tab-1",
+      }),
+    ).toBe(state);
+    // Already-rebound tile: calling rebind again on the same requestId (the
+    // late-result-after-dismiss race) must not re-match by coincidence.
+    const rebound = rebindPendingBrowserTile(state, "req-1", {
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+    expect(
+      rebindPendingBrowserTile(rebound, "req-1", {
+        sessionId: "sess-2",
+        tabId: "tab-2",
+      }),
+    ).toBe(rebound);
+  });
+});
+
 describe("instanceId / content-id decoupling", () => {
   it("dedup collapses two opens of one content id even with distinct instanceIds", () => {
     const firstInstance: EpicNodeRef = { ...SPEC_A, instanceId: "inst-1" };
@@ -1289,6 +1422,19 @@ describe("openTileInPane (non-dedup, target-scoped open)", () => {
 });
 
 describe("openBlankTabInPane", () => {
+  it("leaves an already-empty pane empty", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = splitPaneEmpty(state, sourcePaneId, "horizontal");
+    if (state.activePaneId === null) throw new Error("expected active pane");
+    const emptyPaneId = state.activePaneId;
+
+    const next = openBlankTabInPane(state, emptyPaneId);
+
+    expect(next).toBe(state);
+    expect(paneById(next, emptyPaneId).tabInstanceIds).toEqual([]);
+  });
+
   it("appends a blank, active 'New tab' to a populated pane", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
@@ -1318,6 +1464,27 @@ describe("openBlankTabInPane", () => {
     const pane = rootPane(state);
     expect(pane.tabInstanceIds).toHaveLength(2);
     expect(pane.activeTabId).toBe(firstBlankId);
+  });
+
+  it("reuses an existing blank even when another tab is active", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+    state = openBlankTabInPane(state, paneId);
+    const blankId = rootPane(state).activeTabId;
+    if (blankId === null) throw new Error("expected blank tab");
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    const next = openBlankTabInPane(state, paneId);
+
+    expect(paneById(next, paneId).tabInstanceIds).toHaveLength(2);
+    expect(paneById(next, paneId).activeTabId).toBe(blankId);
+    expect(
+      isBlankTileRef(
+        paneTabRefs(next, paneById(next, paneId)).find(
+          (tab) => tab.instanceId === blankId,
+        ) ?? SPEC_A,
+      ),
+    ).toBe(true);
   });
 
   it("is a no-op when the target pane does not exist", () => {

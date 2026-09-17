@@ -150,16 +150,6 @@ vi.mock("../host-start-adoption", () => ({
   }),
 }));
 
-// Finding D: `provisionHost` constructs a registry yank-lookup up front. The
-// Finding-1 suite uses exact satisfaction (which never consults the manifest);
-// the Finding-D suite drives this stub directly to exercise the
-// implicit-registry-minimum branch.
-vi.mock("../../registry/client", () => ({
-  createRegistryYankLookup: () => ({
-    isVersionYanked: mocks.isVersionYankedMock,
-  }),
-}));
-
 // Version hold (final model, T6-safe write site): `provisionHost` no longer
 // calls `holdVersionIfDowngrade` itself after the committer returns -
 // `commitHostInstallSourceWithAttempt`'s phase hooks can reject AFTER the
@@ -233,6 +223,11 @@ function makeOpts(
     onProgress: null,
     force: false,
     acceptStoreFormatLoss: false,
+    // Finding D: the Finding-1 suite uses exact satisfaction (which never
+    // consults the manifest); the Finding-D suite drives this stub directly
+    // to exercise the implicit-registry-minimum branch. Through the seam, so
+    // the real lookup's network fetch is never constructed here.
+    yankLookup: { isVersionYanked: mocks.isVersionYankedMock },
     holdExplicitDowngrade: false,
     adoption: undefined,
     beforeMutate: null,

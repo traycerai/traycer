@@ -14,9 +14,11 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import {
   useCanvasTabLeaderModifierForIndex,
   useLeaderState,
+  usePickerFastModeLeader,
   usePickerProfileLeaderForIndex,
   usePickerProviderLeaderForIndex,
   usePickerReasoningLeaderForIndex,
@@ -26,6 +28,10 @@ import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leade
 import type { ReasoningFooterConfig } from "@/components/home/pickers/harness-model-picker-footers";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  DEFAULT_STATUS_BAR_LAYOUT,
+  useLayoutStore,
+} from "@/stores/settings/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { ReactNode } from "react";
@@ -189,30 +195,6 @@ function testProfile(profileId: string, label: string): ProviderProfile {
 
 const NOOP_PROFILE_CHANGE = (): void => undefined;
 
-function PickerReasoningScopeProbe(props: {
-  readonly reasoningActionable: boolean;
-}) {
-  const reasoning: ReasoningFooterConfig = {
-    value: "low",
-    options: [{ id: "low", label: "Low", description: null }],
-    disabled: false,
-    onChange: () => undefined,
-  };
-  usePickerLeaderScope({
-    open: true,
-    railEntries: [],
-    onEntryChange: () => undefined,
-    reasoning,
-    reasoningActionable: props.reasoningActionable,
-    activeProviderId: "codex",
-    activeProviderProfiles: [],
-    activeProviderProfileAdmission: null,
-    profileEnablementPending: () => false,
-    onProfileChange: NOOP_PROFILE_CHANGE,
-  });
-  return null;
-}
-
 // Registers the model-picker leader scope AND renders the real badge consumers
 // (`usePickerProviderLeaderForIndex` / `usePickerReasoningLeaderForIndex` /
 // `usePickerProfileLeaderForIndex`) so a test can assert exactly which surface
@@ -237,6 +219,9 @@ function PickerBadgeProbe(props: {
     onEntryChange: () => undefined,
     reasoning,
     reasoningActionable: props.reasoningActionable,
+    // No Fast footer wired here - this probe is scoped to the rail/reasoning/
+    // profile dimensions, and `toggleServiceTier(null)` is already a no-op.
+    serviceTier: null,
     activeProviderId: "codex",
     activeProviderProfiles: props.profiles,
     activeProviderProfileAdmission: null,
@@ -245,12 +230,20 @@ function PickerBadgeProbe(props: {
   });
   const providerLeader = usePickerProviderLeaderForIndex(0);
   const reasoningLeader = usePickerReasoningLeaderForIndex(0);
+  // The 10th reasoning slot (index 9) used to be reachable on digit 0 - now
+  // it's capped at `PICKER_REASONING_LEADER_INDEX_LIMIT` (9), leaving digit 0
+  // for Fast exclusively. Probing it directly catches a regression back to
+  // the old 10-slot limit even though nothing renders a 10th option here.
+  const reasoningLeaderAtTenthSlot = usePickerReasoningLeaderForIndex(9);
+  const fastLeader = usePickerFastModeLeader();
   const profileLeader = usePickerProfileLeaderForIndex(0);
   return (
     <div
       data-testid="picker-badge-probe"
       data-provider-leader={providerLeader ?? ""}
       data-reasoning-leader={reasoningLeader ?? ""}
+      data-reasoning-leader-tenth-slot={reasoningLeaderAtTenthSlot ?? ""}
+      data-fast-leader={fastLeader ?? ""}
       data-profile-leader={profileLeader ?? ""}
     />
   );
@@ -307,6 +300,7 @@ function advance(ms: number): void {
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
   __resetTabNavigationControllerForTesting();
 }
 
@@ -441,6 +435,42 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     // One dispatch per physical press: the OS repeat is swallowed, but the
     // chord stays reserved so the browser default can't run on it either.
     expect(calls).toHaveLength(1);
+    expect(first.defaultPrevented).toBe(true);
+    expect(repeated.defaultPrevented).toBe(true);
+  });
+
+  it("flips the status-bar placement once while its rebound chord is held", () => {
+    // Unbound by default, so the held-chord case only exists once a user has
+    // rebound it - which is exactly the state this covers.
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "app.status-bar.toggle": "mod+alt+u",
+      },
+    });
+    renderProbeWithExtra(
+      createAppRouter(normalizeProbeRoute("/epics/e1"), null),
+      <StatusBarKeybindingBridge />,
+    );
+
+    const first = keyDown({
+      code: "KeyU",
+      key: "u",
+      metaKey: true,
+      altKey: true,
+    });
+    const repeated = keyDown({
+      code: "KeyU",
+      key: "u",
+      metaKey: true,
+      altKey: true,
+      repeat: true,
+    });
+
+    // One flip per physical press, off the default footer. Without the repeat
+    // guard the OS would walk the bar between header and footer for as long as
+    // the chord is held and leave it wherever the last repeat landed.
+    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
     expect(first.defaultPrevented).toBe(true);
     expect(repeated.defaultPrevented).toBe(true);
   });
@@ -1007,6 +1037,34 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(probe().getAttribute("data-mod-owner")).toBe("");
   });
 
+  it("lights the Fast badge alongside reasoning under ⌥, capping reasoning at the ninth slot", () => {
+    const router = createAppRouter("/epics/e1", null);
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({ code: "AltLeft", key: "Alt", altKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    // Zero (Fast) and 1-9 (reasoning) share ⌥ ownership - Fast lights up
+    // unconditionally, but the old 10th reasoning slot (digit 0) no longer
+    // does, now that `PICKER_REASONING_LEADER_INDEX_LIMIT` caps it at 9.
+    expect(pickerProbe().getAttribute("data-fast-leader")).toBe("alt");
+    expect(pickerProbe().getAttribute("data-reasoning-leader")).toBe("alt");
+    expect(pickerProbe().getAttribute("data-reasoning-leader-tenth-slot")).toBe(
+      "",
+    );
+  });
+
   it("lights only the profile dropdown while ⌘⇧ is held with 2+ profiles", () => {
     const router = createAppRouter("/epics/e1", null);
     const onProfileChange = vi.fn();
@@ -1367,12 +1425,22 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(pickerProbe().getAttribute("data-profile-leader")).toBe("modShift");
   });
 
-  it("falls back to header sub-leader hints when picker reasoning becomes inactive", () => {
+  it("keeps ⌥ on the model picker (no fallthrough) when picker reasoning becomes inactive - Fast still owns it", () => {
+    // Pre-Fast, `model.reasoning.byDigit` was only active while reasoning was
+    // actionable, so losing that actionability handed ⌥ back to the header
+    // tab scope beneath it. Now the action is unconditionally active (digit 0
+    // always reserves ⌥ for Fast, and any other digit must still be consumed
+    // rather than fall through to a tab switch), so the picker keeps owning
+    // ⌥ regardless of `reasoningActionable`.
     const router = createAppRouter("/epics/e1", null);
     const view = render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
-        <PickerReasoningScopeProbe reasoningActionable />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
       </KeybindingProvider>,
     );
 
@@ -1382,16 +1450,27 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     advance(LEADER_HINT_DELAY_MS);
     expectAltHintVisible(true);
     expect(probe().getAttribute("data-alt-owner")).toBe("model-picker");
+    expect(pickerProbe().getAttribute("data-fast-leader")).toBe("alt");
+    expect(pickerProbe().getAttribute("data-reasoning-leader")).toBe("alt");
 
     view.rerender(
       <KeybindingProvider router={router}>
         <LeaderProbe />
-        <PickerReasoningScopeProbe reasoningActionable={false} />
+        <PickerBadgeProbe
+          reasoningActionable={false}
+          profiles={[]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
       </KeybindingProvider>,
     );
 
     expectAltHintVisible(true);
-    expect(probe().getAttribute("data-alt-owner")).toBe("header-tabs");
+    expect(probe().getAttribute("data-alt-owner")).toBe("model-picker");
+    // Both badges are gated on ⌥ ownership alone, not on `reasoningActionable`
+    // (that only gates whether digit 1-9 dispatch actually commits a level) -
+    // so neither drops out here.
+    expect(pickerProbe().getAttribute("data-fast-leader")).toBe("alt");
+    expect(pickerProbe().getAttribute("data-reasoning-leader")).toBe("alt");
   });
 
   it("hides visible canvas hints when route changes out of Epic scope", () => {

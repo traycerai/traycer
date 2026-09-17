@@ -38,8 +38,8 @@
  */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
-import type { EpicStateSubscribeServerFrameV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import type { EpicStateSubscribeServerFrameV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicStateRow } from "@traycer-clients/shared/epic-lanes";
 import {
   EPIC_META_ROW_ID,
@@ -239,9 +239,9 @@ function seedLegacyDoc(content: EpicContent): Y.Doc {
  */
 function snapshotFrame(
   content: EpicContent,
-): Extract<EpicStateSubscribeServerFrameV10, { kind: "snapshot" }> {
-  const parsed: EpicStateSubscribeServerFrameV10 =
-    epicStateSubscribeServerFrameSchemaV10.parse({
+): Extract<EpicStateSubscribeServerFrameV11, { kind: "snapshot" }> {
+  const parsed: EpicStateSubscribeServerFrameV11 =
+    epicStateSubscribeServerFrameSchemaV11.parse({
       kind: "snapshot",
       hasBinaryPayload: false,
       authorityEpoch: EPOCH,

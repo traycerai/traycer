@@ -1,6 +1,6 @@
 import { appLogger, describeLogError } from "@/lib/logger";
 import { readingPositionKeyPrefix } from "@/lib/persist/keys";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import type {
   ReadingPositionAnchorValidator,
   ReadingPositionIdentity,
@@ -55,9 +55,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The account whose scroll anchors this service is bound to, or `null` when
+ * there is no admitted identity to bind to.
+ *
+ * SURFACE. Reading positions are `window.localStorage` records about this
+ * device's own rendering - nothing here reaches the account's servers - so the
+ * predicate is admission, not validation. On the verdict, an `unverified`
+ * session fell through to the `session:` memory keys for its whole lifetime:
+ * every durable write was refused by `saveSlot`'s `accountPrefix` guard and
+ * every read missed, so the local plane this state exists to serve reopened
+ * every epic scrolled to the top. `signed-out` still answers `null` and keeps
+ * the anonymous-session records, which `activateReadingPositionAccount` adopts
+ * when an identity does resolve.
+ */
 function currentAuthAccountId(): string | null {
   const auth = useAuthStore.getState();
-  if (auth.status !== "signed-in") return null;
+  if (!admitsLocalPlane(auth.status)) return null;
   return auth.contextMetadata?.userId ?? auth.profile?.userId ?? null;
 }
 

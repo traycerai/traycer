@@ -7,6 +7,7 @@
  * signals that are genuinely arbitrary - which envelope colour is a reply, and
  * which bubble means a person is needed.
  */
+import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -115,6 +116,7 @@ export function OfficeLegend() {
             "bg-popover p-2",
             "text-popover-foreground shadow-md",
           )}
+          data-slot="office-legend-popover"
           data-testid="comm-graph-office-legend-card"
         >
           {SECTIONS.map((section) => (
@@ -144,8 +146,8 @@ export function OfficeLegend() {
                     would only be checkable against the floor by eye anyway. */}
                 <span
                   aria-hidden
-                  className="size-2.5 shrink-0 rounded-xs"
-                  style={{ backgroundColor: entry.tint }}
+                  className="size-2.5 shrink-0 rounded-xs bg-[var(--swatch)]"
+                  style={{ "--swatch": entry.tint } as CSSProperties}
                 />
                 <span className="text-muted-foreground">
                   Envelope: {entry.meaning}

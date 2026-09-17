@@ -241,13 +241,14 @@ function openIntentForPlacement(
 }
 
 /**
- * Where a side chat asked from `sourceChatId`'s tile lands: split to the RIGHT
- * of the pane showing that tile, so the source keeps streaming in view - a
- * side chat is read beside its conversation, not instead of it. Returns `null`
- * - "use the configured conversation placement" - when the source is not on
- * this tab's canvas (or on a phone, which shows one tile at a time), and the
- * handoff degrades the same way on its own if the pane closes before the fork
- * projects.
+ * Where a side chat asked from `sourceChatId`'s tile lands: BESIDE the pane
+ * showing that tile, so the source keeps streaming in view - a side chat is
+ * read beside its conversation, not instead of it. The "Side chats" placement
+ * row decides how "beside" is drawn (a split to the pane's right, or a tab of
+ * that pane); this only names the pane. Returns `null` - "place under the
+ * Side chats row, unanchored" - when the source is not on this tab's canvas
+ * (or on a phone, which shows one tile at a time), and the handoff degrades
+ * the same way on its own if the pane closes before the fork projects.
  */
 export function sideChatPlacementForTile(
   tabId: string,
@@ -262,5 +263,5 @@ export function sideChatPlacementForTile(
     ),
   );
   if (pane === undefined) return null;
-  return { kind: "split", paneId: pane.id, edge: "right" };
+  return { kind: "beside", paneId: pane.id, category: "side-chat" };
 }

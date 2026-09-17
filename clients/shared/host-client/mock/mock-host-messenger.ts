@@ -6,6 +6,7 @@ import {
   RetryableTransportError,
   type HostRequestAuthority,
   type HostRequestOptions,
+  type RequiredHostMethodVersion,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -115,6 +116,14 @@ export class MockHostMessenger<
     readonly requestId: string;
     readonly idempotencyKey: string | null;
     readonly authority: HostRequestAuthority;
+    /**
+     * Recorded, not enforced. The mock has no handshake to check a floor
+     * against, so honouring one here would be a fiction; what a test CAN pin
+     * on this seam is that the caller attached the requirement it claims to.
+     * Enforcement is pinned where it lives, against a real negotiated
+     * manifest (`ws-rpc-client.test.ts`).
+     */
+    readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
   }> = [];
   readonly phases: MockPhaseEvent[] = [];
 
@@ -156,9 +165,16 @@ export class MockHostMessenger<
     params: RequestOfMethod<Registry, Method>,
     options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const { idempotencyKey, authority } = options;
+    const { idempotencyKey, authority, requiredHostMethodVersion } = options;
     const requestId = this.requestIdProvider();
-    this.calls.push({ method, params, requestId, idempotencyKey, authority });
+    this.calls.push({
+      method,
+      params,
+      requestId,
+      idempotencyKey,
+      authority,
+      requiredHostMethodVersion,
+    });
 
     this.emit({ kind: "open", method, requestId });
     this.emit({ kind: "auth", method, requestId });

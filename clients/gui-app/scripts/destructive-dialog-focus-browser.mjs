@@ -68,6 +68,7 @@ try {
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-dialog-focus-",
+    [],
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;

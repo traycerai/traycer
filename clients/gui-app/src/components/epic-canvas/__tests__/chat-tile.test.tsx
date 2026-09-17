@@ -17,6 +17,7 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { modLabel } from "@/lib/keybindings/platform";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -43,6 +44,18 @@ const forkCreateTestState = vi.hoisted(() => ({
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
 }));
+// The tile's own next-step/compact/implement-plan sends read this catalog to
+// clamp a sticky `auto` permission to what the selected harness row actually
+// honors (chat-tile.tsx's `nextStepSettings`). `MOCK_HOST_CLIENT.request`
+// below never resolves, so the real `agent.gui.listHarnesses` query is
+// permanently pending - this test state is the only way to hand the tile a
+// settled row. Left empty, it reproduces the suite's pre-existing "catalog
+// never answers" default for every other test in this file.
+const harnessCatalogTestState = vi.hoisted<{
+  harnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
+}>(() => ({
+  harnesses: [],
+}));
 // The one host this suite runs on. The mocked binding/directory, the tile
 // fixtures, and the per-host run-settings buckets all key off it, so they
 // cannot drift apart into a fixture that tests a host the tile never sees.
@@ -54,11 +67,20 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   lifecycle: "live",
   inventoryReady: true,
   canMaterializeElectron: false,
+  connectionGeneration: 0,
   items: [],
+  viewports: {},
+  setViewport: () => Promise.reject(new Error("not used")),
+  reportViewport: () => undefined,
   errorMessage: null,
   retry: () => undefined,
   openTab: () => Promise.reject(new Error("not used")),
+  prepareOpenTab: () => {
+    throw new Error("not used");
+  },
   closeTab: () => Promise.resolve(),
+  attachTab: () => Promise.reject(new Error("not used")),
+  moveTab: () => Promise.reject(new Error("not used")),
 };
 
 vi.mock(
@@ -109,6 +131,13 @@ const MOCK_HOST_DIRECTORY = {
     hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null,
 };
 
+// ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
+// `@/lib/host` is a barrel of provider-coupled hooks, so the un-overridden
+// residue is not inert: spreading leaks the real `useAuthService` into
+// `EpicSessionProvider` -> `useStreamAuthRevalidator`, which throws "Host
+// runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
+// an unrelated component (~55 tests across these files). Enumeration fails the
+// useful way instead: vitest names the missing export and the module.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
@@ -316,6 +345,25 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
   }),
 }));
 
+// Only `useGuiHarnessCatalogForClient` is overridden - every other export
+// (including `useGuiHarnessCatalog`, whose own body calls the real,
+// unmocked `useGuiHarnessCatalogForClient` from module scope rather than
+// through this export) keeps its real implementation.
+vi.mock(
+  "@/hooks/harnesses/use-gui-harness-catalog",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/harnesses/use-gui-harness-catalog")
+    >()),
+    useGuiHarnessCatalogForClient: () => ({
+      harnesses: harnessCatalogTestState.harnesses,
+      harnessesLoading: false,
+      harnessesError: null,
+      modelsLoading: false,
+    }),
+  }),
+);
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
@@ -373,6 +421,12 @@ import {
   resetFocusedComposerControlsForTests,
 } from "@/lib/commands/composer-controls-registry";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
+import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 
 const EPIC_ID = "epic-chat-tile";
 const CHAT_ARTIFACT = {
@@ -454,6 +508,15 @@ const SESSION_SETTINGS: ChatRunSettings = {
   agentMode: "regular",
   profileId: null,
 };
+// `SESSION_SETTINGS` twin with `permissionMode: "auto"`, for the next-step
+// clamp cases. Installed as the CHAT'S OWN persisted settings (rather than
+// set through the composer toolbar) so a later snapshot carrying the same
+// tuple never trips `authoritativeSettingsChanged` in the session store and
+// silently overwrites it with an unrelated value.
+const AUTO_SESSION_SETTINGS: ChatRunSettings = {
+  ...SESSION_SETTINGS,
+  permissionMode: "auto",
+};
 
 interface ChatHarness {
   readonly sent: ChatSubscribeClientFrame[];
@@ -528,7 +591,7 @@ function createChatHarness(): ChatHarness {
       streamCreations += 1;
       if (snapshot !== null) {
         setTimeout(() => {
-          nextCallbacks.onConnectionStatus("open", null);
+          nextCallbacks.onConnectionStatus("open", null, null);
           emitChatSnapshotWithMessages({
             callbacks: nextCallbacks,
             access: snapshot.access,
@@ -545,6 +608,7 @@ function createChatHarness(): ChatHarness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -764,6 +828,32 @@ function deliveredA2aUserMessage(): Message {
     ...hostUserMessage(),
     messageId: DELIVERED_A2A_MESSAGE_ID,
     timestamp: 5,
+  };
+}
+
+/**
+ * A `agent.gui.listHarnesses` row shaped for `harnessCatalogTestState`,
+ * filling in every field the schema requires with a value that never
+ * constrains anything this suite tests except `supportedPermissionModes`.
+ */
+function harnessCatalogRow(overrides: {
+  readonly id: GuiHarnessCatalogEntry["id"];
+  readonly supportedPermissionModes: GuiHarnessCatalogEntry["supportedPermissionModes"];
+}): GuiHarnessCatalogEntry {
+  return {
+    id: overrides.id,
+    label: overrides.id,
+    enabled: true,
+    available: true,
+    error: null,
+    modes: ["gui"],
+    requiresApiKey: false,
+    supportedPermissionModes: overrides.supportedPermissionModes,
+    nativeAutoJudge: false,
+    availabilityPending: false,
+    models: [],
+    modelsLoading: false,
+    modelsError: null,
   };
 }
 
@@ -1069,6 +1159,8 @@ function approvalState(
     planId: kind === "plan" ? "plan-1" : null,
     actions: [],
     requestedAt: 4,
+    reason: null,
+    reviewing: null,
   };
 }
 
@@ -1076,18 +1168,18 @@ function renderChatTile() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileTestTree(queryClient, true));
+  return render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
 }
 
 function renderSwitchableChatTile() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  const rendered = render(chatTileTestTree(queryClient, true));
+  const rendered = render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
   return {
     ...rendered,
     setChatVisible: (visible: boolean) => {
-      rendered.rerender(chatTileTestTree(queryClient, visible));
+      rendered.rerender(chatTileTestTree(queryClient, visible, CHAT_ARTIFACT));
     },
   };
 }
@@ -1095,7 +1187,7 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(
   queryClient: QueryClient,
   chatVisible: boolean,
-  node: typeof CHAT_ARTIFACT = CHAT_ARTIFACT,
+  node: typeof CHAT_ARTIFACT,
 ) {
   return (
     <TestRouterProvider>
@@ -1137,10 +1229,10 @@ function chatTileTestTree(
 
 async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
-    expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
-    // Since invariant 6 the pre-session state is this one; without it the
-    // wait above would be vacuous (an id that never renders is always absent).
-    expect(screen.queryByTestId("chat-tile-load-chat-1")).toBeNull();
+    // One body covers the whole wait, before and after the session handle
+    // (`ChatTilePreContent`). The tests below assert it on screen, so this
+    // absence is not vacuous.
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
   });
   // LegendList needs a few frames (plus its scroll-finish fallback) to
   // bootstrap its initial scroll position and measure rows in jsdom before
@@ -1187,6 +1279,28 @@ function getButtonContainingText(text: string): HTMLButtonElement {
   return button;
 }
 
+/**
+ * The toolbar's left group (`ComposerToolbarLeft`) has no test id of its own,
+ * so this locates it structurally: the smallest ancestor containing both the
+ * attach-image button and the permission picker's trigger, which are the two
+ * controls that div renders. Scoping matters here because an unrelated
+ * `output[aria-live="polite"]` already exists elsewhere in the composer (the
+ * unsupported-images message), so a document-wide query would prove nothing
+ * about the retired "New mode applies to the next turn" note.
+ */
+function getComposerToolbarLeftGroup(): HTMLElement {
+  const attachButton = getButtonByAriaLabel("Attach image");
+  const permissionButton = getButtonByAriaLabel("Full access");
+  let node: HTMLElement | null = attachButton.parentElement;
+  while (node !== null && !node.contains(permissionButton)) {
+    node = node.parentElement;
+  }
+  if (node === null) {
+    throw new Error("expected a common ancestor for the toolbar left group");
+  }
+  return node;
+}
+
 function registerWaitingChatHandoff(): void {
   const scope = {
     hostId: HOST_ID,
@@ -1231,6 +1345,16 @@ describe("<ChatTile />", () => {
           browserAnnotations: [],
           resetEpoch: 0,
           revision: 0,
+          draftId: null,
+          hostRevision: 0,
+          targetEpicId: null,
+          lastTouchedAt: 0,
+          generation: 0,
+          syncedGeneration: 0,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
+          supersedes: null,
         },
       },
     });
@@ -1256,6 +1380,8 @@ describe("<ChatTile />", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
+    harnessCatalogTestState.harnesses = [];
+    resetNegotiatedManifests();
   });
 
   afterEach(() => {
@@ -1267,6 +1393,8 @@ describe("<ChatTile />", () => {
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();
     chatHarness.teardown();
+    resetNegotiatedManifests();
+    useSelectionAuthorityStore.getState().reset();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -1302,11 +1430,14 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    // The pre-session presentation is now the BOUNDED load state, not the
-    // unbounded spinner: with no session handle the tile renders
-    // `TileHostLoadState`, which says which host it is waiting on and stops
-    // waiting (redesign invariant 6). The gating claim above is unchanged.
-    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
+    // The pre-session presentation is the chat's pre-content body, which says
+    // which host it is waiting on and stops waiting (invariant 6). The gating
+    // claim above is unchanged: no handle, so nothing to retry.
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-has-handle"),
+    ).toBe("false");
   });
 
   it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
@@ -1351,11 +1482,140 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
-    // The pre-session presentation is now the BOUNDED load state, not the
-    // unbounded spinner: with no session handle the tile renders
-    // `TileHostLoadState`, which says which host it is waiting on and stops
-    // waiting (redesign invariant 6). The gating claim above is unchanged.
-    expect(screen.queryByTestId("chat-tile-load-chat-1")).not.toBeNull();
+    // The pre-session presentation is the chat's pre-content body, which says
+    // which host it is waiting on and stops waiting (invariant 6). The gating
+    // claim above is unchanged: no handle, so nothing to retry.
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-has-handle"),
+    ).toBe("false");
+  });
+
+  it("keeps the wait's start when the session handle arrives mid-wait (G2)", async () => {
+    // The body renders in two subtrees - before the handle, and inside the
+    // session view - so the wait is recorded above both, in `ChatTile`. A body
+    // that kept its own would start over here, and a handle that took 40 s
+    // would push the buttons out to 100 s.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const rendered = renderSwitchableChatTile();
+    await advanceLegendListTime(0);
+
+    const before = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(before.getAttribute("data-has-handle")).toBe("false");
+    const began = before.getAttribute("data-wait-began-at");
+    expect(began).not.toBeNull();
+
+    await advanceLegendListTime(5_000);
+    // The record-less chat becomes cloud-known, which opens the session gate.
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    rendered.setChatVisible(true);
+    await waitFor(() => {
+      expect(chatHarness.streamCreations()).toBe(1);
+    });
+
+    const after = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(after.getAttribute("data-has-handle")).toBe("true");
+    expect(after.getAttribute("data-wait-began-at")).toBe(began);
+  });
+
+  it("starts a new wait when the tile is handed another chat (G2)", async () => {
+    // `ChatTile` is keyed by the chat, so the wait - like everything else it
+    // decides once per mount - belongs to one chat.
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const rendered = render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
+    await advanceLegendListTime(0);
+    const began = Number(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-wait-began-at"),
+    );
+
+    await advanceLegendListTime(5_000);
+    rendered.rerender(
+      chatTileTestTree(queryClient, true, { ...CHAT_ARTIFACT, id: "chat-2" }),
+    );
+    await advanceLegendListTime(0);
+
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+    expect(
+      Number(
+        screen
+          .getByTestId("chat-tile-pre-content-chat-2")
+          .getAttribute("data-wait-began-at"),
+      ),
+    ).toBe(began + 5_000);
+  });
+
+  it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: HOST_ID,
+      targetHostId: HOST_ID,
+      effectiveHostId: HOST_ID,
+      leases: [{ hostId: HOST_ID, status: "ready", dead: null }],
+      selectionRevision: 1,
+    });
+    chatHarness.teardown();
+    chatHarness.installDeferred();
+    renderChatTile();
+    await waitFor(() => {
+      expect(() => chatHarness.callbacks()).not.toThrow();
+    });
+
+    // Three refusals from a host that is up bring the buttons early.
+    act(() => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        chatHarness.callbacks().onConnectionStatus("reconnecting", null, {
+          code: "SESSION_CLOSED",
+          reason: "SESSION_CLOSED: chat session is closing",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+      }
+    });
+    const body = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(body.getAttribute("data-arm")).toBe("taking-too-long");
+    expect(body.getAttribute("data-error-code")).toBe("SESSION_CLOSED");
+
+    // `retry()` restores `closed` when its stream factory throws, and rethrows.
+    __setChatStreamClientFactoryForTests(() => {
+      throw new Error("durable wiring failed");
+    });
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected chat session handle");
+    }
+    act(() => {
+      expect(() => handle.store.getState().retryFromUser()).toThrow(
+        "durable wiring failed",
+      );
+    });
+
+    const stalled = screen.getByTestId("chat-tile-pre-content-chat-1");
+    expect(stalled.getAttribute("data-arm")).toBe("taking-too-long");
+    expect(
+      within(stalled).getByText(/^The connection to .+ was lost\.$/),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("chat-tile-pre-content-chat-1-spinner"),
+    ).toBeNull();
+    expect(
+      within(stalled).getByRole("button", { name: "Try again" }),
+    ).not.toBeNull();
   });
 
   it("keeps a cold sidebar-opened chat in one loading state until its first snapshot", async () => {
@@ -1368,8 +1628,10 @@ describe("<ChatTile />", () => {
       expect(chatHarness.streamCreations()).toBe(1);
     });
     expect(
-      screen.getByRole("status", { name: "Loading agent" }),
-    ).not.toBeNull();
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-has-handle"),
+    ).toBe("true");
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
@@ -1399,7 +1661,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
     expect(chatHarness.streamCreations()).toBe(1);
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
-    expect(screen.queryByRole("status", { name: "Loading agent" })).toBeNull();
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
     expect(
       screen
         .getByTestId("host-workspace-selector")
@@ -1636,6 +1898,7 @@ describe("<ChatTile />", () => {
         reason: null,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -1724,13 +1987,16 @@ describe("<ChatTile />", () => {
       });
     });
 
-    // The toolbar stays editable mid-turn; the note only appears once the user
-    // actually changes permission (live-mirror + steer reconcile the change).
+    // The toolbar stays editable mid-turn: a queued message live-mirrors the
+    // settings and steering reconciles the turn-start-baked ones.
+    //
+    // This used to also assert the absence of a "New mode applies to the next
+    // turn" note, which the toolbar no longer renders at all - the host honours
+    // a mid-turn permission change immediately, so that sentence was false.
+    // A `queryByText` for retired copy passes whatever the toolbar does, so it
+    // is dropped rather than kept as coverage it no longer provides.
     await waitFor(() => {
       expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
     });
 
     act(() => {
@@ -1746,9 +2012,6 @@ describe("<ChatTile />", () => {
 
     await waitFor(() => {
       expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
     });
   });
 
@@ -1852,6 +2115,8 @@ describe("<ChatTile />", () => {
           planId: null,
           actions: [],
           requestedAt: 2,
+          reason: null,
+          reviewing: null,
         },
       });
     });
@@ -1861,9 +2126,6 @@ describe("<ChatTile />", () => {
     // Approval-pending is still turn-in-progress, but the toolbar stays editable.
     await waitFor(() => {
       expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
     });
 
     act(() => {
@@ -1878,11 +2140,79 @@ describe("<ChatTile />", () => {
       });
     });
 
+    // And stays editable once the approval resolves - the state this case used
+    // to describe through the retired note's absence.
     await waitFor(() => {
-      expect(
-        screen.queryByText("New mode applies to the next turn"),
-      ).toBeNull();
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
     });
+  });
+
+  it("renders no next-turn note in the toolbar's left group, mid-turn or with an approval pending", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: "codex",
+          model: "gpt-live",
+          profileId: null,
+          userMessageId: "message-1",
+          startedAt: 2,
+          updatedAt: 2,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
+    });
+
+    // The retired "New mode applies to the next turn" note used to be an
+    // `output[aria-live="polite"]` in this exact group. Assert its structural
+    // absence rather than `queryByText` for the deleted copy, which would
+    // pass trivially regardless of what the toolbar renders.
+    expect(
+      getComposerToolbarLeftGroup().querySelector('output[aria-live="polite"]'),
+    ).toBeNull();
+
+    act(() => {
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: {
+          kind: "tool",
+          approvalId: "approval-note-check",
+          toolName: "edit",
+          description: "Apply change",
+          input: null,
+          planId: null,
+          actions: [],
+          requestedAt: 2,
+          reason: null,
+          reviewing: null,
+        },
+      });
+    });
+
+    expect(screen.getByTestId("approval-prompt")).not.toBeNull();
+    expect(
+      getComposerToolbarLeftGroup().querySelector('output[aria-live="polite"]'),
+    ).toBeNull();
   });
 
   it("renders file-edit approvals before generic approvals in the composer slot", async () => {
@@ -1923,6 +2253,8 @@ describe("<ChatTile />", () => {
           planId: null,
           actions: [],
           requestedAt: 3,
+          reason: null,
+          reviewing: null,
         },
       });
     });
@@ -2375,6 +2707,416 @@ describe("<ChatTile />", () => {
     });
   });
 
+  it("clamps a next-step send off the harness row when it does not list auto", async () => {
+    // Host proof: the catalog line is new enough to spell `auto` at all, so
+    // the clamp below is decided by the ROW, not this half of the gate.
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    // Installed as the CHAT's own persisted settings, and re-asserted with the
+    // exact same tuple on the snapshot below: `chat-session-store` replaces a
+    // live composer edit outright whenever a snapshot's settings differ from
+    // what it last recorded (`authoritativeSettingsChanged`), so a toolbar
+    // edit here would be clobbered the moment the next-steps message arrives.
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], AUTO_SESSION_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: AUTO_SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    // `auto`'s own declared fallback (`PERMISSION_FALLBACK_MODE.auto`), not
+    // the row's most-restrictive supported mode - the row honors
+    // `auto_accept_edits` too, so the walk stops there.
+    expect(frame.settings.permissionMode).toBe("auto_accept_edits");
+  });
+
+  it("preserves auto on a next-step send when the harness row lists it", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "auto",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], AUTO_SESSION_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: AUTO_SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.settings.permissionMode).toBe("auto");
+  });
+
+  it("passes auto through a next-step send unclamped when the harness catalog has not answered", async () => {
+    // Host proof present (so the HOST half of the gate cannot be what lets
+    // `auto` through), but no row for "claude" at all - `harnessCatalogTestState`
+    // is left at its default empty array, the same "catalog never answers"
+    // state every other test in this file already runs under.
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], AUTO_SESSION_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: AUTO_SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.settings.permissionMode).toBe("auto");
+  });
+
+  it("clamps a queued steer-now send off the harness row when it does not list auto", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    // Matches `AUTO_SESSION_SETTINGS` on every field `decideSteerSettings`
+    // compares, so the decision is `silent_inject` and the send fires on one
+    // click - `permissionMode` is deliberately excluded from that comparison
+    // (it applies live, no restart needed), which is exactly why an
+    // unclamped `"auto"` on this frame would be the queue-steer regression.
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: AUTO_SESSION_SETTINGS.reasoningEffort,
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    const frame = chatHarness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(frame.newSettings?.permissionMode).toBe("auto_accept_edits");
+  });
+
+  it("passes auto through a queued steer-now send when the harness row lists it", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "auto",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: AUTO_SESSION_SETTINGS.reasoningEffort,
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    const frame = chatHarness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(frame.newSettings?.permissionMode).toBe("auto");
+  });
+
+  it("clamps a queued steer-now send confirmed through the restart dialog", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    // Differs from `AUTO_SESSION_SETTINGS` only on `reasoningEffort` - a
+    // field `decideSteerSettings` DOES compare - so the decision is
+    // `interrupt_restart` instead of `silent_inject`: the click opens the
+    // confirm dialog rather than sending immediately.
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: "high",
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    expect(chatHarness.sent).toHaveLength(0);
+    const dialog = screen.getByTestId("steer-settings-conflict-dialog");
+    const confirmButton = within(dialog).getByTestId(
+      "steer-settings-conflict-confirm",
+    );
+
+    fireEvent.click(confirmButton);
+
+    const frame = chatHarness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(frame.newSettings?.permissionMode).toBe("auto_accept_edits");
+  });
+
   // A next-step click never touches the composer, so the chip has to come out of
   // `buildSubmittedChatJSONContent`. When that converter was `/`-only the `$`
   // prompt stayed prose, which cost more than the pill: with neither a
@@ -2609,8 +3351,8 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null);
-      chatHarness.callbacks().onConnectionStatus("open", null);
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null);
     });
 
     expect(screen.getByText("Host chat content")).not.toBeNull();
@@ -2672,6 +3414,7 @@ describe("<ChatTile />", () => {
         reason: null,
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2682,8 +3425,8 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null);
-      chatHarness.callbacks().onConnectionStatus("open", null);
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null);
     });
 
     expect(chatHarness.sent).toHaveLength(1);
@@ -2734,6 +3477,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2800,6 +3544,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: null,
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -2853,6 +3598,7 @@ describe("<ChatTile />", () => {
         reason: "Only the agent owner can perform this action.",
         code: "NOT_OWNER",
         backgroundStopTaskIds: [],
+        token: null,
       });
     });
 
@@ -4025,7 +4771,7 @@ describe("<ChatTile />", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
-    const rendered = render(chatTileTestTree(queryClient, true));
+    const rendered = render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
     await waitForChatTileLoaded();
     act(() => {
       emitChatSnapshotWithMessages({
@@ -4087,6 +4833,53 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
     expect(chatHarness.sent).toHaveLength(1);
+  });
+
+  it("the pane's Try again reaches retryFromUser", async () => {
+    chatHarness.installDeferred();
+    renderChatTile();
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-tile")).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(() => chatHarness.callbacks()).not.toThrow();
+    });
+
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected chat session handle");
+    }
+    const retryFromUser = vi.fn();
+    const original = handle.store.getState().retryFromUser;
+    handle.store.setState({
+      retryFromUser: () => {
+        retryFromUser();
+        original();
+      },
+    });
+
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "UNAUTHORIZED",
+            reason: "CHAT_INVALID: gone",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        },
+        null,
+      );
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(retryFromUser).toHaveBeenCalledTimes(1);
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

@@ -336,17 +336,18 @@ function PlanModalView(
   return (
     <Dialog open={open} onOpenChange={props.onOpenChange}>
       <DialogContent
+        layout="banded"
         data-theme={themePreset}
         style={{ colorScheme: resolvedTheme }}
         className={cn(
           resolvedTheme === "dark" ? "dark" : null,
-          "grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,72rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(92vw,72rem)]",
+          "grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,72rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(92vw,72rem)]",
         )}
       >
-        <DialogHeader className="border-b border-border/40 px-5 py-4">
+        <DialogHeader>
           <div className="flex flex-wrap items-center gap-2">
             <PlanHarnessIcon harnessId={segment.harnessId} />
-            <DialogTitle className="text-ui-lg">{modalHeadline}</DialogTitle>
+            <DialogTitle size="lg">{modalHeadline}</DialogTitle>
             <PlanStatusBadge
               planStatus={segment.planStatus}
               isStreaming={segment.isStreaming}
@@ -365,15 +366,16 @@ function PlanModalView(
           {props.isFetching ? (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground">
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId="plan-fetch-spinner"
                 variant="dots"
+                tone="muted"
               />
               Loading full plan
             </div>
           ) : null}
           {unavailable ? (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm text-amber-900 dark:text-amber-200">
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground">
               <FileWarning className="size-3.5 shrink-0" aria-hidden />
               Full plan content is unavailable. Showing the saved preview.
             </div>
@@ -411,7 +413,7 @@ function PlanModalView(
             {modalBody}
           </TraycerMarkdown>
         </div>
-        <DialogFooter className="sticky bottom-0 mx-0 mb-0 flex-col gap-2 rounded-none border-t border-border/40 bg-popover/95 px-5 py-3 backdrop-blur supports-backdrop-filter:bg-popover/80 sm:flex-row sm:items-center sm:justify-between">
+        <DialogFooter className="sticky bottom-0 flex-col rounded-none sm:flex-row sm:items-center sm:justify-between">
           <PlanCopyButton markdown={modalMarkdown} />
           {props.actionsVisible ? (
             <PlanImplementButton

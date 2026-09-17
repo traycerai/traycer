@@ -26,6 +26,7 @@ import {
 import { LiveActivityPromoteContext } from "./live-activity-promote-context";
 import { Shimmer } from "@/components/ui/shimmer";
 import { cn } from "@/lib/utils";
+import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import {
   useActivityGroupEverHeaded,
   useActivityGroupOpen,
@@ -209,9 +210,9 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}
         className={cn(
-          "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm py-1 pr-1 text-left text-muted-foreground transition-colors",
-          "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "group/activity flex max-w-full items-center overflow-hidden text-left",
         )}
+        variant="quiet"
       >
         <Box className="size-3.5 shrink-0 transition-colors" aria-hidden />
         {group.isActive ? (
@@ -354,7 +355,12 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
         {row}
       </LiveActivityPromoteContext.Provider>
     );
-  if (!revealed) return wrapped;
+  const anchored = (
+    <ChatBlockNavigationAnchor blockId={segment.id}>
+      {wrapped}
+    </ChatBlockNavigationAnchor>
+  );
+  if (!revealed) return anchored;
   return (
     <div
       ref={bindReveal}
@@ -363,7 +369,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
       aria-label={activityChildLabel(segment)}
       className="rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
-      {wrapped}
+      {anchored}
     </div>
   );
 }

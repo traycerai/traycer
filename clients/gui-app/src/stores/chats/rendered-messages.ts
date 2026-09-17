@@ -1,7 +1,12 @@
+import {
+  codexRetryVisibility,
+  codexRetryTitle,
+} from "@traycer/protocol/host/agent/gui/retry-feedback";
 import { useMemo } from "react";
 import type {
   AgentSender,
   AssistantMessage,
+  AssistantTurnProfile,
   ChatEvent,
   ChatSessionAnchor,
   Message,
@@ -22,6 +27,7 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
 import {
+  autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
   importedChatMarkerRowSource,
@@ -42,6 +48,7 @@ import {
   assistantRowTurnKey,
   assistantSliceRowId,
   assistantTurnNeedsTrailingRow,
+  autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
   importedChatMarkerRowId,
@@ -49,6 +56,7 @@ import {
   planAssistantTurnRows,
   queueSteerRowId,
   setupCardRowId,
+  turnKeysWithUnprovableProfileWalk,
   turnStoppedInfoByTurnKey,
   type AssistantTurnRowPlan,
   type TurnStoppedInfo,
@@ -88,6 +96,7 @@ import type {
   SubagentSegment,
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
+import { manualRungAnchorSegmentId } from "@/stores/chats/manual-rung-anchor";
 import type {
   LiveAssistantMessage,
   PendingUserMessage,
@@ -280,6 +289,8 @@ function blockContentVersion(block: ContentBlock): number {
       return textBlockContentVersion(block);
     case "reasoning":
       return block.content.length;
+    case "error":
+      return errorBlockContentVersion(block);
     case "steer":
       return extractPlainTextFromComposerJSONContent(block.content).length;
     case "plan":
@@ -289,18 +300,45 @@ function blockContentVersion(block: ContentBlock): number {
   }
 }
 
+function errorBlockContentVersion(
+  block: Extract<ContentBlock, { type: "error" }>,
+): number {
+  let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, block.code ?? "");
+  hash = hashStringField(hash, block.message);
+  hash = hashNumberField(hash, block.recoverable ? 1 : 0);
+  hash = hashStringField(hash, block.failure?.reason ?? "");
+  hash = hashStringField(hash, block.failure?.resetsAt?.toString() ?? "");
+  hash = hashStringField(hash, block.failure?.resetsAtSource ?? "");
+  hash = hashStringField(hash, block.failure?.scope ?? "");
+  return hashStringField(hash, block.failure?.providerDetail ?? "");
+}
+
 /**
  * A provider-notice text block is upserted atomically (its rendered fields
  * replace in place, they never append), so `text.length` alone can't catch a
  * same-length title/message/detail update. Hash the rendered fields instead;
  * an ordinary text block (no notice) keeps the cheap length signature.
+ *
+ * `noticeKind` is one of those rendered fields and not an identity, which is
+ * the correction this hash carries: `provider_notice.upsert` rebuilds the WHOLE
+ * `providerNotice` object for an existing `blockId` (see the accumulator in
+ * `protocol/src/host/agent/gui/agent-runtime-accumulator.ts`), so a repeat
+ * upsert can land a different kind on the same block. `block.timestamp` and
+ * `block.status` — the two fields `turnSignature` hashes beside this one —
+ * usually move with it and hide the miss, which is exactly why the kind cannot
+ * be left to them: two upserts inside one millisecond at an unchanged status
+ * leave every hashed field equal and the turn serves its cached segment. The
+ * projected kind is what `isFallbackNoticeKind` reads to offer the fallback
+ * settings link, so a stale one drops that affordance silently — e.g. a block
+ * re-upserted as `fallback_wait_resumed` still rendering the previous kind.
  */
 function textBlockContentVersion(
   block: Extract<ContentBlock, { type: "text" }>,
 ): number {
   const notice = block.providerNotice;
   if (notice === null) return block.text.length;
-  let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, notice.tone);
+  let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, notice.noticeKind);
+  hash = hashStringField(hash, notice.tone);
   hash = hashStringField(hash, notice.title);
   hash = hashStringField(hash, notice.message ?? "");
   return notice.details.reduce((next, detail) => {
@@ -460,6 +498,13 @@ function hasCompletedProviderTurn(timing: TurnLifecycleTiming | null): boolean {
   );
 }
 
+function retryTurnHasEnded(
+  stopped: TurnStoppedEventInfo | null,
+  timing: TurnLifecycleTiming | null,
+): boolean {
+  return stopped !== null || (timing !== null && timing.endedAt !== null);
+}
+
 function nestedSteeredUsersSignature(
   blocks: ReadonlyArray<ContentBlock>,
   userMessagesById: ReadonlyMap<string, UserMessage>,
@@ -552,33 +597,79 @@ function stoppedSignature(stopped: TurnStoppedEventInfo | null): string {
     : `stopped:${stopped.stoppedAt}:${stopped.reason ?? ""}`;
 }
 
-function profileLabelFromSessionAnchor(
-  sessionAnchor: ChatSessionAnchor,
-): string {
-  if (sessionAnchor.labelSnapshot !== null) {
-    return sessionAnchor.labelSnapshot;
+/**
+ * The account label for ONE recorded profile snapshot.
+ *
+ * Takes the structural pair rather than `ChatSessionAnchor` because there are
+ * now two carriers of the same recorded fact - a session anchor's
+ * `profileId`/`labelSnapshot`, and an assistant row's own `turnProfile` - and
+ * they must render identically. A second copy of these three lines is how the
+ * two start disagreeing about what a tombstoned profile reads as.
+ */
+function profileLabelFromSnapshot(snapshot: {
+  readonly profileId: string | null;
+  readonly labelSnapshot: string | null;
+}): string {
+  if (snapshot.labelSnapshot !== null) {
+    return snapshot.labelSnapshot;
   }
-  return sessionAnchor.profileId === null ? "Terminal account" : "profile";
+  return snapshot.profileId === null ? "Terminal account" : "profile";
+}
+
+/** What the walk below learned about one durable assistant turn. */
+interface WalkedTurnProfile {
+  /** This turn's OWN recorded snapshot, from any record that carries one. */
+  recorded: AssistantTurnProfile | null;
+  /** The anchor in effect at this turn, from the running walk. */
+  walkedAnchor: ChatSessionAnchor | null;
+  /** The turn's own sender harness, for the anchor-agreement gate. */
+  harnessId: AgentSender["harnessId"];
 }
 
 /**
- * Associate the immutable profile label on each provider-session anchor with
- * every assistant turn that follows it. Continuation messages do not carry a
- * new anchor, so the last anchor remains in effect until the host mints the
- * next one. The active turn needs an explicit mapping before its first
- * assistant record exists; its `userMessageId` identifies the initiating row.
+ * Which account produced each assistant turn, as a label per turn key.
  *
- * The running `currentAnchor` is exactly the "look at the rows around this one"
- * derivation a bounded window cannot make: a turn whose anchor was established
- * by a user record outside the hydrated span starts the walk with none and
- * silently loses its saved label. `contextByTurnKey` is the host's own answer
- * for that turn and outranks the walk wherever it speaks - the walk stays as
- * the fallback for the legacy line and for any turn the projection said nothing
- * about.
+ * ## The recorded snapshot is the answer wherever it exists
  *
- * The `harnessId` agreement gate applies either way. It is what stops a label
- * minted for one provider from being shown against another's turn, and that is
- * a property of the anchor rather than of where the anchor came from.
+ * An assistant row created by a current host carries `turnProfile`: the
+ * profile that turn was DISPATCHED on, stamped at row creation. That is a fact
+ * about the turn, so it outranks everything derived and needs no
+ * harness-agreement gate - it was stamped from the same run settings as the
+ * row's own `sender.harnessId`.
+ *
+ * ## Why anything else is needed at all
+ *
+ * Rows written before that field existed carry nothing, and the only evidence
+ * left is the `sessionAnchor` on the user row that started the turn, kept in
+ * effect across continuation records by the running `currentAnchor` below.
+ * (`contextByTurnKey` is the host's answer for a turn whose anchor was
+ * established outside a hydrated window; it is the same running walk run over
+ * whole history, so it is the same KIND of evidence, not a corrective.)
+ *
+ * ## Why that evidence is not always usable - the absent-snapshot rule
+ *
+ * A provider fallback hop re-dispatches ONE user message onto a second attempt,
+ * and `recordNativeUserMessageAnchor` then REWRITES that user row's anchor to
+ * the replacement's. The original attempt's row is unchanged, so walking to the
+ * anchor hands it the account that did not produce it. On a profile-only hop
+ * the harness is identical, so the agreement gate below does not catch it.
+ *
+ * `turnKeysWithUnprovableProfileWalk` owns that rule - the definition of a
+ * dispatch attempt, the one-attempt carve-out that preserves every historical
+ * label, and the autonomous-turn exclusion. It is IMPORTED rather than restated
+ * here: the host runs the identical function over whole history, and two copies
+ * of "what counts as an attempt" would drift in the place where the drift shows
+ * up as an account name rather than as a failure.
+ *
+ * Two sources, unioned, because each covers what the other cannot:
+ *
+ * - the HOST's `profileWalkUnprovable`, which saw whole history. A bounded
+ *   window holding one of two attempts counts one and would walk;
+ * - this walk's own answer, for the legacy line and full-materialize mode,
+ *   where no context is served at all.
+ *
+ * Absent means NOT RECORDED, never "no profile" - a turn that ran on the
+ * ambient login records `{ profileId: null }` and is labelled from it.
  */
 function profileLabelsByTurnKeyFromMessages(input: {
   readonly messages: ReadonlyArray<Message>;
@@ -589,9 +680,49 @@ function profileLabelsByTurnKeyFromMessages(input: {
   readonly activeTurnProfileId: string | null;
 }): ReadonlyMap<string, string> {
   const labels = new Map<string, string>();
+  // This client's own answer, over whatever span it holds. Unioned below with
+  // the host's, never used instead of it.
+  const locallyUnprovable = turnKeysWithUnprovableProfileWalk(input.messages);
+  const walk = walkTurnProfiles(input);
+  for (const [turnKey, turn] of walk.turns) {
+    const label = walkedTurnProfileLabel({
+      turn,
+      unprovable:
+        locallyUnprovable.has(turnKey) ||
+        input.contextByTurnKey.get(turnKey)?.profileWalkUnprovable === true,
+    });
+    if (label !== null) labels.set(turnKey, label);
+  }
+  // Last, so it can override the walked label for the same turn - exactly
+  // when its own conditions hold, and never over a recorded snapshot.
+  const active = activeTurnProfileLabel({
+    turns: walk.turns,
+    activeTurnAnchor: walk.activeTurnAnchor,
+    activeTurnId: input.activeTurnId,
+    activeTurnHarnessId: input.activeTurnHarnessId,
+    activeTurnProfileId: input.activeTurnProfileId,
+  });
+  if (active !== null) labels.set(active.turnKey, active.label);
+  return labels;
+}
+
+/**
+ * The running anchor walk behind {@link profileLabelsByTurnKeyFromMessages}:
+ * one entry per assistant turn, plus the anchor in effect for the active
+ * turn's user row. Split out only to keep each half within the complexity
+ * budget - the rules are documented on the caller.
+ */
+function walkTurnProfiles(input: {
+  readonly messages: ReadonlyArray<Message>;
+  readonly contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>;
+  readonly activeTurnUserMessageId: string | null;
+}): {
+  readonly turns: ReadonlyMap<string, WalkedTurnProfile>;
+  readonly activeTurnAnchor: ChatSessionAnchor | null;
+} {
+  const turns = new Map<string, WalkedTurnProfile>();
   let currentAnchor: ChatSessionAnchor | null = null;
   let activeTurnAnchor: ChatSessionAnchor | null = null;
-
   for (const message of input.messages) {
     if (message.role === "user") {
       if (message.sessionAnchor !== null) {
@@ -603,24 +734,73 @@ function profileLabelsByTurnKeyFromMessages(input: {
       continue;
     }
     const turnKey = assistantTurnKey(message);
-    const anchor =
+    const existing = turns.get(turnKey);
+    // Last-write-wins across a turn's records for both derived values, which is
+    // what the single-pass `labels.set` per record used to do. A mid-turn steer
+    // can move `currentAnchor`, and preserving that resolution keeps this
+    // change to the absent-snapshot rule alone.
+    const walkedAnchor =
       input.contextByTurnKey.get(turnKey)?.sessionAnchor ?? currentAnchor;
-    if (anchor?.harnessId === message.sender.harnessId) {
-      labels.set(turnKey, profileLabelFromSessionAnchor(anchor));
+    if (existing === undefined) {
+      turns.set(turnKey, {
+        recorded: message.turnProfile ?? null,
+        walkedAnchor,
+        harnessId: message.sender.harnessId,
+      });
+      continue;
+    }
+    existing.walkedAnchor = walkedAnchor;
+    existing.harnessId = message.sender.harnessId;
+    if (message.turnProfile !== undefined) {
+      existing.recorded = message.turnProfile;
     }
   }
+  return { turns, activeTurnAnchor };
+}
 
-  if (
-    input.activeTurnId !== null &&
-    activeTurnAnchor?.harnessId === input.activeTurnHarnessId &&
-    activeTurnAnchor.profileId === input.activeTurnProfileId
-  ) {
-    labels.set(
-      input.activeTurnId,
-      profileLabelFromSessionAnchor(activeTurnAnchor),
-    );
+/**
+ * One walked turn's label, or `null` when nothing may be named: a recorded
+ * snapshot wins outright; without one, an unprovable walk (either side's
+ * verdict) names nothing, and the walked anchor counts only when its harness
+ * agrees with the row's.
+ */
+function walkedTurnProfileLabel(input: {
+  readonly turn: WalkedTurnProfile;
+  readonly unprovable: boolean;
+}): string | null {
+  const { turn } = input;
+  if (turn.recorded !== null) return profileLabelFromSnapshot(turn.recorded);
+  if (input.unprovable) return null;
+  if (turn.walkedAnchor === null) return null;
+  if (turn.walkedAnchor.harnessId !== turn.harnessId) return null;
+  return profileLabelFromSnapshot(turn.walkedAnchor);
+}
+
+/**
+ * The active turn's label from the anchor in effect for its user row, when
+ * that anchor agrees with the live execution on harness AND profile.
+ */
+function activeTurnProfileLabel(input: {
+  readonly turns: ReadonlyMap<string, WalkedTurnProfile>;
+  readonly activeTurnAnchor: ChatSessionAnchor | null;
+  readonly activeTurnId: string | null;
+  readonly activeTurnHarnessId: AgentSender["harnessId"] | null;
+  readonly activeTurnProfileId: string | null;
+}): { readonly turnKey: string; readonly label: string } | null {
+  const anchor = input.activeTurnAnchor;
+  if (input.activeTurnId === null || anchor === null) return null;
+  // A recorded snapshot on the active turn's own row is authoritative and
+  // must not be displaced by this weaker derivation, which reads today's
+  // anchor rather than the row's stamped fact.
+  if ((input.turns.get(input.activeTurnId)?.recorded ?? null) !== null) {
+    return null;
   }
-  return labels;
+  if (anchor.harnessId !== input.activeTurnHarnessId) return null;
+  if (anchor.profileId !== input.activeTurnProfileId) return null;
+  return {
+    turnKey: input.activeTurnId,
+    label: profileLabelFromSnapshot(anchor),
+  };
 }
 
 function buildTurnPauseAccounting(input: {
@@ -857,6 +1037,42 @@ function isInterviewWaitEndEvent(event: ChatEvent): boolean {
   );
 }
 
+/**
+ * The active turn's stable primitive fields, or all-`null` when no turn is
+ * running. Spelled out once here so `useRenderedMessages` reads them as plain
+ * values: a per-field `activeTurn?.x ?? null` at the call site is five
+ * branches in the hook body for no gain, and the absent turn is one decision,
+ * not five.
+ *
+ * `startedAt` is the turn's real wall-clock start. The pre-turn indicator is
+ * synthesized with a `createdAt` that is a list anchor rather than an instant,
+ * so this is the only place that row can learn when its turn actually began.
+ */
+function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
+  readonly turnId: string | null;
+  readonly userMessageId: string | null;
+  readonly harnessId: ChatActiveTurn["harnessId"] | null;
+  readonly profileId: string | null;
+  readonly startedAt: number | null;
+} {
+  if (activeTurn === null) {
+    return {
+      turnId: null,
+      userMessageId: null,
+      harnessId: null,
+      profileId: null,
+      startedAt: null,
+    };
+  }
+  return {
+    turnId: activeTurn.turnId,
+    userMessageId: activeTurn.userMessageId,
+    harnessId: activeTurn.harnessId,
+    profileId: activeTurn.profileId,
+    startedAt: activeTurn.startedAt,
+  };
+}
+
 export function useRenderedMessages(
   input: RenderedMessagesInput,
   displayContext: RenderedMessagesDisplayContext,
@@ -865,10 +1081,13 @@ export function useRenderedMessages(
   // on its stable primitive fields (not the object identity) to avoid busting
   // this memo each frame. These are all set at turn-start and never rewritten
   // per delta, so they make safe, churn-free deps.
-  const activeTurnId = input.activeTurn?.turnId ?? null;
-  const activeTurnUserMessageId = input.activeTurn?.userMessageId ?? null;
-  const activeTurnHarnessId = input.activeTurn?.harnessId ?? null;
-  const activeTurnProfileId = input.activeTurn?.profileId ?? null;
+  const {
+    turnId: activeTurnId,
+    userMessageId: activeTurnUserMessageId,
+    harnessId: activeTurnHarnessId,
+    profileId: activeTurnProfileId,
+    startedAt: activeTurnStartedAt,
+  } = activeTurnPrimitives(input.activeTurn);
   // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
   // carries the same context object, so the map is at most one entry per
   // hydrated turn, and the derivations below all hold a turn key rather than a
@@ -990,6 +1209,11 @@ export function useRenderedMessages(
   );
   const notificationAnchorMessages = useMemo(
     () => buildNotificationAnchorMessages(input.events),
+    [input.events],
+  );
+
+  const autoJudgeUnattendedDenialMessages = useMemo(
+    () => buildAutoJudgeUnattendedDenialMessages(input.events),
     [input.events],
   );
 
@@ -1250,6 +1474,7 @@ export function useRenderedMessages(
       : renderPendingRunIndicator({
           activeRunState,
           activeTurnId,
+          activeTurnStartedAt,
           activeTurnMeta: pendingTurnMeta(activeTurnMetaInput, displayContext),
           turnPauseAccounting,
           rendered: [...persisted, ...activeTurn, ...pending, ...live],
@@ -1281,6 +1506,10 @@ export function useRenderedMessages(
       ...stoppedWithoutAssistantRecords,
       ...forkedChatLinkMessages,
       ...notificationAnchorMessages,
+      // After the anchors, because `projectTranscriptRows` appends its passes
+      // in this same order and a tie between two events sharing a timestamp is
+      // resolved by that order alone. Moving either list moves ordinals.
+      ...autoJudgeUnattendedDenialMessages,
       ...trailing,
     ];
 
@@ -1363,10 +1592,12 @@ export function useRenderedMessages(
     forkedChatLinkMessages,
     importedChatMarkerMessages,
     notificationAnchorMessages,
+    autoJudgeUnattendedDenialMessages,
     setupCardRows,
     setupCardEntries,
     activeRunState,
     activeTurnId,
+    activeTurnStartedAt,
     activeTurnMetaInput,
     turnPauseAccounting,
     displayContext,
@@ -1591,6 +1822,65 @@ function buildNotificationAnchorMessages(
             message: anchor.message,
             recoverable: false,
             code: anchor.code,
+            // A session-anchor row is synthesized here from an EVENT, not
+            // projected from an error block, so there is no typed failure to
+            // carry - and inventing one would put fallback affordances on a
+            // row no turn produced.
+            failure: null,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
+ * Project an auto-mode refusal that nobody was there to be asked about.
+ *
+ * Under the attendance rule a chat running for another agent is refused rather
+ * than parked: the model reads a tool error and the human reads nothing, so a
+ * person opening that chat tomorrow cannot tell "refused without asking
+ * anyone" from "a judge refused". This row is the only reader that arm will
+ * ever have.
+ *
+ * Filtered and identified THROUGH the projection's own helper, like the fork
+ * link and the provenance marker above it - the host numbers this row's
+ * ordinal from `autoJudgeUnattendedDenialRowSource`, and a row that existed
+ * here but not there is exactly what a windowed transcript loses.
+ */
+function buildAutoJudgeUnattendedDenialMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    const denial = autoJudgeUnattendedDenialRowSource(event);
+    if (denial === null) return [];
+    const id = autoJudgeUnattendedDenialRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "system",
+        content: "",
+        segments: [
+          {
+            id: `${id}:denial`,
+            kind: "auto-judge-unattended-denial",
+            rule: denial.rule,
+            reason: denial.reason,
           },
         ],
         structuredContent: null,
@@ -1659,6 +1949,22 @@ function pendingTurnMeta(
 
 interface AssistantTurnAccumulator {
   messageId: string;
+  /**
+   * The record's OWN `turnId`, not this turn's accumulator key.
+   *
+   * The two differ, and the difference is load-bearing: `assistantTurnKey`
+   * falls back to `ts:<timestamp>` for a record persisted before `turnId`
+   * existed, so the key is always a string while the turn identity may be
+   * absent. Anything matching against a host-supplied turn id - the error
+   * card's manual-rung affordances, whose whole correctness rests on naming
+   * the right attempt - has to compare against this, and a legacy row must
+   * fail that comparison rather than match a synthetic key.
+   *
+   * Records of one turn agree by construction (the key is derived from this
+   * field), so there is no first-wins/last-wins question the way there is for
+   * the run metadata above.
+   */
+  turnId: string | null;
   sender: AgentSender;
   /**
    * Earliest wall-clock the host attributed to this turn. Sourced from
@@ -2180,6 +2486,7 @@ function renderPersistedAssistantMessageTurn(
     input.turnLifecycleTimingByTurnKey.get(turnKey) ?? null,
     acc.blocks,
   );
+  const retryTurnEnded = retryTurnHasEnded(stopped, lifecycleTiming);
   const notificationOnlyAutonomousResume = isNotificationOnlyAutonomousResume(
     turnComplete,
     hasCompletedProviderTurn(lifecycleTiming),
@@ -2213,6 +2520,7 @@ function renderPersistedAssistantMessageTurn(
     checkpointSignature(checkpointView),
     nestedSteeredUsersSignature(acc.blocks, args.userMessagesById),
     completionToken,
+    String(retryTurnEnded),
     timing.cacheToken,
     runState ?? "none",
     String(timing.rowAnchorAt),
@@ -2236,6 +2544,7 @@ function renderPersistedAssistantMessageTurn(
     turnKey,
     checkpointView,
     turnComplete,
+    retryTurnEnded,
     // A plain completion/interruption without a matching start remains a
     // notification-only row. A user Stop is itself a transcript boundary and
     // must retain its stopped marker even when it lands before `turn.started`.
@@ -2305,6 +2614,7 @@ function addAssistantMessageToAccumulator(
   }
   const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
+    turnId: message.turnId,
     sender: message.sender,
     startedAt: message.startedAt,
     timestamp: message.timestamp,
@@ -2565,6 +2875,8 @@ interface AssistantTurnRenderInput {
   readonly turnKey: string;
   readonly checkpointView: CheckpointManifestView | null;
   readonly turnComplete: boolean;
+  /** Durable terminal evidence, independent of whether a live turn is loaded. */
+  readonly retryTurnEnded: boolean;
   /** False for a background notification row that no provider turn adopted. */
   readonly showCompletionFooter: boolean;
   /** Wall-clock terminal instant stamped onto the completed assistant row. */
@@ -2624,6 +2936,7 @@ function renderAssistantTurnRows(
   const plan = planAssistantTurnRows(blocks);
   const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
 
+  const hiddenSliceIds = new Set<string>();
   const rows = plan.entries.map((entry): ChatMessageModel => {
     if (entry.kind === "steer") {
       const block = blocks[entry.blockIndex];
@@ -2633,20 +2946,47 @@ function renderAssistantTurnRows(
       // Anchor the nested steer row at the turn start too, so it stays
       // contiguous with its surrounding slices under the stable `createdAt`
       // sort instead of jumping out by its own block timestamp.
+      //
+      // That anchor is a sort position, NOT when the steer was sent - a turn
+      // that started at 10:00 can carry a steer sent at 10:20. `sentAt`
+      // captures whatever instant the renderer produced before the re-anchor,
+      // which is the real send time down either branch (a persisted user
+      // message's, or the block's), so the transcript stamp reports the
+      // moment the person actually typed rather than the turn's start.
+      const steerRow = renderSteerBlockUserMessage(
+        block,
+        input.ctx,
+        input.userMessagesById.get(block.messageId) ?? null,
+      );
       return {
-        ...renderSteerBlockUserMessage(
-          block,
-          input.ctx,
-          input.userMessagesById.get(block.messageId) ?? null,
-        ),
+        ...steerRow,
+        sentAt: steerRow.createdAt,
         createdAt: input.rowAnchorAt,
       };
+    }
+    const sliceBlocks = entry.blockIndices.map((index) => blocks[index]);
+    if (
+      sliceBlocks.length > 0 &&
+      sliceBlocks.every(
+        (block) =>
+          block.type === "error" &&
+          codexRetryVisibility(
+            input.acc.sender.harnessId,
+            block.code,
+            input.retryTurnEnded,
+          ) === "hidden",
+      )
+    ) {
+      hiddenSliceIds.add(
+        assistantSliceRowId(input.turnKey, entry.chunkIndex, plan.split),
+      );
     }
     return renderAssistantTurnSlice({
       acc: input.acc,
       turnKey: input.turnKey,
       checkpointView: input.checkpointView,
       turnComplete: input.turnComplete,
+      retryTurnEnded: input.retryTurnEnded,
       // A split turn's run indicator belongs on the trailing slice, which
       // `attachRunStateToTrailingAssistantSlice` resolves once for the turn.
       runState: plan.split ? null : input.runState,
@@ -2654,7 +2994,7 @@ function renderAssistantTurnRows(
       ctx: input.ctx,
       epicId: input.epicId,
       chatId: input.chatId,
-      blocks: entry.blockIndices.map((index) => blocks[index]),
+      blocks: sliceBlocks,
       chunkIndex: entry.chunkIndex,
       split: plan.split,
       rowAnchorAt: input.rowAnchorAt,
@@ -2663,11 +3003,100 @@ function renderAssistantTurnRows(
     });
   });
 
-  if (!plan.split) return withTurnCompletion(rows, input);
-  return withTurnCompletion(
-    attachRunStateToTrailingAssistantSlice(rows, input, plan, rowIdByBlockId),
-    input,
+  // Visibility never renumbers the shared plan. A hidden trailing slice must
+  // still carry the turn boundary below the last steer, even when an earlier
+  // assistant slice remains visible.
+  const needsBoundary =
+    input.runState !== null ||
+    input.stopped !== null ||
+    (plan.split &&
+      input.turnComplete &&
+      input.showCompletionFooter &&
+      rows.some(
+        (row) => row.role === "assistant" && !hiddenSliceIds.has(row.id),
+      ));
+  const boundaryRow = needsBoundary ? rows.at(-1) : undefined;
+  const visibleRows = rows.filter(
+    (row) => !hiddenSliceIds.has(row.id) || row === boundaryRow,
   );
+  // Stamp the recovery-action anchor last: completion/run-state passes rebuild
+  // row objects, so they must finish before its single owner is selected.
+  if (!plan.split)
+    return withManualRungAnchor(withTurnCompletion(visibleRows, input));
+  return withManualRungAnchor(
+    withTurnCompletion(
+      attachRunStateToTrailingAssistantSlice(
+        visibleRows,
+        input,
+        plan,
+        rowIdByBlockId,
+      ),
+      input,
+    ),
+  );
+}
+
+/**
+ * Names the ONE error segment of this turn that carries the manual recovery
+ * actions, and stamps it on the single row that contains it.
+ *
+ * This is the seam the anchor walk had to move to. `planAssistantTurnRows`
+ * splits a steered turn into several assistant rows that all carry the same
+ * `turnId`, and the walk used to run per-ROW inside `AssistantMessageBody` -
+ * so a turn whose failure straddled a steer got an anchor on each side and
+ * rendered two Retry / Switch… / Wait groups for one failed attempt. Here the
+ * turn is still whole, so the predicate is asked the question it was written
+ * to answer.
+ *
+ * Rows that do not contain the anchor are returned by REFERENCE, unchanged -
+ * `chat-stable-rows.ts` compares `manualRungAnchorId` like every other field,
+ * and handing back a fresh object for a row whose answer is "not you" would
+ * churn a row per projection to say nothing.
+ */
+function withManualRungAnchor(
+  rows: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<ChatMessageModel> {
+  const anchorId = manualRungAnchorSegmentId(assistantTurnSegments(rows));
+  // The common case by a wide margin: a turn with no error segment at all.
+  if (anchorId === null) return rows;
+  return rows.map((row) =>
+    row.role === "assistant" &&
+    row.segments.some((segment) => segment.id === anchorId)
+      ? { ...row, manualRungAnchorId: anchorId }
+      : row,
+  );
+}
+
+/**
+ * The turn's assistant segments in turn order - the list the split took apart.
+ *
+ * `plan.entries` are ordered and each entry's `blockIndices` are ordered, so
+ * concatenating the assistant rows' segments reconstructs the pre-split order
+ * exactly. Steer rows are skipped: they are user rows, and their content is
+ * the steer bubble, not the turn's blocks.
+ *
+ * The ordering is load-bearing rather than incidental - the predicate picks
+ * the LAST candidate, so a concatenation out of turn order would pick a
+ * different segment and be wrong silently. Checked at the source:
+ * `planAssistantTurnRows` walks `blocks.forEach((block, index) => …)` pushing
+ * ascending indices into a chunk and flushing that chunk at each steer, so
+ * entries are emitted in block order and each `blockIndices` ascends.
+ *
+ * The copy `flat()` makes is deliberate rather than tolerated - the
+ * alternative is a second copy of the anchor predicate that walks rows and
+ * segments together, and this module's own history is that the rule which
+ * exists in two places gets fixed in one. It is also the cheapest thing in
+ * this call: `renderAssistantTurnSlice` has just CONSTRUCTED every segment
+ * object in the list.
+ */
+function assistantTurnSegments(
+  rows: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<MessageSegment> {
+  const perRow: Array<ReadonlyArray<MessageSegment>> = [];
+  for (const row of rows) {
+    if (row.role === "assistant") perRow.push(row.segments);
+  }
+  return perRow.flat();
 }
 
 /**
@@ -2755,6 +3184,8 @@ interface AssistantTurnSliceRenderInput {
   readonly turnKey: string;
   readonly checkpointView: CheckpointManifestView | null;
   readonly turnComplete: boolean;
+  /** Durable terminal evidence, independent of whether a live turn is loaded. */
+  readonly retryTurnEnded: boolean;
   readonly runState: ChatMessageRunState | null;
   readonly pause: TurnPauseAccounting;
   readonly ctx: RenderedMessagesDisplayContext;
@@ -2786,6 +3217,15 @@ function renderAssistantTurnSlice(
     envCredentialVar: input.acc.envCredentialVar,
     costUsd: input.acc.costUsd,
   };
+  const visibleBlocks = input.blocks.filter(
+    (block) =>
+      block.type !== "error" ||
+      codexRetryVisibility(
+        input.acc.sender.harnessId,
+        block.code,
+        input.retryTurnEnded,
+      ) !== "hidden",
+  );
   const firstBlock = input.blocks.at(0) ?? null;
   const createdAt =
     input.rowAnchorAt !== null
@@ -2794,12 +3234,14 @@ function renderAssistantTurnSlice(
   return {
     id: assistantSliceRowId(input.turnKey, input.chunkIndex, input.split),
     role: "assistant",
-    content: input.ctx.contentBlocksPreview(input.blocks),
+    content: input.ctx.contentBlocksPreview(visibleBlocks),
     segments: buildAssistantSegments(
-      input.blocks,
+      visibleBlocks,
       input.checkpointView,
       input.turnComplete,
       {
+        harnessId: input.acc.sender.harnessId,
+        retryTurnEnded: input.retryTurnEnded,
         epicId: input.epicId,
         chatId: input.chatId,
         resolutionsByBlockId: input.acc.imageResolutionsByBlockId,
@@ -2821,6 +3263,10 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    // Spread rather than set: `turnId` is absent when the record carries none,
+    // and an explicit `undefined` would be a present key whose value is the
+    // one thing a reader must not treat as an identity.
+    ...(input.acc.turnId === null ? {} : { turnId: input.acc.turnId }),
     // Assistant rows render no provider/model label above the bubble (it moved
     // to the elapsed-footer hover, which reads `assistantMeta`), so there's no
     // sender label to carry here.
@@ -2907,6 +3353,7 @@ function attachRunStateToTrailingAssistantSlice(
       turnKey: input.turnKey,
       checkpointView: input.checkpointView,
       turnComplete: input.turnComplete,
+      retryTurnEnded: input.retryTurnEnded,
       runState: input.runState,
       pause: input.pause,
       ctx: input.ctx,
@@ -3127,6 +3574,9 @@ function renderLiveAssistant(
   }
   const acc: AssistantTurnAccumulator = {
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    // The live row always has a real turn id - it is what the host is
+    // streaming against - so no `ts:` synthetic can reach here.
+    turnId: liveAssistant.turnId,
     sender: liveAssistant.sender,
     startedAt: liveAssistant.startedAt,
     timestamp: liveAssistant.timestamp,
@@ -3160,6 +3610,7 @@ function renderLiveAssistant(
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
     // Live turn is by definition still streaming — hold back the group.
     turnComplete: false,
+    retryTurnEnded: false,
     showCompletionFooter: true,
     // Unused while `turnComplete` is false; keep the input total and explicit.
     completedAt: liveAssistant.timestamp,
@@ -3205,6 +3656,13 @@ function renderLiveAssistant(
 function renderPendingRunIndicator(input: {
   readonly activeRunState: ChatMessageRunState | null;
   readonly activeTurnId: string | null;
+  /**
+   * The turn's real wall-clock start, or `null` in the short window before a
+   * turn id (and so a turn) exists. `createdAt` below cannot serve as one:
+   * it is a list anchor, so the elapsed timer would measure from the previous
+   * row's position rather than from when the turn actually began.
+   */
+  readonly activeTurnStartedAt: number | null;
   readonly activeTurnMeta: AssistantTurnMeta | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly rendered: ReadonlyArray<ChatMessageModel>;
@@ -3212,6 +3670,7 @@ function renderPendingRunIndicator(input: {
   const {
     activeRunState,
     activeTurnId,
+    activeTurnStartedAt,
     activeTurnMeta,
     turnPauseAccounting,
     rendered,
@@ -3241,7 +3700,13 @@ function renderPendingRunIndicator(input: {
       structuredContent: null,
       attachments: [],
       settings: null,
+      // A list anchor, not an instant: it exists to sort this row last. The
+      // turn's real start rides `elapsedStartedAt` beside it, which is what
+      // the elapsed timer measures from.
       createdAt: latestCreatedAt + 1,
+      ...(activeTurnStartedAt === null
+        ? {}
+        : { elapsedStartedAt: activeTurnStartedAt }),
       completedAt: null,
       stopped: null,
       pausedDurationMs: pause.pausedDurationMs,
@@ -3324,6 +3789,8 @@ function buildAssistantSegments(
   checkpointView: CheckpointManifestView | null,
   turnComplete: boolean,
   imageProjection: {
+    readonly harnessId: string;
+    readonly retryTurnEnded: boolean;
     readonly epicId: string;
     readonly chatId: string;
     readonly resolutionsByBlockId: ReadonlyMap<
@@ -3353,6 +3820,28 @@ function buildAssistantSegments(
     return computed;
   };
   for (const block of blocks) {
+    if (
+      block.type === "error" &&
+      codexRetryVisibility(
+        imageProjection.harnessId,
+        block.code,
+        imageProjection.retryTurnEnded,
+      ) === "active"
+    ) {
+      flat.push({
+        id: block.blockId,
+        kind: "provider_notice",
+        status: "streaming",
+        noticeKind: "harness_message",
+        presentation: "retry",
+        tone: "info",
+        title: codexRetryTitle(block.message),
+        message: null,
+        details: [{ label: "Reported by Codex", value: block.message }],
+        parentId: block.parentBlockId ?? null,
+      });
+      continue;
+    }
     const segment = blockToSegment(block);
     if (segment !== null) {
       const resolutions =
@@ -3941,6 +4430,11 @@ const BLOCK_HANDLERS: {
       return {
         kind: "provider_notice",
         status: block.status,
+        // Straight across, and hashed by `textBlockContentVersion` like every
+        // other notice field projected here. It is NOT fixed at creation: a
+        // repeat `provider_notice.upsert` on the same `blockId` replaces the
+        // whole notice object, kind included.
+        noticeKind: notice.noticeKind,
         tone: notice.tone,
         title: notice.title,
         message: notice.message,
@@ -4089,6 +4583,11 @@ const BLOCK_HANDLERS: {
     message: block.message,
     recoverable: block.recoverable,
     code: block.code,
+    // Straight across, no re-derivation. `failure.reason` is the same
+    // classification the fallback engine acted on, and the error row's
+    // affordances turn on it - so reading it here and inferring it from
+    // `message`/`code` anywhere else would be two answers to one question.
+    failure: block.failure,
   }),
   compaction: (block) => ({
     kind: "compaction",

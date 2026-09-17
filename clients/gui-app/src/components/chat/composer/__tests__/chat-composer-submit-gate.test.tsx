@@ -82,6 +82,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       },
       onSettingsChange: null,
       tuiOnly: false,
+      chatLineCarriesAutoMode: null,
       hostId: null,
     });
 
@@ -104,6 +105,11 @@ describe("chat-composer submit gate (path resolution)", () => {
           attachmentPreparationPending: pending,
           onSubmitMessage,
           onSideChat: null,
+          targetHostId: null,
+          queueEditTargetId: null,
+          // T5's gate is off in these fixtures: they predate it and assert the
+          // inline behaviour, which is what `false` preserves exactly.
+          getDraftBlobBridgeSupported: () => false,
         }),
       { initialProps: true },
     );
@@ -234,7 +240,9 @@ describe("chat-composer submit gate (editor readiness)", () => {
     const { rerender: rerenderDraft } = renderHook(
       (tick: number) =>
         useChatComposerDraft({
-          taskId,
+          chatId: taskId,
+          epicId: "epic-1",
+          hostId: "host-1",
           editorRef,
           editorReadyTick: tick,
         }),
@@ -307,14 +315,18 @@ describe("chat-composer submit multi-surface clear", () => {
 
     renderHook(() =>
       useChatComposerDraft({
-        taskId,
+        chatId: taskId,
+        epicId: "epic-1",
+        hostId: "host-1",
         editorRef: editorRefA,
         editorReadyTick: 1,
       }),
     );
     renderHook(() =>
       useChatComposerDraft({
-        taskId,
+        chatId: taskId,
+        epicId: "epic-1",
+        hostId: "host-1",
         editorRef: editorRefB,
         editorReadyTick: 1,
       }),
@@ -342,6 +354,41 @@ describe("chat-composer submit multi-surface clear", () => {
   });
 });
 
+describe("chat-composer submit after re-key", () => {
+  it("submits immediately on a draft re-keyed by detachDraftIdentity right before submit", () => {
+    const taskId = "task-rekeyed-submit";
+    const onSubmitMessage = vi.fn(acceptSubmit);
+    const clear = vi.fn(() => undefined);
+    const editor = controllableEditorHandle({
+      content: DIRTY,
+      ready: true,
+      clear,
+    });
+    const editorRef = createRef<ComposerPromptEditorHandle | null>();
+    editorRef.current = editor.handle;
+
+    act(() => {
+      useComposerDraftStore.getState().setSnapshot(taskId, DIRTY, null);
+    });
+    act(() => {
+      useComposerDraftStore.getState().detachDraftIdentity(taskId);
+    });
+
+    const { result } = mountSubmitHook({
+      taskId,
+      editorRef,
+      onSubmitMessage,
+    });
+
+    act(() => {
+      result.current.submitDraft("enter");
+    });
+
+    expect(onSubmitMessage).toHaveBeenCalledTimes(1);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+});
+
 function mountSubmitHook(args: {
   readonly taskId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
@@ -362,6 +409,7 @@ function mountSubmitHook(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 
@@ -383,6 +431,11 @@ function mountSubmitHook(args: {
       attachmentPreparationPending: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
+      targetHostId: null,
+      queueEditTargetId: null,
+      // T5's gate is off in these fixtures: they predate it and assert the
+      // inline behaviour, which is what `false` preserves exactly.
+      getDraftBlobBridgeSupported: () => false,
     }),
   );
 }

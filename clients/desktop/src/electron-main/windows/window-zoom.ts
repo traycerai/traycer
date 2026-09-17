@@ -258,7 +258,7 @@ function applyZoomToWindows<TWindow extends ZoomManagedWindow>(
     .filter((window) => !window.isDestroyed())
     .forEach((window) => {
       window.webContents.setZoomFactor(factor);
-      if (process.platform === "win32") {
+      if (process.platform === "win32" || process.platform === "linux") {
         window.setTitleBarOverlay({
           height: windowsTitleBarOverlayHeight(factor),
         });

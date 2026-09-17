@@ -11,6 +11,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
   PointerEvent,
+  ReactElement,
   ReactNode,
 } from "react";
 import {
@@ -36,7 +37,6 @@ import type {
   ChromiumProcessDescriptorWire,
   ManagedCommandOwnerWire,
   OwnerResourceSnapshotWireV15,
-  HostTreeResourceSnapshotWireV15,
   OtherResourceSnapshotWireV15,
   ResourceOwnerKindWireV14,
   ResourceProcessSnapshotWireV15,
@@ -45,7 +45,9 @@ import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import { displayTitle } from "@/lib/display-title";
 import {
+  useRegisteredEpicAgentSessionCounts,
   useRegisteredEpicLiveAgents,
+  type EpicAgentSessionCounts,
   type RegisteredEpicAgentRef,
   type RegisteredEpicLiveAgent,
 } from "@/lib/epic-selectors";
@@ -71,6 +73,7 @@ import { useScopedStreamBinding } from "@/components/settings/host-scope/use-sco
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useResourceMonitorHostScope } from "@/hooks/resources/use-resource-monitor-host-scope";
+import { useDesktopAppResourceUsage } from "@/hooks/resources/use-desktop-app-resource-usage";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
@@ -82,6 +85,7 @@ import {
 } from "@/lib/managed-commands/managed-command-copy";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
+import { useStopTerminalOwner } from "@/hooks/resources/use-stop-terminal-owner-mutation";
 import { agentProviderLabel } from "@/lib/chat/sender-display";
 import {
   DropdownMenu,
@@ -100,7 +104,6 @@ import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import {
-  EMPTY_GLOBAL_RESOURCE_PROJECTION,
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
   type GlobalResourceProjection,
@@ -124,10 +127,14 @@ import {
   formatProcessCount,
 } from "@/lib/resources/format-resource-usage";
 import {
-  desktopAppResourceUsageFromMetrics,
-  getDesktopDiagnosticsBridge,
-  type DesktopAppProcessGroupUsage,
-  type DesktopAppResourceUsage,
+  combineHeadlineResourceSummary,
+  hostMemorySharePercent,
+  resolveResourceMonitorHostReading,
+  type HeadlineResourceSummary,
+} from "@/lib/resources/headline-resource-summary";
+import type {
+  DesktopAppProcessGroupUsage,
+  DesktopAppResourceUsage,
 } from "@/lib/resources/desktop-app-resource-usage";
 import { queryClient } from "@/lib/query-client";
 import type { PlainTerminalCollection } from "@/lib/terminals/plain-terminal-authority";
@@ -154,6 +161,11 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import {
+  PLAN_RESTRICTED_MOBILE_DETAIL,
+  planRestrictedMobileTitle,
+} from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -199,7 +211,6 @@ const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
 // The current root section pins to the top of the scroll region and swaps to the
 // next section as it scrolls into view (a single sticky header, not a stack).
-// Opaque background so scrolled rows slide cleanly underneath it.
 const STICKY_SECTION_HEADER =
   "sticky top-0 z-20 border-b border-border/50 bg-popover";
 /**
@@ -212,15 +223,60 @@ const ROW_ACTION_SLOT = "flex w-10 shrink-0 items-center justify-center";
 /** Row actions stay out of the way until the row is hovered or focused. */
 const ROW_HOVER_REVEAL =
   "opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100";
-const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
-const desktopAppResourceListeners = new Set<() => void>();
-let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
-let desktopAppResourceTimer: number | null = null;
-let desktopAppResourceInFlight = false;
 
-interface ResourceMonitorPopoverProps {
-  readonly className: string | undefined;
+/**
+ * How this popover is opened, as a discriminated union rather than an
+ * injectable node with a spare `className`.
+ *
+ * The two callers do not differ by decoration, they differ by ANATOMY. The
+ * header owns a fixed icon button and anchors its panel downward; the status
+ * bar's trigger is a live readout whose contents this component knows nothing
+ * about, and its panel has to open upward because there is nothing below the
+ * strip. A single optional-node shape would have let a caller supply a custom
+ * trigger and silently keep the header's downward panel — off the bottom of
+ * the window — which is precisely the pairing a union makes unrepresentable.
+ */
+export type ResourceMonitorPopoverTrigger =
+  | {
+      readonly trigger: "header-button";
+      readonly className: string | undefined;
+    }
+  | {
+      readonly trigger: "custom";
+      /**
+       * Rendered through `PopoverTrigger asChild`, so it must be a single
+       * element that forwards props and a ref to a real DOM node. `ReactElement`
+       * rather than `ReactNode` because that is the whole of Radix's Slot
+       * contract: a fragment, a string, an array or a `null` all typecheck as a
+       * node and all fail at render, where the type is the only place the
+       * requirement can be stated once for every caller.
+       */
+      readonly triggerNode: ReactElement;
+      readonly contentSide: "top" | "bottom";
+    };
+
+/**
+ * Whether THIS mount owns `app.resources.open`.
+ *
+ * The action has one handler slot and several possible mounts, and an
+ * unregister only clears its own handler - so two live mounts are not a tie,
+ * they are the later one silently displacing the earlier and then, on
+ * unmounting, deleting the slot outright and leaving the survivor chordless
+ * with no way to re-arm (its effect is long past re-running).
+ *
+ * On desktop the mounts are mutually exclusive by `placement`, so this is
+ * simply `true` everywhere. It exists for the MOBILE viewport, where the
+ * header's monitor and the footer's both draw at once and the header is the
+ * one that stays: the caller that is not the owner passes `false`. Required
+ * rather than defaulted, because "who holds the chord" is a fact about the
+ * arrangement of surfaces and only a call site can know it.
+ */
+interface ResourceMonitorPopoverOwnProps {
+  readonly claimsOpenAction: boolean;
 }
+
+type ResourceMonitorPopoverProps = ResourceMonitorPopoverTrigger &
+  ResourceMonitorPopoverOwnProps;
 
 interface CanvasResourceSnapshot {
   readonly openTabOrder: readonly string[];
@@ -302,12 +358,13 @@ interface TaskDisplayRow {
   readonly cpuPercent: number;
   readonly memoryBytes: number | null;
   readonly owners: readonly OwnerDisplayRow[];
-}
-
-interface DesktopResourceSummary {
-  readonly cpuPercent: number;
-  readonly rssBytes: number;
-  readonly processCount: number;
+  /**
+   * This epic's terminal agents by session state, or `null` when this window
+   * holds no session for the epic and therefore knows nothing about its
+   * agents. Read from the RECORD plane, never from the owner rows above - a
+   * sleeping agent owns no processes, which is the whole point of it.
+   */
+  readonly agentSessions: EpicAgentSessionCounts | null;
 }
 
 interface DesktopProcessGroupEntry {
@@ -336,15 +393,6 @@ interface OwnerProcessRows {
   readonly selfMemoryBytes: number | null;
   readonly treeCpuPercent: number;
   readonly treeMemoryBytes: number | null;
-}
-
-interface HeadlineResourceSummary {
-  readonly cpuPercent: number;
-  readonly memoryBytes: number | null;
-  readonly rssBytes: number | null;
-  readonly pssBytes: number | null;
-  readonly privateBytes: number | null;
-  readonly trackedProcessCount: number;
 }
 
 interface ResourceSearchProjection {
@@ -464,7 +512,8 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
       value={scopedStreamBinding ?? ambientStreamBinding}
     >
       <ScopedResourceMonitorPopover
-        className={props.className}
+        trigger={props}
+        claimsOpenAction={props.claimsOpenAction}
         scope={scope}
         hasExplicitPick={hasExplicitPick}
         streamBoundToScope={
@@ -478,7 +527,8 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 }
 
 function ScopedResourceMonitorPopover(props: {
-  readonly className: string | undefined;
+  readonly trigger: ResourceMonitorPopoverTrigger;
+  readonly claimsOpenAction: boolean;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
   /** The provided stream client is the picked host's, not a fallback. */
@@ -487,13 +537,17 @@ function ScopedResourceMonitorPopover(props: {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const chord = useBindingForAction("app.resources.open");
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.resources.open", () => {
-        setOpen(true);
-      }),
-    [],
-  );
+  // See `ResourceMonitorPopoverOwnProps`: one slot, several possible mounts,
+  // and an unregister that clears only its own handler. A mount that is not
+  // the owner registers nothing rather than registering and hoping to lose the
+  // race - its own `PopoverTrigger` still opens this panel on a click.
+  const claimsOpenAction = props.claimsOpenAction;
+  useEffect(() => {
+    if (!claimsOpenAction) return;
+    return registerDynamicActionHandler("app.resources.open", () => {
+      setOpen(true);
+    });
+  }, [claimsOpenAction]);
   // While the panel is open, let the header drop its title-bar drag regions so a
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
   useTitleBarDragSuppression("resource-monitor", open);
@@ -516,31 +570,36 @@ function ScopedResourceMonitorPopover(props: {
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>
-        <TooltipWrapper
-          // The host belongs in the label only when it is NOT the obvious one.
-          // Naming the active host on every hover would train people to ignore
-          // the one case the words exist for.
-          label={tooltip}
-          side="top"
-          sideOffset={6}
-          align={undefined}
-        >
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Resources"
-              data-testid="resource-monitor-header-button"
-              className={cn(
-                "text-muted-foreground hover:text-foreground",
-                props.className,
-              )}
-            >
-              <Cpu className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-        </TooltipWrapper>
+        {props.trigger.trigger === "header-button" ? (
+          <TooltipWrapper
+            // The host belongs in the label only when it is NOT the obvious one.
+            // Naming the active host on every hover would train people to ignore
+            // the one case the words exist for.
+            label={tooltip}
+            side="top"
+            sideOffset={6}
+            align={undefined}
+          >
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="muted"
+                size="icon-sm"
+                aria-label="Resources"
+                data-testid="resource-monitor-header-button"
+                className={cn(props.trigger.className)}
+              >
+                <Cpu className="size-3.5" />
+              </Button>
+            </PopoverTrigger>
+          </TooltipWrapper>
+        ) : (
+          // No tooltip wrapper: a custom trigger is a readout, not a glyph, so
+          // it already says what the icon button needed a hover to say - and
+          // the status bar's segment carries per-metric tooltips of its own
+          // that a wrapper here would compete with.
+          <PopoverTrigger asChild>{props.trigger.triggerNode}</PopoverTrigger>
+        )}
 
         {open ? (
           <ResourceMonitorContent
@@ -550,6 +609,11 @@ function ScopedResourceMonitorPopover(props: {
             scope={scope}
             hasExplicitPick={props.hasExplicitPick}
             streamBoundToScope={props.streamBoundToScope}
+            contentSide={
+              props.trigger.trigger === "header-button"
+                ? "bottom"
+                : props.trigger.contentSide
+            }
           />
         ) : null}
       </Popover>
@@ -600,8 +664,10 @@ function useResourceRowActions(
 } {
   const killMutation = useResourcesKill();
   const stopMutation = useManagedCommandStop();
+  const stopAgentMutation = useStopTerminalOwner();
   const killPids = killMutation.mutate;
   const stopShell = stopMutation.mutate;
+  const stopAgent = stopAgentMutation.mutate;
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<
     ReadonlyMap<string, RowActionTarget>
@@ -626,6 +692,14 @@ function useResourceRowActions(
         });
         continue;
       }
+      if (target.kind === "stopAgent") {
+        // One call per session, like the shells and unlike the kills: the pid
+        // merge below exists because `resources.kill` takes a LIST, and
+        // `terminal.kill` names exactly one session. It is idempotent, so an
+        // agent already on its way down costs nothing.
+        stopAgent({ hostId: target.hostId, sessionId: target.sessionId });
+        continue;
+      }
       const existing = pidsByHost.get(target.hostId) ?? [];
       existing.push(...target.pids);
       pidsByHost.set(target.hostId, existing);
@@ -634,7 +708,10 @@ function useResourceRowActions(
       if (pids.length > 0) killPids({ hostId, pids });
     }
   };
-  const isPending = killMutation.isPending || stopMutation.isPending;
+  const isPending =
+    killMutation.isPending ||
+    stopMutation.isPending ||
+    stopAgentMutation.isPending;
   const api: ResourceRowActionApi = {
     selectionMode,
     isSelected: (key) => liveSelected.has(key),
@@ -649,7 +726,7 @@ function useResourceRowActions(
     isPending,
   };
   const selectedStopCount = [...liveSelected.values()].filter(
-    (target) => target.kind === "stop",
+    isStopTarget,
   ).length;
   return {
     api,
@@ -713,7 +790,10 @@ function selectionActionCopy(
   }
   return {
     text: `Stop ${stopCount} · Kill ${killCount}`,
-    ariaLabel: `Stop ${countedNoun(stopCount, "shell", "shells")}, kill ${countedNoun(killCount, "process", "processes")}`,
+    // "item", not "shell": since terminal owners stop too, a mixed selection's
+    // stop half can be shells, agents or both, and naming one of them would
+    // describe the wrong rows to the reader who cannot see the selection.
+    ariaLabel: `Stop ${countedNoun(stopCount, "item", "items")}, kill ${countedNoun(killCount, "process", "processes")}`,
     destructive: true,
   };
 }
@@ -735,6 +815,7 @@ function ResourceMonitorContent(props: {
   readonly hasExplicitPick: boolean;
   /** The provided stream client is the picked host's, not a fallback. */
   readonly streamBoundToScope: boolean;
+  readonly contentSide: "top" | "bottom";
 }) {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const scope = props.scope;
@@ -780,11 +861,13 @@ function ResourceMonitorContent(props: {
   return (
     <PopoverContent
       align="end"
+      side={props.contentSide}
       sideOffset={8}
       collisionPadding={12}
       role="dialog"
       aria-label="Resources"
-      className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
+      layout="panel"
+      className="w-[min(92vw,34rem)]"
       onOpenAutoFocus={(event) => event.preventDefault()}
       // Keep the panel open when focus moves elsewhere (switching tabs, a task
       // finishing load and autofocusing its content, a terminal grabbing
@@ -981,13 +1064,26 @@ function ResourceMonitorHostUnavailableNotice(props: {
         className="flex flex-col items-center gap-2 px-6 py-8 text-center"
         data-testid="resource-monitor-host-plan-restricted"
       >
+        {/* The installed mobile app may not offer the purchase or the upgrade
+            (App Store guideline 3.1.1), so it states the same fact without
+            either; `PlanRestrictedUpgradeAction` withholds the button itself
+            on that shell. The host is still named - that is the reason this
+            notice exists. */}
         <p className="max-w-[40ch] text-ui-sm font-medium text-foreground">
-          Reading {scope.hostLabel} needs a paid plan
+          {isMobileApp()
+            ? planRestrictedMobileTitle(scope.hostLabel)
+            : `Reading ${scope.hostLabel} needs a paid plan`}
         </p>
         <p className="max-w-[40ch] text-ui-sm text-muted-foreground">
-          It keeps working on its own machine. This app just can&apos;t attach
-          to it remotely on the current plan, so its processes can&apos;t be
-          streamed here.
+          {isMobileApp() ? (
+            PLAN_RESTRICTED_MOBILE_DETAIL
+          ) : (
+            <>
+              It keeps working on its own machine. This app just can&apos;t
+              attach to it remotely on the current plan, so its processes
+              can&apos;t be streamed here.
+            </>
+          )}
         </p>
         <PlanRestrictedUpgradeAction />
         <button
@@ -1108,122 +1204,6 @@ function watchesNamedHost(scope: HostScope, hasExplicitPick: boolean): boolean {
   return hasExplicitPick && !scope.isViewingActive;
 }
 
-/** Everything watching another machine changes about what this panel reads. */
-interface ResourceMonitorHostReading {
-  /**
-   * Where a kill goes for rows that carry no host of their own - the "Other"
-   * roots. Owner rows route by their own `owner.hostId` and never consult this.
-   */
-  readonly killHostId: string | null;
-  readonly projection: GlobalResourceProjection;
-  readonly desktopApp: DesktopAppResourceUsage | null;
-}
-
-/**
- * Whether "Traycer Desktop" — the Electron shell, which is THIS computer's
- * process — belongs in the reading.
- *
- * The test is the machine's IDENTITY, not whether the surface happens to be
- * following the active selection. Those come apart in both directions: the
- * active host can itself be a remote machine (counting the local shell there
- * attributes this computer's memory to another one, over a "RAM share"
- * denominator its numerator never came from), and someone can explicitly pick
- * the machine they are sitting at while the active host is elsewhere — where
- * the row is exactly what they asked for.
- *
- * With no host resolved the answer is "we do not know which machine this is
- * describing", and the row stays hidden — which is also what it did before
- * there was a picker, since `isViewingActive` is itself false until a host
- * resolves (`isFollowing` requires one). Reaching for `isViewingActive` as a
- * cold-start fallback here looks like it preserves something and cannot: it is
- * false in exactly the case it would be consulted.
- */
-function readingShowsLocalDesktop(scope: HostScope): boolean {
-  return scope.host?.isLocalMachine === true;
-}
-
-/**
- * Reconcile the panel's three host-dependent inputs in ONE place, so the
- * "which machine is this" question is answered once rather than re-derived
- * beside every consumer — the shape of mistake where the totals move to the
- * picked host and the kill route quietly does not.
- *
- * Following the active host every answer is what it was before the picker
- * existed; nothing about a single-host window changes.
- */
-function resolveResourceMonitorHostReading(input: {
-  readonly scope: HostScope;
-  readonly hasExplicitPick: boolean;
-  readonly streamed: GlobalResourceProjection;
-  readonly localDesktopApp: DesktopAppResourceUsage | null;
-}): ResourceMonitorHostReading {
-  // ONE value answers "which machine is this reading about", and it answers it
-  // for both the data and the actions. Deriving the kill target from a second
-  // reader of the active host — `useAddressableHostId`, which this used to
-  // call — is what let the two disagree: on an ambient host swap it moved to
-  // the new machine a commit before the stream transport did, so the panel
-  // showed the old host's processes with kills aimed at the new one. That
-  // needed no picker to happen, and no pick to reproduce.
-  return {
-    killHostId: input.scope.hostId,
-    projection: attributedProjection(
-      input.scope,
-      input.hasExplicitPick,
-      input.streamed,
-    ),
-    desktopApp: readingShowsLocalDesktop(input.scope)
-      ? input.localDesktopApp
-      : null,
-  };
-}
-
-/**
- * The projection, or nothing, according to what this surface is CLAIMING —
- * and the two claims differ, so the burden of proof does too.
- *
- * The projection is a module singleton that outlives any one transport, so it
- * can describe a machine the current reading was not opened against: a host
- * swap still in flight (ambient or scoped — the registry entry is named at
- * acquire time, one commit before the replacement binding reaches context), or
- * a pick just dropped, where the entry still carries the abandoned host's name.
- *
- * **Under a pick** the surface is accountable to a machine the person named, so
- * it owes positive proof: the projection must say this host, or there is
- * nothing to show. An unattributed projection is not good enough — that is
- * exactly the pre-v1.1 per-epic fallback, which rides the ambient transport and
- * would put one machine's processes under another's name.
- *
- * **With no pick** nothing on screen names a machine; the only thing that can
- * go wrong is a kill routed at a host these rows did not come from. So refuse
- * what can be PROVEN foreign and nothing more. A scope that has not resolved
- * its host id — every cold start, between the ambient stream connecting and the
- * host lists answering — proves nothing, and has no kill target either
- * (`defaultHostId` is null, so the Other roots offer no action). Demanding
- * proof there would blank a working monitor on every launch to defend a name it
- * never prints.
- *
- * The branch is `hasExplicitPick`, NOT `isViewingActive`. The latter is false
- * throughout that same cold-start window (see `watchesNamedHost`), so keying on
- * it puts the strict branch in charge of exactly the case the permissive branch
- * exists for — which is the bug this comment used to describe as fixed.
- */
-function attributedProjection(
-  scope: HostScope,
-  hasExplicitPick: boolean,
-  streamed: GlobalResourceProjection,
-): GlobalResourceProjection {
-  if (hasExplicitPick) {
-    return streamed.hostId !== null && streamed.hostId === scope.hostId
-      ? streamed
-      : EMPTY_GLOBAL_RESOURCE_PROJECTION;
-  }
-  const provablyAnotherMachine =
-    streamed.hostId !== null &&
-    scope.hostId !== null &&
-    streamed.hostId !== scope.hostId;
-  return provablyAnotherMachine ? EMPTY_GLOBAL_RESOURCE_PROJECTION : streamed;
-}
-
 /**
  * The panel itself, mounted only once the surface is bound to the host it
  * names. Split from `ResourceMonitorContent` so the reads below are not
@@ -1256,7 +1236,10 @@ function ResourceMonitorPanel(props: {
   const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const dismissingSortMenuRef = useRef(false);
   const streamedProjection = useGlobalResourceProjection();
-  const localDesktopApp = useDesktopAppResourceUsage();
+  // `true`, not the scope: this panel is mounted only while it is OPEN, and it
+  // shows both scopes' readings at once — the shell row is drawn beside the
+  // host tree, not instead of it.
+  const localDesktopApp = useDesktopAppResourceUsage(true);
   const reading = resolveResourceMonitorHostReading({
     scope,
     hasExplicitPick: props.hasExplicitPick,
@@ -1328,6 +1311,22 @@ function ResourceMonitorPanel(props: {
     [canvas, liveAgentByOwner],
   );
   const epicTitleById = useMemo(() => buildEpicTitleById(tasks), [tasks]);
+  // The epics with a section, so the counts subscribe to exactly the sessions
+  // whose headers can show one. An epic this window has not mounted is absent
+  // from the answer rather than zero - see the selector.
+  const projectedEpicIds = useMemo(
+    () => projection.entries.map((entry) => entry.epicId),
+    [projection.entries],
+  );
+  // Scoped to the host this panel is READING, the same one
+  // `attributedProjection` empties the process list for when it disagrees.
+  // The session behind a count belongs to whichever host its epic is open on,
+  // so without this an epic open elsewhere printed that machine's numbers in
+  // this host's section header.
+  const agentSessionsByEpicId = useRegisteredEpicAgentSessionCounts(
+    projectedEpicIds,
+    scope.hostId,
+  );
   const taskRows = useMemo(
     () =>
       buildTaskRows({
@@ -1336,10 +1335,12 @@ function ResourceMonitorPanel(props: {
         canvasIndex,
         recordByOwner,
         epicTitleById,
+        agentSessionsByEpicId,
         sortOption,
         memoryMetric,
       }),
     [
+      agentSessionsByEpicId,
       canvas,
       canvasIndex,
       epicTitleById,
@@ -1509,9 +1510,9 @@ function ResourceMonitorPanel(props: {
                 />
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="muted"
                   size="xs"
-                  className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+                  className="h-6"
                   aria-label="Cancel selection"
                   onClick={rowActions.cancelSelection}
                 >
@@ -1520,14 +1521,11 @@ function ResourceMonitorPanel(props: {
                 </Button>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant={
+                    selectionCopy.destructive ? "destructive-ghost" : "muted"
+                  }
                   size="xs"
-                  className={cn(
-                    "h-6 px-1.5",
-                    selectionCopy.destructive
-                      ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
+                  className="h-6"
                   disabled={
                     rowActions.selectedCount === 0 || rowActions.isPending
                   }
@@ -1548,9 +1546,8 @@ function ResourceMonitorPanel(props: {
               <>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="muted"
                   size="icon-sm"
-                  className="text-muted-foreground hover:text-foreground"
                   aria-label="Select processes to kill"
                   onClick={rowActions.enterSelection}
                 >
@@ -1703,73 +1700,6 @@ function ResourceMonitorPanel(props: {
   );
 }
 
-function useDesktopAppResourceUsage(): DesktopAppResourceUsage | null {
-  return useSyncExternalStore(
-    subscribeDesktopAppResourceUsage,
-    getDesktopAppResourceSnapshot,
-    getDesktopAppResourceSnapshot,
-  );
-}
-
-function subscribeDesktopAppResourceUsage(listener: () => void): () => void {
-  desktopAppResourceListeners.add(listener);
-  if (desktopAppResourceListeners.size === 1) {
-    sampleDesktopAppResourceUsage();
-    desktopAppResourceTimer = window.setInterval(
-      sampleDesktopAppResourceUsage,
-      DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS,
-    );
-  }
-  return () => {
-    desktopAppResourceListeners.delete(listener);
-    if (
-      desktopAppResourceListeners.size === 0 &&
-      desktopAppResourceTimer !== null
-    ) {
-      window.clearInterval(desktopAppResourceTimer);
-      desktopAppResourceTimer = null;
-    }
-  };
-}
-
-function getDesktopAppResourceSnapshot(): DesktopAppResourceUsage | null {
-  return desktopAppResourceSnapshot;
-}
-
-function sampleDesktopAppResourceUsage(): void {
-  const bridge = getDesktopDiagnosticsBridge();
-  if (bridge === null) {
-    setDesktopAppResourceSnapshot(null);
-    return;
-  }
-  if (desktopAppResourceInFlight) return;
-  desktopAppResourceInFlight = true;
-  void bridge
-    .getMetrics()
-    .then(
-      (snapshot) => {
-        setDesktopAppResourceSnapshot(
-          desktopAppResourceUsageFromMetrics(snapshot, Date.now()),
-        );
-      },
-      () => {
-        setDesktopAppResourceSnapshot(null);
-      },
-    )
-    .finally(() => {
-      desktopAppResourceInFlight = false;
-    });
-}
-
-function setDesktopAppResourceSnapshot(
-  next: DesktopAppResourceUsage | null,
-): void {
-  desktopAppResourceSnapshot = next;
-  for (const listener of Array.from(desktopAppResourceListeners)) {
-    listener();
-  }
-}
-
 function useResourceCanvasSnapshot(): CanvasResourceSnapshot {
   return useEpicCanvasStore(
     useShallow((state) => ({
@@ -1814,7 +1744,7 @@ function ResourceSearchInput(props: {
         aria-label="Search resources"
         autoComplete="off"
         spellCheck={false}
-        className="text-ui-sm [&::-webkit-search-cancel-button]:hidden"
+        className="[&::-webkit-search-cancel-button]:hidden"
       />
       {props.value.length > 0 ? (
         <InputGroupAddon align="inline-end">
@@ -2069,20 +1999,14 @@ function hostTreeVisibleProjection(
   };
 }
 
-function hostMemorySharePercent(
-  app: AppResourceUsage | null,
-  summary: HeadlineResourceSummary | null,
-): number | null {
-  if (app === null || app.hostTotalMemoryBytes <= 0) return null;
-  if (summary === null || summary.memoryBytes === null) return null;
-  return (summary.memoryBytes / app.hostTotalMemoryBytes) * 100;
-}
-
 function HostRamShareMetric(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary | null;
 }) {
-  const percent = hostMemorySharePercent(props.app, props.summary);
+  const percent = hostMemorySharePercent(
+    props.summary?.memoryBytes ?? null,
+    props.app,
+  );
   return (
     <MetricBlock
       label="RAM share"
@@ -2096,7 +2020,10 @@ function HostRamShareBar(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary | null;
 }) {
-  const percent = hostMemorySharePercent(props.app, props.summary);
+  const percent = hostMemorySharePercent(
+    props.summary?.memoryBytes ?? null,
+    props.app,
+  );
   if (percent === null) return null;
   // Only the bar geometry and its ARIA value are bounded; the text above
   // reports the raw ratio, including a >100% one that exposes overlap.
@@ -2164,87 +2091,6 @@ function handleResourcePanelKeyDown(
   }
 }
 
-function combineHeadlineResourceSummary(input: {
-  readonly hostTree: HostTreeResourceSnapshotWireV15 | null;
-  readonly app: AppResourceUsage | null;
-  readonly owners: readonly OwnerResourceSnapshotWireV15[];
-  readonly desktopApp: DesktopAppResourceUsage | null;
-  readonly memoryMetric: ResourceMemoryMetric;
-}): HeadlineResourceSummary | null {
-  const { hostTree, app, owners, desktopApp, memoryMetric } = input;
-  if (
-    hostTree === null &&
-    app === null &&
-    desktopApp === null &&
-    owners.length === 0
-  ) {
-    return null;
-  }
-  // Pre-v1.2 hosts don't send the whole-host-tree aggregate, so fall back to
-  // the host app process plus the tracked owner trees.
-  const base =
-    hostTree === null
-      ? legacyHeadlineSummary(app, owners)
-      : {
-          cpuPercent: hostTree.cpuPercent,
-          rssBytes: hostTree.rssBytes,
-          pssBytes: hostTree.pssBytes,
-          privateBytes: hostTree.privateBytes,
-          trackedProcessCount: hostTree.processCount,
-        };
-  const desktop = desktopResourceSummary(desktopApp);
-
-  const summary = {
-    cpuPercent: base.cpuPercent + desktop.cpuPercent,
-    rssBytes: base.rssBytes === null ? null : base.rssBytes + desktop.rssBytes,
-    pssBytes: desktopApp === null ? base.pssBytes : null,
-    privateBytes: desktopApp === null ? base.privateBytes : null,
-    trackedProcessCount: base.trackedProcessCount + desktop.processCount,
-  };
-  return {
-    ...summary,
-    memoryBytes: memoryMetric === "pss" ? summary.pssBytes : summary.rssBytes,
-  };
-}
-
-function legacyHeadlineSummary(
-  app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWireV15[],
-): Omit<HeadlineResourceSummary, "memoryBytes"> {
-  return owners.reduce(
-    (summary, owner) => ({
-      cpuPercent: summary.cpuPercent + owner.cpuPercent,
-      rssBytes: sumCompleteMemoryBytes([summary.rssBytes, owner.rssBytes]),
-      pssBytes: sumCompleteMemoryBytes([summary.pssBytes, owner.pssBytes]),
-      privateBytes: sumCompleteMemoryBytes([
-        summary.privateBytes,
-        owner.privateBytes,
-      ]),
-      trackedProcessCount: summary.trackedProcessCount + owner.processCount,
-    }),
-    {
-      cpuPercent: app?.cpuPercent ?? 0,
-      rssBytes: app === null ? 0 : app.rssBytes,
-      pssBytes: app?.pssBytes ?? null,
-      privateBytes: app?.privateBytes ?? null,
-      trackedProcessCount: app?.processCount ?? 0,
-    },
-  );
-}
-
-function desktopResourceSummary(
-  desktopApp: DesktopAppResourceUsage | null,
-): DesktopResourceSummary {
-  if (desktopApp === null) {
-    return { cpuPercent: 0, rssBytes: 0, processCount: 0 };
-  }
-  return {
-    cpuPercent: desktopApp.cpuPercent,
-    rssBytes: desktopApp.rssBytes,
-    processCount: desktopApp.processCount,
-  };
-}
-
 function buildEpicTitleById(
   tasks: readonly TaskLight[],
 ): ReadonlyMap<string, string> {
@@ -2256,6 +2102,36 @@ function buildEpicTitleById(
       if (title.length === 0) return [];
       return [[light.id, title]];
     }),
+  );
+}
+
+/**
+ * The task header's agent tally: "3 running · 4 sleeping".
+ *
+ * It is the one place the Resource Manager says anything about an agent that
+ * owns no processes, and it says it in WORDS rather than by inventing a row.
+ * A sleeping agent has nothing to show in a process list and nothing to act
+ * on there, so a synthesized row would be a line the panel cannot honestly
+ * fill in - and the panel's contract is that every row it draws is something
+ * running.
+ *
+ * Rendered only when there is something to say: an epic whose agents are all
+ * running reads exactly as it did before, and one this window holds no session
+ * for (`null`) says nothing rather than "0 running".
+ */
+function TaskAgentSessionCounts(props: {
+  readonly counts: EpicAgentSessionCounts | null;
+}) {
+  const counts = props.counts;
+  if (counts === null || counts.sleeping === 0) return null;
+  return (
+    <span
+      className="shrink-0 whitespace-nowrap text-ui-xs text-muted-foreground"
+      data-testid="resource-task-agent-sessions"
+    >
+      {counts.running} running <span aria-hidden="true">·</span>{" "}
+      {counts.sleeping} sleeping
+    </span>
   );
 }
 
@@ -2296,8 +2172,11 @@ function TaskResourceSection(props: {
           STICKY_SECTION_HEADER,
         )}
       >
-        <span className="min-w-0 truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {props.task.label}
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {props.task.label}
+          </span>
+          <TaskAgentSessionCounts counts={props.task.agentSessions} />
         </span>
         <div className="flex items-center">
           <MetricPair
@@ -2489,14 +2368,48 @@ interface StopTarget {
 }
 
 /**
+ * A terminal session to stop through its own host, named by session id - which
+ * for a `terminal-agent` owner is also the agent id.
+ *
+ * Not a {@link KillTarget} over the same row's `rootPids`, and the difference
+ * is what the host is able to say afterwards. A raw signal arrives as
+ * `exitCode=143 reason=process-exit` with nothing tying it to the person who
+ * asked: the agent is reported to its senders as having "exited" without
+ * replying - a verdict that sticks until it is re-armed - and its record
+ * cannot say it was stopped rather than lost. `terminal.kill` carries the
+ * intent, so the sender is told the agent "was stopped by the user", the next
+ * message resumes the same session, and the row reads asleep instead of gone.
+ *
+ * Separate from {@link StopTarget} rather than folded into it because the two
+ * act on different objects through different RPCs. What they share is the
+ * VERB, and that is expressed by both counting as stops below.
+ */
+interface StopAgentTarget {
+  readonly kind: "stopAgent";
+  readonly key: string;
+  readonly hostId: string;
+  readonly sessionId: string;
+}
+
+/**
  * What acting on one row means. The two verbs are not interchangeable: a raw
  * process tree is killed, but a SUPERVISED shell is stopped through its
- * supervisor. Signalling a shell directly would be recorded as
- * `exited (signal SIGTERM)` - a crash, as far as every reader of that status is
- * concerned - which lights the chat's attention badge and invites the agent to
- * restart the very shell a human just asked it to stop.
+ * supervisor and a terminal session through its host. Signalling a shell
+ * directly would be recorded as `exited (signal SIGTERM)` - a crash, as far as
+ * every reader of that status is concerned - which lights the chat's attention
+ * badge and invites the agent to restart the very shell a human just asked it
+ * to stop; signalling an agent's own PTY does the same to its conversation.
  */
-type RowActionTarget = KillTarget | StopTarget;
+type RowActionTarget = KillTarget | StopTarget | StopAgentTarget;
+
+/**
+ * Whether acting on this row is a STOP - the verb, across both stop kinds.
+ * Written as "not a kill" so a fourth target kind has to opt OUT of the gentle
+ * verb rather than be silently counted as a kill.
+ */
+function isStopTarget(target: RowActionTarget): boolean {
+  return target.kind !== "kill";
+}
 
 /**
  * Row action controls threaded down to actionable rows. `selectionMode` toggles
@@ -2526,7 +2439,7 @@ function ConfirmableRowAction(props: {
   const [armed, setArmed] = useState(false);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
-  const verb = props.target.kind === "kill" ? "kill" : "stop";
+  const verb = isStopTarget(props.target) ? "stop" : "kill";
   const arm = (): void => {
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement
@@ -2568,9 +2481,9 @@ function ConfirmableRowAction(props: {
           <Button
             ref={confirmRef}
             type="button"
-            variant="ghost"
+            variant="destructive-ghost"
             size="xs"
-            className="h-5 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="h-5"
             disabled={props.isPending}
             aria-label={`Confirm ${verb} ${props.label}`}
             aria-keyshortcuts="Enter"
@@ -2603,9 +2516,9 @@ function ConfirmableRowAction(props: {
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="xs"
-            className="h-5 px-1.5 text-muted-foreground hover:text-foreground"
+            className="h-5"
             aria-label={`Keep ${props.label} running`}
             aria-keyshortcuts="Escape"
             onKeyDown={cancelFromKeyboard}
@@ -2625,38 +2538,80 @@ function ConfirmableRowAction(props: {
   }
   return (
     <span {...{ [RESOURCE_ACTION_KEY_ATTRIBUTE]: props.target.key }}>
-      {props.target.kind === "stop" ? (
-        <ManagedCommandStopButton
-          commandId={props.target.commandId}
-          ariaLabel={`Stop ${props.label}`}
-          isPending={props.isPending}
-          className={ROW_HOVER_REVEAL}
-          onStop={arm}
-        />
-      ) : (
-        <>
-          {/* Text label, not an icon: a bin reads as "delete this agent's
-              state" and a stop glyph reads as "stop the turn", but this only
-              terminates the process tree. The word carries the meaning. */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className={cn(
-              "h-6 shrink-0 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive",
-              ROW_HOVER_REVEAL,
-            )}
-            aria-label={`Kill ${props.label}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              arm();
-            }}
-          >
-            Kill
-          </Button>
-        </>
-      )}
+      <RowActionTrigger
+        target={props.target}
+        label={props.label}
+        isPending={props.isPending}
+        onArm={arm}
+      />
     </span>
+  );
+}
+
+/**
+ * The un-armed affordance for one row, in the verb that row's action actually
+ * performs.
+ *
+ * Three branches rather than two since terminal owners stop. The two stop
+ * kinds deliberately look ALIKE and differ from Kill: "stop" leaves something
+ * that can be started again - a shell stays listed and restartable, an agent
+ * goes to sleep and resumes on the next message - and only the kill arm ends
+ * something. Painting an agent's Stop in the destructive tone would say the
+ * opposite of what the act now does.
+ *
+ * Split out of {@link ConfirmableRowAction} so that component keeps one job
+ * (the two-step confirm) and this one keeps the other (what the row offers).
+ */
+function RowActionTrigger(props: {
+  readonly target: RowActionTarget;
+  readonly label: string;
+  readonly isPending: boolean;
+  readonly onArm: () => void;
+}) {
+  const onArm = props.onArm;
+  const arm = (event: MouseEvent<HTMLButtonElement>): void => {
+    event.stopPropagation();
+    onArm();
+  };
+  if (props.target.kind === "stop") {
+    return (
+      <ManagedCommandStopButton
+        commandId={props.target.commandId}
+        ariaLabel={`Stop ${props.label}`}
+        isPending={props.isPending}
+        className={ROW_HOVER_REVEAL}
+        onStop={onArm}
+      />
+    );
+  }
+  if (props.target.kind === "stopAgent") {
+    return (
+      <Button
+        type="button"
+        variant="muted"
+        size="xs"
+        className={cn("h-6 shrink-0", ROW_HOVER_REVEAL)}
+        aria-label={`Stop ${props.label}`}
+        onClick={arm}
+      >
+        Stop
+      </Button>
+    );
+  }
+  return (
+    // Text label, not an icon: a bin reads as "delete this agent's state" and
+    // a stop glyph reads as "stop the turn", but this only terminates the
+    // process tree. The word carries the meaning.
+    <Button
+      type="button"
+      variant="destructive-ghost"
+      size="xs"
+      className={cn("h-6 shrink-0", ROW_HOVER_REVEAL)}
+      aria-label={`Kill ${props.label}`}
+      onClick={arm}
+    >
+      Kill
+    </Button>
   );
 }
 
@@ -2751,6 +2706,16 @@ function OwnerRowActionCell(props: {
  *
  * A shell is stopped rather than killed regardless of how it is nested, so this
  * reads the snapshot rather than the row's position in the tree.
+ *
+ * A `terminal` / `terminal-agent` owner is stopped through its own host for the
+ * reason {@link StopAgentTarget} gives: the raw pid route is the one that
+ * leaves the host unable to say who ended the session.
+ *
+ * Ordered deliberately. The managed-command arm comes first because a shell
+ * created by an agent is a `managed-command` owner in its own right, not a
+ * terminal one; the no-processes arm next, because it is the one owner row
+ * with nothing to act on at all; the pid fallback last, for a `chat`, a
+ * harness child or a provider server, where a signal is all there is.
  */
 function ownerSnapshotActionTarget(
   snapshot: OwnerResourceSnapshotWireV15,
@@ -2766,7 +2731,26 @@ function ownerSnapshotActionTarget(
       commandId: managedCommand.commandId,
     };
   }
+  // BEFORE the terminal branch, not after: a Synthetic Agent Row is an
+  // all-zero snapshot standing in for an agent whose own program is not
+  // running, and its owner kind is `terminal-agent` like any other. Offering
+  // Stop there would be an affordance for a session that does not exist -
+  // `terminal.kill` would answer `killed: false` and the row would sit
+  // unchanged, which is worse than no button at all.
   if (snapshot.rootPids.length === 0) return null;
+  const ownerKind = snapshot.owner.kind;
+  if (ownerKind === "terminal" || ownerKind === "terminal-agent") {
+    // The session id rather than the pids it happens to own: the whole point
+    // is to let the host record WHO ended the session, and a pid list cannot
+    // say that. `ResourceOwnerRef.ownerId` IS the session id for both terminal
+    // kinds, so the row already names everything `terminal.kill` needs.
+    return {
+      kind: "stopAgent",
+      key,
+      hostId: snapshot.owner.hostId,
+      sessionId: snapshot.owner.ownerId,
+    };
+  }
   return {
     kind: "kill",
     key,
@@ -2837,9 +2821,9 @@ function SelectAllToggle(props: {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="xs"
-      className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+      className="h-6"
       onClick={props.allSelected ? props.onDeselectAll : props.onSelectAll}
     >
       {props.allSelected ? "Deselect all" : "Select all"}
@@ -2970,9 +2954,9 @@ function OwnerTreeRow(props: {
     <div>
       <div
         className={cn(
-          "group relative flex items-center pr-3.5 transition-colors hover:bg-foreground/5",
-          selected && "bg-foreground/5",
-          visibleExpanded && "sticky z-10 bg-popover",
+          "group relative flex items-center pr-3.5 transition-colors",
+          visibleExpanded ? "sticky z-10 bg-popover" : "hover:bg-foreground/5",
+          selected && !visibleExpanded && "bg-foreground/5",
         )}
         style={{
           paddingLeft: `${props.depth}rem`,
@@ -3470,6 +3454,7 @@ interface TaskRowBuildInput {
   readonly canvasIndex: CanvasResourceIndex;
   readonly recordByOwner: ReadonlyMap<string, EpicNodeRecord>;
   readonly epicTitleById: ReadonlyMap<string, string>;
+  readonly agentSessionsByEpicId: ReadonlyMap<string, EpicAgentSessionCounts>;
   readonly sortOption: ResourceSortOption;
   readonly memoryMetric: ResourceMemoryMetric;
 }
@@ -3508,6 +3493,7 @@ function buildTaskRows(input: TaskRowBuildInput): TaskDisplayRow[] {
           owners.map((owner) => owner.treeMemoryBytes),
         ),
         owners: sortOwnerRows(owners, input.sortOption),
+        agentSessions: input.agentSessionsByEpicId.get(entry.epicId) ?? null,
       },
     ];
   });

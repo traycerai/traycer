@@ -34,6 +34,10 @@ import type {
 import type { PromptStashSourceAdapter } from "@/lib/composer/prompt-stash-source";
 import { registerActivePromptStash } from "@/lib/commands/active-prompt-stash-registry";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
+import {
+  consumeStashOnHost,
+  publishStashEntry,
+} from "@/lib/drafts/draft-mirror-coordinator";
 
 interface UsePromptStashArgs {
   readonly active: boolean;
@@ -53,6 +57,11 @@ interface UsePromptStashArgs {
    * only insert/consume when that same destination still accepts the write.
    */
   readonly destination: PromptStashDestinationAdapter;
+  /**
+   * Host this surface is bound to. `null` leaves the capture device-local
+   * (offline / old host). Restore-consume still deletes locally.
+   */
+  readonly hostId: string | null;
 }
 
 export interface PromptStashController {
@@ -72,8 +81,15 @@ export interface PromptStashController {
 export function usePromptStash(
   args: UsePromptStashArgs,
 ): PromptStashController {
-  const { active, disabled, editorRef, readHashImage, source, destination } =
-    args;
+  const {
+    active,
+    disabled,
+    editorRef,
+    readHashImage,
+    source,
+    destination,
+    hostId,
+  } = args;
   const rows = usePromptStashStore((state) => state.rows);
   const markUnavailable = usePromptStashStore((state) => state.markUnavailable);
   const save = usePromptStashStore((state) => state.save);
@@ -166,6 +182,7 @@ export function usePromptStash(
         id: crypto.randomUUID(),
         createdAt: Date.now(),
         content: snapshot.content,
+        annotations: snapshot.annotations,
         readHashImage,
       });
       // The repository commits the manifest and every referenced image in one
@@ -175,12 +192,27 @@ export function usePromptStash(
       // this await was in flight, so the source only clears if it still
       // matches the token captured before the save.
       await save(entrySnapshot);
+      if (hostId !== null) {
+        void publishStashEntry(hostId, entrySnapshot.entry);
+      }
       if (retiredRef.current) {
         // This hook instance unmounted while the save was in flight. The
         // durable stash is already committed; whatever now occupies this
         // identity/revision belongs to a different (possibly reopened)
         // instance, so never clear it and never surface feedback for a
         // composer that is gone.
+        return;
+      }
+      if (entrySnapshot.droppedAnnotations > 0) {
+        // The entry does not carry everything this composer holds, so clearing
+        // would destroy the part it could not take - a record's comment, the
+        // page it was taken on, which elements were marked. None of that is in
+        // the document text, and none of it can be recovered from the stash.
+        setPulseEpoch((epoch) => epoch + 1);
+        toast.warning("Prompt stashed without its annotations", {
+          description:
+            "Their images could not be read, so the composer was left as it is.",
+        });
         return;
       }
       const cleared = sourceRef.current.clearIfUnchanged(snapshot.token);
@@ -203,7 +235,7 @@ export function usePromptStash(
       stashInFlightRef.current = false;
       if (!retiredRef.current) setSaving(false);
     }
-  }, [disabled, editorRef, rows.length, readHashImage, save]);
+  }, [disabled, editorRef, hostId, rows.length, readHashImage, save]);
 
   const stashCurrent = useCallback(() => {
     void stashCurrentAsync();
@@ -216,6 +248,20 @@ export function usePromptStash(
       // A later switch/remount/close must leave the stash intact.
       const identity = destinationRef.current.captureIdentity();
       if (identity === null) return false;
+      // Ask whether this destination can hold the entry at all BEFORE doing
+      // any work for it. `importAndInsert` refuses too, but it is reached
+      // only after `materialize`, and landing's materializer writes the
+      // entry's images into this window's partition first - so a refusal
+      // delivered there arrives with megabytes already on disk. Nothing
+      // roots them and the reconcile sweep reclaims them, but until it runs
+      // they hold budget, and walking through several unsupported entries
+      // can refuse a legitimate paste for capacity spent on prompts that
+      // were never inserted. The question needs nothing but the entry.
+      const refusal = destinationRef.current.unsupportedReason?.(entry) ?? null;
+      if (refusal !== null) {
+        warnUnsupportedDestination(refusal);
+        return false;
+      }
       busyEntryRef.current = entry.id;
       setBusyEntryId(entry.id);
       try {
@@ -247,6 +293,7 @@ export function usePromptStash(
           result = await destinationRef.current.importAndInsert({
             identity,
             content: materialized.content,
+            entry,
           });
         } finally {
           materialized.release?.();
@@ -256,11 +303,18 @@ export function usePromptStash(
           // reading. Never consume; never report success.
           return false;
         }
+        if (result.status === "unsupported") {
+          // The destination refused rather than take half of it. Keeping the
+          // entry is the point: the part it cannot hold exists nowhere else.
+          warnUnsupportedDestination(result.reason);
+          return false;
+        }
         focusEditor();
         // Immediate consume after accepted insertion (settled move semantics).
         // Consume failure leaves the inserted content plus a duplicate stash.
         try {
           await removeFromStore(entry.id);
+          await consumeStashOnHost(hostId, entry.id);
         } catch {
           toast.warning("Prompt restored, but the stash copy remains", {
             description: "You can delete the duplicate after storage recovers.",
@@ -288,7 +342,7 @@ export function usePromptStash(
         setBusyEntryId(null);
       }
     },
-    [disabled, focusEditor, markUnavailable, removeFromStore],
+    [disabled, focusEditor, hostId, markUnavailable, removeFromStore],
   );
 
   const remove = useCallback(
@@ -298,6 +352,7 @@ export function usePromptStash(
       setBusyEntryId(id);
       try {
         await removeFromStore(id);
+        await consumeStashOnHost(hostId, id);
       } catch {
         toast.error("Could not delete this stashed prompt", {
           description: "The prompt is still safely stored. Try again.",
@@ -307,7 +362,7 @@ export function usePromptStash(
         setBusyEntryId(null);
       }
     },
-    [removeFromStore],
+    [hostId, removeFromStore],
   );
 
   const stashCurrentRef = useRef(stashCurrent);
@@ -334,6 +389,17 @@ export function usePromptStash(
     restore,
     remove,
   };
+}
+
+/**
+ * One refusal message for both places a destination can decline an entry -
+ * the pre-materialization question and `importAndInsert`'s own guard - so a
+ * user sees the same thing whichever answered.
+ */
+function warnUnsupportedDestination(reason: string): void {
+  toast.warning("This composer can't take that prompt", {
+    description: reason,
+  });
 }
 
 /**

@@ -1,3 +1,12 @@
+import {
+  DEFAULT_TAB_CUSTOMIZATION,
+  TAB_COLORS,
+  parseTabCustomizations,
+  parseTabGroups,
+  setLayoutTabGroup,
+  type TabCustomization,
+  type TabGroup,
+} from "./tab-groups";
 import { create } from "zustand";
 import {
   createJSONStorage,
@@ -9,6 +18,7 @@ import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
 } from "@/stores/tabs/registry";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import {
   createEmptySplit,
   DEFAULT_LEFT_RATIO,
@@ -42,6 +52,7 @@ import {
   type SystemTabs,
 } from "@/stores/tabs/layout";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 
@@ -89,36 +100,18 @@ export interface TabsStoreState extends PersistedTabsStoreState {
   separateSplit: (splitId: string) => void;
   replaceRef: (args: ReplaceRefArgs) => void;
   reorderItem: (args: ReorderItemArgs) => void;
+  setTabCustomization: (
+    ref: TabRef,
+    patch: Partial<Pick<TabCustomization, "color" | "icon">>,
+  ) => void;
+  createGroup: (ref: TabRef) => string | null;
+  setTabGroup: (ref: TabRef, groupId: string | null) => void;
+  updateGroup: (groupId: string, patch: Partial<TabGroup>) => void;
+  ungroup: (groupId: string) => void;
   repair: () => void;
 }
 
 const TABS_PERSIST_KEY = persistKey(STORE_KEYS.tabs);
-// Hand-maintained, and duplicated verbatim in `desktop-tabs-persistence.ts`.
-// It is NOT derived from `SETTINGS_SECTIONS` because it also has to accept
-// `service`, the retired id that `settings.service.tsx` still redirects, and
-// because a persisted path from an older build is exactly the input this
-// guards. The cost of hand-maintaining it is that a new section can be
-// forgotten here and silently stop being recognised as a settings route -
-// `devices` was, from the day it was added until `app-diagnostics` arrived and
-// the omission was noticed next to it.
-const SETTINGS_PATHS = new Set([
-  "agents",
-  "app-diagnostics",
-  "appearance",
-  "devices",
-  "diagnostics",
-  "general",
-  "host",
-  "keybindings",
-  "notifications",
-  "opening-behavior",
-  "providers",
-  "service",
-  "shell",
-  "usage",
-  "worktrees",
-]);
-
 let tabsLocalPersistenceEnabled = true;
 let pendingLegacySourceActiveSelection = false;
 
@@ -170,11 +163,47 @@ function itemContainsStructurallyLockedRef(item: StripItem): boolean {
 }
 
 function committedLayout(layout: PersistedTabStripLayout): CommittedTabsLayout {
-  const repaired = repairLayout(layout, isRegisteredTabKind);
+  const repaired = withHomeActivePreserved(
+    layout,
+    repairLayout(layout, isRegisteredTabKind),
+  );
   return {
     ...repaired,
     stripOrder: flattenLayoutRefs(repaired),
   };
+}
+
+/**
+ * `true` when this layout's `activeItemId: null` means "the Home tab is
+ * active", rather than "the strip is empty and nothing is selected".
+ *
+ * The two states are the same value and are told apart by the flag alone: with
+ * Home off, a populated strip always has an active item and `repairLayout`
+ * restores that invariant after every commit. Home is what makes null a
+ * selection a populated strip can legitimately hold.
+ */
+export function layoutHomeIsActive(layout: PersistedTabStripLayout): boolean {
+  return layout.activeItemId === null && isHomeTabEnabled();
+}
+
+/**
+ * Re-applies a deliberate Home selection that `repairLayout` resolved away.
+ *
+ * `repairLayout` is pure and knows nothing about Home, so it reads a null
+ * active id as "unset" and falls back to the first item - correct before Home
+ * existed, and still correct for a persisted payload that simply never carried
+ * one. Only the source layout can say which of the two it meant, so the
+ * distinction is drawn here, at the commit boundary, rather than by teaching
+ * the reducer a flag.
+ */
+function withHomeActivePreserved(
+  source: PersistedTabStripLayout,
+  repaired: PersistedTabStripLayout,
+): PersistedTabStripLayout {
+  if (repaired.activeItemId === null || !layoutHomeIsActive(source)) {
+    return repaired;
+  }
+  return { ...repaired, activeItemId: null };
 }
 
 function layoutFromState(state: TabsStoreState): PersistedTabStripLayout {
@@ -184,6 +213,8 @@ function layoutFromState(state: TabsStoreState): PersistedTabStripLayout {
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
     activationHistory: state.activationHistory,
+    customizations: state.customizations,
+    groups: state.groups,
   };
   // Older consumers and existing tests may still seed Zustand directly with
   // `stripOrder`. Treat such a mismatch as an external v1 compatibility write
@@ -272,6 +303,8 @@ export function migrateTabsPersistedState(
       activeItemId:
         typeof value.activeItemId === "string" ? value.activeItemId : null,
       systemTabs,
+      customizations: parseTabCustomizations(value.customizations),
+      groups: parseTabGroups(value.groups),
       activationHistory: Array.isArray(value.activationHistory)
         ? value.activationHistory.flatMap(parseTabRef)
         : undefined,
@@ -314,6 +347,9 @@ function parseTabRef(value: unknown): ReadonlyArray<TabRef> {
   if (!isRegisteredTabKind(value.kind) || value.id.length === 0) return [];
   if (value.kind === "history" && value.id !== "history") return [];
   if (value.kind === "settings" && value.id !== "settings") return [];
+  // Home is never persisted as a strip ref; `repairLayout` would drop one
+  // anyway, but refusing it here keeps the parsed layout honest.
+  if (value.kind === "home") return [];
   return [{ kind: value.kind, id: value.id }];
 }
 
@@ -419,7 +455,7 @@ function isValidSystemTabPath(
 
 export const useTabsStore = create<TabsStoreState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       ...committedLayout(emptyTabStripLayout()),
 
       replaceLayoutForTransaction: (layout) => {
@@ -429,6 +465,8 @@ export const useTabsStore = create<TabsStoreState>()(
           activeItemId: layout.activeItemId,
           systemTabs: layout.systemTabs,
           activationHistory: layout.activationHistory,
+          customizations: layout.customizations,
+          groups: layout.groups,
         });
       },
 
@@ -440,6 +478,8 @@ export const useTabsStore = create<TabsStoreState>()(
             activeItemId: state.activeItemId,
             systemTabs: state.systemTabs,
             activationHistory: state.activationHistory,
+            customizations: state.customizations,
+            groups: state.groups,
           }),
         );
       },
@@ -605,6 +645,85 @@ export const useTabsStore = create<TabsStoreState>()(
         });
       },
 
+      setTabCustomization: (ref, patch) => {
+        set((state) => {
+          const layout = layoutFromState(state);
+          const item = findStripItemForRef(layout, ref);
+          if (item === null || itemContainsStructurallyLockedRef(item))
+            return state;
+          const key = tabRefKey(ref);
+          const customizations = {
+            ...layout.customizations,
+            [key]: {
+              ...(layout.customizations?.[key] ?? DEFAULT_TAB_CUSTOMIZATION),
+              ...patch,
+            },
+          };
+          return committedLayout({ ...layout, customizations });
+        });
+      },
+
+      createGroup: (ref) => {
+        const layout = layoutFromState(get());
+        const item = findStripItemForRef(layout, ref);
+        if (item === null || itemContainsStructurallyLockedRef(item))
+          return null;
+        const groupId = crypto.randomUUID();
+        const color =
+          TAB_COLORS[
+            Object.keys(layout.groups ?? {}).length % TAB_COLORS.length
+          ].value;
+        set(
+          committedLayout(
+            setLayoutTabGroup(
+              {
+                ...layout,
+                groups: {
+                  ...layout.groups,
+                  [groupId]: { name: "", color, collapsed: false },
+                },
+              },
+              ref,
+              groupId,
+            ),
+          ),
+        );
+        return groupId;
+      },
+
+      setTabGroup: (ref, groupId) => {
+        set((state) => {
+          const layout = layoutFromState(state);
+          const item = findStripItemForRef(layout, ref);
+          if (item === null || itemContainsStructurallyLockedRef(item))
+            return state;
+          return committedLayout(setLayoutTabGroup(layout, ref, groupId));
+        });
+      },
+
+      updateGroup: (groupId, patch) => {
+        set((state) => {
+          const group = state.groups?.[groupId];
+          if (group === undefined) return state;
+          return committedLayout({
+            ...layoutFromState(state),
+            groups: { ...state.groups, [groupId]: { ...group, ...patch } },
+          });
+        });
+      },
+
+      ungroup: (groupId) => {
+        set((state) => {
+          const customizations = Object.fromEntries(
+            Object.entries(state.customizations ?? {}).map(([key, value]) => [
+              key,
+              value.groupId === groupId ? { ...value, groupId: null } : value,
+            ]),
+          );
+          return committedLayout({ ...layoutFromState(state), customizations });
+        });
+      },
+
       repair: () => {
         set((state) => committedLayout(layoutFromState(state)));
       },
@@ -645,6 +764,8 @@ export function readTabStripLayout(): PersistedTabStripLayout {
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
     activationHistory: state.activationHistory,
+    customizations: state.customizations,
+    groups: state.groups,
   };
 }
 

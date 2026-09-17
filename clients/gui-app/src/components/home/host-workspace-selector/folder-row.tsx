@@ -1,7 +1,7 @@
 import {
   CircleMinus,
-  FileSliders,
   Folder,
+  FolderCog,
   Pin,
   Trash2,
   TriangleAlert,
@@ -110,9 +110,10 @@ export function FolderRow(props: {
             aria-label="Loading folder metadata"
           >
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId={undefined}
               variant="dots"
+              tone="muted"
             />
             <span className="sr-only">Loading folder metadata</span>
           </span>
@@ -296,30 +297,30 @@ function PrimaryPinControl(props: {
   );
 }
 
-/** The ⚙ button — opens the setup/teardown scripts modal in every mode. */
+/** The ⚙ button — opens the Repository settings modal in every mode. */
 function EnvironmentButton(props: {
   readonly item: WorkspaceRunItem;
   readonly onEdit: (workspacePath: string) => void;
 }) {
   return (
     <TooltipWrapper
-      label="Setup & teardown scripts"
+      label="Repository settings"
       side="top"
       sideOffset={undefined}
       align={undefined}
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
-        aria-label="Edit setup and teardown scripts"
+        aria-label="Repository settings"
         data-testid="folder-scripts-trigger"
         onClick={() => props.onEdit(props.item.displayPath)}
         // Always visible (muted, brightening on hover/focus) - user decision:
         // hover-revealed row actions were not discoverable.
-        className="text-muted-foreground opacity-[var(--fc-opacity,0.7)] transition-opacity hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
+        className="opacity-[var(--fc-opacity,0.7)] transition-opacity hover:opacity-100 focus-visible:opacity-100"
       >
-        <FileSliders className="size-4" />
+        <FolderCog className="size-4" aria-hidden />
       </Button>
     </TooltipWrapper>
   );
@@ -399,7 +400,7 @@ function RemoveFolderButton(props: {
     >
       {item.removePending ? (
         <AgentSpinningDots
-          className="text-current"
+          className={undefined}
           testId={undefined}
           variant="dots"
         />

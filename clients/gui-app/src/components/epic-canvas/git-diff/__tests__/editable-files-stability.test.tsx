@@ -599,31 +599,7 @@ describe("useGitDiffEditing editableFiles stability", () => {
       { wrapper },
     );
 
-    const lineElement = document.createElement("div");
-    lineElement.append("const value = 1;");
-    document.body.append(lineElement);
-    onTestFinished(() => {
-      lineElement.remove();
-    });
-
-    await act(async () => {
-      result.current.editAdapter.diffOptions.onLineClick?.({
-        type: "diff-line",
-        annotationSide: "additions",
-        lineType: "change-addition",
-        lineNumber: 1,
-        lineElement,
-        numberElement: document.createElement("div"),
-        numberColumn: false,
-        event: new PointerEvent("click", { button: 0, clientX: 4 }),
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(result.current.editableFiles).not.toBeNull();
-    });
+    await activateEditing(result);
     const initial = result.current.editableFiles as EditableDiffFiles;
     expect(initial.newFile.contents).toBe("const value = 1;\n");
 

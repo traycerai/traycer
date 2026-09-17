@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
-import { cn } from "@/lib/utils";
+import { limitedFamilyQualifier } from "@/lib/rate-limits/rate-limit-copy";
 import {
   initialPreviewProfileId,
   type ProfileRateLimitDestination,
@@ -62,7 +62,24 @@ interface ProfileRateLimitSwitchBannerProps {
    * automatic non-forced usage check on it per mounted warning episode. */
   readonly probeTarget: ProfileRateLimitDestination | null;
   readonly runTargetHostId: string | null;
-  /** User-confirmed only. Commits the picked profile for the next turn. */
+  /**
+   * User-confirmed only. Commits the picked profile for the next turn.
+   *
+   * "User-confirmed" is a statement about THIS banner, not a rule about the
+   * app. Provider fallback switches a chat's profile without a press, and that
+   * is legitimate: the user authorized it once, in advance, by configuring the
+   * policy — a standing authorization is consent, and the fallback surfaces
+   * spend it in the open (a named destination, a countdown, and a refusal that
+   * keeps the error).
+   *
+   * What stays true here is the DIVISION: this banner is the manual,
+   * PRE-failure path. It fires on a usage reading while the turn could still
+   * succeed, so there is nothing to rescue and no authorization to spend —
+   * only a suggestion, which a person accepts or dismisses. Fallback is the
+   * post-failure path and never routes through this callback: it would drop
+   * the failed message, which is the one thing this banner's switch does not
+   * carry.
+   */
   readonly onSwitchProfile: (profileId: string | null) => void;
   /** Includes the current chat. The current composer commit is handled by
    * `onSwitchProfile`; this callback switches only matching siblings. */
@@ -105,12 +122,6 @@ const PREVIEW_NAVIGATION_KEYS = new Set([
 
 function switchLabel(profile: ProviderProfile): string {
   return `Switch to ${profileDisplayLabel(profile)}`;
-}
-
-/** "Fable " / "Fable, Opus " qualifier for the banner line; empty when the
- * warning is profile-wide. Trailing space keeps the caller's template flat. */
-function familyQualifier(limitedFamilies: ReadonlyArray<string>): string {
-  return limitedFamilies.length === 0 ? "" : `${limitedFamilies.join(", ")} `;
 }
 
 function profileMenuRows(
@@ -255,7 +266,7 @@ export function ProfileRateLimitSwitchBanner(
   return (
     <section
       aria-label="Rate-limit profile switch"
-      className="relative w-full overflow-visible rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm"
+      className="relative w-full overflow-visible rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm"
     >
       <TooltipWrapper label="Dismiss" side="top" sideOffset={6} align="end">
         <button
@@ -269,7 +280,7 @@ export function ProfileRateLimitSwitchBanner(
       </TooltipWrapper>
       <div className="flex items-start gap-2">
         <AlertTriangle
-          className="mt-1.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+          className="mt-1.5 size-3.5 shrink-0 text-warning-foreground"
           aria-hidden
         />
         <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
@@ -280,8 +291,8 @@ export function ProfileRateLimitSwitchBanner(
             />
             <span>
               {props.severity === "hard_limit"
-                ? `has reached its ${familyQualifier(props.limitedFamilies)}rate limit.`
-                : `is running low on ${familyQualifier(props.limitedFamilies)}usage.`}
+                ? `has reached its ${limitedFamilyQualifier(props.limitedFamilies)}rate limit.`
+                : `is running low on ${limitedFamilyQualifier(props.limitedFamilies)}usage.`}
             </span>
             {readOnly ? (
               <span className="text-muted-foreground">
@@ -609,7 +620,7 @@ function ProfileRateLimitMenuRow({
       })}
       aria-disabled={!row.selectable}
       aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
-      className={cn("gap-2 py-1.5 pr-1.5", !row.selectable && "opacity-60")}
+      className="gap-2"
       onFocus={(event) => onFocusPreview(row.profile, event.currentTarget)}
       onPointerMove={(event) => onPreview(row.profile, event.currentTarget)}
       onSelect={(event) => {

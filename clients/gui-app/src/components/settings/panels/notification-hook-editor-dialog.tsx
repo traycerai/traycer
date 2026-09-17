@@ -44,7 +44,7 @@ export function NotificationHookEditorDialog(props: {
         if (!open) props.onCancel();
       }}
     >
-      <DialogContent className="max-h-[min(85vh,52rem)] w-[min(92vw,42rem)] overflow-y-auto">
+      <DialogContent className="flex max-h-[min(85vh,52rem)] w-[min(92vw,42rem)] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>
@@ -53,7 +53,7 @@ export function NotificationHookEditorDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="min-h-0 space-y-5 overflow-y-auto">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="hook-name">Name</Label>
@@ -110,11 +110,12 @@ export function NotificationHookEditorDialog(props: {
                   value={draft.headersText}
                   rows={3}
                   placeholder={"authorization: Bearer $MY_TOKEN"}
-                  className="font-mono text-ui-xs"
                   onChange={(event) => {
                     const headersText = event.target.value;
                     setDraft((previous) => ({ ...previous, headersText }));
                   }}
+                  font="mono"
+                  size="xs"
                 />
                 <p className="text-ui-xs text-muted-foreground">
                   One <code>name: value</code> per line. <code>$VAR</code> and{" "}
@@ -131,11 +132,12 @@ export function NotificationHookEditorDialog(props: {
                   id="hook-command"
                   value={draft.command}
                   placeholder="/usr/local/bin/notify"
-                  className="font-mono text-ui-xs"
                   onChange={(event) => {
                     const command = event.target.value;
                     setDraft((previous) => ({ ...previous, command }));
                   }}
+                  font="mono"
+                  size="xs"
                 />
               </div>
               <div className="space-y-2">
@@ -145,11 +147,12 @@ export function NotificationHookEditorDialog(props: {
                   value={draft.argsText}
                   rows={2}
                   placeholder={"--channel\nbuilds"}
-                  className="font-mono text-ui-xs"
                   onChange={(event) => {
                     const argsText = event.target.value;
                     setDraft((previous) => ({ ...previous, argsText }));
                   }}
+                  font="mono"
+                  size="xs"
                 />
                 <p className="text-ui-xs text-muted-foreground">
                   One argument per line. Run directly (no shell); the event JSON
@@ -208,7 +211,7 @@ export function NotificationHookEditorDialog(props: {
           </div>
         </div>
 
-        <DialogFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <DialogFooter className="flex-col items-stretch sm:flex-row sm:items-center sm:justify-between">
           <p className="text-ui-xs text-destructive">{problem ?? ""}</p>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={props.onCancel}>

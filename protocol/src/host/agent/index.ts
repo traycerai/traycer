@@ -1,5 +1,6 @@
 export * from "./shared";
 export * from "./contracts";
+export * from "./archive";
 export * from "./roles";
 export * from "./inbox";
 export * from "./activity";

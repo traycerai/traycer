@@ -73,6 +73,7 @@ function createHarness(): Harness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -81,6 +82,7 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -98,7 +100,7 @@ function createHarness(): Harness {
 }
 
 function emitSnapshot(harness: Harness): void {
-  harness.callbacks().onConnectionStatus("open", null);
+  harness.callbacks().onConnectionStatus("open", null, null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -170,6 +172,7 @@ function managedCommandItem(queueItemId: string): ChatQueuedManagedCommandItem {
     kind: "managed-command",
     queueItemId,
     commandId: `${queueItemId}-command`,
+    hostId: null,
     description: "bun test --watch",
     monitoring: true,
     delivery: "next_turn" as const,

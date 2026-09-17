@@ -9,6 +9,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
+import { epicHoldsUnsavedDraft } from "@/lib/epics/epic-draft-guard";
 import { useSyncExternalStore } from "react";
 import {
   agentActivityPlaneAnswers,
@@ -100,7 +101,17 @@ export type EpicSessionTransportCloseTrigger =
   | "retry-rebuild"
   | "repoint"
   | "sign-out"
-  | "construction-failed";
+  | "construction-failed"
+  /**
+   * Renderer parking: no pane of this epic has been visible in any window for
+   * `PARK_HIDDEN_EPIC_AFTER_MS`, so its subscriptions are released while the
+   * tab stays open. Distinct from `prune` (which is the cap reclaiming an
+   * epic nothing is mounted on) and from `tab-close` (which ends the tab), and
+   * the distinction is the whole point of the label: a parked epic is expected
+   * back, and staging reads this to tell an attention-driven close apart from
+   * a capacity-driven one.
+   */
+  | "park";
 
 const handleTransportCloseAttribution = new WeakMap<
   OpenEpicStoreHandle,
@@ -218,6 +229,21 @@ interface EpicRegistrySession {
    * it, so it can never be read by a later, unrelated teardown.
    */
   pendingRetention: RetainedHandleIdentity | null;
+  /**
+   * Whether the teardown about to happen is a PARK - the epic went unwatched
+   * for the park window and is releasing its subscriptions with its tabs still
+   * open (plan C, decision C1).
+   *
+   * Recorded on the session for the same reason `pendingRetention` is: the fact
+   * lives at the call that knows it, and `onBeforeDispose` sees only the shared
+   * `released` cause. What it decides is the DESKTOP OWNERSHIP announcement.
+   * Ownership belongs to the tab/Epic, not to one transient transport during
+   * that tab's lifetime - the `replaced` arm already says so for a re-point -
+   * and a park keeps the tab. Announcing a release here would let a second
+   * window claim an epic this window still has open, and nothing would re-claim
+   * it on show: the provider claims once per mount, and parking is not one.
+   */
+  pendingPark: boolean;
 }
 
 function eligibilityKeyFor(
@@ -313,9 +339,51 @@ function holdsNothingToLose(state: OpenEpicState): boolean {
  * checked, open transport or not.
  */
 function epicIsBusy(epicId: string, hostId: string): boolean {
+  return epicIsBusyAcrossHosts(epicId, [hostId]);
+}
+
+/**
+ * {@link epicIsBusy} over every host an Epic has live state on, not just the
+ * one its own session is bound to. A park disposes the chat plane too, and a
+ * chat can be served from a different host - coverage is per host, so checking
+ * only the epic's host can pass while the plane is blind to the host whose
+ * chats are about to go.
+ */
+function epicIsBusyAcrossHosts(
+  epicId: string,
+  hostIds: Iterable<string>,
+): boolean {
   if (!agentActivityPlaneAnswers()) return true;
   if (hasActiveAgentWork(epicId)) return true;
-  return !agentActivityPlaneCoversHost(hostId);
+  for (const hostId of hostIds) {
+    if (!agentActivityPlaneCoversHost(hostId)) return true;
+  }
+  return false;
+}
+
+/**
+ * The chat plane's half of the park verdict, injected rather than imported.
+ *
+ * The dependency has to run this way round: `lib/registries/chat-session-registry.ts`
+ * imports `lib/epics/epic-parking.ts`, which imports THIS module, so importing
+ * the chat registry here would close a cycle - and a cycle through a module
+ * with import-time subscriptions is how ten unrelated suites died at module
+ * load last round. The downstream module registers the probe instead.
+ *
+ * Absent probe answers "no chat state", which is the correct reading anywhere
+ * the chat plane is not wired up at all (tests, the TUI shell).
+ */
+export interface EpicChatWorkProbe {
+  (epicId: string): {
+    readonly unsettled: boolean;
+    readonly hostIds: readonly string[];
+  };
+}
+
+let chatWorkProbe: EpicChatWorkProbe | null = null;
+
+export function setEpicChatWorkProbe(probe: EpicChatWorkProbe | null): void {
+  chatWorkProbe = probe;
 }
 
 /**
@@ -606,7 +674,15 @@ export class OpenEpicSessionRegistry {
           // the live SESSION is gone either way, and a retained buffer has no
           // transport and claims nothing, so holding that ownership open for it
           // would pin the epic to a window that can no longer serve it.
-          if (cause !== "replaced") this.releaseListener?.(session.epicId);
+          //
+          // A PARK is exempt for the re-point's reason rather than the
+          // retention's: the tab is still open and expects to serve this epic
+          // again the moment a pane of it is shown. See `pendingPark`.
+          const parking = session.pendingPark;
+          session.pendingPark = false;
+          if (cause !== "replaced" && !parking) {
+            this.releaseListener?.(session.epicId);
+          }
           const retention = session.pendingRetention;
           session.pendingRetention = null;
           if (retention === null) return "dispose";
@@ -624,6 +700,20 @@ export class OpenEpicSessionRegistry {
 
   size(): number {
     return this.sessions.size();
+  }
+
+  /**
+   * Every live session handle, in no particular order and WITHOUT touching
+   * MRU ordering.
+   *
+   * Added for the agent-activity host fan-out (`s5-parity-gaps` gap 1): the
+   * hosts whose activity a user can actually see are the hosts their open
+   * epics are bound to, and that set is only knowable from here. Passive, so
+   * it must not make an epic count as recently used - the same reason
+   * `peek()` exists.
+   */
+  liveHandles(): readonly OpenEpicStoreHandle[] {
+    return this.sessions.list().map((session) => session.handle);
   }
 
   /**
@@ -752,6 +842,130 @@ export class OpenEpicSessionRegistry {
       this.sessions.release(epicId, "warm");
       this.sessions.pruneWarm();
       this.sessions.notify();
+    });
+  }
+
+  /**
+   * Whether this epic's live session may be PARKED right now.
+   *
+   * THE CAP'S OWN TWO GATES, read through the same two predicates the prune
+   * walk passes to the shared registry (`isEvictable` / `hasActiveWork`) - not
+   * a third opinion about eligibility. Plan C states the rule in one line: "a
+   * tab with unsynced edits or an in-progress action is not parked. The
+   * renderer's own prune already skips dirty and active entries; parking uses
+   * the same eligibility." Two predicates for one question is how the
+   * projection and `epicHasUnsyncedEdits` drifted apart three methods down, and
+   * that drift discarded work.
+   *
+   * An epic with no live entry answers `true`: there is nothing holding a
+   * subscription, so there is nothing for a park to refuse. The caller uses
+   * that to publish the parked signal anyway - the gates it feeds (the record
+   * polls, the chat tiles) must go quiet whether or not a session happened to
+   * be resident at the moment the window elapsed.
+   *
+   * Deliberately NOT consulting demand, and that is load-bearing rather than an
+   * omission: parking is what happens to an OPEN TAB nobody is looking at, and
+   * such a tab may hold any demand at all. A retained surface holds one; a tab
+   * past `retainedTopLevelSurfaces` holds NONE and its session is sitting warm
+   * with `epic.subscribe` open, which is the single largest thing parking is
+   * for. A demand check would refuse the first case and a
+   * demand-must-be-zero check would refuse the second.
+   */
+  canPark(epicId: string): boolean {
+    // THE GATE THAT IS NOT ABOUT THE SESSION, and it goes first because it is
+    // the cheapest and the least conditional: an editor inside the subtree this
+    // park would UNMOUNT is holding text that exists nowhere else
+    // (`lib/epics/epic-draft-guard.ts`). A comment composer writes nothing
+    // outside its Tiptap instance until Submit, and a chat inline edit lives in
+    // the tile's own reducer, so both leave the epic store perfectly clean and
+    // every other gate here reads yes. Plan C's contract is that a parked tab
+    // keeps its UI state, and losing typed text is the loudest way to break it.
+    //
+    // It protects what is MOUNTED, which is the whole of what it can protect: a
+    // surface the retention cap already unmounted has lost that text before any
+    // park is considered. See the boundary section in `epic-draft-guard.ts`.
+    //
+    // `lib/epics/epic-parking.ts` watches this signal too, so a park refused
+    // for a draft re-attempts the moment the draft is submitted or cleared,
+    // rather than waiting for a fresh hide edge that may never come.
+    if (epicHoldsUnsavedDraft(epicId)) return false;
+    const entry = this.sessions.peekEntry(epicId);
+    const chat = chatWorkProbe?.(epicId) ?? {
+      unsettled: false,
+      hostIds: [] as readonly string[],
+    };
+    // The chat plane is part of the ONE verdict, taken before any plane is
+    // released. A park disposes every chat under the epic, so a chat still
+    // holding work has to be able to refuse it here - after the release there
+    // is nothing left to ask.
+    if (chat.unsettled) return false;
+    const hostIds = new Set<string>(chat.hostIds);
+    if (entry !== null) {
+      const handle = entry.session.handle;
+      if (!holdsNothingToLose(handle.store.getState())) return false;
+      hostIds.add(handle.hostId);
+    }
+    // A MISSING ENTRY IS NOT A YES, and used to be: this returned true the
+    // moment the epic had no session, which skipped the busy check and the
+    // coverage check wholesale. An epic pruned from the warm pool routinely
+    // still has chats under their own 10-minute TTL, so the early yes let a
+    // park force-dispose live chats for an epic with a working agent, and let
+    // it do so while the activity plane was unanswered. With no session and no
+    // chats there genuinely is nothing to lose or release, which is the only
+    // case that still short-circuits.
+    if (hostIds.size === 0) return !hasActiveAgentWork(epicId);
+    return !epicIsBusyAcrossHosts(epicId, hostIds);
+  }
+
+  /**
+   * Release this epic's session because nothing is watching it, leaving its
+   * tabs open. Answers whether the epic is now subscription-free.
+   *
+   * MOUNTED OR WARM, and the name says only `park` for that reason. The entry
+   * is read through `peekEntry`, which answers for a session at any demand, so
+   * this reaches the warm session of a tab whose surface the retention pool
+   * unmounted just as it reaches a mounted one. That case is not incidental -
+   * it is up to `maxLiveEpics` sessions holding `epic.subscribe` for tabs with
+   * no surface at all, and a version of this keyed on a mounted provider could
+   * not see any of them.
+   *
+   * `discard` minus the tab close, which is the shape plan C names: the stream,
+   * the runtime worker and everything the session owns (its artifact rooms and
+   * their body leases included, since they belong to the worker) end here, and
+   * the ENTRY leaves the registry so nothing hands the handle back. What a tab
+   * close would additionally do - reclaim the retained unsynced buffers, and
+   * announce the desktop ownership release - is exactly what a park must not
+   * do; the first is unreachable because a dirty epic never gets here, and the
+   * second is refused through `pendingPark`.
+   *
+   * `releaseMounted` is not this. It drops one mount reference and leaves the
+   * session WARM, which keeps the stream open and the epic visible-leased on
+   * the host - the state parking exists to end.
+   *
+   * Re-acquisition on show is the provider's, through `acquireMounted`, which
+   * builds a fresh handle because this one is gone. Nothing here has to arrange
+   * that: a park is indistinguishable from a cold open on the way back, which
+   * is decision C5 ("the existing establishing presentation, as after a host
+   * reconnect").
+   */
+  park(epicId: string): boolean {
+    return this.sessions.transact(() => {
+      // The verdict FIRST, unconditionally. Reading the entry first and
+      // answering `true` for a missing one skipped the verdict entirely for
+      // exactly the epics that still had chats to lose - see `canPark`.
+      if (!this.canPark(epicId)) return false;
+      const entry = this.sessions.peekEntry(epicId);
+      if (entry === null) return true;
+      // Stated rather than defaulted, as `retireIfDead` states it: a park only
+      // ever runs on a session with nothing to lose, so there is no retention
+      // question to answer and a stale answer from an earlier call must not be
+      // the one that gets read.
+      entry.session.pendingRetention = null;
+      entry.session.pendingPark = true;
+      attributeEpicSessionTransportClose(entry.session.handle, "park");
+      this.sessions.discard(epicId, "released");
+      this.sessions.notify();
+      return true;
     });
   }
 
@@ -1029,6 +1243,7 @@ export class OpenEpicSessionRegistry {
       unsubscribeActivity: null,
       lastEligibilityKey: eligibilityKeyFor(epicId, handle),
       pendingRetention: null,
+      pendingPark: false,
     };
     const handleEligibilityChange = (): void => {
       const nextKey = eligibilityKeyFor(epicId, handle);

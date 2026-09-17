@@ -8,7 +8,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -17,6 +25,12 @@ import type {
   BrowserTabDriver,
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
+import {
+  fakePrepareOpenTab,
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { recordProvisioningReceipt } from "@/lib/browser-view/sessions/browser-open-perf";
 import {
   BROWSER_TILE_DND_TYPE,
   readEpicCanvasDragSourceData,
@@ -158,7 +172,7 @@ function forwardCloseTab(sessionId: string, tabId: string): Promise<void> {
 function forwardOpenTab(
   sessionId: string | null,
   url: string,
-): Promise<{ sessionId: string; tabId: string }> {
+): Promise<{ sessionId: string; tabId: string; handoffToken: string | null }> {
   return openTab(sessionId, url);
 }
 
@@ -170,11 +184,20 @@ const sessionsState = vi.hoisted<{
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
+    connectionGeneration: 0,
     items: [],
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
     errorMessage: null,
     retry: vi.fn(),
     openTab: forwardOpenTab,
+    prepareOpenTab: () => {
+      throw new Error("not used in this test");
+    },
     closeTab: forwardCloseTab,
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   },
 }));
 
@@ -204,27 +227,18 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 function tab(
   overrides: Partial<BrowserTabInfo> & Pick<BrowserTabInfo, "tabId" | "url">,
 ): BrowserTabInfo {
-  return {
-    originTier: "dev",
-    status: "ready",
-    title: null,
-    viewed: false,
-    drivenBy: [],
-    ...overrides,
-  };
+  return tabInfo(overrides);
 }
 
 function session(
   overrides: Partial<BrowserSessionInfo> &
     Pick<BrowserSessionInfo, "sessionId" | "profile" | "tabs">,
 ): BrowserSessionInfo {
-  return {
-    epicId: "epic-1",
-    hostId: "host-1",
+  return sessionInfo({
     lastActivityAt: 2,
+    runtime: { kind: "electron", revision: 0 },
     ...overrides,
-    runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
-  };
+  });
 }
 
 // The panel's close action is a TanStack mutation. One client for the file's
@@ -279,6 +293,12 @@ function seedCanvasTab(): void {
         name: "Epic 1",
       },
     },
+    // A pending tab open is only counted "present" while its view tab is in
+    // `openTabOrder` (see `preparePendingBrowserTile`'s observer) - a tab
+    // registered only in `tabsById`, the way a real close/reopen leaves a
+    // preserved-but-closed tab, reads as never opened and the pending tile
+    // is dismissed the instant it is created.
+    openTabOrder: ["view-tab-1"],
   });
 }
 
@@ -301,6 +321,7 @@ describe("BrowsersPanelBody", () => {
     openTab.mockResolvedValue({
       sessionId: "sess-created",
       tabId: "tab-created",
+      handoffToken: null,
     });
     vi.mocked(toast.error).mockClear();
     navigateNested.mockClear();
@@ -322,6 +343,7 @@ describe("BrowsersPanelBody", () => {
       lifecycle: "live",
       inventoryReady: true,
       canMaterializeElectron: false,
+      connectionGeneration: 0,
       items: [
         session({
           sessionId: "sess-primary",
@@ -367,10 +389,18 @@ describe("BrowsersPanelBody", () => {
           ],
         }),
       ],
+      viewports: {},
+      setViewport: () => Promise.reject(new Error("not used")),
+      reportViewport: () => undefined,
       errorMessage: null,
       retry: vi.fn(),
       openTab: forwardOpenTab,
+      prepareOpenTab: () => {
+        throw new Error("not used in this test");
+      },
       closeTab: forwardCloseTab,
+      attachTab: () => Promise.reject(new Error("not used")),
+      moveTab: () => Promise.reject(new Error("not used")),
     };
   });
 
@@ -408,7 +438,7 @@ describe("BrowsersPanelBody", () => {
         .className.split(/\s+/),
     ).toContain("cursor-pointer");
     const isoRow = screen.getByTestId("epic-browser-sidebar-row-tab-iso");
-    expect(isoRow.innerHTML).toContain("ring-amber-500/80");
+    expect(isoRow.innerHTML).toContain("ring-warning/80");
   });
 
   it("scrolls to and flash-highlights a requested browser row", async () => {
@@ -1399,6 +1429,66 @@ describe("BrowsersPanelBody", () => {
     });
     expect(closeButton.className.split(/\s+/)).toContain("opacity-100");
   });
+
+  it("logs the receipt-to-row perf span through the row's own RAF effect, not before it flushes", async () => {
+    recordProvisioningReceipt(
+      session({
+        sessionId: "sess-provisioning",
+        profile: "primary",
+        tabs: [],
+      }),
+    );
+    const previousTelemetry = window.localStorage.getItem(
+      "traycer:perf:telemetry",
+    );
+    window.localStorage.setItem("traycer:perf:telemetry", "1");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    onTestFinished(() => {
+      warn.mockRestore();
+      if (previousTelemetry === null) {
+        window.localStorage.removeItem("traycer:perf:telemetry");
+      } else {
+        window.localStorage.setItem(
+          "traycer:perf:telemetry",
+          previousTelemetry,
+        );
+      }
+    });
+
+    replaceSessions([
+      session({
+        sessionId: "sess-provisioning",
+        profile: "primary",
+        tabs: [
+          tab({
+            tabId: "tab-provisioning",
+            url: "https://provisioning.example",
+            title: "Provisioning page",
+            status: "provisioning",
+          }),
+        ],
+      }),
+    ]);
+    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
+
+    // `BrowserTabRow` schedules the measurement in a `useLayoutEffect` via
+    // `requestAnimationFrame` - it must not have fired synchronously with the
+    // render itself, only once that frame actually flushes.
+    expect(warn).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+    const line = String(warn.mock.calls[0]?.[0]);
+    expect(line.startsWith("[traycer-perf] ")).toBe(true);
+    const payload = JSON.parse(line.slice("[traycer-perf] ".length)) as {
+      readonly name: string;
+      readonly fields: { readonly hostId: string; readonly sessionId: string };
+    };
+    expect(payload.name).toBe("receipt-to-row");
+    expect(payload.fields.hostId).toBe("host-1");
+    expect(payload.fields.sessionId).toBe("sess-provisioning");
+  });
 });
 
 describe("BrowsersPanelActions", () => {
@@ -1408,6 +1498,7 @@ describe("BrowsersPanelActions", () => {
     openTab.mockResolvedValue({
       sessionId: "sess-created",
       tabId: "tab-created",
+      handoffToken: null,
     });
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();
@@ -1432,11 +1523,21 @@ describe("BrowsersPanelActions", () => {
       lifecycle: "live",
       inventoryReady: true,
       canMaterializeElectron: false,
+      connectionGeneration: 0,
       items: [],
+      viewports: {},
+      setViewport: () => Promise.reject(new Error("not used")),
+      reportViewport: () => undefined,
       errorMessage: null,
       retry: vi.fn(),
       openTab: forwardOpenTab,
+      prepareOpenTab: fakePrepareOpenTab({
+        hostId: () => sessionsState.value.hostId ?? "host-1",
+        openTab: forwardOpenTab,
+      }),
       closeTab: forwardCloseTab,
+      attachTab: () => Promise.reject(new Error("not used")),
+      moveTab: () => Promise.reject(new Error("not used")),
     };
   });
 
@@ -1542,7 +1643,7 @@ describe("BrowsersPanelActions", () => {
     );
     await user.click(screen.getByRole("menuitem", { name: "Host, Work Mac" }));
     fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /Follow active host/ }),
+      screen.getByRole("menuitemradio", { name: /Follow task host/ }),
     );
 
     expect(browserHostPinState.setSelection).toHaveBeenCalledWith(null);

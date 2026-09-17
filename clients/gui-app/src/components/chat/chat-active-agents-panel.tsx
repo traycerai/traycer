@@ -6,6 +6,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { LivePulse } from "@/components/ui/live-pulse";
+import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
@@ -29,7 +30,9 @@ export function ActiveAgentsPanel(props: {
   readonly scrollRegionMaxHeightClass: string;
   readonly separated: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  // Open on arrival when a chip click is what put this row back in the dock.
+  const revealedByChip = useChatDockSectionRevealed("activeAgents");
+  const [open, setOpen] = useState(revealedByChip);
   // The root agent counts as running too when it is itself active (not just
   // idling while its sub-agents work).
   const runningCount =
@@ -39,14 +42,15 @@ export function ActiveAgentsPanel(props: {
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className={cn(
-        "bg-muted/30",
-        props.separated ? "border-t border-border/50" : null,
-      )}
+      className={cn(props.separated ? "border-t border-border/50" : null)}
       data-testid="active-agents-panel"
+      variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger className="group/agents flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        <CollapsibleTrigger
+          className="group/agents flex min-w-0 flex-1 items-center text-left"
+          variant="panel"
+        >
           <ChevronDown
             aria-hidden
             className={cn(

@@ -451,6 +451,18 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // Explicit, state-changing local-store repair. Unusually for this table the
+  // cross-queue caveat does not apply: the request is
+  // `{ confirmOldHostStopped: true }` and nothing else (`local-store/schemas.ts`),
+  // so every confirmation click on one host shares all four key components and
+  // they really are one queue. `fifo` is what that queue needs — under `latest`
+  // a second click arriving while the first is still QUEUED folds into it, and
+  // two deliberate confirmations of a destructive repair reach the host as one.
+  "host.rebindLocalStore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
   // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
@@ -575,6 +587,66 @@ export const HOST_METHOD_POLL_TABLE = {
   // supersedes an older one - and never polled: the answer is a position in a
   // transcript the live subscription is already reporting changes to.
   "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
+  // Search as you type: a newer query supersedes an older one, and never
+  // polled - the caller asks again when the query changes.
+  "chat.search": { ...LATEST_SCHEDULING, poll: null },
+  // The external fallback actions. All `fifo`, and none polled.
+  //
+  // `fifo` because each carries the traversal revision it expects, so two rapid
+  // sends are not the same request twice - the second names a revision the
+  // first is about to invalidate. Coalescing them would drop the one the user
+  // actually meant and answer with the other one's outcome; dropping the LATER
+  // one is worse still, since that is the one carrying the newer intent.
+  //
+  // Never polled, and that is not merely "these are mutations". A poll would
+  // re-send an action against a revision the host has moved past and get a
+  // `traversal_advanced` for its trouble, which the menu renders as "this chat
+  // already resumed" - a poll would manufacture that message out of nothing.
+  //
+  // What `fifo` does NOT buy, because the mode is the only thing this table
+  // gets to say: it does not order these four against ONE ANOTHER, nor two
+  // sends of one verb naming different revisions. `HostRequestCoordinator`
+  // keys its queues by `[hostId, userId, method, params]`, so each of those is
+  // a separate queue and they race. Nothing here needs them not to - every
+  // verb names the revision (or the attempt) it expects and the HOST
+  // adjudicates, answering the loser with a refusal inside a successful
+  // response, which is the concurrency control. A client-side ordering would
+  // only decide WHICH concurrent press wins, and the argument above says the
+  // later one carries the newer intent. A surface that does need arrival order
+  // has to ask for it where the ordering primitive lives - a shared
+  // `MutationScope` on the hooks in `use-fallback-actions.ts` - since a
+  // scheduling policy answers `modeFor` and never supplies the queue key.
+  "chat.fallback.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.chooseTarget": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.runManualRung": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The switch-back banner's answer, on the same terms as the other three: it
+  // names the revision it expects, so two rapid answers are two different
+  // requests rather than one sent twice.
+  "chat.fallback.returnToPreferred": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The destination menu's candidate list, and the ONE fallback method that is
+  // not `fifo`. The other four mutate and name the revision they expect, so two
+  // rapid answers must stay two ordered requests. This one is read-only - no
+  // probe, no gauge write, no record write - so a later read supersedes an
+  // earlier one and `LATEST_SCHEDULING` is the honest scheduling: a user who
+  // reopens or refreshes the menu wants the newest answer, not a queue of stale
+  // ones delivered in order.
+  "chat.fallback.listTargets": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
   // Clearing snapshots destructively removes locally retained data.
@@ -640,6 +712,26 @@ export const HOST_METHOD_POLL_TABLE = {
   // Never poll it - it is a mutation, and the held set it would poll for
   // arrives unprompted on `chat.subscribe`.
   "managedCommand.deliverHeld": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.list": { ...LATEST_SCHEDULING, poll: null },
+  "managedCommand.view": { ...LATEST_SCHEDULING, poll: null },
+  // The agent's configure, not the human switch above. Same `fifo` reasoning:
+  // two presses that differ in value are different params and so different
+  // queues, and two identical ones must stay distinct rather than coalesce.
+  "managedCommand.configureAgentShell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.restart": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -769,6 +861,55 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Forking an agent persists a new collaboration record, like agent.create.
   "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Archiving retires the agent record; fifo so a tap is not coalesced away.
+  "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
+  "host.directory.list": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileCopy.status": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.enumerate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.readChunk": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.close": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.oneOffShell.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only: one host calls this on another, never the renderer. It is here
+  // because this table is exhaustive over the registry, not because the GUI
+  // has a caller. `fifo` matches `agent.create`, whose effect it shares -
+  // persisting a new collaboration record, which must never be coalesced.
+  "host.agent.createFromRemoteSender": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",
@@ -789,7 +930,16 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Pinning changes a task's persisted ordering preference.
   "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in (`poll: true`) and short, for one reader only: the pending-title
+  // fetcher (`providers/pending-epic-title-fetcher.tsx`) re-asks for a
+  // just-created epic's title while generation is in flight and no session is
+  // mounted to learn it from. Every other reader leaves `poll` unset and is
+  // not polled. Bounded by the 30s title-generation backstop, so the cadence
+  // sets how quickly a background tab picks up its name, not how long it asks.
+  "epic.getTaskContexts": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 2 * SECOND_MS },
+  },
   // Creating an epic persists a new collaboration root.
   "epic.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Batch deletion permanently removes the selected epics.
@@ -836,6 +986,35 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Creating an artifact persists a new document node.
   "epic.createArtifact": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deletedArtifacts.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.deletedArtifacts.revive": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.get": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersionSettings.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.setRetentionPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.clearHistory": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -987,9 +1166,11 @@ export const HOST_METHOD_POLL_TABLE = {
   // Updating the epic title persists user intent.
   "epic.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Re-running an interrupted major migration. `fifo`, not `latest`, because it
-  // is an ACTION with host-side effects and not a read: `latest` would let a
-  // second press supersede an in-flight retry, dropping a user-initiated
-  // recovery attempt. Never polled - the modal's Retry button is the only
+  // is an ACTION with host-side effects and not a read: under `latest` a press
+  // arriving while an earlier one is still queued folds into it, so two
+  // user-initiated recovery attempts reach the host as one. (It could not drop
+  // the in-flight attempt - `latest` only ever reuses a QUEUED job, never the
+  // active one.) Never polled - the modal's Retry button is the only
   // caller. Replaces the client frame the monolith carried; no GUI caller
   // exists yet (the read cutover wires it), and this entry is here because the
   // table must exactly match the registry.
@@ -1074,13 +1255,17 @@ export const HOST_METHOD_POLL_TABLE = {
   // the table must exactly match the registry, and the method landed there with
   // the protocol lane contracts.
   "epic.getWorkspaceContext": { ...LATEST_SCHEDULING, poll: null },
-  // The cloud-chat READ surface. All five are reads, so `latest` - and the two
-  // properties that follow from the coordinator keying on PARAMS are exactly
-  // what this fan-out wants: a read of part A never supersedes a concurrent
-  // read of part B (different params, different queue), while two readers
-  // asking for the SAME digest at the same time coalesce onto one request.
-  // `fifo` would serialize a p99 chat's ~165 parts behind each other for no
-  // property gained, since none of these writes anything.
+  // The cloud-chat READ surface. All five are reads, so `latest` - and the
+  // property that follows from the coordinator keying on PARAMS is what this
+  // fan-out wants: a read of part A never supersedes a concurrent read of part
+  // B, because different params are different queues. That is equally why
+  // `fifo` would NOT serialize a p99 chat's ~165 parts behind each other; they
+  // never share a queue either. What the mode picks is what happens WITHIN one
+  // part's queue, and there `latest` folds a redundant repeat onto the one
+  // already waiting instead of spending another request. Not onto the ACTIVE
+  // read - `latest` only ever reuses a QUEUED job - so two simultaneous reads
+  // of the same digest are still two requests; any dedupe tighter than that is
+  // Query's, above this layer.
   //
   // No polling. A published head changes only when its owning host publishes
   // again, and the reader HAS a signal for that: the chat record row carries
@@ -1178,6 +1363,24 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 45_000 },
   },
+  // Drafts live-sync rides `drafts.subscribe`. These unaries are the snapshot
+  // + mutation surface; an older host degrades them as unsupported and the
+  // client keeps device-local drafts. No poll: subscribe is the freshness
+  // channel, and a host missing the stream also misses these methods.
+  "drafts.list": { ...LATEST_SCHEDULING, poll: null },
+  // `fifo` here does NOT order two writes of the same draft: the coordinator
+  // keys its queue by the full params, so two revisions of one draft carry
+  // different params and get different queues. Per-draft ordering is owned by
+  // `DraftMirrorSession` (`sendUpsert`), which chains sends per `draftId` and
+  // drops a body an equal-or-newer generation already covers - the host
+  // applies an upsert as a whole-document LWW, so an older body arriving last
+  // would win.
+  "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Unary byte channel, same posture as `epic.readChatAttachment`.
+  "drafts.putBlob": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected
   // after this query first cached would never surface. 45s sits between the
@@ -1231,9 +1434,11 @@ export const HOST_METHOD_POLL_TABLE = {
   // explicitly (open, refresh click, filter change), so there is no cadence
   // to keep - and a superseded read has nothing worth waiting for.
   "mention.githubCatalog": { ...LATEST_SCHEDULING, poll: null },
-  // Latest-wins is load-bearing here rather than incidental: the section
-  // searches as the user types, and a queued query that has already been
-  // retyped past must not be the one that lands.
+  // A read, so `latest`. That is NOT what discards a query the user has typed
+  // past: `query` is in the request params and so in the queue key, so an old
+  // query and a new one sit in different queues and this mode never compares
+  // them - Query owns which result is current. What `latest` does here is fold
+  // a repeat of the SAME query onto the one already waiting.
   "mention.githubSearch": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
@@ -1247,9 +1452,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // Renaming a terminal persists its display name.
   "terminal.rename": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Durable plain-terminal authority. The list is snapshot seeding only; the
-  // stream owns subsequent convergence. Every write is FIFO so rapid user
-  // actions reach the host in order, while revision guards still protect the
-  // client cache from independently delayed stream frames.
+  // stream owns subsequent convergence. Every write is FIFO so an identical
+  // repeat is delivered on its own - `selectJob` refuses to coalesce a fifo
+  // job. Not so that writes reach the host in a global order, which this layer
+  // does not give: queues are keyed by [hostId, userId, method, params], so two
+  // renames carrying different titles do not share one, nor does a rename share
+  // one with a close. What holds the client cache together across
+  // independently delayed stream frames is the revision guards, not this mode.
   "terminal.plain.create": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1321,6 +1530,24 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Automatic-cleanup policy + history. The two reads are plain latest-wins
+  // panel reads. Writing the policy is `fifo`: it persists a setting whose
+  // revision is the token queued deletions are validated against, so two
+  // in-flight writes must not be reordered - and the host refuses a stale
+  // `expectedRevision` outright rather than letting the later write win.
+  //
+  // No polling on any of them. A cleanup pass runs about once a day and emits
+  // a notification when it finds anything, so a background poll would spend a
+  // request every interval to learn nothing - the panel refetches on mount and
+  // after a policy write, which is when the answer can actually differ.
+  "worktree.getAutoCleanupPolicy": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.setAutoCleanupPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "worktree.listAutoCleanupRuns": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.getAutoCleanupRun": { ...LATEST_SCHEDULING, poll: null },
   "worktree.getBinding": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("worktree.getBinding", {
@@ -1470,9 +1697,15 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // The per-profile pair. `fifo` for the same reason as the provider-wide pair
-  // above, and one reason more: these two write and delete the SAME cell, so a
-  // "latest wins" policy could drop a set that a later clear was meant to
-  // follow - leaving the credential the user asked to remove still stored.
+  // above: these mutate persisted credentials, so an identical repeat has to
+  // be delivered on its own - `selectJob` refuses to coalesce a fifo job.
+  //
+  // (Not for ordering, in either direction. The coordinator keys queues by
+  // [hostId, userId, method, params], so a set and a clear never share one -
+  // nor do two sets carrying different keys. The set-against-clear ordering
+  // this pair does need lives one layer up, in the TanStack mutation scope
+  // `PROFILE_API_KEY_MUTATION_SCOPE` (`hooks/providers/invalidations.ts`),
+  // whose note records what that reaches and what it cannot.)
   "providers.setProfileApiKey": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1485,6 +1718,22 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Updating terminal args changes persisted provider configuration.
   "providers.setTerminalAgentArgs": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Choosing a provider's auto-mode judge changes persisted provider
+  // configuration - it lands in `provider-overrides.json` beside
+  // `terminalAgentArgs`, so it takes that neighbour's policy exactly.
+  //
+  // `fifo` buys LANDING and not order here either: two picks on the same row
+  // carry different `autoJudge` values, so they are two queue keys and race,
+  // and the loser is the HOST's stored choice rather than a cache (this write
+  // invalidates `providers.list` instead of folding its response in, so the UI
+  // then faithfully reports the older selection). The ordering comes from
+  // `providerAutoJudgeWriteScope`, keyed by host AND harness, on
+  // `useProvidersSetAutoJudge`.
+  "providers.setAutoJudge": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -1513,9 +1762,72 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Reading the host-global fallback policy - a pure read, so `latest`.
+  //
+  // Opt-in polling (`poll: true`), for one caller: the settings panel's
+  // "N in progress right now" (`useFallbackInFlightCountQuery`), which reads
+  // this method under its OWN cache entry so the count stays true while the
+  // page is open. The policy read itself (`useFallbackPolicyQuery`) must not
+  // opt in: its entry is where `set` and `restoreTierGroups` write their
+  // responses, and a poll landing after one of those writes would put the
+  // pre-save policy back for the next mount to seed from.
+  "providers.fallbackPolicy.get": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
+  },
+  // Saving the fallback policy is a persisted settings write - `fifo` for the
+  // same reason as the classic provider mutations above: two rapid saves must
+  // both LAND, not be coalesced into one.
+  //
+  // Landing is all `fifo` gives them, and this comment used to add "in order",
+  // which it does not: the queue key carries the params, so two saves carrying
+  // two different policies sit in two queues and race. That matters more here
+  // than for most writes, because `useFallbackPolicySetMutation` folds each
+  // response into the `…fallbackPolicy.get` cache with `setQueriesData` - so
+  // the cached policy is whichever response lands LAST, not whichever save was
+  // pressed last. Ordering has to come from a shared `MutationScope` on that
+  // hook, or from a host-side revision check; this table cannot supply it,
+  // because a scheduling policy answers `modeFor` and never the queue key.
+  "providers.fallbackPolicy.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Restoring the seeded model groups and resetting the whole policy are both
+  // persisted settings writes, so `fifo` for the same reason as `.set`: they
+  // race with it (all three write the same row) and each must land, never be
+  // coalesced. Not "in the order the user pressed them", which this comment
+  // used to claim: three methods are three queue keys, so `fifo` sequences
+  // each against itself and nothing against the other two - see the note on
+  // `.set` above, and the same limit stated on `providers.nativeMutate` below.
+  "providers.fallbackPolicy.restoreTierGroups": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.fallbackPolicy.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A pure read re-issued on every edit, so `latest` - the same argument as
+  // `chat.fallback.listTargets`. Coalescing onto the NEWEST request is what
+  // makes the rendered verdicts match the draft on screen: under a burst of
+  // edits the superseded requests describe groups the user has already changed,
+  // and running them in order would render each stale answer on the way past
+  // while spending a catalog walk per candidate on every one of them. `fifo`
+  // belongs to the writes, which name a revision and must all land.
+  // `poll: null`: it is re-asked when the draft changes, and nothing else can
+  // change its answer.
+  "providers.fallbackPolicy.previewTierGroups": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   // Native MCP/plugins/skills mutations write provider config files, so they
-  // are `fifo` for the same reason as the classic provider mutations above:
-  // two rapid toggles must both land, in order, not be coalesced into one.
+  // are `fifo` for the same reason as the classic provider mutations above: an
+  // identical repeat must be delivered on its own, not coalesced. It does not
+  // order an enable against a disable - `action` and `enabled` are request
+  // params and so part of the queue key, which puts them in separate queues.
   "providers.nativeMutate": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1548,8 +1860,10 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // Upstream credential writes (connect / start OAuth / submit code /
-  // disconnect) - `fifo` for the same reason as `providers.mcpAuth`: two rapid
-  // actions must both land, in order, not be coalesced into one.
+  // disconnect) - `fifo` for the same reason as `providers.mcpAuth`: an
+  // identical repeat must be delivered on its own, not coalesced. Those four
+  // are `action` values in the request params, so they are four separate
+  // queues and this mode never orders one of them against another.
   "providers.modelProviderAuth": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1671,8 +1985,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Config reads and bounded diagnostics reads can coalesce safely; config
-  // writes are ordered so rapid user changes are all persisted in sequence.
+  // Config reads and bounded diagnostics reads can coalesce safely. Config
+  // writes are `fifo` so an identical repeat is persisted rather than coalesced
+  // onto the one already waiting - not to sequence DIFFERENT writes, which this
+  // layer does not do: `set` and `reset` are different methods, and two sets
+  // naming different shells are different params, so none share a queue.
   "config.shell.get": { ...LATEST_SCHEDULING, poll: null },
   "config.shell.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.shell.reset": {
@@ -1702,6 +2019,45 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.logLevels.get": { ...LATEST_SCHEDULING, poll: null },
   "config.logLevels.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.browser.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Auto mode's two host-scoped settings. Both are get/set pairs over a host
+  // config file, so they take the `config.logLevels.*` shape above: a bounded
+  // read that may coalesce, and a write that may not.
+  //
+  // Neither read polls. `autoJudge.get` answers from a file only this GUI
+  // writes, and `autoPolicy.get` proxies an account record whose staleness the
+  // panel handles with the `updatedAt` it returns rather than by refetching on
+  // a timer - a cadence here would have every open settings tab waking the
+  // host, and through it the cloud, for a record that changes when a person
+  // edits it.
+  "autoJudge.get": { ...LATEST_SCHEDULING, poll: null },
+  // The write may not coalesce, and it also may not RACE: `useAutoJudgeSetMutation`
+  // folds each response into the `autoJudge.get` cache with `setQueriesData`, so
+  // an unordered pair leaves the cache holding whichever response landed last.
+  // `fifo` cannot supply that ordering - the queue key carries the params, so
+  // two clicks naming two different judges are two queues - and a scheduling
+  // policy answers `modeFor`, never the queue key. `autoJudgeWriteScope` is
+  // where the order comes from, exactly as for `providers.fallbackPolicy.set`.
+  "autoJudge.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, so ordering is the client's job: rapid
+  // saves must reach the host in the order the user made them. `fifo` is not
+  // what delivers that (see `autoJudge.set` above - two bodies are two queue
+  // keys); `autoPolicyWriteScope` on `useAutoPolicySetMutation` is.
+  "autoPolicy.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

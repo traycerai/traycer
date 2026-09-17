@@ -15,6 +15,7 @@ import {
   useMergedNotificationUnreadCount,
   useNotificationBellState,
   useNotificationCenterHostState,
+  type NotificationBellState,
 } from "@/stores/notifications/merged-notifications";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
@@ -24,7 +25,6 @@ import {
   formatChordForDisplay,
 } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
-import { cn } from "@/lib/utils";
 import {
   Analytics,
   AnalyticsEvent,
@@ -177,14 +177,25 @@ export function NotificationsBell() {
   }, [open, bellState, hostState.isPartial, unreadCount]);
 
   const ariaLabel = notificationBellAccessibleLabel(bellState);
-  const tooltip =
-    chord === null
+  const bellTooltip = (state: NotificationBellState): string => {
+    // The path forward the hollow `unknown` dot needs. Without it this is the
+    // bare gray dot with no explanation that got `unknown` suppressed into
+    // `clear` in the first place - see `useNotificationBellState`.
+    //
+    // Names the CONSEQUENCE, not a cause: `unknown` is reached by an
+    // unreachable stream AND by a reachable one whose summary is not exact
+    // yet, so naming the transport was a diagnosis this state cannot support.
+    if (state.kind === "unknown") {
+      return "Notifications — status unavailable, so this may be out of date";
+    }
+    return chord === null
       ? "Notifications"
       : `Notifications (${formatChordForDisplay(chord)})`;
+  };
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
-        label={open ? null : tooltip}
+        label={open ? null : bellTooltip(bellState)}
         side="top"
         sideOffset={6}
         align={undefined}
@@ -199,7 +210,9 @@ export function NotificationsBell() {
             aria-label={ariaLabel}
             onPointerDown={onTriggerPointerDown}
             onKeyDown={onTriggerKeyDown}
-            className={cn("relative", open && "bg-accent")}
+            // The open surface is `ghost`'s own `aria-expanded:` styling, which
+            // the PopoverTrigger sets for us.
+            className="relative"
           >
             <Bell
               className="size-4 text-muted-foreground group-hover/button:text-foreground"
@@ -221,12 +234,34 @@ export function NotificationsBell() {
                 className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
               />
             )}
+            {/*
+              `s5-parity-gaps` gap 3. `unknown` used to fall through to the
+              bare bell, which is a positive claim that nothing is waiting -
+              made by a UI that does not know. On the modern free tier the
+              cloud summary is unavailable, so that false-clear is the STEADY
+              STATE rather than a connecting blip.
+
+              Deliberately a HOLLOW dot, not a filled one: filled is
+              `quietDot`'s vocabulary and means "there is unread activity",
+              which would be the opposite lie. An outline says "there may be
+              something here and we cannot see it", and the trigger tooltip
+              above carries the reason so the state is not a bare gray
+              dot with no path forward - the objection that kept it hidden.
+            */}
+            {bellState.kind === "unknown" && (
+              <span
+                data-testid="notifications-unknown-indicator"
+                aria-hidden
+                className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-muted-foreground/70 bg-background ring-2 ring-background"
+              />
+            )}
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
       <PopoverContent
+        layout="bare"
         align="end"
-        className="w-auto overflow-hidden p-0"
+        className="w-auto overflow-hidden"
         onOpenAutoFocus={lifecycle.onContentOpenAutoFocus}
         onEscapeKeyDown={lifecycle.onContentEscapeKeyDown}
         onCloseAutoFocus={lifecycle.onContentCloseAutoFocus}

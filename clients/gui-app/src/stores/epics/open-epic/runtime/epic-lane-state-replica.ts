@@ -60,7 +60,10 @@
  * replacement instead of racing two.
  */
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
-import type { EpicMeta } from "@traycer/protocol/host/epic/state-subscribe";
+import type {
+  EpicDeletedArtifactRecord,
+  EpicMeta,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicStateLaneEvent,
@@ -305,6 +308,30 @@ function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
 }
 
 /**
+ * The tombstone arm, lifted out of `buildLaneSlices` so the ticket-status
+ * narrowing does not count against that function's complexity budget.
+ *
+ * `?? null` because the tombstone's `status` is NULLISH on the wire: the
+ * metadata-only schema made the ticket slots optional so slim tombstones
+ * written before it stay valid, so a ticket row can arrive with the key absent
+ * rather than merely null.
+ */
+function projectTombstone(
+  record: EpicDeletedArtifactRecord,
+): DeletedArtifactProjection {
+  return {
+    id: record.id,
+    kind: record.kind,
+    title: record.title,
+    deletedAt: record.deletedAt,
+    status:
+      record.kind === "ticket" || record.kind === "story"
+        ? (record.status ?? null)
+        : null,
+  };
+}
+
+/**
  * Demultiplex the one keyed set into the five populations.
  *
  * The `@1` head's own field-for-field mapping, applied to typed rows instead of
@@ -359,16 +386,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       }
       case "artifact-tombstone": {
         const record = row.record;
-        deletedById[record.id] = {
-          id: record.id,
-          kind: record.kind,
-          title: record.title,
-          deletedAt: record.deletedAt,
-          status:
-            record.kind === "ticket" || record.kind === "story"
-              ? record.status
-              : null,
-        };
+        deletedById[record.id] = projectTombstone(record);
         deletedIds.push(record.id);
         break;
       }
@@ -471,6 +489,20 @@ export function createEpicLaneStateReplica(
           candidate.revision > held.revision,
         supersedesOnUpsert: (candidate, held) =>
           candidate.revision > held.revision,
+        /**
+         * No recency patch can reach this plane, and its rows have nowhere to
+         * put one if it did.
+         *
+         * Patches are the `unchanged` arm of a revision-gated LIST READ
+         * (`epic.listChatRecords@1.3` and its terminal twin); this head is fed
+         * by `epic.state.subscribe`'s typed rows, which have no such arm. And
+         * `HeldLaneRow` carries no recency pair: the timestamp a lane row has
+         * lives inside `row.record` and belongs to the artifact, thread or
+         * epic header it describes, not to the row - so writing a patch here
+         * would need a record kind to aim at that the patch does not name.
+         * See `RecordTablePlane.recency`.
+         */
+        recency: null,
         buildSlice: (visibleRows) => buildLaneSlices(visibleRows),
         slicesEq: laneSlicesEq,
         emptySlice: EMPTY_LANE_STATE_SLICES,
@@ -533,7 +565,12 @@ export function createEpicLaneStateReplica(
     }
     const held = heldRowFor(change.row);
     if (held === null) return false;
-    return table.applyUpsert(held) !== null;
+    // `"complete"`: the lane carries whole rows from the authority, so there
+    // is no field this path leaves unstated for a later list read to fill.
+    // The incomplete counter is about the record STREAM's two seeded gaps
+    // (an unknown chat home, an unstated session facet) - see
+    // `UpsertCompleteness`.
+    return table.applyUpsert(held, "complete") !== null;
   }
 
   function applyRecordSnapshot(

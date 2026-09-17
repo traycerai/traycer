@@ -43,6 +43,10 @@ import type { Mock } from "vitest";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { closeTab } from "@/stores/epics/canvas/actions";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
+import {
+  recordClosedCanvas,
+  useTabRecoveryHistory,
+} from "@/lib/tab-recovery/history";
 
 interface TestTreeNode {
   readonly id: string;
@@ -607,36 +611,62 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRootIds: () => testState.tree.rootIds,
 }));
 
+function fakeEpicStoreState() {
+  const chatRecords = testState.records.filter(
+    (record) => record.type === "chat",
+  );
+  const tuiAgentRecords = testState.records.filter(
+    (record) => record.type === "terminal-agent",
+  );
+  return {
+    snapshotLoaded: true,
+    // The tree index, because the row-level tree reads subscribe HERE now
+    // rather than through `useEpicTreeIndex`. A row that used to take the
+    // whole slice re-rendered on every record change; it now selects its own
+    // answer out of the store, so this fake has to carry what production
+    // reads. Same object the `epic-selectors` fake hands back, so the two
+    // mocks cannot disagree about the shape of the tree.
+    tree: testState.tree,
+    artifacts: {
+      allIds: testState.records
+        .filter((record) => record.type !== "chat")
+        .filter((record) => record.type !== "terminal-agent")
+        .map((record) => record.id),
+      byId: Object.fromEntries(
+        testState.records.map((record) => [
+          record.id,
+          {
+            id: record.id,
+            kind: record.type,
+            status: record.status,
+            title: record.name,
+            updatedAt: 1,
+          },
+        ]),
+      ),
+    },
+    // Fed to `useEpicNodeHostIds`/`useSurfaceHostPin` (`useMaybeEpicStore`),
+    // built from the same `testState.records` the tree/artifacts above read.
+    chats: {
+      allIds: chatRecords.map((record) => record.id),
+      byId: Object.fromEntries(
+        chatRecords.map((record) => [record.id, { hostId: record.hostId }]),
+      ),
+    },
+    tuiAgents: {
+      allIds: tuiAgentRecords.map((record) => record.id),
+      byId: Object.fromEntries(
+        tuiAgentRecords.map((record) => [record.id, { hostId: record.hostId }]),
+      ),
+    },
+  };
+}
+
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      snapshotLoaded: true,
-      // The tree index, because the row-level tree reads subscribe HERE now
-      // rather than through `useEpicTreeIndex`. A row that used to take the
-      // whole slice re-rendered on every record change; it now selects its own
-      // answer out of the store, so this fake has to carry what production
-      // reads. Same object the `epic-selectors` fake hands back, so the two
-      // mocks cannot disagree about the shape of the tree.
-      tree: testState.tree,
-      artifacts: {
-        allIds: testState.records
-          .filter((record) => record.type !== "chat")
-          .filter((record) => record.type !== "terminal-agent")
-          .map((record) => record.id),
-        byId: Object.fromEntries(
-          testState.records.map((record) => [
-            record.id,
-            {
-              id: record.id,
-              kind: record.type,
-              status: record.status,
-              title: record.name,
-              updatedAt: 1,
-            },
-          ]),
-        ),
-      },
-    }),
+    selector(fakeEpicStoreState()),
+  useMaybeEpicStore: (selector: (state: unknown) => unknown) =>
+    selector(fakeEpicStoreState()),
 }));
 
 const seedEpicArtifacts = vi.hoisted(() => vi.fn());
@@ -709,6 +739,12 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
     testState.deleteArtifactMutateAsync.mockResolvedValue({});
     testState.deleteChatMutateAsync.mockResolvedValue({});
     testState.deleteTuiAgentMutateAsync.mockResolvedValue({});
+    testState.prepareCloseCanvasTabFocusTarget.mockReset();
+    testState.prepareCloseCanvasTabFocusTarget.mockReturnValue({
+      paneId: "fallback-pane",
+      tileInstanceId: "fallback-instance",
+    });
+    useTabRecoveryHistory.setState({ entries: [], ready: true });
   });
 
   afterEach(() => {
@@ -725,6 +761,7 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
     testState.openArtifactByKey.clear();
     testState.canvasByTabId = {};
     testState.createdArtifactId = "new-spec-1";
+    useTabRecoveryHistory.setState({ entries: [], ready: true });
   });
 
   it("routes root-create-then-open through navigateNested + prepareOpenTileInTabFocusTargetFromSource", () => {
@@ -793,6 +830,44 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       "pane-1",
       "instance-1",
     );
+  });
+
+  it("suppresses canvas recovery recording after confirmed artifact deletion", async () => {
+    seedSingleArtifact();
+    testState.openArtifactByKey.set(`${TAB_ID}:spec-root`, {
+      paneId: "pane-1",
+      instanceId: "instance-1",
+    });
+    testState.canvasByTabId[TAB_ID] = buildCanvasWithTiles(
+      [{ instanceId: "instance-1", contentId: "spec-root", name: "Root" }],
+      "instance-1",
+    );
+    testState.prepareCloseCanvasTabFocusTarget.mockImplementation(() => {
+      const before = testState.canvasByTabId[TAB_ID];
+      if (before === undefined) throw new Error("expected open canvas");
+      const after = closeTab(before, "pane-1", "instance-1");
+      recordClosedCanvas(
+        { tabId: TAB_ID, epicId: EPIC_ID, name: "Test epic" },
+        before,
+        after,
+        false,
+      );
+      return { paneId: "pane-1", tileInstanceId: "instance-1" };
+    });
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-more-spec-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-spec-root"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteArtifactMutate).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        artifactId: "spec-root",
+      });
+    });
+    expect(testState.prepareCloseCanvasTabFocusTarget).toHaveBeenCalledTimes(1);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
   });
 
   it("batches bulk delete of 3 open tabs (including the active one) into one navigateNested call that focuses the surviving tile", async () => {

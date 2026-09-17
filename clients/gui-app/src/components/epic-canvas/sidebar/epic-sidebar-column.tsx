@@ -1,3 +1,4 @@
+import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 /**
  * Per-pane Epic sidebar. It is mounted beneath the same `EpicSessionProvider`
  * as its canvas, so split Epics retain independent sidebar/session ownership.
@@ -96,6 +97,7 @@ function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {
         )}
         style={{ width: sidebarWidthPx }}
       >
+        {mainCollapsed ? null : <SidebarArtwork />}
         <SidebarProvider defaultOpen className="h-full min-h-0 w-full flex-col">
           {mainCollapsed ? null : (
             <ColumnRail

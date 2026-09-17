@@ -1,18 +1,25 @@
 export * from "./agent";
+export * from "./agent-session-state";
 export * from "./asset-stream-schemas";
 export * from "./browser";
+export * from "./chat-fallback";
 export * from "./chat-fork";
+export * from "./chat-search";
 export * from "./comments";
 export * from "./config";
 export * from "./diagnostics";
+export * from "./drafts";
 export * from "./editor";
 export * from "./epic";
+export * from "./fallback-policy";
 export * from "./git-asset-stream";
+export * from "./host-agent-capabilities";
 export * from "./git-contracts";
 export * from "./git-constants";
 export * from "./git-schemas";
 export * from "./identity";
 export * from "./lifecycle";
+export * from "./local-store";
 export * from "./maintenance";
 export * from "./managed-command";
 export * from "./migration";
@@ -33,6 +40,7 @@ export * from "./terminal";
 export * from "./usage-analytics";
 export * from "./version-order";
 export * from "./workspace";
+export * from "./worktree-auto-cleanup-schemas";
 export * from "./worktree-changed-stream";
 export * from "./providers-changed-stream";
 
@@ -52,6 +60,8 @@ export {
   worktreeDeleteUpgradeV10ToV11,
   worktreeDeleteUpgradeV11ToV12,
   worktreeListHoldersV10,
+  worktreeListHoldersV11,
+  worktreeListHoldersUpgradeV10ToV11,
   worktreeListAllForHostV10,
   worktreeListAllForHostV12,
   worktreeListAllForHostV11,
@@ -59,19 +69,27 @@ export {
   worktreeListAllForHostV14,
   worktreeListAllForHostV15,
   worktreeListAllForHostV16,
+  worktreeListAllForHostV17,
+  worktreeGetAutoCleanupPolicyV10,
+  worktreeSetAutoCleanupPolicyV10,
+  worktreeListAutoCleanupRunsV10,
+  worktreeGetAutoCleanupRunV10,
   worktreeListAllForHostUpgradeV10ToV11,
   worktreeListAllForHostUpgradeV11ToV12,
   worktreeListAllForHostUpgradeV12ToV13,
   worktreeListAllForHostUpgradeV13ToV14,
   worktreeListAllForHostUpgradeV14ToV15,
   worktreeListAllForHostUpgradeV15ToV16,
+  worktreeListAllForHostUpgradeV16ToV17,
   worktreeImportV10,
   worktreeListBranchesV10,
   worktreeListBindingsForEpicV10,
   worktreeListBindingsForEpicV11,
   worktreeListBindingsForEpicV12,
+  worktreeListBindingsForEpicV13,
   worktreeListBindingsForEpicUpgradeV10ToV11,
   worktreeListBindingsForEpicUpgradeV11ToV12,
+  worktreeListBindingsForEpicUpgradeV12ToV13,
   worktreeListByWorkspacePathsV10,
   worktreeListByWorkspacePathsV11,
   worktreeListByWorkspacePathsV12,
@@ -102,6 +120,7 @@ export {
   workspaceScriptsSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeHoldersChangedErrorDetailsSchema,
+  worktreeBusyChatTierSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
   worktreeBusyHolderSchema,
@@ -128,6 +147,8 @@ export {
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
+  worktreeListHoldersRequestSchemaV11,
+  worktreeListHoldersResponseSchemaV11,
   worktreeHostEntrySchema,
   worktreeHostEntryOwnerSchema,
   worktreeBranchStatusSchema,
@@ -154,6 +175,8 @@ export {
   worktreeListAllForHostResponseSchemaV15,
   worktreeListAllForHostRequestSchemaV16,
   worktreeListAllForHostResponseSchemaV16,
+  worktreeListAllForHostRequestSchemaV17,
+  worktreeListAllForHostResponseSchemaV17,
   worktreeImportEntrySchema,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
@@ -162,6 +185,7 @@ export {
   worktreeListBranchesRequestSchema,
   worktreeListBranchesResponseSchema,
   worktreeListBindingsForEpicRequestSchema,
+  worktreeListBindingsForEpicRequestSchemaV13,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
@@ -206,6 +230,7 @@ export {
   type WorkspaceScripts,
   type WorktreeBusyErrorDetails,
   type WorktreeHoldersChangedErrorDetails,
+  type WorktreeBusyChatTier,
   type WorktreeBusyHoldKind,
   type WorktreeBusyHolder,
   type WorktreeBusyHolderActivity,
@@ -229,6 +254,8 @@ export {
   type WorktreeDeleteResponse,
   type WorktreeListHoldersRequest,
   type WorktreeListHoldersResponse,
+  type WorktreeListHoldersRequestV11,
+  type WorktreeListHoldersResponseV11,
   type WorktreeHostEntry,
   type WorktreeHostEntryOwner,
   type WorktreeBranchStatus,
@@ -255,6 +282,8 @@ export {
   type WorktreeListAllForHostResponseV15,
   type WorktreeListAllForHostRequestV16,
   type WorktreeListAllForHostResponseV16,
+  type WorktreeListAllForHostRequestV17,
+  type WorktreeListAllForHostResponseV17,
   type WorktreeImportEntry,
   type WorktreeImportRequest,
   type WorktreeImportResponse,
@@ -264,6 +293,7 @@ export {
   type WorktreeListBranchesRequest,
   type WorktreeListBranchesResponse,
   type WorktreeListBindingsForEpicRequest,
+  type WorktreeListBindingsForEpicRequestV13,
   type WorktreeListBindingsForEpicResponse,
   type WorktreeListBindingsForEpicResponseV11,
   type WorktreeListBindingsForEpicResponseV12,

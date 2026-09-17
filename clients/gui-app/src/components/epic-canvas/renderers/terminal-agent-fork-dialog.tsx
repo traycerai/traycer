@@ -276,7 +276,13 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     null,
     fallbackSeedSource(settingsSeed, hostClient),
     null,
-    { hostClient, hostId, tuiOnly: true },
+    {
+      hostClient,
+      hostId,
+      tuiOnly: true,
+      // Terminal agents have no `chat.subscribe` stream at all.
+      chatLineCarriesAutoMode: null,
+    },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);
@@ -670,7 +676,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="max-h-[92vh] w-[min(94vw,48rem)] gap-3 sm:max-w-[min(94vw,48rem)]"
+        className="max-h-[92vh] w-[min(94vw,48rem)] sm:max-w-[min(94vw,48rem)]"
         // Same portal rule as the worktree pickers: the host switcher's list
         // mounts outside this dialog, so a click in it reads as an interaction
         // from outside. Dismissing on that would throw away the form someone is
@@ -766,6 +772,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                     key={terminalForkModelPickerKey(target)}
                     store={toolbarStore}
                     withServiceTier={false}
+                    withReasoning
                     tuiOnly
                     lockedHarnessId={target?.sourceAgent.harnessId ?? null}
                     disabled={busy}
@@ -808,7 +815,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                   }}
                   disabled={busy}
                   aria-label="Terminal interface CLI arguments"
-                  className="font-mono text-ui-xs"
+                  font="mono"
+                  size="xs"
                 />
               </label>
             </div>
@@ -837,7 +845,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             </div>
           ) : null}
         </div>
-        <DialogFooter className="py-3">
+        <DialogFooter>
           <Button
             type="button"
             variant="outline"
@@ -855,7 +863,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
           >
             {busy ? (
               <AgentSpinningDots
-                className="text-current"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
               />

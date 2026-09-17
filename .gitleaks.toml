@@ -50,6 +50,15 @@ paths = [
 regexes = ['''scrollStateKey: "[A-Za-z0-9_-]+"''']
 
 [[allowlists]]
+description = "Draft-scope cache keys in the auth-lifecycle cross-account handoff suite - kebab-case per-test bucket names (`r6f1-signout` and siblings) that the generic-api-key rule matches only because the field is literally named `scopeKey`, the same false positive as the chat-messages `scrollStateKey` entry above. UI state keys, never credentials. `fetch-depth: 0` makes every PR's scan read the in-flight branch that introduces the file (the draft-image upload work), so this cannot wait for that branch to land. Path-scoped to the one suite."
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^clients/gui-app/src/providers/__tests__/auth-lifecycle-bridge-r6f1-cross-account-handoff\.test\.tsx$''',
+]
+regexes = ['''scopeKey: "[A-Za-z0-9_-]+"''']
+
+[[allowlists]]
 description = "RFC 6455's public sample client nonce in the historic loopback handshake probe. Require both the exact nonce and its source path so unrelated findings remain reportable."
 condition = "AND"
 regexTarget = "secret"
@@ -85,3 +94,12 @@ paths = [
   '''^clients/desktop/src/electron-main/browser-sessions/__tests__/browser-sessions-owner\.test\.ts$''',
 ]
 regexes = ['''^(?:d3JhcHBlZEtleQ==|cmF3S2V5)$''']
+
+[[allowlists]]
+description = "Chat-registry scope keys in the auth-lifecycle cross-account handoff suite: kebab-case test identifiers (e.g. `r6f1-signout`) passed as `scopeKey` to `chatRegistry.acquire`, which the generic-api-key rule matches only because the field is literally named `scopeKey`. UI state keys, never credentials - the same shape as the chat-messages `scrollStateKey` entry above. Fourth instance of the `fetch-depth: 0` pattern: the fixture lives on the in-flight branch `fix/draft-image-hash-rewrite`, so every open PR's scan fails on it until this lands and it cannot wait for that branch to merge. Scoped to the one source path and the `scopeKey: \"...\"` field shape so unrelated findings stay reportable."
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^clients/gui-app/src/providers/__tests__/auth-lifecycle-bridge-r6f1-cross-account-handoff\.test\.tsx$''',
+]
+regexes = ['''scopeKey: "[A-Za-z0-9_-]+"''']

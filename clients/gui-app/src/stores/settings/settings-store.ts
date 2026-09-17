@@ -22,6 +22,10 @@ import {
 } from "@/lib/artifacts/node-display";
 import { DEFAULT_THEME_PRESET, type ThemePreset } from "@/lib/theme-presets";
 import {
+  OFFICE_VIEW_IDS,
+  type OfficeViewChoice,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
+import {
   DEFAULT_DIFF_VIEWER_PREFERENCES,
   type DiffViewerPreferences,
   type DiffViewerPreferencesPatch,
@@ -36,6 +40,12 @@ import {
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
+import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
+import {
+  CONTEXT_USAGE_ROW_KEYS,
+  isContextUsageRowKey,
+  type ContextUsageRowKey,
+} from "@/components/chat/context-usage";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
@@ -57,6 +67,14 @@ export interface TilePlacementSettings {
   content: TilePlacement;
   conversation: TilePlacement;
   browser: BrowserTilePlacement;
+  /**
+   * A `/btw` side chat, which is always placed relative to the chat it was
+   * asked from: `split` opens it to that pane's right, `tab` as a tab of that
+   * pane. Its own row rather than `conversation` because the aside is read
+   * BESIDE its conversation - a user who tabs every new agent still wants
+   * the aside next to the chat it is about.
+   */
+  sideChat: TilePlacement;
 }
 /**
  * Whether a tab the AGENT opens via its browser REPL (`openTab`) reaches the
@@ -80,6 +98,7 @@ export const DEFAULT_TILE_PLACEMENT_SETTINGS: TilePlacementSettings = {
   content: "tab",
   conversation: "tab",
   browser: "split",
+  sideChat: "split",
 };
 const DEFAULT_AGENT_TAB_SURFACING: AgentTabSurfacing = "off";
 export type MinimapSide = "left" | "right";
@@ -91,6 +110,12 @@ export type TerminalCursorStyle = "block" | "bar" | "underline";
 export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
 export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
 export const DEFAULT_MINIMAP_SIDE: MinimapPlacement = "right";
+
+/**
+ * Auto, so a first-ever office opens on the view that actually fits the tile
+ * it is in rather than on whichever one this build happens to list first.
+ */
+export const DEFAULT_AGENT_OFFICE_VIEW: OfficeViewChoice = "auto";
 
 // Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
 // which never blinks). Bar/underline mirror the chosen shape so the cursor
@@ -107,6 +132,23 @@ export function inactiveCursorStyleFor(
   return style === "block" ? "outline" : style;
 }
 
+/**
+ * The readings a task navigator / sidebar row can print inline. Ordered as the
+ * chip prints them; the stored list is always a subsequence of this one.
+ */
+export type NavigatorResourceMetric = "cpu" | "memory" | "processes";
+export const NAVIGATOR_RESOURCE_METRICS: ReadonlyArray<NavigatorResourceMetric> =
+  ["cpu", "memory", "processes"];
+/** Chips are opt-in: a fresh install draws none until a reading is picked. */
+export const DEFAULT_NAVIGATOR_RESOURCE_METRICS: ReadonlyArray<NavigatorResourceMetric> =
+  [];
+
+export function isNavigatorResourceMetric(
+  value: unknown,
+): value is NavigatorResourceMetric {
+  return value === "cpu" || value === "memory" || value === "processes";
+}
+
 // Default font sizes, shared with the Appearance panel so its reset-to-default
 // affordance and the store's initial state stay a single source of truth.
 export const DEFAULT_UI_FONT_SIZE = 15;
@@ -117,7 +159,78 @@ export const DEFAULT_CODE_FONT_SIZE = 12;
 // source of truth.
 export const DEFAULT_WORKTREE_BRANCH_PREFIX = "traycer/";
 
+export const START_PAGE_WALLPAPER_STYLES = [
+  "photo",
+  "dither",
+  "grain",
+] as const;
+export type StartPageWallpaperStyle =
+  (typeof START_PAGE_WALLPAPER_STYLES)[number];
+export const DEFAULT_START_PAGE_WALLPAPER_INTENSITY = 0.6;
+
+/**
+ * The personal start-page wallpaper's SETTINGS. `null` means no wallpaper. The
+ * image bytes live in the appearance blob store
+ * (`lib/appearance/start-page-wallpaper.ts`), never here.
+ */
+export interface StartPageWallpaper {
+  readonly style: StartPageWallpaperStyle;
+  /** 0..1. Applies to `dither` and `grain` only. */
+  readonly intensity: number;
+  /**
+   * `dither` only: paint the tones from the accent ramp. Off dithers each RGB
+   * channel on its own, so the image keeps its own colours.
+   */
+  readonly tintWithAccent: boolean;
+  /**
+   * The chosen file's name, or `null` when none is stored. Lives here rather
+   * than beside the bytes (the appearance blob store) so metadata is all in
+   * one place; `lib/appearance/start-page-wallpaper.ts` writes this row and
+   * the blob together from a single entry point per user action, which is
+   * what makes it safe to keep here without risking a name left over for an
+   * image that is gone.
+   */
+  readonly name: string | null;
+  /**
+   * The curated catalog id this image came from, or `null` for a file the
+   * user chose themselves. Only the gallery reads it - to ring the tile the
+   * stored image came from - so an id whose entry has since left the manifest
+   * simply rings nothing, and `name` keeps showing the title it was applied
+   * under.
+   */
+  readonly curatedId: string | null;
+}
+/**
+ * One field of the pinned context breakdown - the same keys the breakdown
+ * rows carry, so the picker can only ever name a row the strip knows how to
+ * draw.
+ */
+export type ContextBreakdownField = ContextUsageRowKey;
+export const DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS: ReadonlyArray<ContextBreakdownField> =
+  CONTEXT_USAGE_ROW_KEYS;
+
+/**
+ * How the unpinned context chip draws the remaining percentage: the sentence
+ * (`75% context left`), a circular gauge with the number inside, or the gauge
+ * on its own with the number left to the label.
+ */
+export type ContextIndicatorStyle = "text" | "ring" | "ring-only";
+export const DEFAULT_CONTEXT_INDICATOR_STYLE: ContextIndicatorStyle = "text";
+
+/**
+ * The pin is off until asked for. A constant rather than a literal in the
+ * initial state, so Layout's Default preset can BE the default rather than a
+ * copy of it (`lib/layout-presets.ts`).
+ */
+export const DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN = false;
+
 export interface SettingsState {
+  startPageWallpaper: StartPageWallpaper | null;
+  showGreeting: boolean;
+  showRecentHistory: boolean;
+  setStartPageWallpaper: (wallpaper: StartPageWallpaper | null) => void;
+  setShowGreeting: (visible: boolean) => void;
+  setShowRecentHistory: (visible: boolean) => void;
   theme: ThemeMode;
   themePreset: ThemePreset;
   defaultSelection: HarnessModelSelection;
@@ -132,8 +245,11 @@ export interface SettingsState {
   preventSleepWhileRunning: boolean;
   /** Show the app-global resource monitor button in the header. */
   showGlobalResourceMonitor: boolean;
-  /** Show inline resource usage chips in task navigator/sidebar rows. */
-  showNavigatorResourceStats: boolean;
+  /**
+   * Which readings the inline resource chip in task navigator/sidebar rows
+   * prints, in chip order. An empty list draws no chip at all.
+   */
+  navigatorResourceMetrics: ReadonlyArray<NavigatorResourceMetric>;
   /**
    * Keep the chat context-window breakdown pinned near the composer instead of
    * the compact-only chip. Global preference, default off; chats without
@@ -142,6 +258,24 @@ export interface SettingsState {
   pinContextUsageBreakdown: boolean;
   /** Shared edge used by chat and artifact minimaps, or `hide` for both. */
   chatTurnMinimapSide: MinimapPlacement;
+  /**
+   * Which office view an epic's agent office opens on when nobody has picked
+   * one for that tile.
+   *
+   * A DEFAULT, not a setting the tiles follow: a tile that has been given a
+   * view of its own keeps it, so changing this moves only the tiles nobody has
+   * touched. `"auto"` measures the tile and picks by what fits.
+   */
+  agentOfficeDefaultView: OfficeViewChoice;
+  /**
+   * A monotonic counter bumped every time {@link agentOfficeDefaultView}
+   * changes value. A following comm-graph tile records the generation its Auto
+   * outcome was measured under, so a tile that was CLOSED while the default left
+   * Auto and returned can tell a stale outcome from a still-current one on the
+   * next mount - which a mounted-only witness cannot. Persisted, so a quiet
+   * restart matches and does not force a re-measure.
+   */
+  agentOfficeDefaultViewGeneration: number;
   pointerCursors: boolean;
   uiFontSize: number;
   codeFontSize: number;
@@ -228,14 +362,57 @@ export interface SettingsState {
   workspaceFileWordWrap: boolean | null;
   /** App-wide audible cues selected for each notification event type. */
   notificationChimeSounds: NotificationChimeSoundsByEvent;
+  /**
+   * The fixed Home tab and its focus view. Opt-in while the view is still
+   * filling out: with this off the strip, the routes, the chord and the mobile
+   * drawer behave exactly as they did before Home existed.
+   */
+  homeTabEnabled: boolean;
+  /**
+   * Which breakdown rows the pinned context strip draws, in the strip's own
+   * order. Never empty: the strip with no fields is what unpinning is for, so
+   * the toggle refuses to remove the last one. Only read while
+   * `pinContextUsageBreakdown` is on.
+   */
+  pinnedContextBreakdownFields: ReadonlyArray<ContextBreakdownField>;
+  /** Shape of the unpinned context chip. */
+  contextIndicatorStyle: ContextIndicatorStyle;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
+  /**
+   * The permission mode a NEW conversation starts under when nothing more
+   * specific applies.
+   *
+   * Deliberately NOT the only input to a new chat: a composer prefers the last
+   * mode that host ran with (`composer-run-settings-store`, bucketed per host),
+   * so this is the install's default - what a fresh host, or a fresh window with
+   * no history, opens on. Session import reads the same ladder
+   * (`newChatPermissionModeFor`) so an imported chat is no stricter and no
+   * looser than one the user creates.
+   *
+   * Unclamped on write: this value is harness-agnostic, and the clamp against a
+   * given harness's `supportedPermissionModes` belongs to the surface that
+   * resolves one (`normalizePermissionMode`). Clamping here would let whichever
+   * provider happened to be selected narrow an install-wide preference.
+   */
+  setDefaultPermission: (mode: PermissionMode) => void;
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setShowGlobalResourceMonitor: (value: boolean) => void;
-  setShowNavigatorResourceStats: (value: boolean) => void;
+  /** Adds or removes one reading; the list keeps chip order either way. */
+  toggleNavigatorResourceMetric: (metric: NavigatorResourceMetric) => void;
+  /**
+   * The whole list at once, for a caller holding a complete answer rather than
+   * one chip's - Layout's presets and its reset. Normalized to chip order like
+   * the toggle, so the two writers cannot leave the list in two different
+   * shapes.
+   */
+  setNavigatorResourceMetrics: (
+    metrics: ReadonlyArray<NavigatorResourceMetric>,
+  ) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
   setMinimapSide: (value: MinimapPlacement) => void;
+  setAgentOfficeDefaultView: (value: OfficeViewChoice) => void;
   setPointerCursors: (value: boolean) => void;
   setUiFontSize: (value: number) => void;
   setCodeFontSize: (value: number) => void;
@@ -266,10 +443,25 @@ export interface SettingsState {
     eventType: NotificationChimeEventType,
     value: NotificationChimeSound,
   ) => void;
+  setHomeTabEnabled: (value: boolean) => void;
+  togglePinnedContextBreakdownField: (field: ContextBreakdownField) => void;
+  /**
+   * The whole field list at once, same caller as
+   * `setNavigatorResourceMetrics`. Keeps both of the toggle's guarantees - the
+   * strip's own order, and never empty - so a preset cannot write a shape the
+   * row below it could not produce.
+   */
+  setPinnedContextBreakdownFields: (
+    fields: ReadonlyArray<ContextBreakdownField>,
+  ) => void;
+  setContextIndicatorStyle: (style: ContextIndicatorStyle) => void;
 }
 
 type PersistedSettingsState = Pick<
   SettingsState,
+  | "startPageWallpaper"
+  | "showGreeting"
+  | "showRecentHistory"
   | "theme"
   | "themePreset"
   | "defaultSelection"
@@ -279,9 +471,11 @@ type PersistedSettingsState = Pick<
   | "composerMode"
   | "preventSleepWhileRunning"
   | "showGlobalResourceMonitor"
-  | "showNavigatorResourceStats"
+  | "navigatorResourceMetrics"
   | "pinContextUsageBreakdown"
   | "chatTurnMinimapSide"
+  | "agentOfficeDefaultView"
+  | "agentOfficeDefaultViewGeneration"
   | "pointerCursors"
   | "uiFontSize"
   | "codeFontSize"
@@ -306,6 +500,9 @@ type PersistedSettingsState = Pick<
   | "diffViewerPreferences"
   | "workspaceFileWordWrap"
   | "notificationChimeSounds"
+  | "homeTabEnabled"
+  | "pinnedContextBreakdownFields"
+  | "contextIndicatorStyle"
 >;
 
 type SetFn = (
@@ -344,6 +541,9 @@ function clampCodeFontSize(value: number): number {
 
 function partializeSettingsState(state: SettingsState): PersistedSettingsState {
   return {
+    startPageWallpaper: state.startPageWallpaper,
+    showGreeting: state.showGreeting,
+    showRecentHistory: state.showRecentHistory,
     theme: state.theme,
     themePreset: state.themePreset,
     defaultSelection: state.defaultSelection,
@@ -353,9 +553,11 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     composerMode: state.composerMode,
     preventSleepWhileRunning: state.preventSleepWhileRunning,
     showGlobalResourceMonitor: state.showGlobalResourceMonitor,
-    showNavigatorResourceStats: state.showNavigatorResourceStats,
+    navigatorResourceMetrics: state.navigatorResourceMetrics,
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
     chatTurnMinimapSide: state.chatTurnMinimapSide,
+    agentOfficeDefaultView: state.agentOfficeDefaultView,
+    agentOfficeDefaultViewGeneration: state.agentOfficeDefaultViewGeneration,
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
     codeFontSize: state.codeFontSize,
@@ -380,12 +582,21 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     diffViewerPreferences: state.diffViewerPreferences,
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     notificationChimeSounds: state.notificationChimeSounds,
+    homeTabEnabled: state.homeTabEnabled,
+    pinnedContextBreakdownFields: state.pinnedContextBreakdownFields,
+    contextIndicatorStyle: state.contextIndicatorStyle,
   };
 }
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
+      startPageWallpaper: null,
+      showGreeting: true,
+      showRecentHistory: true,
+      setStartPageWallpaper: makeSetter(set, "startPageWallpaper"),
+      setShowGreeting: makeSetter(set, "showGreeting"),
+      setShowRecentHistory: makeSetter(set, "showRecentHistory"),
       theme: "system",
       themePreset: DEFAULT_THEME_PRESET,
       defaultSelection: DEFAULT_SELECTION,
@@ -395,9 +606,11 @@ export const useSettingsStore = create<SettingsState>()(
       composerMode: DEFAULT_COMPOSER_MODE,
       preventSleepWhileRunning: false,
       showGlobalResourceMonitor: true,
-      showNavigatorResourceStats: false,
-      pinContextUsageBreakdown: false,
+      navigatorResourceMetrics: DEFAULT_NAVIGATOR_RESOURCE_METRICS,
+      pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
       chatTurnMinimapSide: DEFAULT_MINIMAP_SIDE,
+      agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
+      agentOfficeDefaultViewGeneration: 0,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
       codeFontSize: DEFAULT_CODE_FONT_SIZE,
@@ -422,23 +635,60 @@ export const useSettingsStore = create<SettingsState>()(
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       workspaceFileWordWrap: null,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+      homeTabEnabled: false,
+      pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+      contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
           set({ themePreset });
       },
+      setDefaultPermission: makeSetter(set, "defaultPermission"),
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setShowGlobalResourceMonitor: makeSetter(
         set,
         "showGlobalResourceMonitor",
       ),
-      setShowNavigatorResourceStats: makeSetter(
-        set,
-        "showNavigatorResourceStats",
-      ),
+      toggleNavigatorResourceMetric: (metric) => {
+        set((s) => {
+          const selected = new Set(s.navigatorResourceMetrics);
+          if (selected.has(metric)) {
+            selected.delete(metric);
+          } else {
+            selected.add(metric);
+          }
+          return {
+            navigatorResourceMetrics: NAVIGATOR_RESOURCE_METRICS.filter(
+              (candidate) => selected.has(candidate),
+            ),
+          };
+        });
+      },
+      setNavigatorResourceMetrics: (metrics) => {
+        const selected = new Set(metrics);
+        set({
+          navigatorResourceMetrics: NAVIGATOR_RESOURCE_METRICS.filter(
+            (candidate) => selected.has(candidate),
+          ),
+        });
+      },
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setMinimapSide: makeSetter(set, "chatTurnMinimapSide"),
+      // Not `makeSetter`: a real change also rolls the generation to a fresh
+      // collision-free stamp, so a tile closed across the change can tell a
+      // stale Auto outcome from a current one on remount - even against another
+      // window that changed the default at the same time.
+      setAgentOfficeDefaultView: (value) =>
+        set((s) =>
+          s.agentOfficeDefaultView === value
+            ? s
+            : {
+                agentOfficeDefaultView: value,
+                agentOfficeDefaultViewGeneration:
+                  nextAgentOfficeDefaultViewGeneration(),
+              },
+        ),
       setPointerCursors: makeSetter(set, "pointerCursors"),
       setUiFontSize: makeClampedFontSizeSetter(
         set,
@@ -538,6 +788,40 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
+      setHomeTabEnabled: makeSetter(set, "homeTabEnabled"),
+      togglePinnedContextBreakdownField: (field) => {
+        set((s) => {
+          const selected = new Set(s.pinnedContextBreakdownFields);
+          if (selected.has(field)) {
+            // The last field stays: an empty strip is what unpinning is for.
+            if (selected.size === 1) return s;
+            selected.delete(field);
+          } else {
+            selected.add(field);
+          }
+          // Re-inserted in canonical order rather than appended, so the strip
+          // reads the same whatever order the fields were switched on in.
+          return {
+            pinnedContextBreakdownFields: CONTEXT_USAGE_ROW_KEYS.filter(
+              (candidate) => selected.has(candidate),
+            ),
+          };
+        });
+      },
+      setPinnedContextBreakdownFields: (fields) => {
+        const selected = new Set(fields);
+        const next = CONTEXT_USAGE_ROW_KEYS.filter((candidate) =>
+          selected.has(candidate),
+        );
+        // An empty list is not a shape the strip has: unpinning is what hides
+        // it, so a caller that names no field gets the full set rather than a
+        // strip that draws its label and nothing else.
+        set({
+          pinnedContextBreakdownFields:
+            next.length === 0 ? DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS : next,
+        });
+      },
+      setContextIndicatorStyle: makeSetter(set, "contextIndicatorStyle"),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -555,8 +839,12 @@ export const useSettingsStore = create<SettingsState>()(
       // could never be reached again. `linkOpen`, `tilePlacement` and
       // `agentTabSurfacing` are resolved from the persisted record rather than
       // from `merged` because this is also where the one-shot migration off
-      // their pre-refactor keys runs. Every other field keeps the default
-      // shallow merge behavior.
+      // their pre-refactor keys runs. `agentOfficeDefaultView` is re-derived
+      // because its vocabulary is a REGISTRY: a blob written by a build that
+      // ships more office views than this one names a view nothing here can
+      // plan, and it has to come back as Auto - which always has an answer -
+      // rather than as that name. Every other field keeps the default shallow
+      // merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -565,6 +853,17 @@ export const useSettingsStore = create<SettingsState>()(
         const merged: SettingsState = { ...currentState, ...persisted };
         return {
           ...merged,
+          startPageWallpaper: parseStartPageWallpaper(
+            persisted.startPageWallpaper,
+          ),
+          showGreeting:
+            typeof persisted.showGreeting === "boolean"
+              ? persisted.showGreeting
+              : true,
+          showRecentHistory:
+            typeof persisted.showRecentHistory === "boolean"
+              ? persisted.showRecentHistory
+              : true,
           worktreeBranchPrefix:
             typeof merged.worktreeBranchPrefix === "string" &&
             worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
@@ -576,6 +875,13 @@ export const useSettingsStore = create<SettingsState>()(
             persistedMinimapSide === "hide"
               ? persistedMinimapSide
               : DEFAULT_MINIMAP_SIDE,
+          agentOfficeDefaultView: resolvePersistedAgentOfficeView(
+            persisted.agentOfficeDefaultView,
+          ),
+          agentOfficeDefaultViewGeneration:
+            resolvePersistedAgentOfficeGeneration(
+              persisted.agentOfficeDefaultViewGeneration,
+            ),
           agentTabSurfacing: resolvePersistedAgentTabSurfacing(persisted),
           linkOpen: resolvePersistedLinkOpen(persisted),
           tilePlacement: resolvePersistedTilePlacement(persisted),
@@ -592,14 +898,70 @@ export const useSettingsStore = create<SettingsState>()(
             persisted.notificationChimeSounds,
             persisted.notificationChimeSound,
           ),
+          navigatorResourceMetrics: resolvePersistedNavigatorResourceMetrics(
+            persisted.navigatorResourceMetrics,
+            persisted.showNavigatorResourceStats,
+          ),
+          // Narrowed rather than merged verbatim, for the same reason
+          // `workspaceFileWordWrap` is: this flag gates a tab kind, a route
+          // guard and a chord, so a truthy non-boolean rehydrating as-is would
+          // switch Home on for a user who never asked for it.
+          homeTabEnabled:
+            typeof merged.homeTabEnabled === "boolean"
+              ? merged.homeTabEnabled
+              : false,
+          pinnedContextBreakdownFields:
+            resolvePersistedPinnedContextBreakdownFields(
+              persisted.pinnedContextBreakdownFields,
+            ),
+          contextIndicatorStyle: isContextIndicatorStyle(
+            persisted.contextIndicatorStyle,
+          )
+            ? persisted.contextIndicatorStyle
+            : DEFAULT_CONTEXT_INDICATOR_STYLE,
         };
       },
     },
   ),
 );
 
+/**
+ * Non-hook read of the Home-tab flag, for the framework-free seams that gate on
+ * it (route guards, the tab command coordinator, the navigation controller and
+ * the keybinding dispatcher). Components read `homeTabEnabled` reactively.
+ */
+export function isHomeTabEnabled(): boolean {
+  return useSettingsStore.getState().homeTabEnabled;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseStartPageWallpaper(value: unknown): StartPageWallpaper | null {
+  if (!isRecord(value)) return null;
+  const style = START_PAGE_WALLPAPER_STYLES.find(
+    (candidate) => candidate === value.style,
+  );
+  if (style === undefined) return null;
+  const intensity = value.intensity;
+  return {
+    style,
+    intensity:
+      typeof intensity === "number" &&
+      Number.isFinite(intensity) &&
+      intensity >= 0 &&
+      intensity <= 1
+        ? intensity
+        : DEFAULT_START_PAGE_WALLPAPER_INTENSITY,
+    tintWithAccent:
+      typeof value.tintWithAccent === "boolean" ? value.tintWithAccent : true,
+    // Untrusted input (a chosen file's name): cap its length the way theme
+    // names and other user-authored strings are capped elsewhere.
+    name: typeof value.name === "string" ? value.name.slice(0, 256) : null,
+    curatedId:
+      typeof value.curatedId === "string" ? value.curatedId.slice(0, 64) : null,
+  };
 }
 
 function resolvePersistedNotificationChimeSounds(
@@ -628,6 +990,31 @@ function resolvePersistedNotificationChimeSounds(
   }
 
   return resolved;
+}
+
+/**
+ * Rehydration for the sidebar resource chip's metric list, doubling as the
+ * one-shot migration off the retired `showNavigatorResourceStats` switch: a
+ * persisted `true` becomes every metric, `false` becomes none. The list wins
+ * whenever it is present, so a user who has since picked a subset keeps it
+ * even while the old key is still readable; `partialize` does not list the old
+ * key, so the next write drops it. Unknown ids are dropped and the survivors
+ * are put back in chip order, so a hand-edited record cannot draw a chip the
+ * settings row has no button for.
+ */
+function resolvePersistedNavigatorResourceMetrics(
+  value: unknown,
+  legacy: unknown,
+): ReadonlyArray<NavigatorResourceMetric> {
+  if (Array.isArray(value)) {
+    const entries: ReadonlyArray<unknown> = value;
+    const selected = new Set(entries.filter(isNavigatorResourceMetric));
+    return NAVIGATOR_RESOURCE_METRICS.filter((metric) => selected.has(metric));
+  }
+  if (typeof legacy === "boolean") {
+    return legacy ? [...NAVIGATOR_RESOURCE_METRICS] : [];
+  }
+  return DEFAULT_NAVIGATOR_RESOURCE_METRICS;
 }
 
 export function isLinkOpenMode(value: unknown): value is LinkOpenMode {
@@ -662,6 +1049,27 @@ export function isAgentTabSurfacing(
   return value === "off" || value === "surface";
 }
 
+export function isContextIndicatorStyle(
+  value: unknown,
+): value is ContextIndicatorStyle {
+  return value === "text" || value === "ring" || value === "ring-only";
+}
+
+/**
+ * Unknown ids are dropped (a row renamed or retired since the value was
+ * written), duplicates collapse, and the survivors take canonical order. A
+ * list left empty by that - or anything that is not a list - falls back to
+ * every field, since the strip is never drawn with none.
+ */
+function resolvePersistedPinnedContextBreakdownFields(
+  value: unknown,
+): ReadonlyArray<ContextBreakdownField> {
+  if (!Array.isArray(value)) return DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS;
+  const selected = new Set(value.filter(isContextUsageRowKey));
+  if (selected.size === 0) return DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS;
+  return CONTEXT_USAGE_ROW_KEYS.filter((candidate) => selected.has(candidate));
+}
+
 /** The configured mode for one link kind; the global default wins unless it
  * defers to the per-kind overrides. */
 export function linkOpenModeForKind(
@@ -671,14 +1079,27 @@ export function linkOpenModeForKind(
   return settings.default === "per-kind" ? settings[kind] : settings.default;
 }
 
+/** The setting row each placement category reads. Spelled out because the
+ * category words are the resolver's and the keys are the store's; a total
+ * record keeps the two in step when either side grows. */
+const TILE_PLACEMENT_KEY_BY_CATEGORY: Record<
+  TilePlacementCategory,
+  Exclude<keyof TilePlacementSettings, "default">
+> = {
+  content: "content",
+  conversation: "conversation",
+  browser: "browser",
+  "side-chat": "sideChat",
+};
+
 /** Same shape for tiles: the global default wins unless it defers per
  * category. Only `browser` can answer `pip`. */
 export function tilePlacementForCategory(
   settings: TilePlacementSettings,
-  category: "content" | "conversation" | "browser",
+  category: TilePlacementCategory,
 ): BrowserTilePlacement {
   return settings.default === "per-category"
-    ? settings[category]
+    ? settings[TILE_PLACEMENT_KEY_BY_CATEGORY[category]]
     : settings.default;
 }
 
@@ -756,7 +1177,51 @@ function resolvePersistedTilePlacement(
     browser: isBrowserTilePlacement(stored.browser)
       ? stored.browser
       : DEFAULT_TILE_PLACEMENT_SETTINGS.browser,
+    // Newer than the other rows: a blob written before it existed takes the
+    // default, which is the split-beside-the-source the feature always did.
+    sideChat: isTilePlacement(stored.sideChat)
+      ? stored.sideChat
+      : DEFAULT_TILE_PLACEMENT_SETTINGS.sideChat,
   };
+}
+
+/**
+ * A persisted office view choice this build can still honour.
+ *
+ * The registry is the vocabulary, exactly as it is for the tile's own choice:
+ * a value naming a view a newer build shipped degrades to Auto, which measures
+ * and always has an answer, rather than to a view id nothing can plan.
+ */
+function resolvePersistedAgentOfficeView(value: unknown): OfficeViewChoice {
+  if (value === "auto") return "auto";
+  if (typeof value !== "string") return DEFAULT_AGENT_OFFICE_VIEW;
+  return (
+    OFFICE_VIEW_IDS.find((id) => id === value) ?? DEFAULT_AGENT_OFFICE_VIEW
+  );
+}
+
+/**
+ * The generation is a monotonic stamp a tile compares for equality to decide
+ * whether an inherited Auto outcome still holds, and the setter reads it back
+ * to increment. A blob with a non-number (a string increments as `"5" + 1 ->
+ * "51"`), a negative, or a fractional generation would never match a tile's
+ * stamp - every inherited office would remeasure on each reload - so anything
+ * that is not already a finite non-negative integer resets to the baseline 0.
+ */
+function resolvePersistedAgentOfficeGeneration(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : 0;
+}
+
+function nextAgentOfficeDefaultViewGeneration(): number {
+  // A collision-free revision stamp, NOT a per-window counter. The generation
+  // is compared by EQUALITY - a tile trusts its Auto outcome only while its
+  // stamp still equals the current generation - so two windows that change the
+  // default before either sees the other's `storage` event must not land on the
+  // same next value. `+1` guarantees they collide; a random draw over the
+  // safe-integer range does not, and ordering is never read here.
+  return Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
 }
 
 function resolvePersistedAgentTabSurfacing(
@@ -769,3 +1234,25 @@ function resolvePersistedAgentTabSurfacing(
   if (legacy === "pip" || legacy === "tile") return "surface";
   return DEFAULT_AGENT_TAB_SURFACING;
 }
+
+let crossWindowSyncInstalled = false;
+
+/**
+ * Rehydrate this store when another window writes its persisted key (or
+ * clears storage entirely - a `null` event key). Exported and guarded
+ * (idempotent, no-op outside a DOM) rather than a bare module-scope
+ * `window.addEventListener`, so it is callable from app bootstrap and from a
+ * test without relying on import order to have wired it up.
+ */
+export function initSettingsCrossWindowSync(): void {
+  if (crossWindowSyncInstalled) return;
+  if (typeof window === "undefined") return;
+  crossWindowSyncInstalled = true;
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === persistKey(STORE_KEYS.settings)) {
+      void useSettingsStore.persist.rehydrate();
+    }
+  });
+}
+
+initSettingsCrossWindowSync();

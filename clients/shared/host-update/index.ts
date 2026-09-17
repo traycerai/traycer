@@ -59,6 +59,7 @@ export type {
   PublicAttemptMutationIntent,
   PublicAttemptMutationIntent as AttemptMutationIntent,
   AttemptMutationRejection,
+  AttemptDiscardOutcome,
   AttemptPruneOutcome,
   AttemptPruneRejection,
   CommitAttemptMutationOptions,
@@ -67,6 +68,7 @@ export type {
 export {
   AttemptRecordDurabilityError,
   commitAttemptMutation,
+  discardAttemptRecordForUninstall,
   pruneTerminalAttemptRecord,
   readRegularFileNoFollow,
   readUpdateAttemptRecord,
@@ -151,6 +153,7 @@ export {
   withUpdateContender,
   withSupervisorRelaunchContender,
   commitAttemptMutationWithCapability,
+  discardAttemptRecordWithCapability,
   withUpdateContenderAdoption,
 } from "./contender";
 

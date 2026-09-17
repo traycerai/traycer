@@ -8,11 +8,19 @@ import {
 import {
   agentConfigureRequestSchema,
   agentConfigureRequestSchemaV20,
+  agentConfigureResponseCanCarryPermissionMode,
   agentConfigureResponseSchema,
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
   agentConfigureDowngradeV30ToV20,
+  agentConfigureDowngradeV60ToV10,
   agentConfigureUpgradeV10ToV20,
+  agentConfigureV10,
+  agentConfigureV20,
+  agentConfigureV30,
+  agentConfigureV40,
+  agentConfigureV50,
+  agentConfigureV60,
   agentCreateDowngradeV20ToV10,
   agentCreateUpgradeV10ToV20,
   agentCreateUpgradeV20ToV30,
@@ -1154,6 +1162,115 @@ describe("agent.configure v1 <-> v2 hermes-harness response translation", () => 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+});
+
+// FIX (P2): a pre-flight for a PRESERVE-mode configure. A caller below the
+// live major sends no permission mode; the upgrade path supplies
+// `permissionMode: null`, the host applies the mutation, and only THEN does
+// the response downgrade discover it cannot spell the agent's actual mode -
+// a failed configure over a successful mutation. This predicate lets the
+// host refuse BEFORE mutating, by parsing `mode` against the very schema the
+// downgrade itself uses.
+describe("agentConfigureResponseCanCarryPermissionMode", () => {
+  // Derived from the actual contracts rather than hard-coded literals, so a
+  // renumber of the frozen line moves this table with it.
+  const PRE_AUTO_MAJORS = [
+    agentConfigureV10,
+    agentConfigureV20,
+    agentConfigureV30,
+    agentConfigureV40,
+    agentConfigureV50,
+  ].map((contract) => contract.schemaVersion.major);
+  const LIVE_MAJOR = agentConfigureV60.schemaVersion.major;
+
+  it.each(PRE_AUTO_MAJORS)(
+    "refuses 'auto' but allows every pre-auto mode on frozen major %s",
+    (major) => {
+      expect(agentConfigureResponseCanCarryPermissionMode(major, "auto")).toBe(
+        false,
+      );
+      expect(
+        agentConfigureResponseCanCarryPermissionMode(major, "supervised"),
+      ).toBe(true);
+      expect(
+        agentConfigureResponseCanCarryPermissionMode(
+          major,
+          "auto_accept_edits",
+        ),
+      ).toBe(true);
+      expect(
+        agentConfigureResponseCanCarryPermissionMode(major, "full_access"),
+      ).toBe(true);
+    },
+  );
+
+  it("allows 'auto' on the live major", () => {
+    expect(
+      agentConfigureResponseCanCarryPermissionMode(LIVE_MAJOR, "auto"),
+    ).toBe(true);
+  });
+
+  // We do not refuse a configure for a line this client never negotiated -
+  // the downgrade bridge is still the backstop for it.
+  it("answers true for a major this client has no schema table entry for", () => {
+    expect(agentConfigureResponseCanCarryPermissionMode(9999, "auto")).toBe(
+      true,
+    );
+  });
+
+  // The cases that show WHY: the predicate is a PRE-FLIGHT for the real
+  // downgrade, so the two must agree about the same (major, mode) tuple in
+  // BOTH directions. Disagreement either way is a live defect - a green
+  // pre-flight over a bridge that refuses means the mutation already happened
+  // before the response failed to reparse, and a red pre-flight over a bridge
+  // that would have passed refuses a configure that was always fine.
+  //
+  // The bridge under test is `V60ToV10`, not `V20ToV10`: the live major is the
+  // only one whose response TYPE can carry `auto` at all, which is the whole
+  // finding restated - a v1.0 caller reaches this code by having its request
+  // upgraded, and the response it gets back is built on the live line and
+  // downgraded from there. Building a V2 response around an `auto` it cannot
+  // spell would take a cast, and the cast would be the test asserting against
+  // its own fiction rather than against the path the host walks.
+  const v10Major = agentConfigureV10.schemaVersion.major;
+  const liveSettings = {
+    harnessId: "claude" as const,
+    model: "opus-4.7",
+    profileSelection: { kind: "ambient" as const },
+    reasoningEffort: null,
+    fastMode: false,
+    agentMode: "regular" as const,
+  };
+
+  it("agrees with the real bridge: both refuse an agent.configure@1.0 response carrying 'auto'", () => {
+    expect(agentConfigureResponseCanCarryPermissionMode(v10Major, "auto")).toBe(
+      false,
+    );
+
+    const downgraded = agentConfigureDowngradeV60ToV10.downgradeResponse({
+      settings: { ...liveSettings, permissionMode: "auto" as const },
+      warnings: [],
+    });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+
+  // The agreeing direction, and the control for the case above: the same
+  // bridge, the same major, one field changed. Without it, a predicate hard-
+  // wired to `false` and a bridge that refused EVERY response would both look
+  // correct - this is what makes the refusal above specific to `auto`.
+  it("agrees with the real bridge: both allow an agent.configure@1.0 response carrying a pre-auto mode", () => {
+    expect(
+      agentConfigureResponseCanCarryPermissionMode(v10Major, "supervised"),
+    ).toBe(true);
+
+    const downgraded = agentConfigureDowngradeV60ToV10.downgradeResponse({
+      settings: { ...liveSettings, permissionMode: "supervised" as const },
+      warnings: [],
+    });
+    expect(downgraded.ok).toBe(true);
   });
 });
 

@@ -42,11 +42,41 @@ export const logsConfigSchema = z
   .default({ cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL });
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
 
+/**
+ * The `browser` block in `~/.traycer/cli/config.json`: the machine-user-global
+ * switch for whether agents may drive the in-app browser. Defaults to `true` -
+ * the capability existed before the switch did, so an install that has never
+ * touched Settings keeps the behaviour it already had. Additive and
+ * `.default()`-ed like every other block, so older config files keep validating
+ * without a `CLI_CONFIG_VERSION` bump.
+ */
+export const browserConfigSchema = z
+  .object({
+    agentAccess: z.boolean().default(true),
+  })
+  .default({ agentAccess: true });
+export type BrowserConfig = z.infer<typeof browserConfigSchema>;
+
+/**
+ * The `browser` block read on its own, ignoring every other key.
+ *
+ * `readBrowserConfigSync` validates with THIS rather than `cliConfigSchema`
+ * because whole-document validation makes an unrelated defect revoke a
+ * deliberate setting: a `version` this binary predates, or a block a newer
+ * writer reshaped, fails the document and would send the gate to its
+ * permissive default while the file plainly says `agentAccess: false`. Failing
+ * open is for a block we cannot read, never for one we can.
+ */
+export const browserOnlyConfigSchema = z.object({
+  browser: browserConfigSchema,
+});
+
 export const featureSettingsSchema = z
   .object({
     agentRoles: z.boolean().default(false),
+    artifactVersioning: z.boolean().default(false),
   })
-  .default({ agentRoles: false });
+  .default({ agentRoles: false, artifactVersioning: false });
 export type FeatureSettings = z.infer<typeof featureSettingsSchema>;
 
 /**
@@ -95,24 +125,34 @@ export interface ShellEntry {
   readonly args: readonly string[] | null;
 }
 
-export const cliConfigSchema = z.object({
-  version: z.literal(CLI_CONFIG_VERSION),
-  // Each section defaults so a partial file (e.g. only `shell.path` set, or
-  // `envOverrides` absent) still reads - restoring the tolerance the previous
-  // hand-rolled reader had. Defaults fill ONLY missing/`undefined` fields;
-  // a present-but-wrong-typed value (e.g. `path: 5`) is still rejected, so
-  // genuine corruption is still surfaced.
-  shell: z
-    .object({
-      path: z.string().nullable().default(null),
-      args: z.array(z.string()).nullable().default(null),
-      entries: z.array(shellEntrySchema).default([]),
-    })
-    .default({ path: null, args: null, entries: [] }),
-  envOverrides: envOverrideMapSchema.default({}),
-  logs: logsConfigSchema,
-  features: featureSettingsSchema,
-});
+export const cliConfigSchema = z
+  .object({
+    version: z.literal(CLI_CONFIG_VERSION),
+    // Each section defaults so a partial file (e.g. only `shell.path` set, or
+    // `envOverrides` absent) still reads - restoring the tolerance the previous
+    // hand-rolled reader had. Defaults fill ONLY missing/`undefined` fields;
+    // a present-but-wrong-typed value (e.g. `path: 5`) is still rejected, so
+    // genuine corruption is still surfaced.
+    shell: z
+      .object({
+        path: z.string().nullable().default(null),
+        args: z.array(z.string()).nullable().default(null),
+        entries: z.array(shellEntrySchema).default([]),
+      })
+      .default({ path: null, args: null, entries: [] }),
+    envOverrides: envOverrideMapSchema.default({}),
+    logs: logsConfigSchema,
+    features: featureSettingsSchema,
+    browser: browserConfigSchema,
+  })
+  // Top-level only: an unknown BLOCK survives a read-modify-write instead of
+  // being stripped. Two binaries share this file - an older CLI or host that
+  // predates a block must not silently delete the newer one's setting on its
+  // next write (which is exactly how `logs`/`features` would have been lost).
+  // Unknown keys INSIDE a known block are still stripped: those are the shapes
+  // both sides already agree on, so an extra key there is corruption, not the
+  // future.
+  .passthrough();
 
 export type CliConfig = z.infer<typeof cliConfigSchema>;
 
@@ -170,5 +210,6 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   shell: { path: null, args: null, entries: [] },
   envOverrides: {},
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
-  features: { agentRoles: false },
+  features: { agentRoles: false, artifactVersioning: false },
+  browser: { agentAccess: true },
 };

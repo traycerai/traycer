@@ -1,3 +1,4 @@
+import { browserSessionTileId } from "./tile-schema/browser-tile";
 /**
  * Pure actions over `EpicCanvasState` (the N-ary split tree + decoupled tile
  * payloads). Every action:
@@ -20,8 +21,10 @@
  */
 import { v4 as uuidv4 } from "uuid";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import type {
+  CommGraphTileCamera,
   CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
@@ -42,6 +45,7 @@ import {
   isHostEpicTerminalRef,
   isUnsupportedEpicTerminalRef,
 } from "./types";
+import { isNeutralCamera } from "./tile-schema/comm-graph-tile";
 import {
   activationHistoryEqual,
   pruneActivationHistory,
@@ -78,6 +82,12 @@ function createEmptyPane(): TilePane {
     previewTabId: null,
     activationHistory: [],
   };
+}
+
+export function ensureEmptyCanvasPane(state: EpicCanvasState): EpicCanvasState {
+  if (state.root !== null) return state;
+  const root = createEmptyPane();
+  return { ...state, root, activePaneId: root.id };
 }
 
 function createPaneWithTab(
@@ -206,11 +216,8 @@ export interface PaneTabLocation {
 }
 
 /**
- * Locate an open tab by content id. Every tile kind carries a deterministic
- * content `id` (artifact uuid, workspace-file path hash, git-diff payload
- * hash), so dedup is plain id equality across all kinds. Used by global
- * dedup - opening content already present anywhere focuses that tab instead
- * of cloning.
+ * Locate an open tab by content id. Rebound browsers retain their original
+ * node id, so their host identity is also accepted for sidebar/deep-link opens.
  *
  * For a host-bound kind, prefer {@link findPaneTabForRef}: ids minted by a
  * host (a chat, a shell) are unique per host, not globally.
@@ -223,12 +230,26 @@ export function findPaneTabByContentId(
     for (let index = 0; index < pane.tabInstanceIds.length; index += 1) {
       const instanceId = pane.tabInstanceIds[index];
       const ref = state.tilesByInstanceId[instanceId];
-      if (ref !== undefined && ref.id === contentId) {
+      if (
+        ref !== undefined &&
+        (ref.id === contentId || tileContentId(ref) === contentId)
+      ) {
         return { pane, index, instanceId, ref };
       }
     }
   }
   return null;
+}
+
+function tileContentId(ref: TileIdentity): string {
+  if (
+    ref.type === "browser-session" &&
+    typeof ref.sessionId === "string" &&
+    typeof ref.tabId === "string"
+  ) {
+    return browserSessionTileId({ sessionId: ref.sessionId, tabId: ref.tabId });
+  }
+  return ref.id;
 }
 
 /** The bound host of a tile kind that has one; null for the rest. */
@@ -239,6 +260,9 @@ export function findPaneTabByContentId(
  * callers holding a finished `EpicCanvasTileRef`.
  */
 export interface TileIdentity {
+  readonly type?: string;
+  readonly sessionId?: string | null;
+  readonly tabId?: string | null;
   readonly id: string;
   readonly hostId?: string | null;
 }
@@ -267,7 +291,11 @@ export function findPaneTabForRef(
       const instanceId = pane.tabInstanceIds[index];
       const ref = state.tilesByInstanceId[instanceId];
       if (ref === undefined) continue;
-      if (ref.id !== node.id || tileHostId(ref) !== hostId) continue;
+      if (
+        (ref.id !== node.id && tileContentId(ref) !== tileContentId(node)) ||
+        tileHostId(ref) !== hostId
+      )
+        continue;
       return { pane, index, instanceId, ref };
     }
   }
@@ -797,12 +825,7 @@ export function openTileInPane(
   };
 }
 
-/**
- * Open a blank "New tab" in `paneId`, made active, with the pane made
- * globally active. Reuse-if-active-is-blank: when the pane's active tab is
- * already blank, just focus it (no stacking) so repeated invocations don't
- * pile up empty tabs.
- */
+/** Open the picker without adding a redundant tab to an empty pane. */
 export function openBlankTabInPane(
   state: EpicCanvasState,
   paneId: string,
@@ -810,19 +833,16 @@ export function openBlankTabInPane(
   if (state.root === null) return state;
   const target = findPaneById(state.root, paneId);
   if (target === null) return state;
-  const active = resolveActiveTabInstance(target);
-  const activeRef =
-    active === null
-      ? null
-      : (state.tilesByInstanceId[active.instanceId] ?? null);
-  if (active !== null && activeRef !== null && isBlankTileRef(activeRef)) {
+  if (target.tabInstanceIds.length === 0)
+    return state.activePaneId === paneId
+      ? state
+      : { ...state, activePaneId: paneId };
+  const blankId = target.tabInstanceIds.find(
+    (id) => state.tilesByInstanceId[id]?.type === "blank",
+  );
+  if (blankId !== undefined) {
     const root = replacePane(state.root, paneId, (pane) =>
-      pane.activeTabId === active.instanceId
-        ? recordPaneActivation(pane, active.instanceId)
-        : recordPaneActivation(
-            { ...pane, activeTabId: active.instanceId },
-            active.instanceId,
-          ),
+      recordPaneActivation(pane, blankId),
     );
     if (root === state.root && state.activePaneId === paneId) return state;
     return { ...state, root, activePaneId: paneId };
@@ -949,7 +969,11 @@ export function closeTab(
     pane.activeTabId === tabId
       ? removeTabAtIndexWithSyntheticFallback(pane, index)
       : removeTabAtIndexPruneOnly(pane, index);
-  if (removed.pane.tabInstanceIds.length > 0) {
+  // A picker tab is temporary UI; dismissing it must not close its split.
+  if (
+    removed.pane.tabInstanceIds.length > 0 ||
+    state.tilesByInstanceId[tabId]?.type === "blank"
+  ) {
     const root = replacePane(state.root, paneId, () => removed.pane);
     return {
       ...state,
@@ -1050,6 +1074,15 @@ export function closeAllTabs(
   const pane = findPaneById(state.root, paneId);
   if (pane === null) return state;
   if (pane.tabInstanceIds.length === 0) return state;
+  if (
+    pane.tabInstanceIds.every(
+      (id) => state.tilesByInstanceId[id]?.type === "blank",
+    )
+  )
+    return pane.tabInstanceIds.reduce(
+      (current, id) => closeTab(current, paneId, id),
+      state,
+    );
   return closePane(state, paneId);
 }
 
@@ -1521,6 +1554,22 @@ export function renameArtifact(
   );
 }
 
+export function rebindPendingBrowserTile(
+  state: EpicCanvasState,
+  requestId: string,
+  opened: { readonly sessionId: string; readonly tabId: string },
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) =>
+      ref.type === "browser-session" && ref.pending?.requestId === requestId,
+    (ref) => {
+      if (ref.type !== "browser-session") return ref;
+      return { ...ref, ...opened, pending: undefined };
+    },
+  );
+}
+
 export function updateBrowserTileViewportPreset(
   state: EpicCanvasState,
   tileInstanceId: string,
@@ -1736,10 +1785,23 @@ export function updateSnapshotDiffTilePayload(
 }
 
 /**
- * Persist a comm-graph tile's viewport. Called on gesture END (React Flow's
- * `onMoveEnd`), never per animation frame - the canvas snapshot is serialized
- * on every write, so a per-frame pan would churn the whole persistence path.
+ * Rewrite a comm-graph tile's WHOLE view value: the mode, the office view
+ * choice, and the camera those two decide.
+ *
+ * Every field is compared, the two office choices included. They are not
+ * decoration on a viewport write - they are the reason this action exists
+ * beside {@link updateCommGraphTileCamera}, and a compare that skipped them
+ * would report "nothing changed" for a pick that only switched views.
  */
+/** Two office cameras that say the same thing, `null` (unframed) included. */
+function sameOfficeCamera(
+  a: CommGraphTileCamera | null,
+  b: CommGraphTileCamera | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.x === b.x && a.y === b.y && a.zoom === b.zoom;
+}
+
 export function updateCommGraphTileView(
   state: EpicCanvasState,
   tileId: string,
@@ -1754,11 +1816,134 @@ export function updateCommGraphTileView(
         ref.view.x === view.x &&
         ref.view.y === view.y &&
         ref.view.zoom === view.zoom &&
-        ref.view.mode === view.mode
+        ref.view.mode === view.mode &&
+        ref.view.officeView === view.officeView &&
+        ref.view.officeAutoView === view.officeAutoView &&
+        // The SEVENTH field. Left out, a write that only re-stamps which view
+        // the camera frames is read as a no-op and dropped - which is exactly
+        // the shape of the reset on a tile whose camera is already neutral.
+        ref.view.officeCameraView === view.officeCameraView &&
+        // And the EIGHTH, by the same argument one field over. Since D68 the
+        // office's framing lives here rather than in `x`/`y`/`zoom`, so every
+        // writer that neutralises it - a view pick, Auto's first measurement,
+        // a Settings default that moved - now changes THIS and often nothing
+        // else. Compared by value, not by identity: these writers build a
+        // fresh object each time, and an identity compare would call every
+        // one of them a change even when the numbers are the ones already
+        // stored.
+        sameOfficeCamera(ref.view.officeCamera, view.officeCamera) &&
+        // And the NINTH: the default GENERATION the Auto outcome was measured
+        // under. A re-measurement that lands on the same view and camera but
+        // under a newer default MUST still persist - it refreshes the stamp the
+        // Auto effect reads to decide whether to re-measure. Omitted, that
+        // stamp-only write reads as a no-op and is dropped, so the stored
+        // generation never catches up and a default-following tile re-measures
+        // on every remount instead of settling on the refreshed outcome.
+        ref.view.officeAutoGeneration === view.officeAutoGeneration
       ) {
         return ref;
       }
       return { ...ref, view };
+    },
+  );
+}
+
+/**
+ * The OFFICE's camera write: the numbers, plus the view they are about.
+ *
+ * Deliberately a second entry point rather than a flag on
+ * {@link updateCommGraphTileCamera} below. The graph renderer has no idea what
+ * an office view is, so it must not be able to say anything about one - not
+ * even `null`, which would quietly erase the framing record on every debounced
+ * pan. Two writers, two paths, each saying only what it knows.
+ *
+ * Since D68 the separation is in the DATA and not only in the entry points:
+ * this one writes `officeCamera` and `officeCameraView`, and the graph's
+ * writes `x`, `y`, `zoom`. Neither can reach the other's fields, so a Graph
+ * detour cannot move the office's framing and a pan on the floor cannot move
+ * the graph's - which is the whole of what the mode switch used to destroy by
+ * resetting the one camera they shared.
+ */
+export function updateCommGraphTileOfficeCamera(
+  state: EpicCanvasState,
+  tileId: string,
+  camera: CommGraphTileCamera,
+  framedView: OfficeViewId | null,
+): EpicCanvasState {
+  // The NEUTRAL camera is the armed/auto-fit state, and `officeCamera: null` is
+  // its one canonical spelling - the value every `officeCamera !== null` check,
+  // the witness arm and both Auto keep arms already read as "nobody has framed
+  // this, fit it". The office canvas re-arms auto-fit by persisting the neutral
+  // camera (its `onCameraChange` patch has no vocabulary for `null`), so it is
+  // collapsed to that one sentinel here rather than becoming a SECOND neutral
+  // value the rest of the office logic would have to learn to recognise.
+  const nextCamera = isNeutralCamera(camera) ? null : camera;
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isCommGraphTileRef(ref),
+    (ref) => {
+      if (!isCommGraphTileRef(ref)) return ref;
+      if (
+        sameOfficeCamera(ref.view.officeCamera, nextCamera) &&
+        ref.view.officeCameraView === framedView
+      ) {
+        return ref;
+      }
+      return {
+        ...ref,
+        view: {
+          ...ref.view,
+          officeCamera: nextCamera,
+          officeCameraView: framedView,
+        },
+      };
+    },
+  );
+}
+
+/**
+ * Persist a comm-graph tile's viewport, and ONLY its viewport. Called on
+ * gesture END (React Flow's `onMoveEnd`, the office's debounced persist),
+ * never per animation frame - the canvas snapshot is serialized on every
+ * write, so a per-frame pan would churn the whole persistence path.
+ *
+ * A PATCH, where the renderers used to build a whole view value and hand it
+ * over. Both of them know the camera and nothing else; a whole-value write
+ * from either would carry the mode and the view choice as they were when that
+ * renderer last rendered, so a pan landing after a pick - which is exactly
+ * what a debounced pan does - would put the old view back.
+ *
+ * Since D68 this is the GRAPH's camera alone. It already wrote only these
+ * three fields, so the split cost it no change - but that is now load-bearing
+ * rather than incidental: a graph pan during a detour must leave the office's
+ * framing exactly where the office left it.
+ */
+export function updateCommGraphTileCamera(
+  state: EpicCanvasState,
+  tileId: string,
+  camera: CommGraphTileCamera,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isCommGraphTileRef(ref),
+    (ref) => {
+      if (!isCommGraphTileRef(ref)) return ref;
+      if (
+        ref.view.x === camera.x &&
+        ref.view.y === camera.y &&
+        ref.view.zoom === camera.zoom
+      ) {
+        return ref;
+      }
+      return {
+        ...ref,
+        view: {
+          ...ref.view,
+          x: camera.x,
+          y: camera.y,
+          zoom: camera.zoom,
+        },
+      };
     },
   );
 }

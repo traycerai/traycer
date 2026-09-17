@@ -3,6 +3,7 @@ import {
   DEFAULT_HISTORY_SEARCH,
   clearHistorySearchParams,
   historySearchToParams,
+  normalizePersistedHistorySearch,
   parseHistorySearch,
   patchHistorySearch,
 } from "@/lib/history-search";
@@ -33,6 +34,21 @@ describe("history search params", () => {
       sort: "relevance",
       sortExplicit: false,
     });
+  });
+
+  it("fills missing fields from older persisted search state", () => {
+    expect(
+      normalizePersistedHistorySearch({
+        query: "api",
+        repos: [],
+        repoMode: "any",
+        workspaces: [],
+        workspaceMode: "any",
+        ownershipScopes: [],
+        sort: "recent",
+        sortExplicit: false,
+      }),
+    ).toMatchObject({ query: "api", chatHosts: [] });
   });
 
   it("preserves an explicit recent sort while a query is active", () => {
@@ -67,10 +83,12 @@ describe("history search params", () => {
         historyWorkspaces: ["host-1:%2FUsers%2Fme%2Fgui-app"],
         historyWorkspaceMode: "all",
         historyOwnership: ["mine"],
+        historyDrafts: ["landing"],
         historySort: "relevance",
       }),
     ).toEqual({ focusedAt: 1 });
   });
+
   it("round-trips chat-host selections through the URL, dropping a default mode", () => {
     const parsed = parseHistorySearch({
       historyChatHosts: ["host-b", "host-a"],

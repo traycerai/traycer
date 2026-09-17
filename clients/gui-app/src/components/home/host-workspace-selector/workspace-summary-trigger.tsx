@@ -161,7 +161,7 @@ export function WorkspaceSummaryTrigger(
             collisionPadding={12}
             // Same desktop-scrolls-here / phone-scrolls-the-list split as the
             // editable panel in `WorkspaceFolderSummaryControl` - see the note there.
-            className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3 max-md:overflow-hidden"
+            className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] overflow-y-auto max-md:overflow-hidden"
             data-testid="workspace-readonly-folders-popover"
             onOpenAutoFocus={(event) => event.preventDefault()}
           >
@@ -178,7 +178,6 @@ export function WorkspaceSummaryTrigger(
               discardDisabled={false}
               onEditEnvironment={NOOP}
               readOnly
-              nestedInPopover={false}
               bindingResolved={bindingResolved}
               recentWorkspaces={null}
               moveToRecent={false}
@@ -204,7 +203,7 @@ function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
   return (
     <>
       <AgentSpinningDots
-        className="size-4 shrink-0 text-current"
+        className="size-4 shrink-0"
         testId={undefined}
         variant="dots"
       />

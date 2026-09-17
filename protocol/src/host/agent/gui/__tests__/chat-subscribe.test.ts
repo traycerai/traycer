@@ -16,7 +16,13 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
+  chatSubscribeV111,
+  chatSubscribeV112,
+  chatSubscribeV113,
   createImageResolutionUpdatedFrame,
+  chatApprovalStateSchema,
+  chatApprovalStateSchemaPreAuto,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   guiAgentModelCapabilitiesSchema,
@@ -2272,30 +2278,139 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 9 as chatSubscribeV19", () => {
+  it("registers chat.subscribe major 1 latestMinor 13 as chatSubscribeV113", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
     // negotiates to the highest the peers share, so that line flipping to `8`
     // was the moment `1.8`-capable peers started exchanging windowed frames.
-    // `9` is windowed too - it differs from `8` only in the session-anchor
-    // union reachable through `rowContext`.
-    expect(entry[1].latestMinor).toBe(9);
+    // `9` is windowed too - it differs from `8` in the session-anchor union
+    // reachable through `rowContext` and in delivery placement.
+    //
+    // `10` carries the fallback surface (the `fallback-wait` background item,
+    // the two `fallback.*` client actions, the ack lease `token`, the fallback
+    // DTOs, and the fallback provider-notice kinds), and it is WINDOWED for
+    // that reason: this registry is the negotiation ceiling, so registering a
+    // full-snapshot contract above windowed `1.9` would silently un-window
+    // every peer already capable of it. `11` carries the shell host on a resume
+    // trigger and on the queued managed-command item, and is windowed for the
+    // same reason. `12` adds the draft-blob bridge capability and the typed
+    // missing-attachment rejection cause, windowed for the same reason again.
+    // That is what these assertions together protect - the ceiling, and the
+    // line shape at the ceiling.
+    //
+    // `13` does not switch anything either: it is the auto-mode line, and what
+    // it switches is the host's willingness to SERVE an `auto` chat at all.
+    expect(entry[1].latestMinor).toBe(13);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
     expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
+    expect(entry[1].versions[10].contract).toBe(chatSubscribeV110);
+    expect(entry[1].versions[11].contract).toBe(chatSubscribeV111);
+    expect(entry[1].versions[12].contract).toBe(chatSubscribeV112);
+    expect(entry[1].versions[13].contract).toBe(chatSubscribeV113);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
+    expect(chatSubscribeV110.schemaVersion).toEqual({
+      major: 1,
+      minor: 10,
+    });
+    expect(chatSubscribeV111.schemaVersion).toEqual({
+      major: 1,
+      minor: 11,
+    });
+    expect(chatSubscribeV112.schemaVersion).toEqual({
+      major: 1,
+      minor: 12,
+    });
+    expect(chatSubscribeV113.schemaVersion).toEqual({
+      major: 1,
+      minor: 13,
+    });
+  });
+
+  it("keeps the FULL-SNAPSHOT schema version pinned at 1.7 while the ceiling moves", () => {
+    // `chatSubscribeFullSnapshotSchemaVersion` names the newest NON-windowed
+    // line, and it must not drift upward with the registry ceiling. `1.8`
+    // through `1.13` are all windowed, so the last full-snapshot line is
+    // still `1.7`; moving this to the ceiling would hand a full-snapshot
+    // consumer a contract whose snapshot frame carries a bounded `tail`
+    // instead of a whole chat.
+    expect(chatSubscribeFullSnapshotSchemaVersion).toEqual({
+      major: 1,
+      minor: 7,
+    });
+  });
+
+  it("keeps the judge fields off every RELEASED chat.subscribe line", () => {
+    // `reason` / `reviewing` are additive and defaulted, which is exactly the
+    // shape that looks safe to let a released line track live and is not: a key
+    // a released host never emits leaves that line's consumers reading
+    // `undefined` from a field their types call present.
+    // `released-baseline-compat.test.ts` is the gate; this is the local,
+    // readable statement of what the gate protects, keyed to the schema
+    // objects rather than to a JSON dump.
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reason",
+    );
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reviewing",
+    );
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reason");
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reviewing");
+
+    // Absent on the wire parses as "no judge ran", never as a missing key.
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "run tests",
+      input: null,
+      requestedAt: 1,
+    });
+    expect(parsed.reason).toBeNull();
+    expect(parsed.reviewing).toBeNull();
+  });
+
+  it("carries a judge verdict and a transient stage on the live card", () => {
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "git push --force",
+      input: null,
+      requestedAt: 1,
+      reason: { rule: "Force push", text: "Rewrites published history." },
+      reviewing: "reviewing",
+    });
+    expect(parsed.reason).toEqual({
+      rule: "Force push",
+      text: "Rewrites published history.",
+    });
+    expect(parsed.reviewing).toBe("reviewing");
+
+    // The stage vocabulary is closed: an unknown stage is a bug in the emitter,
+    // not something a card should try to render.
+    expect(() =>
+      chatApprovalStateSchema.parse({
+        approvalId: "a1",
+        toolName: "Bash",
+        description: "x",
+        input: null,
+        requestedAt: 1,
+        reviewing: "thinking",
+      }),
+    ).toThrow();
   });
 
   // `cli-v1.3.0` / `host-v1.3.0` shipped `@1.8`, so it is frozen at the
   // twenty-arm session-anchor union those peers strict-decode. `@1.9` is the
   // first minor whose `rowContext` may carry the Antigravity arm. Streams have
   // no downgrade bridge, so the host projects the field away for a `<1.9`
-  // subscriber (`chat-session-manager.ts`'s `projectWindowedFrameForVersion`)
-  // rather than sending a frame that fails the peer's whole parse.
+  // subscriber (`projectChatHistoryForSchemaVersion` in
+  // `chat-frame-projection.ts`, applied at `emitWindowedFrameToSubscriber`)
+  // rather than sending a frame that fails the peer's whole parse. `@1.10`
+  // inherits the anchor unchanged.
   it("keeps an antigravity session anchor out of the released @1.8 frame", () => {
     const rangeFrame = {
       kind: "range" as const,
@@ -2339,6 +2454,133 @@ describe("chat.subscribe registry membership", () => {
     expect(
       chatSubscribeV19.serverFrameSchema.safeParse(rangeFrame).success,
     ).toBe(true);
+    expect(
+      chatSubscribeV110.serverFrameSchema.safeParse(rangeFrame).success,
+    ).toBe(true);
+  });
+});
+
+// `1.11` is main's shell-host line, turned into an INTERVENING FROZEN TIER by
+// this merge: it carries the shell's `hostId` on the queued managed-command
+// item (main's addition, `chatQueueStateSchemaPreAuto`) while the permission
+// mode everywhere is still pre-`auto` (`auto` re-minted a minor above it, at
+// `1.13`). That combination existed on neither side before the merge - `1.10`
+// lacks the shell host entirely, `1.12` adds main's rejected-attachment cause,
+// and `1.13` no longer holds `auto` back - so it gets its own coverage rather
+// than inheriting any neighbour's.
+describe("chat.subscribe@1.11 (the shell-host tier, pre-`auto`)", () => {
+  function activePermissionModeUpdateFrame(
+    permissionMode: string,
+  ): Record<string, unknown> {
+    return {
+      kind: "activePermissionModeUpdate",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      clientActionId: "permission-action-1",
+      permissionMode,
+    };
+  }
+
+  it('client frames reject an "auto" settings write - 1.13 is where auto becomes settable', () => {
+    // `chatSubscribeWindowedClientFrameSchemaPreAuto` binds `1.11`
+    // deliberately: a settings write accepted here would mint a chat that
+    // very line is then refused (`chatSubscribeSupportsPermissionMode`).
+    expect(
+      chatSubscribeV111.clientFrameSchema.safeParse(
+        activePermissionModeUpdateFrame("auto"),
+      ).success,
+    ).toBe(false);
+    // A mode that predates `auto` is unaffected on the same line.
+    expect(
+      chatSubscribeV111.clientFrameSchema.safeParse(
+        activePermissionModeUpdateFrame("full_access"),
+      ).success,
+    ).toBe(true);
+    // `1.13` is the first line whose client may say `auto`.
+    expect(
+      chatSubscribeV113.clientFrameSchema.safeParse(
+        activePermissionModeUpdateFrame("auto"),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("carries the shell host on a queued item while holding auto back on another, in the SAME queue", () => {
+    const shellQueuedCommand = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-managed-1",
+      commandId: "command-1",
+      description: "bun test --watch",
+      hostId: "cross-host-1",
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+    const autoQueuedPrompt = {
+      kind: "prompt" as const,
+      queueItemId: "queue-prompt-1",
+      messageId: "message-1",
+      message: {
+        kind: "user" as const,
+        content: { type: "doc" as const, content: [] },
+        browserAnnotations: [],
+      },
+      sender: { type: "user" as const, userId: "user-1" },
+      settings: {
+        harnessId: "codex" as const,
+        model: "gpt-5-codex",
+        permissionMode: "auto" as const,
+        reasoningEffort: null,
+        agentMode: "regular" as const,
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+    function queueChangedFrame(
+      items: ReadonlyArray<unknown>,
+    ): Record<string, unknown> {
+      return {
+        kind: "queueChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        queue: { status: "idle", items },
+      };
+    }
+
+    // Neither neighbour has the combination. `1.10` lacks the shell host
+    // entirely - the key drops off an otherwise-valid item as an unmodeled
+    // member, rather than failing the parse.
+    const onV110 = chatSubscribeV110.serverFrameSchema.parse(
+      queueChangedFrame([shellQueuedCommand]),
+    );
+    if (onV110.kind !== "queueChanged") {
+      throw new Error("expected queueChanged");
+    }
+    expect(onV110.queue.items[0]).not.toHaveProperty("hostId");
+
+    // `1.11` carries it.
+    const onV111 = chatSubscribeV111.serverFrameSchema.parse(
+      queueChangedFrame([shellQueuedCommand]),
+    );
+    if (onV111.kind !== "queueChanged") {
+      throw new Error("expected queueChanged");
+    }
+    expect(onV111.queue.items[0]).toMatchObject({ hostId: "cross-host-1" });
+
+    // `1.13` carries `auto` on a queued turn's settings.
+    expect(
+      chatSubscribeV113.serverFrameSchema.safeParse(
+        queueChangedFrame([autoQueuedPrompt]),
+      ).success,
+    ).toBe(true);
+
+    // `1.11` is pre-`auto` still: the queued turn cannot be parsed at all,
+    // even though this SAME queue carries the shell host on its sibling item.
+    expect(
+      chatSubscribeV111.serverFrameSchema.safeParse(
+        queueChangedFrame([shellQueuedCommand, autoQueuedPrompt]),
+      ).success,
+    ).toBe(false);
   });
 });
 

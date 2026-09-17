@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { AppErrorScreen } from "@/components/errors/app-error-screen";
+import { appLogger } from "@/lib/logger";
 import {
   captureReportIssueError,
   type ReportIssueErrorCapture,
@@ -31,6 +32,16 @@ function captureRouteError(
     sourceAction: "Route error",
   });
   captureByOccurrence.set(props, capture);
+  // Logged here, on the once-per-occurrence path, and not only sent to Sentry:
+  // a production React build strips the component name from a render-loop
+  // error ("Minified React error #185"), so the component stack is the only
+  // thing in the desktop log that says WHICH route component crashed - the
+  // same line `RootErrorBoundary` writes for a crash above the route tree.
+  appLogger.errorSummary(
+    "[renderer] route error reached RouteErrorComponent",
+    { componentStack: capture.cause.componentStack },
+    props.error,
+  );
   return capture;
 }
 

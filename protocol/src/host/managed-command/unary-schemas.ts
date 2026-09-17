@@ -227,6 +227,142 @@ export type ManagedCommandDeleteResponse = z.infer<
 >;
 
 /**
+ * Agent-facing command row. Wider than the human `managedCommandSchema`:
+ * the authoring agent already knows the command line and cwd, and list/view
+ * over a dialed session must return them.
+ */
+export const managedCommandAgentViewSchema = z.object({
+  id: z.string(),
+  monitor: z.boolean(),
+  debounceMs: z.number().int().nonnegative().optional(),
+  maxWaitMs: z.number().int().nonnegative().optional(),
+  throttleMs: z.number().int().nonnegative().optional(),
+  description: z.string(),
+  command: z.string(),
+  cwd: z.string(),
+  /**
+   * Reported so an agent's own configure/view round-trips the flag it can
+   * author. The human `managedCommandSchema` carries the same field; this row
+   * is the agent's view of the same command, not a second source of truth.
+   */
+  relaunchOnHostRestart: z.boolean(),
+  status: managedCommandStatusSchema,
+  logDirectory: z.string(),
+  createdByAgentId: z.string(),
+  createdAtMs: z.number(),
+  updatedAtMs: z.number(),
+  hint: z.string().optional(),
+  notice: z.string().optional(),
+});
+export type ManagedCommandAgentView = z.infer<
+  typeof managedCommandAgentViewSchema
+>;
+
+export const managedCommandCreateRequestSchema = z.object({
+  epicId: z.string().min(1),
+  createdByAgentId: z.string().min(1),
+  command: z.string().min(1),
+  description: z.string().min(1),
+  cwd: z.string().min(1).nullable(),
+  monitor: z.boolean(),
+  debounceMs: z.number().int().nonnegative().nullable(),
+  maxWaitMs: z.number().int().nonnegative().nullable(),
+  throttleMs: z.number().int().nonnegative().nullable(),
+  /**
+   * `null` takes the host default rather than asserting one, so an agent that
+   * does not care about restart policy does not have to state one.
+   */
+  relaunchOnHostRestart: z.boolean().nullable(),
+});
+export type ManagedCommandCreateRequest = z.infer<
+  typeof managedCommandCreateRequestSchema
+>;
+
+export const managedCommandCreateResponseSchema = z.object({
+  command: managedCommandAgentViewSchema,
+});
+export type ManagedCommandCreateResponse = z.infer<
+  typeof managedCommandCreateResponseSchema
+>;
+
+export const managedCommandListRequestSchema = z.object({
+  epicId: z.string().min(1),
+  createdByAgentId: z.string().min(1),
+});
+export type ManagedCommandListRequest = z.infer<
+  typeof managedCommandListRequestSchema
+>;
+
+export const managedCommandListResponseSchema = z.object({
+  commands: z.array(managedCommandAgentViewSchema),
+});
+export type ManagedCommandListResponse = z.infer<
+  typeof managedCommandListResponseSchema
+>;
+
+export const managedCommandViewRequestSchema =
+  managedCommandControlRequestSchema;
+export type ManagedCommandViewRequest = ManagedCommandControlRequest;
+
+export const managedCommandViewResponseSchema = z.object({
+  command: managedCommandAgentViewSchema,
+});
+export type ManagedCommandViewResponse = z.infer<
+  typeof managedCommandViewResponseSchema
+>;
+
+/**
+ * The AGENT's configure, distinct from the human `managedCommand.configure`
+ * above: it edits the notification settings and label an agent authored, and
+ * answers with the wider `managedCommandAgentViewSchema`. The two share a verb
+ * and nothing else - a different caller, a different field set, a different
+ * response shape - so they are separate methods rather than one widened one.
+ *
+ * Every field but the ids is nullable-meaning-unchanged, so an agent may set
+ * one setting without restating the rest. `relaunchOnHostRestart` is here as
+ * well as on the human call because the agent tool has always been able to
+ * author it (`traycer_run_shell`), and a configure that could not edit what
+ * run could set would be a hole the agent has no other way to close.
+ */
+export const managedCommandConfigureAgentShellRequestSchema = z.object({
+  epicId: z.string().min(1),
+  commandId: z.string().min(1),
+  description: z.string().min(1).nullable(),
+  monitor: z.boolean().nullable(),
+  debounceMs: z.number().int().nonnegative().nullable(),
+  maxWaitMs: z.number().int().nonnegative().nullable(),
+  throttleMs: z.number().int().nonnegative().nullable(),
+  relaunchOnHostRestart: z.boolean().nullable(),
+});
+export type ManagedCommandConfigureAgentShellRequest = z.infer<
+  typeof managedCommandConfigureAgentShellRequestSchema
+>;
+
+export const managedCommandConfigureAgentShellResponseSchema = z.object({
+  command: managedCommandAgentViewSchema,
+});
+export type ManagedCommandConfigureAgentShellResponse = z.infer<
+  typeof managedCommandConfigureAgentShellResponseSchema
+>;
+
+export const managedCommandRestartRequestSchema = z.object({
+  epicId: z.string().min(1),
+  commandId: z.string().min(1),
+  command: z.string().min(1).nullable(),
+  cwd: z.string().min(1).nullable(),
+});
+export type ManagedCommandRestartRequest = z.infer<
+  typeof managedCommandRestartRequestSchema
+>;
+
+export const managedCommandRestartResponseSchema = z.object({
+  command: managedCommandAgentViewSchema,
+});
+export type ManagedCommandRestartResponse = z.infer<
+  typeof managedCommandRestartResponseSchema
+>;
+
+/**
  * One shell whose last batch of output a committed Stop fence captured and is
  * holding back. The hold is DURABLE and survives host restarts, which is the
  * whole reason this needs a surface: a shell that is still running releases its

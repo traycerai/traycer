@@ -295,7 +295,7 @@ function EnvOverrideRow(props: {
           disabled={disabled}
           spellCheck={false}
           aria-label={`Name for ${entry.key}`}
-          className="h-8 font-mono text-code-xs"
+          className="h-8"
           onChange={(event) =>
             setDraft((current) => ({ ...current, key: event.target.value }))
           }
@@ -303,6 +303,8 @@ function EnvOverrideRow(props: {
             if (event.key === "Enter") event.currentTarget.blur();
           }}
           onBlur={commit}
+          font="mono"
+          size="xs"
         />
         <EnvValueField
           value={draft.value}
@@ -370,10 +372,12 @@ function EnvOverrideAddRow(props: {
           spellCheck={false}
           placeholder={namePlaceholder}
           aria-label="New environment variable name"
-          className="h-8 font-mono text-code-xs"
+          className="h-8"
           onChange={(event) =>
             setDraft((current) => ({ ...current, key: event.target.value }))
           }
+          font="mono"
+          size="xs"
         />
         <EnvValueField
           value={draft.value}
@@ -469,12 +473,14 @@ function EnvValueField(props: {
         spellCheck={false}
         aria-label={ariaLabel}
         placeholder={mode === "unset" ? "removed from environment" : "value"}
-        className="h-8 min-w-0 flex-1 font-mono text-code-xs"
+        className="h-8 min-w-0 flex-1"
         onChange={(event) => onValueChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
         onBlur={onBlur}
+        font="mono"
+        size="xs"
       />
     </div>
   );

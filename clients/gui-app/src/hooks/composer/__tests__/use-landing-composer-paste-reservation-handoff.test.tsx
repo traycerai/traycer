@@ -21,7 +21,7 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import * as landingImageBudget from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   releaseSession,
 } from "@/lib/composer/landing-image-store";
@@ -103,7 +103,7 @@ beforeEach(async () => {
   const hashes = await imageHashKeys();
   await Promise.all(
     hashes.map(async (hash) => {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }),
   );
@@ -178,7 +178,12 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         reservation.release();
       });
       releaseSpies.push(release);
-      return { release };
+      return {
+        release,
+        settleStored: (candidateIndex: number, hash: string) => {
+          reservation.settleStored(candidateIndex, hash);
+        },
+      };
     });
     return { releaseSpies };
   }

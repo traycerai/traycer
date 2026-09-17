@@ -14,9 +14,11 @@ import { platform as osPlatform, userInfo } from "node:os";
 import * as nodePath from "node:path";
 import { cliConfigDir, cliConfigPath } from "./paths";
 import {
+  browserOnlyConfigSchema,
   cliConfigSchema,
   CLI_CONFIG_VERSION,
   EMPTY_CLI_CONFIG,
+  type BrowserConfig,
   type CliConfig,
   type FeatureSettings,
   type DetectedShell,
@@ -247,6 +249,42 @@ function pathScanCandidates(isWindows: boolean): string[] {
 }
 
 /**
+ * Whether a path names a Git-for-Windows `bash.exe`, i.e. the thing this
+ * module labels "Git Bash" in the Settings picker.
+ *
+ * Deliberately narrow — a Git-named install directory, not any MSYS layout.
+ * `C:\msys\bin\bash.exe` is a plain bash and keeps its basename label; the
+ * broader `<install>\bin\bash.exe` reading belongs to
+ * `windowsShellCaptionFamily` / the host's env-probe family, which are asking
+ * a different question (how do I read this shell's profile?) and can afford
+ * to be inclusive because a wrong guess there just degrades to a fallback.
+ *
+ * Exported because the host's managed-command interpreter classifier has to
+ * recognise a *configured* Git Bash, and a second copy of this rule would
+ * drift from the label the user is looking at in Settings.
+ *
+ * The path is normalised three ways before matching, and all three matter for
+ * a user-typed value: case, separators (forward slashes, which detection's own
+ * win32-built paths never produce), and DOT SEGMENTS. Without the last one this
+ * searches text the filesystem never will —
+ * `C:\Git\bin\..\..\Windows\System32\bash.exe` contains `\git\bin\`
+ * but resolves to System32, so the rule would report Git Bash for the legacy
+ * WSL launcher: the probe succeeds, the host publishes `git-bash`, and a
+ * command written in Git Bash syntax meets WSL — which this classifier
+ * deliberately treats as unsupported.
+ */
+export function isGitBashShellPath(shellPath: string): boolean {
+  const normalised = nodePath.win32.normalize(
+    shellPath.toLowerCase().replaceAll("/", "\\"),
+  );
+  return (
+    nodePath.win32.basename(normalised) === "bash.exe" &&
+    (normalised.includes("\\git\\bin\\") ||
+      normalised.includes("\\git\\usr\\bin\\"))
+  );
+}
+
+/**
  * A friendly display name for a detected shell: WSL and Git Bash get recognised
  * labels (both are `*.exe` whose basename would otherwise read as `wsl.exe` /
  * `bash.exe`); everything else is just its basename. Purely cosmetic - never a
@@ -257,11 +295,7 @@ function friendlyShellName(shellPath: string, isWindows: boolean): string {
   const api = pathApiFor(isWindows);
   const base = api.basename(shellPath);
   if (base.toLowerCase() === "wsl.exe") return "WSL";
-  const lower = shellPath.toLowerCase();
-  if (
-    base.toLowerCase() === "bash.exe" &&
-    (lower.includes("\\git\\bin\\") || lower.includes("\\git\\usr\\bin\\"))
-  ) {
+  if (isGitBashShellPath(shellPath)) {
     return "Git Bash";
   }
   return base;
@@ -942,7 +976,7 @@ export function readFeatureSettingsSync(): FeatureSettings {
   } catch {
     // Feature gates must remain safe even when config cannot be read.
   }
-  return { agentRoles: false };
+  return { agentRoles: false, artifactVersioning: false };
 }
 
 /** Enables or disables agent roles while preserving the rest of the config. */
@@ -951,6 +985,54 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
   await writeCliConfig({
     ...current,
     features: { ...current.features, agentRoles: enabled },
+  });
+}
+
+/** Whether agents may drive the in-app browser (default on when unset). */
+export async function readBrowserConfig(): Promise<BrowserConfig> {
+  return (await readCliConfig()).browser;
+}
+
+/**
+ * Best-effort synchronous browser read, for the per-call gate on agent browser
+ * tools. Fails OPEN - a missing, unreadable, or invalid `browser` block
+ * resolves to `{ agentAccess: true }` - which is the opposite of
+ * `readFeatureSettingsSync` and deliberate: this is not an experimental
+ * capability being unlocked, it is a capability agents already have that the
+ * user may switch OFF. A corrupt config that silently disabled it would read as
+ * "the browser tools are broken", with nothing in the UI to explain why;
+ * failing open keeps the default behaviour and leaves the config error to
+ * surface where it is actionable (`readBrowserConfig`, which throws like
+ * `readLogLevels`).
+ *
+ * It validates `browserOnlyConfigSchema`, NOT the whole document: failing open
+ * is for a block we cannot read, and an explicit `agentAccess: false` beside a
+ * future `version` or a block some newer writer reshaped is one we can. Reading
+ * the document whole would let an unrelated defect re-grant a capability the
+ * user deliberately revoked, which is the one direction this gate must not
+ * move on its own.
+ */
+export function readBrowserConfigSync(): BrowserConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = browserOnlyConfigSchema.safeParse(JSON.parse(raw));
+    if (result.success) return result.data.browser;
+  } catch {
+    // An unreadable config must not revoke a capability the user never
+    // disabled - fall through to the permissive default.
+  }
+  return { agentAccess: true };
+}
+
+/**
+ * Enables or disables agent access to the in-app browser while preserving the
+ * rest of the config.
+ */
+export async function setAgentBrowserAccess(enabled: boolean): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    ...current,
+    browser: { ...current.browser, agentAccess: enabled },
   });
 }
 

@@ -211,6 +211,7 @@ function createHarness(): Harness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: () => {},
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     environment: CHAT_STORE_TEST_ENVIRONMENT,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
@@ -218,6 +219,7 @@ function createHarness(): Harness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => {
           rangeRequests += 1;
         },
@@ -509,6 +511,7 @@ describe("the runtime-disposal card on an already-hydrated windowed row", () => 
             "Send your message again to continue on a fresh session.",
           recoverable: true,
           code: "CLAUDE_RUNTIME_DISPOSED",
+          failure: null,
         },
         {
           type: "error",
@@ -518,6 +521,7 @@ describe("the runtime-disposal card on an already-hydrated windowed row", () => 
           message: "1 queued message was held.",
           recoverable: true,
           code: "QUEUE_PAUSED_AFTER_ERROR",
+          failure: null,
         },
       ],
     };

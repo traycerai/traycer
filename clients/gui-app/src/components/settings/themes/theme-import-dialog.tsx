@@ -1,4 +1,6 @@
+import type { CSSProperties } from "react";
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { z } from "zod";
 import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Check,
@@ -134,6 +136,13 @@ async function stageThemeImport(
         ),
       ),
     };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new Error(
+        "The theme contains unsupported values. Check its colors and syntax rules.",
+      );
+    }
+    throw error;
   } finally {
     controllers.delete(controller);
   }
@@ -252,7 +261,7 @@ function ThemeImportDialogBody({
         )
     ) {
       setSuccess(
-        `${imported.length} ${imported.length === 1 ? "theme" : "themes"} added to your library. Choose a light or dark variant in Appearance to use it.`,
+        `${imported.length} ${imported.length === 1 ? "theme" : "themes"} added to your library. Close this dialog and choose it under Light theme or Dark theme.`,
       );
       loadThemes.reset();
     }
@@ -263,27 +272,47 @@ function ThemeImportDialogBody({
   }
   return (
     <Dialog open onOpenChange={close}>
-      <DialogContent className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-3xl">
-        <DialogHeader className="shrink-0 border-b border-border/60 p-4 pr-10">
-          <DialogTitle className="text-ui-sm">
-            Find your next palette
-          </DialogTitle>
-          <DialogDescription className="max-w-prose pr-4">
-            Browse Open VSX or import theme files.
+      <DialogContent
+        layout="banded"
+        className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] flex-col overflow-hidden sm:max-w-3xl"
+      >
+        <DialogHeader className="shrink-0">
+          <DialogTitle size="sm">Import themes</DialogTitle>
+          <DialogDescription className="max-w-prose">
+            Browse community themes from the Open VSX extension registry, or
+            import theme files.
           </DialogDescription>
+          {loadThemes.isPending ? (
+            <div
+              role="status"
+              className="flex items-center gap-2 text-muted-foreground"
+            >
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+              Reading theme data
+            </div>
+          ) : null}
+          {loadThemes.isError ? (
+            <p role="alert" className="text-destructive">
+              {loadThemes.error.message}
+            </p>
+          ) : null}
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-4 pb-4">
           <Tabs defaultValue="browse" className="gap-3 pt-3">
             <TabsList
               variant="line"
               aria-label="Theme import source"
-              className="w-full justify-start gap-5 border-b border-border/60 pb-2"
+              className="w-full justify-start gap-5"
             >
-              <TabsTrigger value="browse" className="flex-none px-0">
+              <TabsTrigger value="browse" className="flex-none">
                 <Search aria-hidden />
                 Browse themes
               </TabsTrigger>
-              <TabsTrigger value="files" className="flex-none px-0">
+              <TabsTrigger value="files" className="flex-none">
                 <FileUp aria-hidden />
                 Import files
               </TabsTrigger>
@@ -303,7 +332,7 @@ function ThemeImportDialogBody({
                       id="theme-search"
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
-                      placeholder="Theme name or publisher.extension"
+                      placeholder="Search by theme name or publisher"
                       className="h-9 border-border/70 pl-9"
                     />
                   </div>
@@ -315,14 +344,11 @@ function ThemeImportDialogBody({
                     {popularSearches.map((entry) => (
                       <Button
                         key={entry.label}
-                        size="sm"
+                        size="xs"
                         variant="ghost"
                         aria-pressed={query === entry.query}
                         onClick={() => setQuery(entry.query)}
-                        className={cn(
-                          "h-7 rounded-full px-2.5 text-ui-xs",
-                          query === entry.query && "bg-foreground/8",
-                        )}
+                        className="h-7 rounded-full"
                       >
                         {entry.label}
                       </Button>
@@ -344,8 +370,8 @@ function ThemeImportDialogBody({
                   >
                     <SelectTrigger
                       aria-label="Sort themes"
-                      size="sm"
-                      className="w-auto border-transparent bg-transparent text-ui-xs shadow-none"
+                      size="xs"
+                      className="w-auto border-transparent bg-transparent shadow-none"
                     >
                       <SelectValue />
                     </SelectTrigger>
@@ -496,7 +522,9 @@ function ThemeImportDialogBody({
                       onChange={(event) => setJson(event.target.value)}
                       placeholder="Paste exported Traycer theme JSON or a VS Code color theme…"
                       rows={7}
-                      className="bg-foreground/3 font-mono text-ui-xs"
+                      className="bg-foreground/3"
+                      font="mono"
+                      size="xs"
                     />
                     <div className="flex justify-end">
                       <Button
@@ -513,24 +541,6 @@ function ThemeImportDialogBody({
             </TabsContent>
           </Tabs>
           <div className="space-y-3 pt-3">
-            {loadThemes.isPending ? (
-              <div
-                role="status"
-                className="flex items-center gap-2 text-muted-foreground"
-              >
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-                Reading theme data
-              </div>
-            ) : null}
-            {loadThemes.isError ? (
-              <p role="alert" className="text-destructive">
-                {loadThemes.error.message}
-              </p>
-            ) : null}
             {conflictError ? (
               <p role="alert" className="text-destructive">
                 {conflictError}
@@ -639,7 +649,7 @@ function CommunityThemeRow({
           ) : (
             <Download aria-hidden className="size-3.5" />
           )}
-          {installed ? "Review update" : "Install"}
+          {installed ? "Review update" : "Preview themes"}
         </Button>
       </div>
     </article>
@@ -682,14 +692,20 @@ function ThemeImportPreview({
               className="flex size-8 shrink-0 overflow-hidden rounded-md border border-foreground/10"
             >
               <span
-                className="w-2/3"
-                style={{
-                  background: theme.colors.background ?? "var(--background)",
-                }}
+                className="w-2/3 bg-[var(--swatch)]"
+                style={
+                  {
+                    "--swatch": theme.colors.background ?? "var(--background)",
+                  } as CSSProperties
+                }
               />
               <span
-                className="flex-1"
-                style={{ background: theme.colors.primary ?? "var(--primary)" }}
+                className="flex-1 bg-[var(--swatch)]"
+                style={
+                  {
+                    "--swatch": theme.colors.primary ?? "var(--primary)",
+                  } as CSSProperties
+                }
               />
             </span>
             <span className="min-w-0 flex-1 break-words">{theme.name}</span>
@@ -708,7 +724,7 @@ function ThemeImportPreview({
         <p className="text-xs text-muted-foreground">
           Updating replaces {replacing} installed{" "}
           {replacing === 1 ? "theme" : "themes"}, including your color edits.
-          Save copies to keep those edits.
+          Import as copies to keep your existing themes and their edits.
         </p>
       ) : null}
       <div className="flex flex-wrap justify-end gap-2">
@@ -718,7 +734,7 @@ function ThemeImportPreview({
         {replacing > 0 || staged.baseline !== "[]" || saveFailed ? (
           <Button variant="outline" onClick={() => onSave(true)}>
             <Copy aria-hidden className="size-4" />
-            Save copies
+            Import as copies
           </Button>
         ) : null}
         <Button onClick={() => onSave(false)}>

@@ -6,6 +6,11 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
+import {
+  PLAN_RESTRICTED_MOBILE_DETAIL,
+  planRestrictedMobileTitle,
+} from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 
 /**
@@ -174,11 +179,24 @@ function UnreachableNotice(props: {
   // deleted My Hosts list carried exactly this notice; the scope model now
   // preserves the reason so this gate can keep making the distinction.
   if (host.planRestricted) {
+    // The installed mobile app may not offer the purchase or the upgrade
+    // (App Store guideline 3.1.1), so it states the same fact without either -
+    // and `PlanRestrictedUpgradeAction` withholds the button itself, which is
+    // why the action slot below stays mounted on both shells.
+    const mobile = isMobileApp();
     return (
       <HostScopeNotice
         tone="warn"
-        title={`Connecting to ${host.name} needs a paid plan`}
-        detail="It keeps working on its own machine, and account-level settings here still apply. This app just can't attach to it remotely on the current plan."
+        title={
+          mobile
+            ? planRestrictedMobileTitle(host.name)
+            : `Connecting to ${host.name} needs a paid plan`
+        }
+        detail={
+          mobile
+            ? PLAN_RESTRICTED_MOBILE_DETAIL
+            : "It keeps working on its own machine, and account-level settings here still apply. This app just can't attach to it remotely on the current plan."
+        }
         action={<PlanRestrictedUpgradeAction />}
         testId="host-scope-plan-restricted"
       />
@@ -243,7 +261,7 @@ function HostScopeNotice(props: {
       <div
         className={cn(
           "font-medium text-ui-sm",
-          props.tone === "warn" ? "text-amber-500" : "text-foreground",
+          props.tone === "warn" ? "text-warning-foreground" : "text-foreground",
         )}
       >
         {props.title}
@@ -270,7 +288,8 @@ export function HostScopeConnecting(props: {
       <AgentSpinningDots
         testId={undefined}
         variant="orbit"
-        className="text-muted-foreground"
+        className={undefined}
+        tone="muted"
       />
       Connecting to {props.hostName}…
     </div>

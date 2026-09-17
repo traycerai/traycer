@@ -7,7 +7,6 @@ import {
   useSystemOverlayActive,
   useSystemTabModalActions,
 } from "@/stores/tabs/use-system-tab-modal";
-import { cn } from "@/lib/utils";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
@@ -32,16 +31,13 @@ export function HistoryButton() {
     <TooltipWrapper label={tooltip} side="top" sideOffset={6} align={undefined}>
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label="History"
         aria-haspopup="dialog"
+        aria-expanded={isActive}
         data-testid="history-button"
         onClick={onClick}
-        className={cn(
-          "text-muted-foreground hover:text-foreground",
-          isActive && "bg-accent text-foreground hover:text-foreground",
-        )}
       >
         <History className="size-4" />
       </Button>

@@ -9,8 +9,8 @@ import {
 } from "../landing-terminal-gesture-context";
 import {
   UNBOUND_LANDING_PAGE_ID,
-  useLandingTerminalStore,
-} from "@/stores/home/landing-terminal-store";
+  useLandingPanelStore,
+} from "@/stores/home/landing-panel-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -106,7 +106,7 @@ function resetStores(): void {
   useWorkspaceFoldersStore.setState({ byHost: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useWorktreeIntentStagingStore.getState().resetForTests();
-  useLandingTerminalStore.getState().resetForTests();
+  useLandingPanelStore.getState().resetForTests();
   mocks.activeHostId = HOST_A;
 }
 
@@ -358,7 +358,7 @@ describe("LandingTerminalGestureProvider - staged worktree intent routes the lau
     // Opens this landing page's panel so the captured gesture actually pins
     // `target` instead of reverting to live focus once it's captured.
     act(() => {
-      useLandingTerminalStore
+      useLandingPanelStore
         .getState()
         .setPanelOpen(UNBOUND_LANDING_PAGE_ID, true);
     });

@@ -10,9 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { HostDoctorCard } from "@/components/settings/panels/host-doctor-card";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import type { RecurrenceState } from "@/components/settings/panels/host-doctor-recurrence";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
+  HostLogsTailResult,
   HostRestartRequestResult,
   QueuedDoctorRepair,
   QueuedDoctorRepairResult,
@@ -46,6 +48,10 @@ interface ManagementOverrides {
   readonly freePortAndRestart?: (
     input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ) => Promise<FreePortAndRestartInput>;
+  readonly getHostLogs?: (input: {
+    readonly tailLines: number;
+    readonly expectedHostId: string;
+  }) => Promise<HostLogsTailResult>;
 }
 
 function makeManagement(overrides: ManagementOverrides): IHostManagement {
@@ -64,7 +70,9 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),
-    getHostLogs: vi.fn(() => Promise.resolve({ path: null, tail: "" })),
+    getHostLogs:
+      overrides.getHostLogs ??
+      vi.fn(() => Promise.resolve({ path: null, tail: "" })),
     runDoctor:
       overrides.runDoctor ??
       vi.fn(() => Promise.resolve<HostDoctorReport>({ issues: [], ranAt: "" })),
@@ -149,18 +157,51 @@ function pendingUpgradeIssue(): HostDoctorIssue {
   };
 }
 
-function renderCard(host: IRunnerHost): QueryClient {
+function renderCard(
+  host: IRunnerHost,
+  options:
+    | {
+        readonly recurrenceState?: RecurrenceState;
+        readonly onRecurrenceChange?: (next: RecurrenceState) => void;
+      }
+    | undefined,
+): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={host}>
-        <HostDoctorCard expectedHostId="local-host" />
+        <HostDoctorCard
+          expectedHostId="local-host"
+          recurrenceState={options?.recurrenceState}
+          onRecurrenceChange={options?.onRecurrenceChange}
+        />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+function hostLogsIssue(): HostDoctorIssue {
+  return {
+    code: "RECENT_CRASH_MARKERS",
+    severity: "warning",
+    title: "Recent crash markers",
+    message: "The host log contains recent crash markers.",
+    fixAction: "host-logs",
+    terminalCommand: null,
+    details: null,
+  };
+}
+
+/**
+ * The native `disabled` property, not `toBeDisabled()`: jest-dom's matchers
+ * are not wired into this suite (see `host-overview-identity-card.test.tsx`),
+ * so the matcher would be undefined rather than failing informatively.
+ */
+function isDisabled(element: HTMLElement): boolean {
+  return element instanceof HTMLButtonElement && element.disabled;
 }
 
 describe("HostDoctorCard pending CLI upgrade", () => {
@@ -180,7 +221,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
           ranAt: "2026-05-15T00:00:00Z",
         }),
     });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
 
     expect(await screen.findByText(/CLI upgrade pending/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Restart host/i })).toBeTruthy();
@@ -216,7 +257,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
         }),
       freePortAndRestart,
     });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
 
     const fixButton = await screen.findByRole("button", {
       name: /Free port \+ restart/i,
@@ -282,7 +323,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
         }),
       freePortAndRestart,
     });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
 
     const fixButton = await screen.findByRole("button", {
       name: /Free port \+ restart/i,
@@ -338,7 +379,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       freePortAndRestart,
       restartHost,
     });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
 
     const button = await screen.findByRole("button", {
       name: /Free port \+ restart/i,
@@ -377,7 +418,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
           ranAt: "2026-05-15T00:00:00Z",
         }),
     });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
     expect(await screen.findByText(/Host endpoint unreachable/)).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: /Free port \+ restart/i }),
@@ -401,7 +442,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       restartHost,
       runDoctorRepairQueued,
     });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
 
     const button = await screen.findByRole("button", {
       name: /Restart host/i,
@@ -424,7 +465,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     const management = makeManagement({
       runDoctor: () => Promise.reject(new Error(HOST_CHANGED_MESSAGE)),
     });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
 
     expect(
       await screen.findByText(`Doctor could not run: ${HOST_CHANGED_MESSAGE}`),
@@ -462,7 +503,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       };
     });
     const management = makeManagement({ runDoctor });
-    renderCard(makeHostWithManagement(management));
+    renderCard(makeHostWithManagement(management), undefined);
 
     expect(
       await screen.findByText(`Doctor could not run: ${HOST_CHANGED_MESSAGE}`),
@@ -491,5 +532,173 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     second.release();
     expect(await screen.findByText("Doctor: no issues detected.")).toBeTruthy();
     expect(screen.queryByText(/Doctor could not run:/)).toBeNull();
+  });
+});
+
+describe("HostDoctorCard host-logs fix", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("reads the tail through a dedicated mutation and renders it, with no applied toast, no repair dispatch, and no report refetch", async () => {
+    const getHostLogs = vi.fn(() =>
+      Promise.resolve<HostLogsTailResult>({
+        path: "/var/log/traycer/host.log",
+        tail: "line one\nline two",
+      }),
+    );
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    );
+    const runDoctor = vi.fn(() =>
+      Promise.resolve<HostDoctorReport>({
+        issues: [hostLogsIssue()],
+        ranAt: "2026-05-15T00:00:00Z",
+      }),
+    );
+    const management = makeManagement({
+      runDoctor,
+      runDoctorRepairQueued,
+      getHostLogs,
+    });
+    const onRecurrenceChange = vi.fn();
+    // A non-empty, non-locked recurrence: the pre-existing fix mutation's
+    // `onSuccess` would reset this to `{ failures: [], locked: false }`. The
+    // logs read must leave it untouched, which we can only observe through
+    // the controlled `onRecurrenceChange` callback.
+    const startingRecurrence: RecurrenceState = {
+      failures: [{ at: Date.now(), code: "SOME_OTHER_ISSUE" }],
+      locked: false,
+    };
+    renderCard(makeHostWithManagement(management), {
+      recurrenceState: startingRecurrence,
+      onRecurrenceChange,
+    });
+
+    const button = await screen.findByRole("button", { name: /Show logs/i });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(getHostLogs).toHaveBeenCalledWith({
+        tailLines: 200,
+        expectedHostId: "local-host",
+      });
+    });
+
+    const tail = await screen.findByTestId("host-doctor-log-tail");
+    expect(tail.textContent).toBe("line one\nline two");
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(runDoctorRepairQueued).not.toHaveBeenCalled();
+    // One call: the initial report fetch. A refetch (as the applied-fix path
+    // triggers via `invalidateQueries`) would push this to two.
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(onRecurrenceChange).not.toHaveBeenCalled();
+  });
+
+  it("shows empty-log feedback when the host's log tail is empty", async () => {
+    const getHostLogs = vi.fn(() =>
+      Promise.resolve<HostLogsTailResult>({ path: null, tail: "" }),
+    );
+    const management = makeManagement({
+      runDoctor: () =>
+        Promise.resolve<HostDoctorReport>({
+          issues: [hostLogsIssue()],
+          ranAt: "2026-05-15T00:00:00Z",
+        }),
+      getHostLogs,
+    });
+    renderCard(makeHostWithManagement(management), undefined);
+
+    const button = await screen.findByRole("button", { name: /Show logs/i });
+    fireEvent.click(button);
+
+    const tail = await screen.findByTestId("host-doctor-log-tail");
+    expect(tail.textContent).toBe(
+      "This host's log is empty or no longer there.",
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a read failure via a plain error toast, not the fix-failed path, and leaves recurrence alone", async () => {
+    const getHostLogs = vi.fn(() => Promise.reject(new Error("boom")));
+    const management = makeManagement({
+      runDoctor: () =>
+        Promise.resolve<HostDoctorReport>({
+          issues: [hostLogsIssue()],
+          ranAt: "2026-05-15T00:00:00Z",
+        }),
+      getHostLogs,
+    });
+    const onRecurrenceChange = vi.fn();
+    renderCard(makeHostWithManagement(management), {
+      recurrenceState: { failures: [], locked: false },
+      onRecurrenceChange,
+    });
+
+    const button = await screen.findByRole("button", { name: /Show logs/i });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't read this host's log.",
+        expect.objectContaining({ description: "boom" }),
+      );
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    // A failed fix normally advances the recurrence guard
+    // (`nextFailedRecurrence`); a failed log read is not a failed fix and
+    // must not count toward the 3-strikes lock.
+    expect(onRecurrenceChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("host-doctor-log-tail")).toBeNull();
+  });
+
+  it("bypasses the recurrence lock for Show logs: the button stays enabled and the read still runs", async () => {
+    const getHostLogs = vi.fn(() =>
+      Promise.resolve<HostLogsTailResult>({ path: null, tail: "captured" }),
+    );
+    const management = makeManagement({
+      runDoctor: () =>
+        Promise.resolve<HostDoctorReport>({
+          issues: [hostLogsIssue()],
+          ranAt: "2026-05-15T00:00:00Z",
+        }),
+      getHostLogs,
+    });
+    const onRecurrenceChange = vi.fn();
+    const lockedRecurrence: RecurrenceState = {
+      failures: [
+        { at: Date.now(), code: "A" },
+        { at: Date.now(), code: "B" },
+        { at: Date.now(), code: "C" },
+      ],
+      locked: true,
+    };
+    renderCard(makeHostWithManagement(management), {
+      recurrenceState: lockedRecurrence,
+      onRecurrenceChange,
+    });
+
+    const button = await screen.findByRole("button", { name: /Show logs/i });
+    expect(isDisabled(button)).toBe(false);
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(getHostLogs).toHaveBeenCalledWith({
+        tailLines: 200,
+        expectedHostId: "local-host",
+      });
+    });
+    await screen.findByTestId("host-doctor-log-tail");
+    // The locked-recurrence guard shows its own reportable toast
+    // ("Doctor paused after 3 failed fixes…") for every other fix action;
+    // Show logs must never route through it.
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(onRecurrenceChange).not.toHaveBeenCalled();
   });
 });

@@ -8,8 +8,9 @@
  * same surface, and a second copy of it would be a second place for the empty
  * copy, the retry affordance and the pager to drift.
  *
- * Components only - the shared row-label rule is a plain function and lives in
- * `history-item-title`, so this module stays hot-reloadable.
+ * Shared row decisions live here too. The responsive bodies have distinct row
+ * layouts, but account-level truth (such as whether a cloud mutation can
+ * target a row) must not drift between them.
  */
 import { useState, type ReactNode } from "react";
 import { Layers } from "lucide-react";
@@ -22,19 +23,39 @@ import { NotificationIndicatorIcon } from "@/components/notifications/notificati
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import {
+  historyRowProvenance,
+  historyRowProvenanceTitle,
+  type HistoryRowProvenance,
+} from "@/components/epics/history-row-provenance";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
+import { cn } from "@/lib/utils";
 
 /**
  * A task row's status: the epic's notification indicator when it has one, its
- * running state when an agent is working, and `defaultIcon` otherwise. Every
- * surface that lists tasks reads the same two sources through this one
- * component, so a task that is running or wants attention looks the same in
- * the desktop list, the phone's history and the phone's nav drawer. Phases
- * have no live agent activity and are never looked up for it.
+ * running state when an agent is working, its provenance when that has a
+ * consequence, and `defaultIcon` otherwise. Every surface that lists tasks
+ * reads the same sources through this one component, so a task that is
+ * running, wants attention, was deleted with edits kept, or is not synced yet
+ * looks the same in the desktop list, the phone's history and the phone's nav
+ * drawer. Phases have no live agent activity and are never looked up for it.
  *
- * `defaultIcon` is what an idle, unread-free row shows: a glyph where the
- * surface wants every row to carry one, or `null` where a row without status
- * should carry nothing at all.
+ * Provenance takes the `defaultIcon` slot, below every notification tone and
+ * the running state, on purpose: those are things happening NOW that the
+ * person may need to act on this minute, while "deleted, edits kept" and "not
+ * synced yet" are standing conditions the row keeps until they act on them.
+ * A row that is both running and unsynced shows the spinner; the provenance
+ * glyph returns when the agent goes idle.
+ *
+ * `defaultIcon` is what an idle, unread-free, ordinary row shows: a glyph
+ * where the surface wants every row to carry one, or `null` where a row
+ * without status should carry nothing at all.
  */
 export function HistoryRowStatusIcon(props: {
   readonly item: HistoryItem;
@@ -49,19 +70,97 @@ export function HistoryRowStatusIcon(props: {
     { epicId: props.item.epicId },
     null,
   );
+  const provenance = historyRowProvenance(props.item);
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
       running={activityStatus === "idle" ? false : activityStatus}
+      // An EPIC-level rollup, exactly as in the tab strip: a task's agents can
+      // live on several machines, so no one host's coverage answers for the
+      // row. Unserved-plane reporting belongs to the per-agent icons.
+      activityCoverage="indeterminate"
       subjectId={props.item.epicId}
       testIdPrefix={props.testIdPrefix}
       className={props.className}
       style={undefined}
       runningTitle="Task activity in progress"
-      defaultIcon={props.defaultIcon}
+      defaultIcon={
+        provenance === null ? (
+          props.defaultIcon
+        ) : (
+          <HistoryRowProvenanceGlyph
+            provenance={provenance}
+            epicId={props.item.epicId}
+            testIdPrefix={props.testIdPrefix}
+            className={props.className}
+          />
+        )
+      }
       statusPresentation="message"
       agentSurface="gui"
     />
+  );
+}
+
+/**
+ * The provenance dot: a hollow ring for a task that is not synced yet, a
+ * filled destructive dot for one that was deleted with its edits kept. The
+ * same `role="status"` + accessible-name + tooltip leaf the notification
+ * glyphs render, so a screen reader and a hover read the same sentence.
+ *
+ * Colour carries the severity, not the shape alone: the hollow ring stays in
+ * the row's muted text colour because on a plan without sync EVERY row wears
+ * it, and a warning tint on all of them would be noise the person cannot
+ * act on.
+ */
+function HistoryRowProvenanceGlyph(props: {
+  readonly provenance: HistoryRowProvenance;
+  readonly epicId: string;
+  readonly testIdPrefix: string;
+  readonly className: string | undefined;
+}): ReactNode {
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const title = historyRowProvenanceTitle(props.provenance, cloudAuthorized);
+  // The desktop row's activation target is an overlay link, and this span is
+  // deliberately not a second tab stop - so keyboard focus on the row holds
+  // the tooltip open (`StatusGlyphFocusContext`), or a sighted keyboard user
+  // would reach the row and see a dot that nothing on screen explains.
+  const tooltipOpen = useStatusGlyphTooltipOpen();
+  return (
+    <TooltipWrapper
+      label={title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+      open={tooltipOpen.open}
+      onOpenChange={tooltipOpen.onOpenChange}
+    >
+      <span
+        role="status"
+        aria-label={title}
+        data-testid={`${props.testIdPrefix}-provenance-${props.provenance}-${props.epicId}`}
+        data-provenance={props.provenance}
+        // After `props.className` so the destructive tint displaces the
+        // surface's muted colour AND its hover colour - a deleted task's dot
+        // does not turn neutral because the pointer is over the row.
+        className={cn(
+          "inline-flex size-3.5 shrink-0 items-center justify-center",
+          props.className,
+          props.provenance === "preserved-orphan" &&
+            "text-destructive group-hover/list-row:text-destructive",
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "size-2 rounded-full border-[1.5px] border-current",
+            props.provenance === "preserved-orphan" && "bg-current",
+          )}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -110,8 +209,9 @@ export function EpicsListFilteringLoading(): ReactNode {
     >
       <AgentSpinningDots
         variant="dots"
-        className="text-muted-foreground"
+        className={undefined}
         testId={undefined}
+        tone="muted"
       />
       <p className="font-medium text-foreground">Searching tasks</p>
     </div>
@@ -141,6 +241,42 @@ export function EpicsListChatHostFilterUnsupported(): ReactNode {
   );
 }
 
+/**
+ * Shown when NO listing was requested: this session holds no cloud verdict and
+ * the negotiated host predates the local-first `epic.listTasks` leg, so the
+ * only listing it can produce is one that spends the account's credential.
+ *
+ * The copy names the two remedies and nothing else, and every other phrasing
+ * this state could take is a false statement, which is why the wording is
+ * fenced here rather than left to a call site:
+ *
+ *  - a spinner claims something is in flight; nothing is, and nothing will be;
+ *  - "No tasks yet" claims the account is empty, which is unknown;
+ *  - anything about what the host holds versus what the cloud holds narrates
+ *    a split the person never asked about - they know their tasks, not where
+ *    each copy lives - and on this exact host it would also be wrong: the
+ *    epics are there, the host simply cannot list them without a sign-in.
+ *
+ * It also does not say the cloud is unreachable. The cloud may be perfectly
+ * fine; this client is declining to spend it on an unverified session.
+ */
+export function EpicsListHostRequiresCloudToList(): ReactNode {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-[min(4rem,12vh)] text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-host-requires-cloud-to-list"
+    >
+      <p className="font-medium text-foreground">
+        Couldn&apos;t load your tasks
+      </p>
+      <p className="max-w-full">
+        Your sign-in couldn&apos;t be confirmed, and this host version needs it
+        to list tasks. They&apos;ll show once it is, or update the host.
+      </p>
+    </div>
+  );
+}
+
 export function EpicsListEmpty(): ReactNode {
   return (
     <div
@@ -149,6 +285,105 @@ export function EpicsListEmpty(): ReactNode {
     >
       <p className="font-medium text-foreground">No tasks yet</p>
     </div>
+  );
+}
+
+/**
+ * No rows AND no settled page. Not an empty account: the listing failed or was
+ * withheld, so "No tasks yet" would be the one claim of completeness this page
+ * cannot make. It says only that - the user is never told which side of the
+ * listing failed - and offers the remedy that can actually change the answer.
+ *
+ * Under an unverified session that remedy is NOT a retry:
+ * `useCloudEpicTasksQuery` settles the page as unavailable without dispatching
+ * the cloud leg while the session holds no verdict, and its guarded `refetch`
+ * resolves without a request under the same condition, so a Retry there is a
+ * button that does nothing. A confirmed sign-in is what changes the verdict,
+ * and the copy states that CONDITION rather than telling the person to sign
+ * in again: `unverified` also covers authn being unreachable (which recovers
+ * on its own) and an unavailable account (which a re-sign-in cannot fix), and
+ * this component holds only the boolean - see `stores/auth/auth-store.ts`.
+ */
+export function EpicsListUnavailable(props: {
+  readonly onRetry: () => void;
+}): ReactNode {
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-unavailable"
+      data-remedy={cloudAuthorized ? "retry" : "sign-in"}
+      role="status"
+    >
+      <p className="font-medium text-foreground">
+        Couldn&apos;t load your tasks
+      </p>
+      {cloudAuthorized ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="epics-list-unavailable-retry"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
+      ) : (
+        <p>
+          Your sign-in couldn&apos;t be confirmed. They&apos;ll load once it is.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Every "there are no rows" reading, decided once for both responsive list
+ * bodies. Ordering is load-bearing:
+ *
+ * 1. A pending cloud page is a renderable device snapshot, not a settled
+ *    account result, so an empty one is still a load - never "No tasks yet".
+ * 2. With no filters, an unavailable page is a failed load, not an empty
+ *    account; a settled one is genuinely empty.
+ * 3. Under a filter, a fetch in flight is the search spinner; an unavailable
+ *    page is again a failed load (the filter was never evaluated over the
+ *    account); only a settled page may say "No tasks match".
+ *
+ * Renders `null` for nothing: a caller reaches this only with zero rows.
+ */
+export function EpicsListNoRows(props: {
+  readonly cloudPagePending: boolean;
+  readonly cloudPageUnavailable: boolean;
+  readonly hasActiveFilters: boolean;
+  readonly isFetching: boolean;
+  readonly onRetry: () => void;
+  readonly hasNextPage: boolean;
+  readonly isFetchingNextPage: boolean;
+  readonly onLoadMore: () => void;
+}): ReactNode {
+  if (props.cloudPagePending) return <EpicsListLoading />;
+  if (!props.hasActiveFilters) {
+    return props.cloudPageUnavailable ? (
+      <EpicsListUnavailable onRetry={props.onRetry} />
+    ) : (
+      <EpicsListEmpty />
+    );
+  }
+  if (props.isFetching) return <EpicsListFilteringLoading />;
+  if (props.cloudPageUnavailable) {
+    return <EpicsListUnavailable onRetry={props.onRetry} />;
+  }
+  return (
+    <>
+      <EpicsListFilteredEmpty />
+      <EpicsListShowMore
+        hasNextPage={props.hasNextPage}
+        isFetchingNextPage={props.isFetchingNextPage}
+        onLoadMore={props.onLoadMore}
+      />
+    </>
   );
 }
 
@@ -186,8 +421,9 @@ export function EpicsListShowMore(props: EpicsListShowMoreProps): ReactNode {
         {props.isFetchingNextPage ? (
           <AgentSpinningDots
             variant="dots"
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
+            tone="muted"
           />
         ) : null}
         Show more
@@ -263,7 +499,7 @@ function errorHeadline(error: Error): string {
       return "You don't have permission to view these epics.";
     }
   }
-  return "Couldn't reach Traycer Cloud";
+  return "Couldn't load your tasks";
 }
 
 function formatError(error: Error): string {

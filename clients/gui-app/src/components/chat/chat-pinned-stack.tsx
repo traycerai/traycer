@@ -42,12 +42,18 @@ export function PinnedStackSections(props: {
   readonly restore: ChatRestoreContextValue;
   readonly scrollRegionMaxHeightClass: string;
   readonly separated: boolean;
+  /**
+   * The changes panel is standing as a chip under the input instead. The todo
+   * panel is not configurable, so the stack can still be here without it.
+   */
+  readonly changesFolded: boolean;
 }) {
   const { restore, todo } = props;
-  // The same predicate `hasChatPinnedStackContent` gates the whole stack on -
+  // The same predicate `chatPinnedStackVisible` gates the whole stack on -
   // shared rather than restated, because a stack that mounts and a section
   // that renders nothing is an empty bordered box.
-  const showChanges = chatChangesPanelHasContent(restore);
+  const showChanges =
+    !props.changesFolded && chatChangesPanelHasContent(restore);
   if (todo === null && !showChanges) return null;
 
   return (
@@ -92,6 +98,7 @@ export function ChatPinnedStack(props: ChatPinnedStackProps) {
             restore={props.restore}
             scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
             separated={false}
+            changesFolded={false}
           />
         </div>
       </div>
@@ -126,14 +133,15 @@ function PinnedTodoPanel(props: {
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className={cn(
-        "bg-muted/30",
-        props.separated ? "border-t border-border/50" : null,
-      )}
+      className={cn(props.separated ? "border-t border-border/50" : null)}
       data-testid="pinned-todo-panel"
+      variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger className="group/todo flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        <CollapsibleTrigger
+          className="group/todo flex min-w-0 flex-1 items-center text-left"
+          variant="panel"
+        >
           <ChevronDown
             aria-hidden
             className={cn(

@@ -15,7 +15,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import {
   isImageAssetPath,
-  isPdfAssetPath,
+  DOCUMENT_ASSET_LABELS,
+  documentAssetKindOf,
 } from "@/lib/assets/image-extension-allowlist";
 import { cn } from "@/lib/utils";
 import {
@@ -723,17 +724,13 @@ function ImageDiffSide(props: {
       <BinaryPlaceholder
         fileName={props.effectivePath}
         sizeBytes={null}
-        // A PDF side is a deliberate product cut (workspace tile previews
-        // PDFs; diffs don't - PDF preview design, Q7), so its copy must
-        // read as a limit, not as "unsupported format" next to a file the
-        // app previews elsewhere. It promises no action: the only Open
-        // Externally here opens the CURRENT path, which for a cross-type
+        // A document side (PDF, Word) is a deliberate product cut (workspace
+        // tile previews documents; diffs don't - PDF preview design, Q7), so
+        // its copy must read as a limit, not as "unsupported format" next to
+        // a file the app previews elsewhere. It promises no action: the only
+        // Open Externally here opens the CURRENT path, which for a cross-type
         // rename (`old.pdf -> new.png`) is not this side's file at all.
-        reason={
-          isPdfAssetPath(props.effectivePath)
-            ? "PDF diffs aren't previewed."
-            : "This file is not one of the supported image formats."
-        }
+        reason={documentSideReason(props.effectivePath)}
         onOpenExternally={props.onOpenExternally}
         openExternallyOpening={props.openExternallyOpening}
         compact
@@ -788,4 +785,12 @@ function ImageDiffEmptyState(props: {
       <span>{props.label}</span>
     </div>
   );
+}
+
+function documentSideReason(effectivePath: string): string {
+  const kind = documentAssetKindOf(effectivePath);
+  if (kind === null) {
+    return "This file is not one of the supported image formats.";
+  }
+  return `${DOCUMENT_ASSET_LABELS[kind]} diffs aren't previewed.`;
 }

@@ -90,6 +90,48 @@ export function isValidStoreFormatVersion(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+/**
+ * What a host archive's runtime `version.json` says about its formats.
+ *
+ * `undeclared` is the ordinary state of every archive built before the writer
+ * existed; `malformed` is an archive that TRIED to declare and could not be
+ * read - a packaging bug rather than an old archive, and the one arm worth a
+ * caller's warning. Neither is a format: what a caller does with them is its
+ * own policy (the CLI degrades both to "undeclared" and warns on the second;
+ * the host reports both as "declares nothing" on `host.status`).
+ */
+export type DeclaredStoreFormatsReading =
+  | { readonly kind: "declared"; readonly formats: HostStoreFormats }
+  | { readonly kind: "undeclared" }
+  | { readonly kind: "malformed" };
+
+/**
+ * Read the `storeFormats` member off a parsed `version.json`.
+ *
+ * Shared by the two processes that read the sidecar - the CLI installer for
+ * the tree it is about to swap in and the tree already installed, and the
+ * host for the tree it is running from - so the three reads accept exactly
+ * one shape. Takes the PARSED document, never the bytes: the callers differ
+ * in how they get at the file and in what they do when they cannot, and only
+ * the interpretation is common ground.
+ */
+export function declaredStoreFormatsFromSidecar(
+  sidecar: unknown,
+): DeclaredStoreFormatsReading {
+  if (sidecar === null || typeof sidecar !== "object") {
+    return { kind: "undeclared" };
+  }
+  const declared = (sidecar as Record<string, unknown>).storeFormats;
+  if (declared === undefined || declared === null)
+    return { kind: "undeclared" };
+  const chatDb =
+    typeof declared === "object" && !Array.isArray(declared)
+      ? (declared as Record<string, unknown>).chatDb
+      : undefined;
+  if (!isValidStoreFormatVersion(chatDb)) return { kind: "malformed" };
+  return { kind: "declared", formats: { chatDb } };
+}
+
 interface ChatDbFormatEra {
   /** First host version, inclusive, that writes `chatDb`. */
   readonly from: string;

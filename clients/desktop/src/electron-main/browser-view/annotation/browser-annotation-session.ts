@@ -14,7 +14,10 @@ import {
   originFromPageUrl,
 } from "./browser-annotation-crop";
 import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "./browser-annotation-overlay-guest.generated";
-import { BrowserDebugSession } from "../debug/browser-debug-session";
+import {
+  BrowserDebugSession,
+  type BrowserDebugLease,
+} from "../debug/browser-debug-session";
 import { dispatchCuratedCdp } from "@traycer/protocol/host/browser/cdp-dispatch";
 import type {
   BrowserCdpCommand,
@@ -27,6 +30,7 @@ import {
   ANNOTATION_WAIT_FOR_PAINT_EXPRESSION,
   ANNOTATION_WORLD_NAME,
   callGuestHook,
+  sanitizeAttachRequest,
   sanitizeAnnotationBindingPayload,
 } from "./browser-annotation-overlay-script";
 import type { BrowserViewCapturedImage } from "../browser-view-port";
@@ -75,11 +79,12 @@ export class BrowserAnnotationSession {
   private readonly onAttached: (
     result: BrowserAnnotationAttachedResult,
   ) => Promise<boolean>;
+  private lease: BrowserDebugLease | null = null;
   private removeBindingListener: (() => void) | null = null;
   private contextId: number | null = null;
   private ended = false;
   private started = false;
-  private capturing = false;
+  private captureInFlight: Promise<boolean> | null = null;
   private markCount = 0;
 
   constructor(options: BrowserAnnotationSessionOptions) {
@@ -99,10 +104,60 @@ export class BrowserAnnotationSession {
     return this.isActive() && this.markCount > 0;
   }
 
+  async preserveBeforeViewportChange(): Promise<void> {
+    if (!this.isActive()) return;
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      await Promise.race([
+        this.preserveMarks(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "Saving the annotation took too long. The viewport was not changed.",
+                ),
+              ),
+            10_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+  }
+
+  private async preserveMarks(): Promise<void> {
+    const current = this.captureInFlight;
+    if (current !== null) {
+      if (await current) return;
+      throw new Error(
+        "Couldn't save the annotation to a chat draft. Try again before resizing.",
+      );
+    }
+    if (this.markCount === 0) return;
+    const evaluation = await this.evaluateRaw(
+      "globalThis.__traycerAnnotationPrepareAttach?.()",
+      false,
+    );
+    const request = sanitizeAttachRequest(readEvaluateValue(evaluation));
+    if (request === null && this.captureInFlight === null && this.isActive()) {
+      await this.captureFailed();
+    }
+    if (request === null || !(await this.captureAttach(request))) {
+      throw new Error(
+        "Couldn't save the annotation to a chat draft. Choose a chat and check the marks before resizing.",
+      );
+    }
+  }
+
   async start(): Promise<BrowserAnnotationStartResult> {
     if (this.ended) return { ok: false, reason: "inject-failed" };
     try {
-      await this.debugSession.enableAfterCommit();
+      // The overlay is a CDP consumer for as long as it is on the page: an
+      // isolated world, a Runtime binding, and evaluates in both directions.
+      this.lease = this.debugSession.acquire();
+      await this.lease.ready();
       if (this.ended) return this.abortStart("inject-failed");
       await this.debugSession.sendCommand(
         "Runtime.addBinding",
@@ -214,9 +269,10 @@ export class BrowserAnnotationSession {
       | "no-main-frame"
       | "no-isolated-world",
   ): BrowserAnnotationStartResult {
-    this.sendCancel();
+    const cancelled = this.sendCancel();
     this.teardownListeners();
-    this.removeBinding();
+    const bindingRemoved = this.removeBinding();
+    this.releaseLease(Promise.all([cancelled, bindingRemoved]));
     this.contextId = null;
     return { ok: false, reason };
   }
@@ -225,15 +281,33 @@ export class BrowserAnnotationSession {
     if (this.ended) return;
     this.ended = true;
     this.markCount = 0;
-    this.sendCancel();
+    const cancelled = this.sendCancel();
     this.teardownListeners();
-    this.removeBinding();
+    const bindingRemoved = this.removeBinding();
+    this.releaseLease(Promise.all([cancelled, bindingRemoved]));
     if (!this.started) return;
     if (reason === "cancelled") {
       this.onEvent({ type: "cancelled" });
       return;
     }
     this.onEvent({ type: "ended", reason });
+  }
+
+  /**
+   * The lease is dropped the moment the session ends, but the DEBUGGER must
+   * not be: on a solo-lease tab the last release detaches in the same tick,
+   * which rejects the cancel evaluate that takes the overlay off the page and
+   * leaves the marks painted with no channel left to clear them. So the
+   * release rides the commands already in flight.
+   */
+  private releaseLease(pending: Promise<unknown>): void {
+    const lease = this.lease;
+    if (lease === null) return;
+    this.lease = null;
+    const release = (): void => {
+      lease.release();
+    };
+    void pending.then(release, release);
   }
 
   private attachMessageListener(): void {
@@ -274,42 +348,55 @@ export class BrowserAnnotationSession {
     this.onEvent(sanitized);
   }
 
-  private sendCancel(): void {
-    void this.evaluateBestEffort(
+  private sendCancel(): Promise<void> {
+    return this.evaluateBestEffort(
       callGuestHook("__traycerAnnotationCancel", []),
       false,
     );
   }
 
-  private removeBinding(): void {
-    if (!this.debugSession.isAttached()) return;
-    this.debugSession
+  private removeBinding(): Promise<void> {
+    if (!this.debugSession.isAttached()) return Promise.resolve();
+    return this.debugSession
       .sendCommand(
         "Runtime.removeBinding",
         { name: ANNOTATION_BINDING_NAME },
         undefined,
       )
-      .catch(() => undefined);
+      .then(
+        () => undefined,
+        () => undefined,
+      );
   }
 
-  private async captureAttach(
+  private captureAttach(
     request: BrowserAnnotationAttachRequest,
-  ): Promise<void> {
-    if (!this.isActive() || this.capturing) return;
-    this.capturing = true;
+  ): Promise<boolean> {
+    if (!this.isActive()) return Promise.resolve(false);
+    if (this.captureInFlight !== null) return this.captureInFlight;
+    const capture = this.captureAndAttach(request).finally(() => {
+      if (this.captureInFlight === capture) this.captureInFlight = null;
+    });
+    this.captureInFlight = capture;
+    return capture;
+  }
+
+  private async captureAndAttach(
+    request: BrowserAnnotationAttachRequest,
+  ): Promise<boolean> {
     try {
       await this.hideChromeForCapture();
       await this.evaluateRequired(ANNOTATION_WAIT_FOR_PAINT_EXPRESSION, true);
       const viewport = await this.readViewportCssSize();
       const image = await this.webContents.capturePage();
-      if (!this.isActive()) return;
+      if (!this.isActive()) return false;
       const pngBytes =
         viewport === null
           ? null
           : cropAnnotationPng(image, request.unionRect, viewport);
       if (pngBytes === null) {
         if (this.isActive()) await this.captureFailed();
-        return;
+        return false;
       }
       const pageUrl = this.webContents.getURL();
       const { counts, droppedElementCount } = deliveredAnnotationCounts(
@@ -334,12 +421,13 @@ export class BrowserAnnotationSession {
         payload,
         pngBytes,
       });
-      if (!this.isActive()) return;
+      if (!this.isActive()) return false;
       if (!delivered) {
         await this.captureFailed();
-        return;
+        return false;
       }
       await this.resetAfterAttach();
+      return true;
     } catch (err) {
       log.warn("[browser-view] annotation capture failed", {
         error: describeLogError(err),
@@ -348,8 +436,7 @@ export class BrowserAnnotationSession {
       if (this.isActive()) {
         await this.captureFailed();
       }
-    } finally {
-      this.capturing = false;
+      return false;
     }
   }
 

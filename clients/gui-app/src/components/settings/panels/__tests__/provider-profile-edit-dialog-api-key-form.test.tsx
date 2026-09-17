@@ -187,6 +187,7 @@ function renderDialog(profile: ProviderProfile) {
           profiles={[profile]}
           canOauth
           startInReauth={false}
+          isLocalHost
           open
           onOpenChange={() => undefined}
           remainingProfilesAfterRemoval={[]}

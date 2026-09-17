@@ -13,10 +13,12 @@ import { z } from "zod";
 import {
   HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeBusyHoldersSchema,
+  worktreeBusyHoldersSchemaV1,
   worktreeBusyOwnerRefSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export {
   HOLDERS_REVISION_DIGEST_PATTERN,
+  worktreeBusyChatTierSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
@@ -27,6 +29,7 @@ export {
   worktreeHoldersChangedErrorDetailsSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export type {
+  WorktreeBusyChatTier,
   WorktreeBusyErrorDetails,
   WorktreeBusyHoldKind,
   WorktreeBusyHolder,
@@ -580,12 +583,16 @@ export type WorktreeListByWorkspacePathsRequestV14 =
 //   worktree.listAllForHost       - released through 1.4, so `presence` could
 //     not widen that line and had to open a 1.5.
 //
-// Both presence-bearing lines are therefore UNRELEASED and still mutable; the
-// `V15` name records which minor the fact landed on for the OTHER method, not a
-// freeze. A further field belongs in these same two minors - widen the mutable
-// head rather than freezing 1.5 or opening a 1.6. Check the floors against
-// `__tests__/__fixtures__/released-baseline-surface.json` before assuming
-// otherwise; that fixture, not this comment, is the authority.
+// Both presence-bearing lines were UNRELEASED and still mutable WHEN THIS WAS
+// WRITTEN; the `V15` name records which minor the fact landed on for the OTHER
+// method, not a freeze. That window has closed, and this comment's own closing
+// instruction is how to see it: the fixture, not this comment, is the
+// authority, and `released-baseline-surface.json` now carries
+// `worktree.listAllForHost` at canonical 1.6 and
+// `worktree.listByWorkspacePaths` at 1.4. Both presence lines are therefore
+// RELEASED and frozen - a further field opens a new minor rather than widening
+// these, and the advice below to "widen the mutable head" no longer applies.
+// Re-check the fixture rather than trusting this paragraph either.
 export const worktreeListByWorkspacePathsResponseSchemaV14 = z.object({
   workspaces: z.array(worktreeWorkspaceSummarySchemaV15),
   scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
@@ -962,7 +969,8 @@ export type WorktreeListHoldersRequest = z.infer<
 >;
 
 export const worktreeListHoldersResponseSchema = z.object({
-  holders: worktreeBusyHoldersSchema,
+  /** Released `@1.0` holder shape - see `worktreeBusyHolderSchemaV1`. */
+  holders: worktreeBusyHoldersSchemaV1,
   /**
    * Host-computed digest of `holders`. Optional so a pre-revision
    * response still parses; a current host always emits it. Present
@@ -974,6 +982,24 @@ export const worktreeListHoldersResponseSchema = z.object({
 });
 export type WorktreeListHoldersResponse = z.infer<
   typeof worktreeListHoldersResponseSchema
+>;
+
+/**
+ * `worktree.listHolders@1.1` - request unchanged (aliased so the two cannot
+ * drift); the response's `chat-turn` holders may carry `chatTier`, the WHY
+ * behind a chat's `working` activity. A `@1.0` client reparses through its
+ * own frozen holder object and strips the key.
+ */
+export const worktreeListHoldersRequestSchemaV11 =
+  worktreeListHoldersRequestSchema;
+export type WorktreeListHoldersRequestV11 = WorktreeListHoldersRequest;
+
+export const worktreeListHoldersResponseSchemaV11 = z.object({
+  holders: worktreeBusyHoldersSchema,
+  holdersRevision: z.string().regex(HOLDERS_REVISION_DIGEST_PATTERN).optional(),
+});
+export type WorktreeListHoldersResponseV11 = z.infer<
+  typeof worktreeListHoldersResponseSchemaV11
 >;
 
 /**
@@ -1408,6 +1434,33 @@ export type WorktreeListAllForHostResponseV16 = z.infer<
 >;
 
 /**
+ * `worktree.listAllForHost` v1.7 - a SEMANTIC minor. Request and response
+ * shapes are byte-identical to v1.6 (aliased, not re-declared, so the two can
+ * never drift): what the minor negotiates is what `lastActivityAt` MEANS.
+ *
+ * On v1.7 it is the authoritative activity timestamp
+ *   `max(worktree birthtime, git HEAD reflog, durable worktree activity)`,
+ * the same formula automatic cleanup applies its inactivity cutoff to. Through
+ * v1.6 it was `max(git HEAD reflog, binding-row updatedAt)` - and a binding
+ * row's `updatedAt` is a bookkeeping touch, not evidence anyone worked in the
+ * worktree, which is why it is not an input here.
+ *
+ * The minor exists because Settings and cleanup history must not present two
+ * different inactivity ages for the same worktree, and a client cannot tell the
+ * two formulas apart from the value alone. Older negotiated minors keep their
+ * released behavior; a client that needs the authoritative age must require
+ * v1.7 rather than assume it.
+ */
+export const worktreeListAllForHostRequestSchemaV17 =
+  worktreeListAllForHostRequestSchemaV16;
+export type WorktreeListAllForHostRequestV17 = WorktreeListAllForHostRequestV16;
+
+export const worktreeListAllForHostResponseSchemaV17 =
+  worktreeListAllForHostResponseSchemaV16;
+export type WorktreeListAllForHostResponseV17 =
+  WorktreeListAllForHostResponseV16;
+
+/**
  * Returns `null` when no row exists yet so a fresh terminal-agent
  * renders "not selected" without throwing.
  */
@@ -1436,6 +1489,28 @@ export const worktreeListBindingsForEpicRequestSchema = z.object({
 });
 export type WorktreeListBindingsForEpicRequest = z.infer<
   typeof worktreeListBindingsForEpicRequestSchema
+>;
+
+/** Exact retryable directory-timeout detail carried by the RPC error. */
+export const WORKTREE_DIRECTORY_CHECK_TIMEOUT_MESSAGE =
+  "Workspace directory check timed out. Try again.";
+
+/**
+ * v1.3 lets terminal launchers request directory availability without Git.
+ * Omitted purpose preserves Git selector behavior. Directory reads return
+ * verified directory presence independently of Git. Their present rows have
+ * no disabled reason and leave Git facts pending; missing directories are
+ * definitive missing rows. A partially resolved batch preserves verified
+ * siblings and marks unresolved paths disabled/pending for retry. If nothing
+ * resolves, errors/timeouts fail the request. Git consumers must keep using
+ * the default purpose.
+ */
+export const worktreeListBindingsForEpicRequestSchemaV13 =
+  worktreeListBindingsForEpicRequestSchema.extend({
+    purpose: z.enum(["git", "directory"]).optional(),
+  });
+export type WorktreeListBindingsForEpicRequestV13 = z.infer<
+  typeof worktreeListBindingsForEpicRequestSchemaV13
 >;
 
 export const worktreeBindingSelectorDisabledReasonSchema = z.enum([

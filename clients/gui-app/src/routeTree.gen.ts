@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from "./routes/__root";
 import { Route as IndexRouteImport } from "./routes/index";
 import { Route as EpicsRouteImport } from "./routes/epics";
+import { Route as HomeRouteImport } from "./routes/home";
 import { Route as OnboardingRouteImport } from "./routes/onboarding";
 import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
@@ -21,14 +22,18 @@ import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
+import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
+import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
+import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
+import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
@@ -44,6 +49,11 @@ const IndexRoute = IndexRouteImport.update({
 const EpicsRoute = EpicsRouteImport.update({
   id: "/epics",
   path: "/epics",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const HomeRoute = HomeRouteImport.update({
+  id: "/home",
+  path: "/home",
   getParentRoute: () => rootRouteImport,
 } as any);
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -97,6 +107,11 @@ const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   path: "/appearance",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
+  id: "/delete-account",
+  path: "/delete-account",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
   id: "/devices",
   path: "/devices",
@@ -105,6 +120,11 @@ const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
 const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
   id: "/diagnostics",
   path: "/diagnostics",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsFallbackRoute = SettingsFallbackRouteImport.update({
+  id: "/fallback",
+  path: "/fallback",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
@@ -122,6 +142,11 @@ const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   path: "/keybindings",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsLayoutRoute = SettingsLayoutRouteImport.update({
+  id: "/layout",
+  path: "/layout",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsLinkPhoneRoute = SettingsLinkPhoneRouteImport.update({
   id: "/link-phone",
   path: "/link-phone",
@@ -135,6 +160,11 @@ const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
 const SettingsOpeningBehaviorRoute = SettingsOpeningBehaviorRouteImport.update({
   id: "/opening-behavior",
   path: "/opening-behavior",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsPermissionsRoute = SettingsPermissionsRouteImport.update({
+  id: "/permissions",
+  path: "/permissions",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
@@ -171,6 +201,7 @@ const EpicsEpicIdTabIdRoute = EpicsEpicIdTabIdRouteImport.update({
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
   "/epics": typeof EpicsRouteWithChildren;
+  "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
@@ -179,14 +210,18 @@ export interface FileRoutesByFullPath {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
+  "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -198,6 +233,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
+  "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
@@ -205,14 +241,18 @@ export interface FileRoutesByTo {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
+  "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -226,6 +266,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/epics": typeof EpicsRouteWithChildren;
+  "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
@@ -234,14 +275,18 @@ export interface FileRoutesById {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
+  "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -256,6 +301,7 @@ export interface FileRouteTypes {
   fullPaths:
     | "/"
     | "/epics"
+    | "/home"
     | "/onboarding"
     | "/settings"
     | "/draft/$draftId"
@@ -264,14 +310,18 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
+    | "/settings/fallback"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -283,6 +333,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/"
+    | "/home"
     | "/onboarding"
     | "/draft/$draftId"
     | "/draft/new"
@@ -290,14 +341,18 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
+    | "/settings/fallback"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -310,6 +365,7 @@ export interface FileRouteTypes {
     | "__root__"
     | "/"
     | "/epics"
+    | "/home"
     | "/onboarding"
     | "/settings"
     | "/draft/$draftId"
@@ -318,14 +374,18 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
+    | "/settings/fallback"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -339,6 +399,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
   EpicsRoute: typeof EpicsRouteWithChildren;
+  HomeRoute: typeof HomeRoute;
   OnboardingRoute: typeof OnboardingRoute;
   SettingsRoute: typeof SettingsRouteWithChildren;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
@@ -359,6 +420,13 @@ declare module "@tanstack/react-router" {
       path: "/epics";
       fullPath: "/epics";
       preLoaderRoute: typeof EpicsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/home": {
+      id: "/home";
+      path: "/home";
+      fullPath: "/home";
+      preLoaderRoute: typeof HomeRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/onboarding": {
@@ -431,6 +499,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsAppearanceRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/delete-account": {
+      id: "/settings/delete-account";
+      path: "/delete-account";
+      fullPath: "/settings/delete-account";
+      preLoaderRoute: typeof SettingsDeleteAccountRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/devices": {
       id: "/settings/devices";
       path: "/devices";
@@ -443,6 +518,13 @@ declare module "@tanstack/react-router" {
       path: "/diagnostics";
       fullPath: "/settings/diagnostics";
       preLoaderRoute: typeof SettingsDiagnosticsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/fallback": {
+      id: "/settings/fallback";
+      path: "/fallback";
+      fullPath: "/settings/fallback";
+      preLoaderRoute: typeof SettingsFallbackRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/general": {
@@ -466,6 +548,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsKeybindingsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/layout": {
+      id: "/settings/layout";
+      path: "/layout";
+      fullPath: "/settings/layout";
+      preLoaderRoute: typeof SettingsLayoutRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/link-phone": {
       id: "/settings/link-phone";
       path: "/link-phone";
@@ -485,6 +574,13 @@ declare module "@tanstack/react-router" {
       path: "/opening-behavior";
       fullPath: "/settings/opening-behavior";
       preLoaderRoute: typeof SettingsOpeningBehaviorRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/permissions": {
+      id: "/settings/permissions";
+      path: "/permissions";
+      fullPath: "/settings/permissions";
+      preLoaderRoute: typeof SettingsPermissionsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/providers": {
@@ -549,14 +645,18 @@ interface SettingsRouteChildren {
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
+  SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
+  SettingsFallbackRoute: typeof SettingsFallbackRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
+  SettingsLayoutRoute: typeof SettingsLayoutRoute;
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
+  SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
@@ -570,14 +670,18 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
+  SettingsFallbackRoute: SettingsFallbackRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsLayoutRoute: SettingsLayoutRoute,
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
+  SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
@@ -593,6 +697,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   EpicsRoute: EpicsRouteWithChildren,
+  HomeRoute: HomeRoute,
   OnboardingRoute: OnboardingRoute,
   SettingsRoute: SettingsRouteWithChildren,
   DraftDraftIdRoute: DraftDraftIdRoute,

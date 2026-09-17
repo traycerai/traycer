@@ -11,6 +11,10 @@ import {
   isChatRunInProgress,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import {
+  acceptedActionIsUnsettled,
+  noticeCarriesOnlyCopy,
+} from "@/stores/chats/chat-queue-reconciler";
 
 /**
  * How long a chat session is kept warm after its last tile unmounts. A chat
@@ -127,10 +131,32 @@ export class ChatSessionRegistry {
         // Every chat session is worth keeping warm; this plane has no
         // unreattachable state.
         retainWhenIdle: () => true,
-        hasActiveWork: hasActiveChatWork,
-        // Nothing a chat session holds is lost by disposing it: the transcript
-        // is the host's, and a re-open re-subscribes.
+        hasActiveWork: (handle) =>
+          hasActiveChatWork(handle) || holdsUnrecordedPrompt(handle),
+        // NOTHING is gated here, and that is the correction rather than an
+        // omission. This read `!holdsUnrecordedPrompt(handle)`, on the premise
+        // that the two eviction routes do not share a gate - the warm-cap walk
+        // asking `isEvictable` and idle expiry asking only `hasActiveWork`.
+        // The first half is false. `enforceWarmCap` filters its candidates
+        // `hasActiveWork` FIRST and `isEvictable` second (shared registry,
+        // `session-registry.ts`), so once the hold is in `hasActiveWork` - and
+        // it must be, because that is the only thing idle expiry reads - every
+        // case this clause would have refused was already skipped one line
+        // above it. It was unreachable.
+        //
+        // An unreachable guard is worse than an absent one: four tests were
+        // written against it and passed, each for a reason other than the one
+        // its name claimed. So the hold lives in exactly one predicate,
+        // `hasActiveWork`, which both routes reach. Narrowing that predicate
+        // now loses the warm-cap hold too - which is the honest coupling, and
+        // is why it is written down here.
         isEvictable: () => true,
+        // Left as an unconditional dispose ON PURPOSE. `"retain"` means "the
+        // plane has taken ownership", and the shared registry removes the
+        // entry from its map either way - so returning it here would leave the
+        // prompt in a store nothing can reacquire, which is the same loss by a
+        // quieter route. The idle path is held off in `hasActiveWork` instead,
+        // where the deferral is bounded by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
         onBeforeDispose: () => "dispose",
         dispose: (handle) => {
           handle.dispose();
@@ -206,6 +232,38 @@ export class ChatSessionRegistry {
     return ids;
   }
 
+  /**
+   * The chat plane's half of a park verdict for one Epic: whether any of its
+   * chats still holds work, and which hosts those chats are served from.
+   *
+   * Parking decides ONCE, at the epic, and then force-disposes every chat under
+   * it through {@link disposeForEpic}. Before this existed the epic-side gates
+   * read the epic store and the agent-activity plane and nothing else, so a
+   * chat holding an unacknowledged queue action was destroyed by a decision
+   * that never looked at it. The hosts come back with the answer because the
+   * activity plane's COVERAGE is per host, and a chat can be served from a host
+   * the epic's own session is not - so an epic-only coverage check can be
+   * satisfied while the plane is blind to exactly the host whose chat is about
+   * to be thrown away.
+   */
+  unsettledWorkForEpic(epicId: string): {
+    readonly unsettled: boolean;
+    readonly hostIds: readonly string[];
+  } {
+    const hostIds = new Set<string>();
+    let unsettled = false;
+    for (const entry of this.sessions.entries()) {
+      const handle = entry.session;
+      if (handle.epicId !== epicId) continue;
+      // Off the KEY, not the handle: the host is part of a chat session's
+      // identity rather than a field on it, which is why `listHandlesForHost`
+      // reads it the same way.
+      hostIds.add(chatSessionKeyHostId(entry.key));
+      if (hasUnsettledChatWork(handle)) unsettled = true;
+    }
+    return { unsettled, hostIds: Array.from(hostIds) };
+  }
+
   subscribe(listener: () => void): () => void {
     return this.sessions.subscribe(listener);
   }
@@ -243,6 +301,42 @@ export class ChatSessionRegistry {
     this.sessions.forceRelease(chatSessionKey(epicId, chatId, hostId));
   }
 
+  /**
+   * End every live session of one epic - leased, warm, on any host.
+   *
+   * Renderer parking's half of this plane (plan C, decision C1). A chat session
+   * claims a VISIBLE lease on its epic through the host's chat session, so one
+   * surviving `chat.subscribe` keeps the epic pinned and the whole park buys
+   * nothing. Dropping the tiles' leases is not enough on its own: this plane's
+   * whole design is that a lease-free session stays warm with its websocket
+   * open for `idleTtlMs`, so a park that only released leases would leave the
+   * epic pinned for another ten minutes - past the host's own idle window, and
+   * past the "an epic with no agent activity sheds in about seven minutes"
+   * the plan is sized around.
+   *
+   * Leased sessions go too, and that is not a violation of the lease contract
+   * so much as the reason this method exists: parking is the caller stating
+   * that no surface of this epic is visible, so a lease still held is one from
+   * a tile that is about to unmount with the epic's own React subtree. The
+   * shared `discard` tears down regardless of demand and the later
+   * `releaseHandle` from that unmount is a no-op against a gone entry, so the
+   * order the two happen in does not matter.
+   *
+   * Deliberately NOT `hasActiveChatWork`-gated. That predicate governs whether
+   * the TTL and the cap may reclaim a session on their own schedule; this is a
+   * caller with a fact neither of them has. Eligibility for a park is decided
+   * once, at the epic, through the open-epic registry's own gates - and an epic
+   * whose agents are working never reaches this call.
+   */
+  disposeForEpic(epicId: string): void {
+    this.sessions.transact(() => {
+      for (const entry of this.sessions.entries()) {
+        if (entry.session.epicId !== epicId) continue;
+        this.sessions.discard(entry.key, "released");
+      }
+    });
+  }
+
   disposeAll(): void {
     this.sessions.disposeAll();
   }
@@ -273,6 +367,151 @@ function chatSessionKey(
 function chatSessionKeyHostId(key: SessionKey): string {
   return sessionKeyPartsOf(key)[2] ?? "";
 }
+/**
+ * {@link hasActiveChatWork} plus everything the user has issued that has not
+ * reached its OWN end - a pause, a queue edit, an approval response, a
+ * checkpoint restore still running, an accepted send the host has not confirmed,
+ * and a rejected send's prompt still waiting for the composer to take it.
+ *
+ * The unit is the lifecycle, not the acknowledgement. `pendingActions` empties
+ * when the host says it heard the frame, which is the START of the interesting
+ * part for a send: an ack moves the record to `acceptedActions` with its
+ * recovery fields, and a rejection moves the prompt to `failedSendRestoration`
+ * where it is the only copy until a mounted driver persists it. Both are read
+ * here, because a park that fires between the ack and the end destroys the
+ * state that would have recovered.
+ *
+ * SEPARATE from `hasActiveChatWork`, and deliberately so. That predicate
+ * governs whether the idle TTL and the warm-overflow cap may reclaim a session
+ * on their own schedule, and those two are allowed to reclaim a chat whose only
+ * outstanding item is an unacknowledged action: re-opening re-subscribes and
+ * the reconciler replays from the host's answer. A PARK is not that. It is a
+ * decision taken at the epic that force-disposes every chat beneath it at once,
+ * so it has to see the action that a TTL is entitled to ignore. Widening
+ * `hasActiveChatWork` itself would silently change the TTL and cap behaviour
+ * for a reason that belongs only to parking.
+ */
+function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
+  if (hasActiveChatWork(handle)) return true;
+  const state = handle.store.getState();
+  if (Object.keys(state.pendingActions).length > 0) return true;
+  // AN ACTION LEAVING `pendingActions` IS AN ACKNOWLEDGEMENT, NOT A
+  // SETTLEMENT, and reading it as one destroyed user text.
+  //
+  // A send rejected after a deferred deadline does not simply vanish: it moves
+  // the prompt into `failedSendRestoration`, where it is the ONLY copy until
+  // the initial-chat-handoff driver's effect writes it into the composer draft
+  // store. Parking on the acknowledgement disposes both planes, the gate
+  // unmounts that driver, and the effect never runs - so the prompt is gone.
+  // Held until the slot is consumed, which is what `ackFailedSendRestoration`
+  // marks.
+  if (state.failedSendRestoration !== null) return true;
+  // A recovery is the same kind of hold, one step earlier. Its action has left
+  // `pendingActions` (the host answered it) and its prompt has not reached
+  // `failedSendRestoration` yet, so between those two it is invisible to both
+  // checks above - and for a QUEUED send there is no optimistic echo either.
+  // Parking an otherwise-idle recovering chat disposes the only copy.
+  if (Object.keys(state.hashOnlyRecoveries).length > 0) return true;
+  // An accepted action is not finished at its ACK - but what "finished" means
+  // is the action's own, so `acceptedActionIsUnsettled` decides per kind
+  // against the live queue (a `restoreCheckpoint` record is retired by its
+  // own frames instead, so for it existence is the hold). Reading
+  // `confirmedByHost` here instead was wrong twice over: it is a send-only
+  // fact that no other kind ever gains, so a session that once paused a queue
+  // never parked again; and the records it judged were free to be pruned by
+  // age or by the cap while the hold was still needed, which is why the
+  // pruner now locks exactly the records this asks about.
+  const settlement = { queue: state.queue };
+  for (const action of Object.values(state.acceptedActions)) {
+    if (acceptedActionIsUnsettled(action, settlement)) return true;
+  }
+  // A checkpoint restore that is still running. `completed` persists in this
+  // slot for toast and dialog consumers, so it is finished and does not hold.
+  const restoreKind = state.restore?.kind;
+  if (restoreKind === "in-flight" || restoreKind === "progressing") return true;
+  // A notice that IS the last copy of someone's prompt, not yet shown. The
+  // restoration slot above is not the only home a failed send's text ends up
+  // in: when the composer already holds a newer draft, `stateFailedSendRestoration`
+  // clears the slot and states the displaced prompt in a `SEND_NOT_RECORDED`
+  // notice instead, whose message body is now the only copy. The toast layer
+  // replays such a notice only when a pane focuses and marks it delivered
+  // then; a hidden chat never focuses, so the slot is empty, no action is
+  // accepted, and parking would dispose the session with the notice in it
+  // (Codex on ac6c4eca1). Held until delivered - the same promise the slot
+  // makes, kept for the text's other home. "Delivered" is the LAST-COPY
+  // notice's own delivery, not the action's: the action-wide set answers
+  // yes for a rejection toast shown before the draft was ever stated, and it
+  // is a FIFO that forgets a shown draft while its record stays in the ring
+  // (Codex on 4df091443) - see `deliveredLastCopyActionIds`.
+  if (
+    state.errorNotices.some(
+      (notice) =>
+        noticeCarriesOnlyCopy(notice) &&
+        notice.clientActionId !== null &&
+        !state.deliveredLastCopyActionIds.has(notice.clientActionId),
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether this chat still holds a prompt that exists NOWHERE ELSE - not in the
+ * host's transcript, not in a draft row, not in any other store.
+ *
+ * The registry's default answer is that a chat holds nothing to lose, because
+ * a re-open re-subscribes and the host is the source of truth. The hash-only
+ * refusal path breaks that premise, and it breaks it in three consecutive
+ * states, not one:
+ *
+ *  1. **Recovering.** The settled action is gone and the retry has not been
+ *     built; the recovery record is the only copy.
+ *  2. **Retry dispatched, not acknowledged.** The record is gone the moment
+ *     `sendAction` returns, but the host has not confirmed anything, and the
+ *     original send it replaces was REFUSED - so there is nothing to replay.
+ *     Only a `hashOnlyRetry` action counts here: an ordinary unacknowledged
+ *     send is the pre-existing retention policy's business, and widening this
+ *     to every pending action would change the idle TTL for every chat.
+ *  4. **An undelivered last-copy notice.** The slot was displaced, so the
+ *     prompt now lives only in a `SEND_NOT_RECORDED` notice the user has not
+ *     seen yet.
+ *  3. **Handed back, not consumed.** `failedSendRestoration` is the only copy
+ *     until a mounted tile's driver writes it into the composer draft store -
+ *     which is exactly the reasoning `hasUnsettledChatWork` already gives for
+ *     holding a PARK on the same slot.
+ *
+ * Covering only (1) - the first version - meant the hold expired at the
+ * instant custody moved to (2) or (3), and warm overflow then destroyed the
+ * only copy a few milliseconds later.
+ *
+ * Bounded, not indefinite: (1) has its own 30-second deadline, and the idle
+ * deferral this feeds is capped by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
+ */
+function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
+  const state = handle.store.getState();
+  if (Object.keys(state.hashOnlyRecoveries).length > 0) return true;
+  if (state.failedSendRestoration !== null) return true;
+  if (
+    Object.values(state.pendingActions).some((action) => action.hashOnlyRetry)
+  ) {
+    return true;
+  }
+  // 4. The prompt has become an UNDELIVERED last-copy notice. A restoration
+  //    displaced by the user's newer draft ends up here, and so does a
+  //    recovery abandoned into an occupied slot - and once the slot is
+  //    cleared, the notice is the only copy. `hasUnsettledChatWork` already
+  //    protects exactly this state through `deliveredLastCopyActionIds`;
+  //    omitting it here meant warm overflow could discard the notice before
+  //    the pane ever showed it.
+  return state.errorNotices.some(
+    (notice) =>
+      noticeCarriesOnlyCopy(notice) &&
+      notice.clientActionId !== null &&
+      !state.deliveredLastCopyActionIds.has(notice.clientActionId),
+  );
+}
+
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {
   const state = handle.store.getState();
   // A chat parked on a human gate (interview / command approval / file-edit

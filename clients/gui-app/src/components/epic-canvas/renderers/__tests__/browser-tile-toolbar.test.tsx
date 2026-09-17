@@ -40,7 +40,6 @@ const DISABLED_CAPABILITIES: TileChromeCapabilities = {
   forward: false,
   reload: false,
   zoom: false,
-  viewportPreset: false,
   devtools: false,
   find: false,
   siteInfo: false,
@@ -58,6 +57,7 @@ function makeController(
   annotation: BrowserAnnotationSessionController | null,
 ): TileController {
   return {
+    viewport: null,
     capabilities,
     profile: "primary",
     url: "https://example.com",
@@ -68,7 +68,6 @@ function makeController(
     canGoBack: true,
     canGoForward: true,
     zoomPercent: 100,
-    viewportPreset: "responsive",
     disabled: false,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
@@ -81,7 +80,6 @@ function makeController(
     onZoomOut: () => undefined,
     onZoomIn: () => undefined,
     onResetZoom: () => undefined,
-    onViewportPresetChange: () => undefined,
     onOpenDevTools: () => undefined,
     onClearSite: () => undefined,
   };
@@ -119,7 +117,6 @@ const ADVANCED_MENU_ITEMS = [
   /^Zoom out/,
   /^Reset zoom/,
   /^Zoom in/,
-  /^Viewport/,
   "Open browser DevTools",
 ] as const;
 
@@ -252,36 +249,6 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     expect(convert).toHaveBeenCalledOnce();
   });
 
-  it("keeps viewport presets open for quick switching", () => {
-    const onViewportPresetChange = vi.fn();
-    const controller = {
-      ...makeController(
-        { ...DISABLED_CAPABILITIES, viewportPreset: true },
-        null,
-      ),
-      onViewportPresetChange,
-    };
-    render(
-      <TooltipProvider>
-        <BrowserTileToolbar
-          controller={controller}
-          pictureInPicture={null}
-          loading={false}
-        />
-      </TooltipProvider>,
-    );
-
-    openMoreMenu();
-    expect(screen.queryByRole("menuitemradio", { name: /^Mobile/ })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Viewport/ }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Mobile/ }));
-    expect(onViewportPresetChange).toHaveBeenCalledWith("mobile");
-    expect(screen.getByRole("menuitem", { name: /^Viewport/ })).not.toBeNull();
-    expect(
-      screen.getByRole("menuitemradio", { name: /^Mobile/ }),
-    ).not.toBeNull();
-  });
-
   it("progressively discloses site information from the More menu", () => {
     renderToolbar({ ...DISABLED_CAPABILITIES, siteInfo: true }, null);
 
@@ -326,7 +293,6 @@ describe("<BrowserTileToolbar /> capability gating", () => {
 
   it.each([
     { flag: "zoom" as const, names: [/^Zoom/] },
-    { flag: "viewportPreset" as const, names: [/^Viewport/] },
     { flag: "devtools" as const, names: ["Open browser DevTools"] },
     { flag: "siteInfo" as const, names: [/^Site information/] },
   ])("hides advanced controls when $flag is false", ({ flag, names }) => {

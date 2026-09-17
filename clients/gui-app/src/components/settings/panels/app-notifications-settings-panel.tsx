@@ -1,6 +1,7 @@
 import { NotificationChimeSettingsSection } from "@/components/settings/panels/notification-chime-settings-section";
 import { PushPermissionSection } from "@/components/settings/panels/push-permission-section";
 import { SystemNotificationSettingsSection } from "@/components/settings/panels/system-notification-settings-section";
+import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -14,8 +15,8 @@ export function AppNotificationsSettingsPanel() {
 
   return (
     <SettingsPanelShell
-      title="Notifications"
-      description="How this app alerts you across hosts."
+      title="Sounds"
+      description="Which chime plays for each kind of alert, across hosts."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
@@ -23,14 +24,14 @@ export function AppNotificationsSettingsPanel() {
         <SystemNotificationSettingsSection />
         <PushPermissionSection />
         <SettingsGroup
-          title="Events"
+          group={APP_NOTIFICATIONS.definitions.events}
+          showTitle
           tone="default"
           dataTestId="notification-event-settings-section"
           fill={false}
         >
           <SettingsRow
-            label="Notification events"
-            description="Choose which events alert you for the host selected in Settings."
+            row={APP_NOTIFICATIONS.definitions.notificationEvents}
             control={
               <Button
                 type="button"

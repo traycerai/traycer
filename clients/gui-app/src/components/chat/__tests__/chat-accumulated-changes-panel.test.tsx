@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import { ChatAccumulatedChangesPanel } from "@/components/chat/chat-accumulated-changes-panel";
+import { ChatDockCompactStripProvider } from "@/components/chat/chat-dock-compact-strip";
 import {
   ChatDiffTargetContext,
   type ChatSnapshotDiffOpener,
@@ -305,6 +306,65 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     // number, which would be counted off one row out of four.
     expect(screen.getByTestId("revert-artifacts-checkbox")).not.toBeNull();
     expect(dialog.textContent).not.toMatch(/also revert \d+ artifact/i);
+  });
+});
+
+// Layout ▸ Composer folding: a chip click puts a compacted row back in the
+// dock already OPEN - the click asked for the panel, not for a second click
+// to expand it. Outside a strip provider (every existing mount) the panel
+// keeps its ordinary collapsed-by-default behavior.
+describe("<ChatAccumulatedChangesPanel /> revealed by the compact chip", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("opens already expanded when its section is revealed", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <ChatDiffTargetContext.Provider value={null}>
+          <ChatDockCompactStripProvider
+            value={{
+              chips: [],
+              expanded: new Set(["filesChanged"]),
+              onToggle: vi.fn(),
+            }}
+          >
+            <ChatAccumulatedChangesPanel
+              restore={baseRestore([fileChange("/repo/src/app.ts")], null)}
+              separated={false}
+              scrollRegionMaxHeightClass="max-h-96"
+            />
+          </ChatDockCompactStripProvider>
+        </ChatDiffTargetContext.Provider>
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Undo changes to /repo/src/app.ts",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("stays collapsed with no strip provider", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <ChatDiffTargetContext.Provider value={null}>
+          <ChatAccumulatedChangesPanel
+            restore={baseRestore([fileChange("/repo/src/app.ts")], null)}
+            separated={false}
+            scrollRegionMaxHeightClass="max-h-96"
+          />
+        </ChatDiffTargetContext.Provider>
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Undo changes to /repo/src/app.ts",
+      }),
+    ).toBeNull();
   });
 });
 

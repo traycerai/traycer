@@ -18,14 +18,10 @@ import {
   Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  Trash2,
   X,
 } from "lucide-react";
-import {
-  AnimatePresence,
-  LayoutGroup,
-  useReducedMotion,
-  type Transition,
-} from "motion/react";
+import { LayoutGroup, useReducedMotion, type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
 import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
@@ -287,9 +283,25 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
+  // Every chat and terminal-agent tab on this strip belongs to the strip's
+  // epic; naming the owner lets each host layer ask for its exact
+  // `home: local` partition in mixed mode instead of the pendingFork-only
+  // import a whole-origin answer permits.
+  const chatEpicIds = useMemo<Readonly<Record<string, string>>>(
+    () =>
+      Object.fromEntries(
+        indicatorScopes.flatMap((scope) =>
+          scope.chatIds.map((chatId): readonly [string, string] => [
+            chatId,
+            epicId,
+          ]),
+        ),
+      ),
+    [indicatorScopes, epicId],
+  );
 
   return (
-    <ChatIndicatorHostScopes scopes={indicatorScopes}>
+    <ChatIndicatorHostScopes scopes={indicatorScopes} chatEpicIds={chatEpicIds}>
       <div
         ref={stripRef}
         data-testid="tab-strip"
@@ -766,7 +778,6 @@ function TabItemBody(
     if (rename.isEditing) return;
     onSelect(groupId, tab.instanceId);
     if (
-      isActive &&
       consumeNotificationEntity !== null &&
       (tab.type === "chat" ||
         tab.type === "terminal" ||
@@ -781,7 +792,6 @@ function TabItemBody(
     consumeNotificationEntity,
     epicId,
     groupId,
-    isActive,
     onSelect,
     rename.isEditing,
     tab,
@@ -820,7 +830,12 @@ function TabItemBody(
       ? null
       : {
           modifier: leaderModifier,
-          hint: leaderHint(leaderDigitFor(index), "to switch to", displayTitle),
+          hint: leaderHint(
+            leaderDigitFor(index),
+            leaderModifier,
+            "to switch to",
+            displayTitle,
+          ),
         };
   const tooltipContent = tabTooltipContent(
     tab,
@@ -854,7 +869,7 @@ function TabItemBody(
             className={cn(
               "group relative flex h-9 shrink-0 cursor-pointer items-center gap-1.5 border-r border-canvas-border/70 px-3 text-ui-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               "transition-[background-color,color] duration-300 ease-spring",
-              "hover:bg-card/60 active:scale-[0.97]",
+              "hover:bg-card/60 active:scale-97",
               // Paint over the strip border so the active tab merges with the panel below.
               isActive &&
                 "bg-(--app-background) text-canvas-foreground shadow-[inset_0_-1px_0_0_var(--app-background)]",
@@ -950,6 +965,8 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
 
   return (
     <>
+      {/* The title keeps the tab width stable; hints share its overlay.
+          On release, restore the title and close control together without an exit fade. */}
       <span className="relative min-w-[7ch] max-w-40">
         <Tooltip>
           <TooltipTrigger asChild>
@@ -957,6 +974,7 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
               data-testid={`tab-title-${tabInstanceId}`}
               className={cn(
                 "inline-flex max-w-full min-w-0 items-center gap-1 pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
+                leaderBadge !== null && "opacity-0",
                 isPreview && "italic",
                 isActive ? "font-medium" : "font-normal",
               )}
@@ -970,32 +988,37 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           <TooltipContent>{tooltipContent}</TooltipContent>
         </Tooltip>
         <span
-          aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden min-w-0 items-center gap-1 pr-1 group-focus-within:flex group-hover:flex",
-            leaderBadge !== null && "right-7",
+            "pointer-events-none absolute inset-y-0 left-0 flex min-w-0 items-center gap-1 pr-1",
+            leaderBadge === null
+              ? "right-5 hidden group-focus-within:flex group-hover:flex"
+              : "right-0",
             isPreview && "italic",
             isActive ? "font-medium" : "font-normal",
           )}
         >
-          <TabDisplayTitle
-            displayTitle={displayTitle}
-            isArchived={isArchived}
-          />
+          <span
+            aria-hidden="true"
+            className="flex min-w-0 flex-1 items-center gap-1"
+          >
+            <TabDisplayTitle
+              displayTitle={displayTitle}
+              isArchived={isArchived}
+            />
+          </span>
+          {leaderBadge !== null ? (
+            <span className="shrink-0">
+              <LeaderDigitBadge
+                digit={leaderDigitFor(tabIndex)}
+                modifier={leaderBadge.modifier}
+                ariaLabel={leaderBadge.hint}
+                testId={`canvas-tab-digit-${leaderDigitFor(tabIndex)}`}
+                className={undefined}
+              />
+            </span>
+          ) : null}
         </span>
       </span>
-      <AnimatePresence initial={false}>
-        {leaderBadge !== null ? (
-          <LeaderDigitBadge
-            key={`${leaderBadge.modifier}:${tabInstanceId}`}
-            digit={leaderDigitFor(tabIndex)}
-            modifier={leaderBadge.modifier}
-            ariaLabel={leaderBadge.hint}
-            testId={`canvas-tab-digit-${leaderDigitFor(tabIndex)}`}
-            className={undefined}
-          />
-        ) : null}
-      </AnimatePresence>
       {leaderBadge === null ? (
         <button
           type="button"
@@ -1259,6 +1282,8 @@ function renderFixedTabIcon(
       return <CommGraphTileIcon className="size-3.5" />;
     case "published-chat":
       return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+    case "deleted-artifacts":
+      return <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />;
     default:
       return null;
   }
@@ -1328,9 +1353,10 @@ export function TabIcon(props: {
   const defaultIcon =
     props.tab.type === "chat" && props.titleGenerationPending ? (
       <AgentSpinningDots
-        className="size-3.5 text-muted-foreground"
+        className="size-3.5"
         testId={`tab-title-generating-${props.tab.instanceId}`}
         variant="dots2"
+        tone="muted"
       />
     ) : undefined;
   return (

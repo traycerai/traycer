@@ -6,6 +6,7 @@
 import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { PromptStashEntry } from "@/lib/composer/prompt-stash-codec";
 
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { useNewConversationPromptStashDestination } from "@/components/epic-canvas/sidebar/use-new-conversation-prompt-stash-adapters";
@@ -15,6 +16,22 @@ import {
 } from "@/lib/composer/composer-editor-incarnation";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+
+/**
+ * A minimal entry for `importAndInsert`, which now takes the entry being
+ * restored so a destination can carry what does not live inside `content`
+ * (today: the annotation sidecar). These cases are about identity and
+ * acceptance, so the sidecar is empty.
+ */
+function stashEntryOf(content: JsonContent): PromptStashEntry {
+  return {
+    id: "stash-entry-fixture",
+    createdAt: 1,
+    content,
+    blobHashes: [],
+    annotations: [],
+  };
+}
 
 function textDoc(text: string): JsonContent {
   return {
@@ -180,6 +197,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     const insertResult = await result.current.importAndInsert({
       identity: captured,
       content: textDoc("should not insert"),
+      entry: stashEntryOf(textDoc("should not insert")),
     });
     expect(insertResult).toEqual({ status: "stale" });
     expect(editor.setContents).toHaveLength(0);
@@ -202,6 +220,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     const insertResult = await result.current.importAndInsert({
       identity: captured,
       content: textDoc("restored after facade churn"),
+      entry: stashEntryOf(textDoc("restored after facade churn")),
     });
     expect(insertResult).toEqual({ status: "accepted" });
     expect(editor.setContents).toEqual([
@@ -235,6 +254,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     const insertResult = await result.current.importAndInsert({
       identity: captured,
       content: textDoc("should not insert after remount"),
+      entry: stashEntryOf(textDoc("should not insert after remount")),
     });
     expect(insertResult).toEqual({ status: "stale" });
     expect(editor.setContents).toHaveLength(0);
@@ -258,6 +278,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     const insertResult = await destB.current.importAndInsert({
       identity: captured,
       content: textDoc("wrong epic"),
+      entry: stashEntryOf(textDoc("wrong epic")),
     });
     expect(insertResult).toEqual({ status: "stale" });
     expect(editor.setContents).toHaveLength(0);
@@ -281,6 +302,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     const insertResult = await result.current.importAndInsert({
       identity: captured,
       content: textDoc("stashed prompt"),
+      entry: stashEntryOf(textDoc("stashed prompt")),
     });
 
     expect(insertResult).toEqual({ status: "accepted" });
@@ -317,6 +339,7 @@ describe("new-conversation modal prompt-stash destination acknowledgement", () =
     const insertResult = await result.current.importAndInsert({
       identity: captured,
       content: textDoc("from seed path"),
+      entry: stashEntryOf(textDoc("from seed path")),
     });
 
     expect(insertResult).toEqual({ status: "accepted" });

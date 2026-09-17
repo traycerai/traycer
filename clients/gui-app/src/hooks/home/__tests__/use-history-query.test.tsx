@@ -1,7 +1,8 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ListTasksCompleteness,
   ListTasksResponse,
   ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -13,6 +14,7 @@ import {
 } from "@/lib/history-search";
 import type { HistorySearchState } from "@/lib/history-search";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const testState = vi.hoisted(() => {
   const tasks: ListTaskLight[] = [];
@@ -32,10 +34,38 @@ const testState = vi.hoisted(() => {
     activityWorktrees: [] as readonly WorktreeHostEntryV12[],
     activityError: null as Error | null,
     taskContexts: new Map<string, ListTaskLight>(),
+    localHomedTaskIds: new Set<string>(),
     taskContextsError: null as Error | null,
     chatHostSupport: "supported",
+    // The cloud hook's GUARDED refresh - the one `useHistoryQuery` must expose.
     refetch: vi.fn(),
+    // TanStack's raw `query.refetch`, which overrides `enabled` and resets the
+    // page identity before the verdict is consulted; History must never hand
+    // this one out.
+    rawRefetch: vi.fn(),
     fetchNextPage: vi.fn(),
+    // T5a/T5b: `isCloudPagePending` and `completeness` are the two NEW
+    // fields `useCloudEpicTasksQuery` exposes so `useHistoryQuery` can pass
+    // them through as `cloudPagePending` / the union `data.completeness`.
+    // Independent from `isFetching`/`response`: the producer this models is
+    // the caller-owned-tombstone arm, whose page is `{tasks: [], hasMore:
+    // false}` with `isFetching` already settled false - not a fetch in
+    // progress.
+    isCloudPagePending: false,
+    completenessOverride: null as ListTasksCompleteness | null,
+    initialLegRefused: false,
+    // Otherwise-hardcoded `false` in the mock below, so a test asserting the
+    // T18 refusal's `isPending: false` has something to distinguish it from -
+    // without this, `query.isPending` never varies and that assertion would
+    // pass whether or not the hook's own `!initialLegRefused && ...` guard
+    // existed at all.
+    queryIsPending: false,
+    // T12: the `enabled` argument `useEpicGetTaskContexts` was actually
+    // called with, most-recent last. The mock below otherwise ignores it (it
+    // always returns `taskContexts` regardless), so asserting on the mock's
+    // RESULT would pass whether or not `useHistoryQuery` gated the spend on
+    // the cloud-authorization verdict - only capturing the argument proves it.
+    taskContextsEnabledCalls: [] as boolean[],
   };
 });
 
@@ -67,15 +97,22 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
           query.length === 0
             ? testState.response
             : { tasks, hasMore: false, facets: testState.response.facets },
-        isPending: false,
+        isPending: testState.queryIsPending,
         isFetching: testState.isFetching,
         isPlaceholderData: testState.isPlaceholderData,
         error: null,
-        refetch: testState.refetch,
+        refetch: testState.rawRefetch,
       },
+      refetch: testState.refetch,
       fetchNextPage: testState.fetchNextPage,
       hasNextPage: testState.hasNextPage,
       isFetchingNextPage: false,
+      initialLegRefused: testState.initialLegRefused,
+      isCloudPagePending: testState.isCloudPagePending,
+      // The UNION statement, deliberately independent of `query.data`'s own
+      // `completeness` above (T5b) - `useHistoryQuery` must read this field,
+      // not `tasksQuery.data.completeness`, for the exposed `data.completeness`.
+      completeness: testState.completenessOverride,
     };
   },
 }));
@@ -106,16 +143,27 @@ vi.mock("@/hooks/home/use-chat-host-filter-support", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
-  useEpicGetTaskContexts: (taskIds: readonly string[]) => ({
-    tasksById: new Map(
-      taskIds.flatMap((taskId) => {
-        const task = testState.taskContexts.get(taskId);
-        return task === undefined ? [] : [[taskId, task] as const];
-      }),
-    ),
-    isFetching: false,
-    error: testState.taskContextsError,
-  }),
+  useEpicGetTaskContexts: (
+    taskIds: readonly string[],
+    _userId: string | null,
+    options: { readonly enabled: boolean },
+  ) => {
+    testState.taskContextsEnabledCalls.push(options.enabled);
+    return {
+      tasksById: new Map(
+        taskIds.flatMap((taskId) => {
+          const task = testState.taskContexts.get(taskId);
+          return task === undefined ? [] : [[taskId, task] as const];
+        }),
+      ),
+      // `epic.getTaskContexts@1.2`'s sibling home-marker list. Kept on the fake
+      // because the projection now READS it - a context-only hit is the one path
+      // where nothing else can say the epic is local-homed.
+      localHomedTaskIds: testState.localHomedTaskIds,
+      isFetching: false,
+      error: testState.taskContextsError,
+    };
+  },
 }));
 
 describe("useHistoryQuery", () => {
@@ -138,14 +186,43 @@ describe("useHistoryQuery", () => {
     testState.activityError = null;
     testState.taskContexts = new Map();
     testState.taskContextsError = null;
+    testState.localHomedTaskIds = new Set<string>();
     testState.chatHostSupport = "supported";
     testState.refetch.mockReset();
+    testState.rawRefetch.mockReset();
     testState.fetchNextPage.mockReset();
+    testState.isCloudPagePending = false;
+    testState.completenessOverride = null;
+    testState.initialLegRefused = false;
+    testState.queryIsPending = false;
+    testState.taskContextsEnabledCalls = [];
+    // `useEpicGetTaskContexts` is gated on `authorizesCloudCapability`, read
+    // off the REAL store (not mocked in this file) - default to `signed-in`
+    // so every pre-existing test here keeps exercising the id-fetched union
+    // exactly as before. The T12 test below overrides this per case.
+    useAuthStore.setState({ status: "signed-in" });
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    // Zustand stores are module scope, so a status staged here outlives this
+    // file inside the same worker.
+    useAuthStore.setState({ status: "signed-out" });
+  });
+
+  it("exposes the cloud hook's guarded refetch, never the raw query's", () => {
+    // TanStack's `query.refetch` overrides `enabled` and resets the page
+    // identity before the dispatch-time verdict check can refuse the cloud
+    // leg, so a pull-to-refresh holding it across a demotion discarded every
+    // retained cursor page for a request it never sent. History must hand out
+    // the hook's own callback, which re-reads the verdict at dispatch.
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(testState.refetch).toHaveBeenCalledTimes(1);
+    expect(testState.rawRefetch).not.toHaveBeenCalled();
   });
 
   it("locally narrows existing rows while a new search query is debouncing", () => {
@@ -499,6 +576,171 @@ describe("useHistoryQuery", () => {
     );
   });
 
+  describe("cloud page pending", () => {
+    // T5a: `cloudPagePending` is passed through from `isCloudPagePending`,
+    // independent of `isFetching` and of whether `tasks`/`items` are empty.
+    // The producer this models is the host resolver's caller-owned-tombstone
+    // arm - a `{tasks: [], hasMore: false}` page for an account nobody has
+    // finished asking about, with `isFetching` already settled false (the
+    // follow-up revalidation runs under its own ephemeral query key and is
+    // invisible to `isFetching`). Building the fixture as a "pristine
+    // cloud-only account" was disproved
+    // (`traycer-host/src/transport/rpc/__tests__/epic-list-tasks-discovery.test.ts:249-288`
+    // shows such an account WAITS for cloud instead), so this deliberately
+    // pairs the pending flag with settled-empty rows rather than an
+    // in-flight fetch.
+    it("stays true while the local-first revalidation leg is outstanding, even with settled empty rows", () => {
+      testState.tasks = [];
+      testState.response = { tasks: [], hasMore: false };
+      testState.isFetching = false;
+      testState.isCloudPagePending = true;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(screen.getByTestId("fetching").textContent).toBe("false");
+      expect(screen.getByTestId("cloud-page-pending").textContent).toBe("true");
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("");
+    });
+
+    it("clears once the follow-up settles (or fails)", () => {
+      testState.isCloudPagePending = false;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(screen.getByTestId("cloud-page-pending").textContent).toBe(
+        "false",
+      );
+    });
+  });
+
+  describe("completeness union", () => {
+    // T5b: `data.completeness` must be the union `useCloudEpicTasksQuery`
+    // computes across the first page AND every retained "Show more" tail
+    // (`unionCompleteness`/`mergeCompleteness` in
+    // `hooks/epics/use-cloud-epic-tasks-query.ts`), never the first page's
+    // own `completeness` alone. The mock deliberately gives the first page
+    // and the union DIFFERENT statements so a regression that reads
+    // `tasksQuery.data.completeness` instead of the hook's `completeness`
+    // field would fail this assertion.
+    it("exposes the worst-of union rather than the first page's own statement", () => {
+      testState.response = {
+        tasks: testState.tasks,
+        hasMore: false,
+        completeness: {
+          cloudPage: "settled",
+          facets: "server",
+          localRows: "none",
+          sort: "server",
+        },
+      };
+      testState.completenessOverride = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "truncated",
+        sort: "loaded-union",
+      };
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(screen.getByTestId("completeness").textContent).toBe(
+        "unavailable|partial|truncated|loaded-union",
+      );
+    });
+
+    it("unions a locally-held workspace and repo into the available filter options when the union reports partial facets", () => {
+      testState.tasks = [
+        taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
+      ];
+      testState.response = {
+        tasks: testState.tasks,
+        hasMore: false,
+        facets: {
+          repos: [
+            { repoIdentifier: { owner: "traycer", repo: "gui-app" }, count: 1 },
+          ],
+          workspaces: [
+            {
+              workspaceIdentifier: {
+                hostId: "host-1",
+                workspacePath: "/server-only",
+              },
+              count: 1,
+            },
+          ],
+          ownershipScopes: [],
+        },
+      };
+      testState.completenessOverride = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "truncated",
+        sort: "loaded-union",
+      };
+      testState.worktreeIndex = [
+        {
+          ...worktreeWithPullRequest(1),
+          worktreePath: "/w/local-only",
+          branch: "feature/local-only-workspace",
+          owners: [
+            {
+              epicId: "epic-local",
+              ownerKind: "chat",
+              ownerId: "chat-local",
+              updatedAt: 1,
+            },
+          ],
+        },
+      ];
+      // Local-only labels that sort BEFORE the server counterparts. A fixture
+      // that was already alphabetical cannot tell server-first union from a
+      // full re-sort, so only this order makes `dedupSortWorkspaces` fail.
+      const localTask = taskLight(
+        "epic-local",
+        "Local only workspace",
+        "aaa/local-repo",
+      );
+      if (localTask.epic === undefined || localTask.epic === null) {
+        throw new Error("Expected epic on local task fixture");
+      }
+      testState.taskContexts = new Map([
+        [
+          "epic-local",
+          {
+            ...localTask,
+            epic: {
+              ...localTask.epic,
+              workspaces: [
+                {
+                  task: null,
+                  hostId: "aaa-host",
+                  workspacePath: "/aaa-local",
+                  createdAt: 0,
+                },
+              ],
+            },
+          },
+        ],
+      ]);
+
+      render(
+        <HistoryQueryHarness
+          search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+            query: "feature/local-only-workspace",
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId("available-workspaces").textContent).toBe(
+        "host-1:/server-only|aaa-host:/aaa-local",
+      );
+      expect(screen.getByTestId("available-repos").textContent).toBe(
+        "traycer/gui-app|aaa/local-repo",
+      );
+    });
+  });
+
   describe("chat-host filter", () => {
     const hostSearch: HistorySearchState = {
       ...DEFAULT_HISTORY_SEARCH,
@@ -649,7 +891,64 @@ describe("useHistoryQuery", () => {
       ).toBe("");
     });
   });
+
+  // T12: `epic.getTaskContexts` is a CLOUD spend for the ids an id-fetched
+  // worktree/PR match surfaces. `currentUserId` is the WIDENED identity
+  // (`unverified` resolves one too, so History keeps rendering this
+  // machine's own epics), so it cannot double as this batch's authorization -
+  // the hook must gate `enabled` on `authorizesCloudCapability` separately.
+  it("gates the task-context batch's enabled flag on the cloud-authorization verdict, not on search activity", () => {
+    useAuthStore.setState({ status: "unverified" });
+    const { rerender } = render(
+      <HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />,
+    );
+    expect(testState.taskContextsEnabledCalls.at(-1)).toBe(false);
+
+    useAuthStore.setState({ status: "signed-in" });
+    rerender(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+    expect(testState.taskContextsEnabledCalls.at(-1)).toBe(true);
+  });
+
+  // T18: `useCloudEpicTasksQuery`'s `initialLegRefused` maps to a SETTLED
+  // empty result, not `undefined` (which every render site here treats as
+  // still loading). Ahead of the `tasksQuery.data === undefined` guard in the
+  // `data` memo for exactly that reason - the refusal PRODUCES that
+  // `undefined`, so checking it first would misread the refusal as a load in
+  // progress and never reach `hostRequiresCloudToList` at all.
+  it("settles to an empty, non-pending page and flags hostRequiresCloudToList when the initial leg is refused", () => {
+    testState.initialLegRefused = true;
+    // The underlying TanStack query for a refused leg is disabled and reports
+    // `isPending: true` forever - this models that, so the assertion below
+    // proves `useHistoryQuery` overrides it rather than merely inheriting an
+    // already-false value from the mock.
+    testState.queryIsPending = true;
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    expect(screen.getByTestId("host-requires-cloud-to-list").textContent).toBe(
+      "true",
+    );
+    // The false statement this exists to prevent: a query that never ran
+    // reports `status: "pending"` forever, which the render sites read as a
+    // permanent skeleton.
+    expect(screen.getByTestId("pending").textContent).toBe("false");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("");
+  });
 });
+
+/**
+ * Project an optional list of already-formatted parts into one assertable
+ * string. Every readout below is the same "map then join, or say nothing"
+ * shape, and inlining the `?? fallback` at each of them is what put this
+ * harness over the complexity ceiling.
+ */
+function joined(
+  parts: ReadonlyArray<string> | undefined,
+  fallback: string,
+): string {
+  return parts === undefined ? fallback : parts.join("|");
+}
 
 function HistoryQueryHarness(props: {
   readonly search: HistorySearchState;
@@ -657,38 +956,88 @@ function HistoryQueryHarness(props: {
   const result = useHistoryQuery({ search: props.search, nowMs: null });
   return (
     <div>
+      <button
+        type="button"
+        onClick={() => {
+          void result.refetch();
+        }}
+      >
+        Refresh
+      </button>
       <div data-testid="pending">{String(result.isPending)}</div>
       <div data-testid="fetching">{String(result.isFetching)}</div>
+      <div data-testid="host-requires-cloud-to-list">
+        {String(result.data?.hostRequiresCloudToList ?? false)}
+      </div>
       <div data-testid="error">{result.error?.message ?? ""}</div>
       <div data-testid="has-next-page">{String(result.hasNextPage)}</div>
       <div role="status" aria-label="History titles">
-        {result.data?.items.map((item) => item.title).join("|") ?? ""}
+        {joined(
+          result.data?.items.map((item) => item.title),
+          "",
+        )}
       </div>
       <div data-testid="repo-facets">
-        {result.data?.facets.repos
-          .map((facet) => `${facet.label}:${facet.count}`)
-          .join("|") ?? ""}
+        {joined(
+          result.data?.facets.repos.map(
+            (facet) => `${facet.label}:${facet.count}`,
+          ),
+          "",
+        )}
       </div>
       <div data-testid="workspace-facets">
-        {result.data?.facets.workspaces
-          .map(
+        {joined(
+          result.data?.facets.workspaces.map(
             (facet) =>
               `${facet.workspace.hostId}:${facet.workspace.workspacePath}:${facet.count}`,
-          )
-          .join("|") ?? ""}
+          ),
+          "",
+        )}
       </div>
       <div data-testid="chat-host-unsupported">
         {String(result.data?.chatHostFilterUnsupported ?? false)}
       </div>
       <div data-testid="chat-host-facets">
-        {result.data?.facets.chatHosts
-          ?.map((facet) => `${facet.hostId}:${facet.count}`)
-          .join("|") ?? "none"}
+        {joined(
+          result.data?.facets.chatHosts?.map(
+            (facet) => `${facet.hostId}:${facet.count}`,
+          ),
+          "none",
+        )}
       </div>
       <div data-testid="ownership-facets">
-        {result.data?.facets.ownershipScopes
-          .map((facet) => `${facet.value}:${facet.count}`)
-          .join("|") ?? ""}
+        {joined(
+          result.data?.facets.ownershipScopes.map(
+            (facet) => `${facet.value}:${facet.count}`,
+          ),
+          "",
+        )}
+      </div>
+      <div data-testid="cloud-page-pending">
+        {String(result.cloudPagePending)}
+      </div>
+      <div data-testid="completeness">
+        {(() => {
+          const completeness = result.data?.completeness;
+          if (completeness === null || completeness === undefined) return "";
+          return [
+            completeness.cloudPage,
+            completeness.facets,
+            completeness.localRows,
+            completeness.sort,
+          ].join("|");
+        })()}
+      </div>
+      <div data-testid="available-workspaces">
+        {joined(
+          result.data?.availableWorkspaces.map(
+            (workspace) => `${workspace.hostId}:${workspace.workspacePath}`,
+          ),
+          "",
+        )}
+      </div>
+      <div data-testid="available-repos">
+        {joined(result.data?.availableRepos, "")}
       </div>
     </div>
   );

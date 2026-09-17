@@ -99,6 +99,27 @@ const PIP_CURSOR_FRAME: BrowserScreencastServerFrame = {
   label: "Agent",
 };
 
+const PIP_VIEWPORT_EPOCH_FRAME: BrowserScreencastServerFrame = {
+  kind: "viewportEpoch",
+  hasBinaryPayload: false,
+  epoch: 5,
+  logicalViewport: { width: 390, height: 844, dpr: 1 },
+};
+
+const PIP_RESIZED_FRAME: BrowserScreencastServerFrame = {
+  kind: "resized",
+  hasBinaryPayload: false,
+  frameWidth: 900,
+  frameHeight: 700,
+};
+
+const PIP_LEGACY_VIEWPORT_EPOCH_FRAME: BrowserScreencastServerFrame = {
+  kind: "viewportEpoch",
+  hasBinaryPayload: false,
+  epoch: 6,
+  logicalViewport: null,
+};
+
 /**
  * The non-pixel half of PiP's own subscription: frame geometry and the agent
  * cursor. Everything below the transport is real - only the stream itself is
@@ -116,6 +137,11 @@ function PipMetaProbe(props: { readonly snapshot: PipSnapshot }) {
         preview.frameSize === null
           ? ""
           : `${String(preview.frameSize.width)}x${String(preview.frameSize.height)}`
+      }
+      data-logical-viewport={
+        preview.logicalViewport === null
+          ? ""
+          : `${String(preview.logicalViewport.width)}x${String(preview.logicalViewport.height)}`
       }
     />
   );
@@ -135,10 +161,13 @@ describe("usePipOwnedFrame meta", () => {
     );
 
     emitPipFrame(PIP_STARTED_FRAME);
+    emitPipFrame(PIP_VIEWPORT_EPOCH_FRAME);
+    emitPipFrame(PIP_RESIZED_FRAME);
     emitPipFrame(PIP_CURSOR_FRAME);
 
     const dataset = pipTestDataset("pip-meta-probe");
-    expect(dataset.frameSize).toBe("800x600");
+    expect(dataset.frameSize).toBe("900x700");
+    expect(dataset.logicalViewport).toBe("390x844");
     expect(dataset.cursor).toBe("Agent");
   });
 
@@ -161,5 +190,21 @@ describe("usePipOwnedFrame meta", () => {
     const dataset = pipTestDataset("pip-meta-probe");
     expect(dataset.frameSize).toBe("");
     expect(dataset.cursor).toBe("");
+  });
+
+  it("clears logical geometry when an old host omits the viewport payload", () => {
+    render(
+      <PipMetaProbe
+        snapshot={{ ...HIDDEN_PIP_SNAPSHOT, target: pipTarget("selection-a") }}
+      />,
+    );
+
+    emitPipFrame(PIP_STARTED_FRAME);
+    emitPipFrame(PIP_VIEWPORT_EPOCH_FRAME);
+    emitPipFrame(PIP_LEGACY_VIEWPORT_EPOCH_FRAME);
+
+    const dataset = pipTestDataset("pip-meta-probe");
+    expect(dataset.frameSize).toBe("800x600");
+    expect(dataset.logicalViewport).toBe("");
   });
 });

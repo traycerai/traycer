@@ -546,7 +546,17 @@ describe("decodeHostUpdateAttempt", () => {
     installGeneration: "gen-a",
     stageFingerprint: "fp-a",
     allowDowngrade: true,
+    acceptStoreFormatLoss: false,
   };
+
+  it("decodes a claim written before acceptStoreFormatLoss existed as consent not given, never as corrupt", () => {
+    const { acceptStoreFormatLoss: _drop, ...legacy } = VALID_CLAIM;
+    const result = decodeHostUpdateAttempt(bytes(json({ claim: legacy })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid") {
+      expect(result.value.claim).toEqual(VALID_CLAIM);
+    }
+  });
 
   it("decodes as valid, with no claim key, when claim is explicitly undefined (i.e. omitted from the wire)", () => {
     const result = decodeHostUpdateAttempt(bytes(json({ claim: undefined })));
@@ -595,6 +605,10 @@ describe("decodeHostUpdateAttempt", () => {
     ["stageFingerprint wrong type", { ...VALID_CLAIM, stageFingerprint: 1 }],
     ["stageFingerprint empty string", { ...VALID_CLAIM, stageFingerprint: "" }],
     ["allowDowngrade wrong type", { ...VALID_CLAIM, allowDowngrade: "yes" }],
+    [
+      "acceptStoreFormatLoss wrong type",
+      { ...VALID_CLAIM, acceptStoreFormatLoss: "yes" },
+    ],
     [
       "allowDowngrade missing",
       (() => {

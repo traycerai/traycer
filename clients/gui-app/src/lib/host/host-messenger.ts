@@ -30,6 +30,10 @@ import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
   type RequestIdProvider,
@@ -82,6 +86,16 @@ export interface BuildRawHostMessengerForTargetParams<
    */
   readonly bearer: BearerSourceProvider;
   /**
+   * Gates the remote session's attach-grant MINT only - see
+   * `CreateRemoteTransportOptions.cloudAuthorized`. Taken as a parameter rather
+   * than read off the auth store in here, because this function is also the
+   * seam tests build through: an implicit ambient read would make the
+   * permission untestable from the outside and invisible at the call site.
+   * Only consulted on the `target.kind === "remote"` branch, so local hosts are
+   * unaffected.
+   */
+  readonly cloudAuthorized: () => boolean;
+  /**
    * Auth recovery for an `UNAUTHORIZED` remote-session fatal (an expired
    * bearer at a wake-time re-attach; see `RemoteSessionOptions.auth`).
    * `null` keeps such a fatal terminal - acceptable only for short-lived
@@ -120,6 +134,7 @@ export function buildRawHostMessengerForTarget<
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,
       // MUST match what `buildHostStreamClient` passes, and this is not a
       // stylistic point: `clock` is deliberately not part of the session cache
@@ -478,6 +493,10 @@ class RuntimeHostMessenger<
       userId,
       registry: this.registry,
       bearer: () => this.currentBearer,
+      // Read at mint time, not captured: a session outlives the verdict it was
+      // built under, in both directions.
+      cloudAuthorized: () =>
+        authorizesCloudCapability(useAuthStore.getState().status),
       auth: this.auth,
       authnBaseUrl: this.authnBaseUrl,
       requestId: this.requestId,

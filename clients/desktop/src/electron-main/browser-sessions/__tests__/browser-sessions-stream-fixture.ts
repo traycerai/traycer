@@ -20,7 +20,10 @@ export {
   FakeStreamSession,
 } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { BrowserSessionsHostTransport } from "../browser-sessions-transport";
-import type { BrowserViewEnsureTab } from "../../browser-view/browser-view-port";
+import type {
+  BrowserViewEnsureTab,
+  BrowserViewNativeTabTransfer,
+} from "../../browser-view/browser-view-port";
 
 export interface JarRecorder {
   readonly observed: Array<{
@@ -242,12 +245,16 @@ export interface TabRecorder {
   readonly released: BrowserViewNativeTabCapability[];
   readonly cdp: Array<{ readonly tabId: string }>;
   emitStatus: (change: BrowserViewNativeTabStatusChange) => void;
+  emitTransferred: (transfer: BrowserViewNativeTabTransfer) => void;
   readonly port: BrowserSessionsTabPort;
 }
 
 export function createTabRecorder(): TabRecorder {
   const statusListeners = new Set<
     (change: BrowserViewNativeTabStatusChange) => void
+  >();
+  const transferListeners = new Set<
+    (transfer: BrowserViewNativeTabTransfer) => void
   >();
   const recorder: TabRecorder = {
     ensured: [],
@@ -256,6 +263,9 @@ export function createTabRecorder(): TabRecorder {
     cdp: [],
     emitStatus: (change) => {
       for (const listener of statusListeners) listener(change);
+    },
+    emitTransferred: (transfer) => {
+      for (const listener of transferListeners) listener(transfer);
     },
     port: {
       ensureTab: (windowId, input) => {
@@ -283,10 +293,18 @@ export function createTabRecorder(): TabRecorder {
           errorText: null,
         });
       },
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: (listener) => {
         statusListeners.add(listener);
         return () => {
           statusListeners.delete(listener);
+        };
+      },
+      onNativeTabTransferred: (listener) => {
+        transferListeners.add(listener);
+        return () => {
+          transferListeners.delete(listener);
         };
       },
     },

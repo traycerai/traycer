@@ -24,7 +24,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -107,21 +106,26 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/epics/$epicId/$tabId": "Epic tab",
   "/draft/new": "New chat draft",
   "/draft/$draftId": "Chat draft",
+  "/home": "Home",
   "/onboarding": "Onboarding",
   "/settings": "Settings",
   "/settings/": "Settings",
   "/settings/agents": "Settings - Agents",
   "/settings/app-diagnostics": "Settings - App diagnostics",
-  "/settings/app-notifications": "Settings - Application notifications",
+  "/settings/app-notifications": "Settings - Sounds",
   "/settings/appearance": "Settings - Appearance",
+  "/settings/delete-account": "Settings - Delete account",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
+  "/settings/fallback": "Settings - Fallback",
   "/settings/general": "Settings - General",
   "/settings/host": "Settings - Host",
   "/settings/keybindings": "Settings - Keybindings",
+  "/settings/layout": "Settings - Layout",
   "/settings/link-phone": "Settings - Link mobile app",
   "/settings/notifications": "Settings - Notifications",
   "/settings/opening-behavior": "Settings - Opening behavior",
+  "/settings/permissions": "Settings - Permissions",
   "/settings/providers": "Settings - Providers",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Shell",
@@ -184,7 +188,6 @@ interface ReportIssueFormState {
   readonly frequency: DesktopReportFrequency | null;
   readonly locationValue: string;
   readonly locationChanged: boolean;
-  readonly allowContact: boolean;
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
   readonly includeBrowserDiagnostics: boolean;
@@ -197,13 +200,9 @@ const INITIAL_FORM_STATE: ReportIssueFormState = {
   frequency: null,
   locationValue: CURRENT_LOCATION_VALUE,
   locationChanged: false,
-  allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
-  // Default OFF, unlike the other two log toggles: `browser-trace.jsonl`
-  // records the agent's cell source and every page it drove, so it is opt-in
-  // per report rather than opted-out. Touched-by-user tracking is unchanged.
-  includeBrowserDiagnostics: false,
+  includeBrowserDiagnostics: true,
   includeDiagnostics: true,
 };
 
@@ -316,8 +315,7 @@ interface ReportIssueGateFlags {
 // call so `ReportIssueDialog` itself stays a thin orchestrator - splitting
 // these into a dozen separate `&&`/`||`/`?:` consts inline pushed its own
 // cyclomatic complexity well past the repo's lint budget.
-type ReportIssueDerivedFlags = ReportIssueDeliveryFlags &
-  ReportIssueGateFlags & { readonly contactCheckboxVisible: boolean };
+type ReportIssueDerivedFlags = ReportIssueDeliveryFlags & ReportIssueGateFlags;
 
 function deriveGateFlags(input: {
   readonly hasErrorEnvelope: boolean;
@@ -361,9 +359,7 @@ function deriveReportIssueFlags(input: {
 }): ReportIssueDerivedFlags {
   const delivery = deriveDeliveryFlags(input);
   const gate = deriveGateFlags(input);
-  const contactCheckboxVisible =
-    input.snapshot !== null && input.snapshot.user.email !== null;
-  return { ...delivery, ...gate, contactCheckboxVisible };
+  return { ...delivery, ...gate };
 }
 
 function fingerprintOccurrenceQueryOptions(
@@ -458,11 +454,6 @@ export function ReportIssueDialog(
   const [reviewExpanded, setReviewExpanded] = useState(false);
   const [gateErrorVisible, setGateErrorVisible] = useState(false);
   const [logsTouchedByUser, setLogsTouchedByUser] = useState(false);
-  // Flow 1 (error-triggered) shows every toggle expanded by default; Flow 2
-  // (manual, either type) collapses the consent panel to one summary line
-  // with a "details" expand affordance - both flows' own wireframes draw it
-  // this way.
-  const [consentExpanded, setConsentExpanded] = useState(hasErrorEnvelope);
   const [previewDraft, setPreviewDraft] =
     useState<DesktopSupportBuildPublicDraftResult | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
@@ -529,7 +520,7 @@ export function ReportIssueDialog(
       frequency: form.frequency,
       location:
         form.type === "bug" && form.locationChanged ? form.locationValue : null,
-      allowContact: form.allowContact,
+      allowContact: true,
       includeDesktopLog: form.includeDesktopLog,
       includeHostLog: form.includeHostLog,
       includeBrowserDiagnostics: form.includeBrowserDiagnostics,
@@ -612,7 +603,6 @@ export function ReportIssueDialog(
     showGateError,
     showFrequencyChips,
     showLocationSelector,
-    contactCheckboxVisible,
     isDeliveryUnavailable,
   } = deriveReportIssueFlags({
     hasErrorEnvelope,
@@ -727,8 +717,7 @@ export function ReportIssueDialog(
   function selectType(nextType: DesktopReportType): void {
     setForm((prev) => {
       if (logsTouchedByUser) return { ...prev, type: nextType };
-      // D8: log toggles default OFF for idea/other, ON for bug - browser
-      // diagnostics included, full symmetry with the desktop/host toggles.
+      // App and host logs follow the report type until the user changes them.
       const logsOn = nextType === "bug";
       return {
         ...prev,
@@ -824,13 +813,10 @@ export function ReportIssueDialog(
             showGateError={showGateError}
             intentRef={intentRef}
             isPending={submitMutation.isPending}
-            consentExpanded={consentExpanded}
-            onToggleConsentExpanded={() => setConsentExpanded(true)}
             isDeliveryUnavailable={isDeliveryUnavailable}
             draftId={draftId}
             support={support}
-            contactCheckboxVisible={contactCheckboxVisible}
-            contactEmail={snapshot?.user.email ?? null}
+            contactEmail={freezeEvidenceData?.contactEmail ?? null}
             onLogsTouched={() => setLogsTouchedByUser(true)}
             onSelectType={selectType}
             attachments={attachments}
@@ -865,7 +851,7 @@ export function ReportIssueDialog(
           </div>
         ) : null}
 
-        <DialogFooter className="flex-wrap gap-2">
+        <DialogFooter className="flex-wrap">
           <ReportIssueDialogFooter
             screen={screen}
             deliveryResult={effectiveDeliveryResult}
@@ -965,12 +951,9 @@ function CaptureScreenBody({
   showGateError,
   intentRef,
   isPending,
-  consentExpanded,
-  onToggleConsentExpanded,
   isDeliveryUnavailable,
   draftId,
   support,
-  contactCheckboxVisible,
   contactEmail,
   onLogsTouched,
   onSelectType,
@@ -994,12 +977,9 @@ function CaptureScreenBody({
   readonly showGateError: boolean;
   readonly intentRef: RefObject<HTMLTextAreaElement | null>;
   readonly isPending: boolean;
-  readonly consentExpanded: boolean;
-  readonly onToggleConsentExpanded: () => void;
   readonly isDeliveryUnavailable: boolean;
   readonly draftId: number;
   readonly support: DesktopSupportDialogProps["support"];
-  readonly contactCheckboxVisible: boolean;
   readonly contactEmail: string | null;
   readonly onLogsTouched: () => void;
   readonly onSelectType: (type: DesktopReportType) => void;
@@ -1124,10 +1104,7 @@ function CaptureScreenBody({
             }}
             disabled={isPending}
             aria-invalid={showGateError}
-            className={cn(
-              "min-h-20 resize-none",
-              showGateError && "border-destructive",
-            )}
+            className="min-h-20 resize-none"
           />
           <IntentFieldHint
             showGateError={showGateError}
@@ -1165,8 +1142,6 @@ function CaptureScreenBody({
         <AttachmentSection attachments={attachments} disabled={isPending} />
 
         <ConsentPanel
-          expanded={consentExpanded}
-          onToggleExpanded={onToggleConsentExpanded}
           deliveryUnavailable={isDeliveryUnavailable}
           draftId={draftId}
           support={support}
@@ -1174,8 +1149,6 @@ function CaptureScreenBody({
           includeHostLog={form.includeHostLog}
           includeBrowserDiagnostics={form.includeBrowserDiagnostics}
           includeDiagnostics={form.includeDiagnostics}
-          allowContact={form.allowContact}
-          contactCheckboxVisible={contactCheckboxVisible}
           contactEmail={contactEmail}
           disabled={isPending}
           onToggleDesktopLog={(checked) => {
@@ -1194,9 +1167,6 @@ function CaptureScreenBody({
           }}
           onToggleDiagnostics={(checked) => {
             setForm((prev) => ({ ...prev, includeDiagnostics: checked }));
-          }}
-          onToggleAllowContact={(checked) => {
-            setForm((prev) => ({ ...prev, allowContact: checked }));
           }}
         />
       </div>
@@ -1491,9 +1461,9 @@ function EvidenceStrip({
 
   if (!expanded) {
     return (
-      <div className="flex items-start justify-between gap-2 rounded-md border border-emerald-800/40 bg-emerald-950/10 px-3 py-2 text-ui-xs">
+      <div className="flex items-start justify-between gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-ui-xs">
         <span>
-          <span className="font-medium text-emerald-600 dark:text-emerald-400">
+          <span className="font-medium text-success-foreground">
             ✓ Captured
           </span>{" "}
           {summaryParts.join(" · ")}
@@ -1512,9 +1482,7 @@ function EvidenceStrip({
   return (
     <div className="grid max-h-64 gap-2 overflow-y-auto rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-emerald-600 dark:text-emerald-400">
-          ✓ Captured
-        </span>
+        <span className="font-medium text-success-foreground">✓ Captured</span>
         <button
           type="button"
           onClick={onToggleExpanded}
@@ -1762,7 +1730,7 @@ function AttachmentThumbnail({
   readonly onRemove: () => void;
 }): ReactNode {
   return (
-    <div className="relative h-[38px] w-14 shrink-0 overflow-hidden rounded border border-border bg-foreground/8">
+    <div className="relative h-9.5 w-14 shrink-0 overflow-hidden rounded border border-border bg-foreground/8">
       <img
         src={image.previewUrl}
         alt={image.fileName}
@@ -1781,19 +1749,7 @@ function AttachmentThumbnail({
   );
 }
 
-function logsToggleSummary(
-  desktopOn: boolean,
-  hostOn: boolean,
-  browserDiagnosticsOn: boolean,
-): string {
-  if (desktopOn && hostOn && browserDiagnosticsOn) return "log tails on";
-  if (!desktopOn && !hostOn && !browserDiagnosticsOn) return "log tails off";
-  return "log tails partially on";
-}
-
 function ConsentPanel(props: {
-  readonly expanded: boolean;
-  readonly onToggleExpanded: () => void;
   readonly deliveryUnavailable: boolean;
   readonly draftId: number;
   readonly support: DesktopSupportDialogProps["support"];
@@ -1801,15 +1757,12 @@ function ConsentPanel(props: {
   readonly includeHostLog: boolean;
   readonly includeBrowserDiagnostics: boolean;
   readonly includeDiagnostics: boolean;
-  readonly allowContact: boolean;
-  readonly contactCheckboxVisible: boolean;
   readonly contactEmail: string | null;
   readonly disabled: boolean;
   readonly onToggleDesktopLog: (checked: boolean) => void;
   readonly onToggleHostLog: (checked: boolean) => void;
   readonly onToggleBrowserDiagnostics: (checked: boolean) => void;
   readonly onToggleDiagnostics: (checked: boolean) => void;
-  readonly onToggleAllowContact: (checked: boolean) => void;
 }): ReactNode {
   // Honest per build: the no-DSN bundle never includes screenshots (a
   // deliberate ticket 08 choice - see `saveDiagnosticBundle`'s own doc
@@ -1820,28 +1773,6 @@ function ConsentPanel(props: {
   const summary = props.deliveryUnavailable
     ? "Included in your diagnostic bundle: your words, type/frequency, and any log tails still toggled on below. Screenshots stay on this device - attach them manually if you post a GitHub issue."
     : "Sent privately to the Traycer team: adds your words, screenshots and logs to the crash data we already receive.";
-
-  if (!props.expanded) {
-    const logsState = logsToggleSummary(
-      props.includeDesktopLog,
-      props.includeHostLog,
-      props.includeBrowserDiagnostics,
-    );
-    return (
-      <div className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-ui-xs text-muted-foreground">
-        <span>
-          {summary} · {logsState}
-        </span>
-        <button
-          type="button"
-          onClick={props.onToggleExpanded}
-          className="shrink-0 underline"
-        >
-          details
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="grid gap-2.5 rounded-md border border-border px-3 py-2.5">
@@ -1874,7 +1805,8 @@ function ConsentPanel(props: {
       <div className="flex items-center justify-between gap-2">
         <Label
           htmlFor="report-issue-diagnostics-toggle"
-          className="text-ui-xs font-normal"
+          size="xs"
+          variant="option"
         >
           Diagnostics (crash context, versions, provider info)
         </Label>
@@ -1885,17 +1817,11 @@ function ConsentPanel(props: {
           onCheckedChange={props.onToggleDiagnostics}
         />
       </div>
-      {props.contactCheckboxVisible ? (
-        <label className="flex items-center gap-2 text-ui-xs">
-          <Checkbox
-            checked={props.allowContact}
-            disabled={props.disabled}
-            onCheckedChange={(value) =>
-              props.onToggleAllowContact(value === true)
-            }
-          />
-          You may contact me at {props.contactEmail}
-        </label>
+      {!props.deliveryUnavailable && props.contactEmail !== null ? (
+        <p className="text-ui-xs text-muted-foreground">
+          Your email ({props.contactEmail}) is included so we can follow up. It
+          is kept out of public GitHub reports.
+        </p>
       ) : null}
     </div>
   );
@@ -1914,7 +1840,9 @@ function ConsentLogToggleRow(props: {
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-ui-xs font-normal">{props.label}</Label>
+        <Label size="xs" variant="option">
+          {props.label}
+        </Label>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1961,7 +1889,9 @@ function ConsentBrowserDiagnosticsRow(props: {
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-ui-xs font-normal">Browser diagnostics</Label>
+        <Label size="xs" variant="option">
+          Browser diagnostics
+        </Label>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -2068,8 +1998,8 @@ function ConfirmationScreen({
   readonly reportId: string;
 }): ReactNode {
   return (
-    <div className="grid gap-2 rounded-md border border-emerald-800/40 bg-emerald-950/10 px-3 py-3 text-ui-sm">
-      <p className="font-medium text-emerald-600 dark:text-emerald-400">
+    <div className="grid gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-3 text-ui-sm">
+      <p className="font-medium text-success-foreground">
         Sent privately to the Traycer team.
       </p>
       <p className="flex items-center gap-2 font-mono text-code-xs text-muted-foreground">
@@ -2320,7 +2250,6 @@ function Field({
       <Label
         htmlFor={htmlFor}
         className={cn(
-          "text-ui-sm",
           required && "after:ml-0.5 after:text-destructive after:content-['*']",
         )}
       >

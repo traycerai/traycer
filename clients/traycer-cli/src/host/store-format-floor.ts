@@ -353,12 +353,17 @@ function storeFormatFloorRefusal(
   verdict: Exclude<StoreFormatFloorVerdict, { kind: "clear" }>,
 ): CliError {
   const head = `${input.site}: refusing to install host ${input.targetVersion} over ${describeInstalled(input.installedVersion)}`;
+  // Direction-NEUTRAL, both sentences, and deliberately so: this gate is not
+  // downgrade-only. Over an installed side nobody can place - a build-stamped
+  // archive with no sidecar - `storeFloorApplicability` evaluates a forward
+  // move too, so "update forward" can be advice to do what the operator is
+  // already doing, and "survive the downgrade" can name a move that is not one.
   const remedy =
-    "Update forward instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats.";
+    "Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats.";
   const message =
     verdict.kind === "blocked"
       ? `${head} - it reads chat store format ${verdict.targetChatDb}, and ${countedEpics(verdict.epics.length)} on this machine ${verdict.epics.length === 1 ? "carries" : "carry"} a newer one (${describeReadings(verdict.epics)}).${describeBlockedFailures(verdict.failures)} Those chats would be unreadable to it, and a host that meets a store it cannot open crash-loops rather than reporting it. ${remedy}`
-      : `${head} - ${describeIndeterminate(input, verdict)}, so it cannot be shown that those chats survive the downgrade. ${remedy}`;
+      : `${head} - ${describeIndeterminate(input, verdict)}, so it cannot be shown that those chats survive the swap. ${remedy}`;
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     message,

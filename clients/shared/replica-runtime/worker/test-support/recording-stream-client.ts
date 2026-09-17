@@ -11,8 +11,12 @@
  * and those are different bugs.
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type {
+  IStreamClient,
+  StreamParamsProvider,
+} from "@traycer-clients/shared/host-transport/i-stream-client";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -45,6 +49,11 @@ export interface RecordedSession {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ): void;
+  /**
+   * Drives the `reconnecting` transition a retryable close causes, carrying
+   * the host's details as its retry cause (see `StatusChangeHandler`).
+   */
+  emitRetryableReconnect(retryCause: FatalErrorDetails): void;
   setNegotiatedVersion(version: SchemaVersion | null): void;
   /** Re-reads the provider, as a wire re-subscribe would. */
   readParams(): unknown;
@@ -105,7 +114,10 @@ export function createRecordingStreamClient(): RecordingStreamClient {
         frameHandler?.(envelope, binaryPayload);
       },
       emitStatus: (status, reason) => {
-        statusHandler?.(status, reason);
+        statusHandler?.(status, reason, null);
+      },
+      emitRetryableReconnect: (retryCause) => {
+        statusHandler?.("reconnecting", null, retryCause);
       },
       setNegotiatedVersion: (version) => {
         negotiated = version;
@@ -129,9 +141,13 @@ export function createRecordingStreamClient(): RecordingStreamClient {
       Method extends keyof HostStreamRpcRegistry & string,
     >(
       method: Method,
-      paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+      paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
     ): IStreamSession {
-      const built = build(method, paramsProvider, paramsProvider());
+      // `null` for the same reason `createWorkerStreamClient` passes it - this
+      // double stands in for the worker side of the proxy, where the version
+      // main negotiated is not observable.
+      const readParams = (): unknown => paramsProvider(null);
+      const built = build(method, readParams, readParams());
       sessions.push(built.recorded);
       return built.session;
     },

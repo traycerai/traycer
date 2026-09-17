@@ -55,12 +55,17 @@ const OWNERSHIP_OPTIONS: ReadonlyArray<{
   { value: "shared", label: "Shared" },
 ];
 
+function historyFilterActiveCount(search: HistorySearchState): number {
+  return (
+    search.ownershipScopes.length +
+    search.repos.length +
+    search.workspaces.length +
+    search.chatHosts.length
+  );
+}
+
 export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
-  const activeCount =
-    props.search.ownershipScopes.length +
-    props.search.repos.length +
-    props.search.workspaces.length +
-    props.search.chatHosts.length;
+  const activeCount = historyFilterActiveCount(props.search);
   const ownershipCounts = new Map(
     props.facets?.ownershipScopes.map((facet) => [facet.value, facet.count]) ??
       [],
@@ -95,7 +100,7 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="max-h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)] gap-3 overflow-y-auto"
+        className="max-h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)] overflow-y-auto"
         data-testid="epics-filter-popover"
       >
         <FilterSection label="Ownership" trailing={null}>

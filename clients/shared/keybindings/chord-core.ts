@@ -29,6 +29,85 @@ export function formatChord(parts: ChordParts): ChordString {
   return pieces.join("+");
 }
 
+const BARE_MODIFIER_CODES = new Set<string>([
+  "MetaLeft",
+  "MetaRight",
+  "ControlLeft",
+  "ControlRight",
+  "ShiftLeft",
+  "ShiftRight",
+  "AltLeft",
+  "AltRight",
+  "OSLeft",
+  "OSRight",
+]);
+
+const CODE_TO_KEY: Readonly<Record<string, string>> = {
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  Semicolon: ";",
+  Quote: "'",
+  Backquote: "`",
+  Minus: "-",
+  Equal: "=",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backslash: "\\",
+  Space: "space",
+  Enter: "enter",
+  Escape: "escape",
+  Tab: "tab",
+  Backspace: "backspace",
+  Delete: "delete",
+  ArrowUp: "arrowup",
+  ArrowDown: "arrowdown",
+  ArrowLeft: "arrowleft",
+  ArrowRight: "arrowright",
+  Home: "home",
+  End: "end",
+  PageUp: "pageup",
+  PageDown: "pagedown",
+};
+
+/**
+ * Normalize a `KeyboardEvent.code` / Electron `Input.code` to our canonical key
+ * token.
+ *
+ * PHYSICAL position, deliberately, and this is why it lives in the shared core
+ * rather than beside the renderer's event helpers: a chord token names a place
+ * on the keyboard, not the character that place produces. On AZERTY the key
+ * where US has `W` reports `key: "z"` and `code: "KeyW"`, and the physical
+ * `1` reports `key: "&"` (or `"!"` shifted) with `code: "Digit1"`.
+ *
+ * Both halves of the guest-focused input policy must derive a token THIS way
+ * or a shared table buys nothing: the renderer resolved `mod+1` from the code
+ * while Electron main resolved nothing from `key: "&"`, so every digit and
+ * every letter chord was forwarded to the guest on a non-US layout. See
+ * `browser-view-chords.ts`.
+ */
+export function normalizeCode(code: string): ChordKey | null {
+  if (BARE_MODIFIER_CODES.has(code)) return null;
+  if (code.startsWith("Key") && code.length === 4) {
+    return code.slice(3).toLowerCase();
+  }
+  if (code.startsWith("Digit") && code.length === 6) {
+    return code.slice(5);
+  }
+  if (code.startsWith("Numpad") && code.length === 7) {
+    const tail = code.slice(6);
+    if (/^\d$/.test(tail)) return tail;
+  }
+  if (Object.hasOwn(CODE_TO_KEY, code)) return CODE_TO_KEY[code];
+  if (/^F\d{1,2}$/.test(code)) return code.toLowerCase();
+  return null;
+}
+
+/** Is this code a bare modifier - a key that can never be a chord's primary? */
+export function isBareModifierCode(code: string): boolean {
+  return BARE_MODIFIER_CODES.has(code);
+}
+
 export function parseChordString(chord: ChordString): ChordParts | null {
   if (chord.length === 0) return null;
   const tokens = chord.split("+");

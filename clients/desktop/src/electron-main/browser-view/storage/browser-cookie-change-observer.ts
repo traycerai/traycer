@@ -8,7 +8,12 @@ import {
   cookieDomainInScope,
   registrableDomain,
 } from "@traycer/protocol/host/browser/registrable-domain";
-import { describeLogError, log, sanitizeLogFields } from "../../app/logger";
+import {
+  describeLogError,
+  isDebugEnabled,
+  log,
+  sanitizeLogFields,
+} from "../../app/logger";
 import { browserStorageCookies, cookieKeyId } from "./browser-storage-state";
 
 /**
@@ -84,8 +89,10 @@ export interface BrowserCookieChangeObserverOptions {
   readonly coalesceWindowMs: number;
 }
 
-/** Spec §6.3: ~2 s from the first change of a burst to the delta. */
+// ponytail: quiet time trades login latency for fewer deltas; tune from live traffic.
 export const BROWSER_COOKIE_DELTA_WINDOW_MS = 2_000;
+// ponytail: cap continuous writers at one delta per 10 s; lower if churn delays logins.
+export const BROWSER_COOKIE_DELTA_MAX_WAIT_MS = 10_000;
 
 /**
  * The `cause` values Chromium reports for a removal NOBODY asked for.
@@ -180,7 +187,8 @@ interface CoalescingWindow {
    * session cookie as a suppression, which is churn, not a suppression.
    */
   readonly suppressedRemovals: Map<string, SuppressedRemoval>;
-  readonly timer: NodeJS.Timeout;
+  readonly quietTimer: NodeJS.Timeout;
+  readonly maxWaitTimer: NodeJS.Timeout;
 }
 
 export class BrowserCookieChangeObserver {
@@ -360,6 +368,7 @@ export class BrowserCookieChangeObserver {
     // so the slice is re-read and the desktop's own view stays current. Only
     // the logout CLAIM is withheld.
     const window = this.windows.get(scope) ?? this.openWindow(scope);
+    window.quietTimer.refresh();
     const normalized = normalizedCookieOf(cookie);
     if (normalized === null) return;
     const keyId = cookieKeyId(normalized);
@@ -387,6 +396,17 @@ export class BrowserCookieChangeObserver {
     // The maps stay disjoint: Chromium can fire several removal events for one
     // key inside a burst, and the witnessed one wins rather than being counted
     // in both places.
+    if (isDebugEnabled()) {
+      log.debug(
+        "[browser-view] witnessed cookie removal",
+        sanitizeLogFields({
+          domain: normalized.domain,
+          name: normalized.name,
+          path: normalized.path,
+          cause,
+        }),
+      );
+    }
     window.suppressedRemovals.delete(keyId);
     window.removedKeys.set(keyId, {
       domain: normalized.domain,
@@ -440,9 +460,12 @@ export class BrowserCookieChangeObserver {
       issuedAt: this.options.now(),
       removedKeys: new Map<string, BrowserCookieKey>(),
       suppressedRemovals: new Map<string, SuppressedRemoval>(),
-      timer: setTimeout(() => {
+      quietTimer: setTimeout(() => {
         void this.flushWindow(domain);
       }, this.options.coalesceWindowMs),
+      maxWaitTimer: setTimeout(() => {
+        void this.flushWindow(domain);
+      }, BROWSER_COOKIE_DELTA_MAX_WAIT_MS),
     };
     this.windows.set(domain, window);
     return window;
@@ -459,14 +482,15 @@ export class BrowserCookieChangeObserver {
   private dropWindow(domain: string): void {
     const window = this.windows.get(domain);
     if (window === undefined) return;
-    clearTimeout(window.timer);
+    clearTimeout(window.quietTimer);
+    clearTimeout(window.maxWaitTimer);
     this.windows.delete(domain);
   }
 
   private async flushWindow(domain: string): Promise<void> {
     const window = this.windows.get(domain);
     if (window === undefined) return;
-    this.windows.delete(domain);
+    this.dropWindow(domain);
     if (this.isSuppressed()) return;
     traceSuppressedRemovals(domain, window.suppressedRemovals);
     const epoch = this.suppressionEpoch;

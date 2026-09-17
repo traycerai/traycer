@@ -35,6 +35,22 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
+/**
+ * The directory's answer, as the gate's attach-pending cover reads it.
+ *
+ * Mocked rather than driven through a real `HostDirectoryService`: the cover
+ * consumes one boolean, and standing up a service would pin its commit rules a
+ * second time (they are pinned against the real service in
+ * `host-directory-service.test.ts`) while telling us nothing about this reader.
+ * Defaults to `false`, which is what a tree with no host binding answers
+ * anyway - so every existing fixture keeps its meaning, and only the
+ * no-local-host case below can even reach the arm that consumes it.
+ */
+const discovery = vi.hoisted(() => ({ concluded: false }));
+
+vi.mock("@/hooks/host/use-host-discovery-concluded", () => ({
+  useHostDiscoveryConcluded: () => discovery.concluded,
+}));
 
 // `traycer host status` is a CLI subprocess read. Stubbing the query rather
 // than a 15-method ITraycerCli keeps the seam at the boundary the component
@@ -213,6 +229,44 @@ function renderGateWithCli(
 }
 
 /**
+ * The gate on a shell that cannot boot a local host - the phone, and a browser
+ * window.
+ *
+ * Its own harness rather than a parameter on `renderGateWithCli`, whose
+ * `hasLocalHost: undefined` every other fixture depends on: this is the ONE
+ * population where the narrator's discovery wait is reachable at all
+ * (`windowNarrationAwaitsDiscovery` returns false whenever a local host can be
+ * expected), so it is a different shell rather than a variation of that one.
+ */
+function renderRemoteOnlyGate(readiness: SurfaceReadiness): RenderResult {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: false,
+    traycerCli: undefined,
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostReadinessControllerContext.Provider
+          value={controllerFor(readiness, PRESENTATION, false)}
+        >
+          <HostReadyGate>
+            <main>app</main>
+          </HostReadyGate>
+        </HostReadinessControllerContext.Provider>
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/**
  * The gate AND the window modal in one tree, which is the only arrangement that
  * can see them collide.
  *
@@ -280,6 +334,7 @@ const SLOW_PRESENTATION: DefaultHostReadinessPresentation = {
 beforeEach(() => {
   routerState.pathname = "/";
   hostStatus.data = undefined;
+  discovery.concluded = false;
   useAuthStore.setState({ status: "signed-in" });
 });
 
@@ -294,6 +349,27 @@ afterEach(() => {
 });
 
 describe("<HostReadyGate />", () => {
+  it("removes the branded boot cover on readiness without advancing animation timers", () => {
+    vi.useFakeTimers();
+    try {
+      const gate = renderGate({ kind: "loading-host" }, PRESENTATION);
+      const startTime = Date.now();
+      expect(screen.getByTestId("host-gate-attach-pending")).toBeTruthy();
+      expect(screen.getByTestId("brand-entrance")).toBeTruthy();
+      expect(screen.queryByRole("main")).toBeNull();
+
+      gate.setReadiness({ kind: "ready" }, PRESENTATION);
+
+      expect(Date.now()).toBe(startTime);
+      expect(screen.queryByTestId("host-ready-gate")).toBeNull();
+      expect(screen.queryByTestId("brand-entrance")).toBeNull();
+      expect(screen.getByRole("main").textContent).toBe("app");
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("renders the app once the default host is ready", () => {
     renderGate({ kind: "ready" }, PRESENTATION);
     expect(screen.getByRole("main")).toBeTruthy();
@@ -446,6 +522,71 @@ describe("<HostReadyGate />", () => {
           selectionRevision: 1,
         });
       });
+
+      expect(screen.queryByTestId("host-gate-attach-pending")).toBeNull();
+    });
+  });
+
+  describe("the discovery wait - the cover's SECOND reason to speak", () => {
+    /**
+     * `windowNarrationAwaitsDiscovery` has two readers, and the whole point of
+     * sharing one definition is that they agree about which frames are covered.
+     * The narrator's side is pinned in `window-narration.test.ts` and
+     * `window-narration-discovery-wait.test.tsx`; this is the gate's side.
+     *
+     * Reachable only on a shell that cannot boot a local host: with a local
+     * host expected the narrator tells a cold-start story instead, and the
+     * predicate never waits. So these use the remote-only harness.
+     */
+    it("keeps the cover up while ATTACHED with discovery unconcluded", () => {
+      // The launch this whole surface is about: the kernel has attached, so the
+      // detached arm no longer applies, and the authority's lease list is empty
+      // because nothing has asked the registry yet. Without the second reason,
+      // this frame is a bare header over an empty page.
+      renderRemoteOnlyGate({ kind: "loading-host" });
+
+      act(() => {
+        useSelectionAuthorityStore.getState().applyKernelSnapshot({
+          attached: true,
+          preferredHostId: null,
+          targetHostId: null,
+          effectiveHostId: null,
+          leases: [],
+          selectionRevision: 1,
+        });
+      });
+
+      expect(screen.getByTestId("host-gate-attach-pending")).toBeTruthy();
+    });
+
+    it("yields the instant discovery concludes, so it cannot double-speak with the narrator", () => {
+      // The discriminating half: identical state, the only difference being
+      // that an attempt has now concluded - at which point the narrator owns
+      // the words and this cover must be gone.
+      renderRemoteOnlyGate({ kind: "loading-host" });
+
+      const attach = (revision: number): void => {
+        act(() => {
+          useSelectionAuthorityStore.getState().applyKernelSnapshot({
+            attached: true,
+            preferredHostId: null,
+            targetHostId: null,
+            effectiveHostId: null,
+            leases: [],
+            selectionRevision: revision,
+          });
+        });
+      };
+
+      attach(1);
+      expect(screen.getByTestId("host-gate-attach-pending")).toBeTruthy();
+
+      // Flipped IN PLACE on the same mounted tree - a remount would re-run
+      // every arm from scratch and prove nothing about the transition. The
+      // store publish is what re-renders the gate, so the cover re-reads the
+      // hook and yields.
+      discovery.concluded = true;
+      attach(2);
 
       expect(screen.queryByTestId("host-gate-attach-pending")).toBeNull();
     });
@@ -630,18 +771,18 @@ describe("<HostReadyGate />", () => {
     expect(
       screen.getAllByRole("button", { name: "Open settings" }),
     ).toHaveLength(1);
-    // Nothing is starting: no spinner, no boot headline.
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    // Nothing is starting: no boot headline.
+    expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
     expect(screen.queryByText("Starting Traycer…")).toBeNull();
   });
 
-  it("draws restoring-request-context as the shared boot surface: idle heading, spinner, indeterminate bar, Show details and Open settings", () => {
+  it("draws restoring-request-context as the shared boot surface: idle heading, no bar, Show details and Open settings", () => {
     // A WAIT, not a terminal, and it can sit between the attach cover and the
     // narrator's card on any launch. It used to be a bare "Restoring
-    // authenticated session…" line with no spinner and no controls - a fourth
-    // card shape in a launch that must have one. Now it is the same card, the
-    // same idle sentence, the same bar and the same footer pair as the
-    // surfaces on either side of it, so the hand-off is invisible. The
+    // authenticated session…" line with no controls - a fourth card shape in
+    // a launch that must have one. Now it is the same card, the same idle
+    // sentence and the same footer pair as the surfaces on either side of it,
+    // so the hand-off is invisible. The
     // testids are the boot BODY's own (`local-host-loading-*`): the surface
     // is that body with no lane, not a look-alike.
     renderGateWithCli(
@@ -654,13 +795,11 @@ describe("<HostReadyGate />", () => {
       "host-ready-gate-restoring-request-context",
     );
     expect(card.getAttribute("data-surface")).toBe(HOST_BOOT_CARD_SURFACE);
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
     expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
       "Starting Traycer…",
     );
-    expect(
-      screen.getByTestId("local-host-download-progress").dataset.indeterminate,
-    ).toBe("true");
+    // No lane, so no measured position and no bar.
+    expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.queryByText("Restoring authenticated session…")).toBeNull();
     expect(
       screen.getByTestId("local-host-loading-toggle-details"),
@@ -883,7 +1022,7 @@ describe("<HostReadyGate />", () => {
       // Both conditions at once, which is a single-host account whose local
       // provision threw: readiness is `provisioning-error` (A's state) and the
       // authority has nothing effective (B's state). Before this was pinned the
-      // user saw the modal floating at z-[60] behind its blur over the gate's
+      // user saw the modal floating at z-60 behind its blur over the gate's
       // own centred card, each with its own copy and its own recovery actions -
       // the layering this epic exists to delete, rebuilt out of two deciders
       // that were each correct alone.

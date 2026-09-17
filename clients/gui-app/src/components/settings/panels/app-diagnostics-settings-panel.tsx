@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { APP_DIAGNOSTICS } from "@/components/settings/panels/app-diagnostics-settings.definitions";
 import { LogDetailGroup } from "@/components/settings/panels/diagnostics-log-detail-group";
 import {
   BridgeLogEntry,
@@ -86,6 +87,7 @@ export function AppDiagnosticsSettingsPanel(): ReactNode {
         )}
       >
         <LogDetailGroup
+          group={APP_DIAGNOSTICS.definitions.logDetail}
           controls={controls}
           emptyState={
             <LogInfoLine>
@@ -189,7 +191,8 @@ function MemoryDiagnosticsGroup(): ReactNode {
   if (bridge === null && !jsHeapAvailable) {
     return (
       <SettingsGroup
-        title="Memory"
+        group={APP_DIAGNOSTICS.definitions.memory}
+        showTitle
         tone="default"
         dataTestId={undefined}
         fill={false}
@@ -203,7 +206,8 @@ function MemoryDiagnosticsGroup(): ReactNode {
 
   return (
     <SettingsGroup
-      title="Memory"
+      group={APP_DIAGNOSTICS.definitions.memory}
+      showTitle
       tone="default"
       dataTestId={undefined}
       fill={false}
@@ -227,7 +231,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
             >
               {captureMutation.isPending ? (
                 <AgentSpinningDots
-                  className="text-current"
+                  className={undefined}
                   testId={undefined}
                   variant={undefined}
                 />
@@ -356,7 +360,7 @@ function JsHeapReadout(): ReactNode {
         >
           {measureMutation.isPending ? (
             <AgentSpinningDots
-              className="text-current"
+              className={undefined}
               testId={undefined}
               variant={undefined}
             />

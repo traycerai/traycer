@@ -13,6 +13,7 @@ import {
 import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
 import { findConflict } from "@/lib/keybindings/conflicts";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { Kbd } from "@/components/ui/kbd";
 import { useSummonHotkey } from "@/hooks/runner/use-summon-hotkey";
 import { GLOBAL_SHORTCUT_DEFAULT_CHORDS } from "@traycer-clients/shared/keybindings/global-shortcuts";
@@ -43,8 +44,15 @@ export function KeybindingsSettingsPanel() {
   const clearBinding = useKeybindingStore((s) => s.clearBinding);
   const resetAll = useKeybindingStore((s) => s.resetAll);
 
+  const homeTabEnabled = useSettingsStore((s) => s.homeTabEnabled);
+  // A row here is a promise that the chord does something. `app.home.open`
+  // dispatches to nothing while the Home tab is off, so it would be a bindable
+  // row for a surface this build has not got - the same reason the command
+  // palette omits it.
   const primaryActionIds = ACTION_IDS.filter(
-    (id) => !SUB_LEADER_ACTION_SET.has(id),
+    (id) =>
+      !SUB_LEADER_ACTION_SET.has(id) &&
+      (homeTabEnabled || id !== "app.home.open"),
   );
 
   // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to
@@ -71,7 +79,7 @@ export function KeybindingsSettingsPanel() {
 
   return (
     <section className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-8 sm:py-10">
-      <header className="sticky top-0 z-10 -mx-4 mb-8 bg-background/95 px-4 py-2 backdrop-blur sm:-mx-8 sm:px-8">
+      <header className="sticky top-0 z-10 -mx-4 mb-8 bg-background px-4 py-2 sm:-mx-8 sm:px-8">
         <h1 className="text-title-lg font-semibold text-foreground">
           Keybindings
         </h1>
@@ -177,9 +185,8 @@ function SubLeaderSection(props: SubLeaderSectionProps) {
           Sub-leader
         </h2>
         <p className="mt-1 text-ui-xs text-muted-foreground">
-          The primary leader (default <Kbd>⌘</Kbd>) drives the active Epic
-          group. The sub-leader (default <Kbd>⌥</Kbd>) drives the header tab
-          strip, and settings sections while Settings is frontmost.
+          The primary leader switches tabs within the active task. Configure
+          shortcuts for header tabs and Settings sections below.
         </p>
       </header>
       <KeybindingList
@@ -207,9 +214,13 @@ function DigitBindingDisplay(props: DigitBindingDisplayProps) {
   if (actionId === "tab.switch.byDigit") {
     return (
       <span className="inline-flex items-center gap-1 text-ui-xs">
-        <Kbd className="font-mono tabular-nums">{first}</Kbd>
+        <Kbd className="tabular-nums" variant="mono">
+          {first}
+        </Kbd>
         <span className="text-muted-foreground">–</span>
-        <Kbd className="font-mono tabular-nums">{last}</Kbd>
+        <Kbd className="tabular-nums" variant="mono">
+          {last}
+        </Kbd>
       </span>
     );
   }
@@ -219,11 +230,17 @@ function DigitBindingDisplay(props: DigitBindingDisplayProps) {
   );
   return (
     <span className="inline-flex items-center gap-1 text-ui-xs">
-      <Kbd className="font-mono tabular-nums">{first}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {first}
+      </Kbd>
       <span className="text-muted-foreground">–</span>
-      <Kbd className="font-mono tabular-nums">{last}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {last}
+      </Kbd>
       <span className="text-muted-foreground">·</span>
-      <Kbd className="font-mono tabular-nums">{overflow}</Kbd>
+      <Kbd className="tabular-nums" variant="mono">
+        {overflow}
+      </Kbd>
     </span>
   );
 }

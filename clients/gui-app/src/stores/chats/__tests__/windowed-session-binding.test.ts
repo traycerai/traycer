@@ -315,12 +315,14 @@ function createHarnessWith(
     onProviderAuthError: () => {
       providerAuthNudges += 1;
     },
+    wakeTransport: null,
     streamFlushCoordinator,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: (request) => {
           rangeRequests.push(request);
         },
@@ -1024,6 +1026,8 @@ describe("a deferred snapshot's auxiliary state", () => {
         description: "rm -rf /tmp/x",
         input: null,
         requestedAt: 12,
+        reason: null,
+        reviewing: null,
         kind: "tool",
         planId: null,
         actions: [],
@@ -1120,6 +1124,8 @@ describe("a deferred snapshot's auxiliary state", () => {
               description: "ls",
               input: null,
               requestedAt: 5,
+              reason: null,
+              reviewing: null,
               kind: "tool",
               planId: null,
               actions: [],

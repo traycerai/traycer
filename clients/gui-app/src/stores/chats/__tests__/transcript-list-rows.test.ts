@@ -393,7 +393,7 @@ describe("transcriptListRows", () => {
   it("keeps every same-timestamp setup card projected from live events", () => {
     const setupEvent = (
       eventId: string,
-      type: ChatEvent["type"] = "setup.running",
+      type: ChatEvent["type"],
     ): ChatEvent => ({
       eventId,
       type,
@@ -419,11 +419,11 @@ describe("transcriptListRows", () => {
         skeletonComplete: false,
         invalidated: true,
         liveEvents: [
-          setupEvent("setup-live-1"),
+          setupEvent("setup-live-1", "setup.running"),
           // This boundary splits the same-timestamp setup events into two
           // projected setup-card windows, which is the cardinality under test.
           setupEvent("setup-boundary", "worktree.missing"),
-          setupEvent("setup-live-2"),
+          setupEvent("setup-live-2", "setup.running"),
         ],
       }),
       rendered: [
@@ -1829,6 +1829,38 @@ describe("transcriptListRows", () => {
     // user row above the turn.
     expect(steerIndex).toBeGreaterThan(assistantIndex);
     expect(rows[steerIndex].ordinal).toBe(2);
+  });
+});
+
+describe("Codex retry row suppression", () => {
+  it("withholds a settled retry slice without losing the canonical answer part", () => {
+    const part0 = assistantSliceRowId("turn-retry-sparse", 0, true);
+    const steer = queueSteerRowId("queue-retry-sparse");
+    const part1 = assistantSliceRowId("turn-retry-sparse", 1, true);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [span(0, [part0, steer, part1])],
+        skeleton: [
+          skeletonEntry(part0),
+          skeletonEntry(steer),
+          skeletonEntry(part1),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+      }),
+      // The renderer has already withheld the settled retry-only part:0 row.
+      rendered: [modelWithoutPersistentMessageId(steer), model(part1)],
+    });
+
+    expect(
+      rows.map((row) => (row.kind === "hydrated" ? row.model.id : row.key)),
+    ).toEqual([steer, part1]);
+    expect(rows.some((row) => row.key === part0)).toBe(false);
+    expect(
+      rows.find((row) => row.kind === "hydrated" && row.model.id === part1)
+        ?.ordinal,
+    ).toBe(2);
   });
 });
 

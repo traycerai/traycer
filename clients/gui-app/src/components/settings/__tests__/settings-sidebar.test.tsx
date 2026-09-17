@@ -8,6 +8,7 @@ import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -240,6 +241,17 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(labels).not.toContain("Agents");
   });
 
+  it("labels application sounds apart from host notification events", () => {
+    const app = SETTINGS_SECTIONS.find(
+      (section) => section.id === "app-notifications",
+    );
+    const host = SETTINGS_SECTIONS.find(
+      (section) => section.id === "notifications",
+    );
+    expect(app?.label).toBe("Sounds");
+    expect(host?.label).toBe("Notifications");
+  });
+
   it("delays sub-leader digit badges in settings navigation", async () => {
     const router = buildRouter("/settings/general");
     render(
@@ -404,5 +416,41 @@ describe("<SettingsSidebar /> section navigation history", () => {
       router.history.back();
     });
     expect(router.state.location.pathname).toBe("/task-stub");
+  });
+});
+
+describe("<SettingsSidebar /> search", () => {
+  // The navigation-history cases above leave their trees mounted.
+  beforeEach(() => {
+    cleanup();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useSettingsSearchStore.setState({ query: "" });
+  });
+
+  // The query lives in the store so the modal frame can see a search running,
+  // but a visit's search must not greet the next one.
+  it("replaces the section list while searching and forgets the query on unmount", async () => {
+    const router = buildRouter("/settings/general");
+    const view = render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    const input = await screen.findByRole("combobox", {
+      name: "Search settings",
+    });
+
+    fireEvent.change(input, { target: { value: "theme" } });
+
+    expect(useSettingsSearchStore.getState().query).toBe("theme");
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: "General" })).toBeNull();
+
+    view.unmount();
+
+    expect(useSettingsSearchStore.getState().query).toBe("");
   });
 });

@@ -71,6 +71,11 @@ export function ChatUsageDialog(): ReactNode {
         epicId: null,
         chatId: target?.chatId ?? null,
         window: target === null ? undefined : "epic",
+        // This dialog has not been given the verdict-less cohort - it opens
+        // from a chat tab, which has its own auth gating - so it keeps the
+        // released "host picks the reader" behavior. Stated rather than
+        // defaulted; see `buildUsageSummaryRequest`.
+        plane: null,
       }),
     [target],
   );
@@ -90,7 +95,7 @@ export function ChatUsageDialog(): ReactNode {
     >
       <DialogContent
         className={cn(
-          "flex h-[min(80dvh,34rem)] w-[min(92vw,48rem)] min-w-0 flex-col gap-4 overflow-hidden sm:max-w-3xl",
+          "flex h-[min(80dvh,34rem)] w-[min(92vw,48rem)] min-w-0 flex-col overflow-hidden sm:max-w-3xl",
           USAGE_DIALOG_SHEET_CLASSES,
         )}
         data-testid="chat-usage-dialog"
@@ -187,7 +192,7 @@ function ChatUsageDialogContent(props: {
               type="button"
               variant="ghost"
               size="sm"
-              className="w-fit gap-1.5 px-2"
+              className="w-fit"
               data-testid="chat-usage-drilldown-toggle"
             >
               <ChevronDown

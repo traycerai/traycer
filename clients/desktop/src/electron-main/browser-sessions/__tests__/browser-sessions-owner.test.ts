@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  BrowserPrimaryProfileDelta,
   BrowserSessionsServerFrame,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
@@ -36,7 +37,7 @@ vi.mock("../../app/logger", () => ({
 }));
 
 const OPEN_REQUEST = {
-  epicId: "epic-1",
+  scope: { kind: "epic", epicId: "epic-1" } as const,
   hostId: "host-1",
   identityKey: "identity-1",
 };
@@ -82,7 +83,21 @@ async function openLiveStream(
   registry: BrowserSessionsRegistry,
   windowId: string,
 ): Promise<FakeStreamSession> {
-  registry.open(windowId, OPEN_REQUEST);
+  return openLiveStreamForHost(
+    harness,
+    registry,
+    windowId,
+    OPEN_REQUEST.hostId,
+  );
+}
+
+async function openLiveStreamForHost(
+  harness: RegistryHarness,
+  registry: BrowserSessionsRegistry,
+  windowId: string,
+  hostId: string,
+): Promise<FakeStreamSession> {
+  registry.open(windowId, { ...OPEN_REQUEST, hostId });
   // The directory read is a promise, so the subscription exists a microtask
   // after `open` returns.
   await Promise.resolve();
@@ -138,6 +153,7 @@ function tabStatus(viewed: boolean): BrowserViewNativeTabStatusChange {
     canGoBack: false,
     canGoForward: false,
     zoomPercent: 100,
+    navigationAttempt: 0,
     viewed,
   };
 }
@@ -787,11 +803,12 @@ describe("the browser.sessions jar plane lives in main", () => {
       "electronTabLifecycleReady",
       "primaryProfileForgetLedger",
     ]);
-    // Locality is the whole of what readiness declares now: the window a
-    // stream belongs to never leaves this process (H02 retired the host's
-    // last reader for it).
+    // Readiness declares two things: locality, and which window this stream
+    // speaks for. The window travels again because native routes are elected
+    // per scope AND window - one stream per window, so the id main keys the
+    // stream by is the route identity the host elects.
     expect(session.sentFrames[0]?.coLocatedHostId).toBe("host-1");
-    expect(session.sentFrames[0]).not.toHaveProperty("desktopWindowId");
+    expect(session.sentFrames[0]?.desktopWindowId).toBe("window-1");
     expect(session.sentFrames[1]?.revision).toBe(7);
   });
 
@@ -912,6 +929,44 @@ describe("the browser.sessions jar plane lives in main", () => {
     // per account, so a fresh bearer drops the whole cache before any restart
     // could resolve against it.
     expect(harness.directoryResets.count).toBe(1);
+  });
+
+  it("probes every open stream's transport once on system resume, and skips a stream that has none", async () => {
+    registry.open("window-1", OPEN_REQUEST);
+    await Promise.resolve();
+    await Promise.resolve();
+    registry.open("window-2", OPEN_REQUEST);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.clients).toHaveLength(2);
+    const [firstClient, secondClient] = harness.clients;
+    if (firstClient === undefined || secondClient === undefined) {
+      throw new Error("expected two dialed clients");
+    }
+    const firstReconnect = vi.spyOn(firstClient, "reconnectAll");
+    const secondReconnect = vi.spyOn(secondClient, "reconnectAll");
+
+    // Signed out, so this stream never reaches a transport - it must not be
+    // dialed, and it must not make the resume signal throw.
+    harness.userId = null;
+    registry.open("window-3", OPEN_REQUEST);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.clients).toHaveLength(2);
+
+    expect(() => registry.notifySystemResumed()).not.toThrow();
+
+    expect(firstReconnect).toHaveBeenCalledTimes(1);
+    expect(firstReconnect).toHaveBeenCalledWith("system-resume", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
+    expect(secondReconnect).toHaveBeenCalledTimes(1);
+    expect(secondReconnect).toHaveBeenCalledWith("system-resume", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
+    expect(harness.clients).toHaveLength(2);
   });
 
   it("closes its streams itself when the user signs out", async () => {
@@ -1893,5 +1948,144 @@ describe("the browser.sessions jar plane lives in main", () => {
       "snapshot",
       "caption",
     ]);
+  });
+});
+
+describe("owner-level primary-profile delta carrier election", () => {
+  let harness: RegistryHarness;
+  let registry: BrowserSessionsRegistry;
+
+  beforeEach(() => {
+    vi.mocked(log.warn).mockClear();
+    harness = createRegistryHarness();
+    registry = new BrowserSessionsRegistry(harness.deps);
+  });
+
+  function ack(session: FakeStreamSession): void {
+    session.emit(
+      {
+        kind: "primaryProfileForgetLedgerAck",
+        hasBinaryPayload: false,
+        revision: 0,
+      },
+      null,
+    );
+  }
+
+  function delta(): BrowserPrimaryProfileDelta {
+    return {
+      domain: "example.com",
+      cookies: SEED.cookies,
+      removedKeys: [],
+      issuedAt: 1,
+    };
+  }
+
+  it("delivers once, on the most recently acked stream, when three ready streams exist for one host", async () => {
+    const a = await openLiveStream(harness, registry, "window-a");
+    const b = await openLiveStream(harness, registry, "window-b");
+    const c = await openLiveStream(harness, registry, "window-c");
+
+    ack(b);
+
+    harness.jar.emitDelta(delta());
+
+    expect(a.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+    expect(b.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+    expect(c.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+  });
+
+  it("delivers to every open, lifecycle-ready stream for a host when none has acked", async () => {
+    const a = await openLiveStream(harness, registry, "window-a");
+    const b = await openLiveStream(harness, registry, "window-b");
+    const c = await openLiveStream(harness, registry, "window-c");
+
+    harness.jar.emitDelta(delta());
+
+    expect(a.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+    expect(b.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+    expect(c.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+  });
+
+  it("delivers on whichever ready stream acked MOST RECENTLY, not merely on any acked stream", async () => {
+    const a = await openLiveStream(harness, registry, "window-a");
+    const b = await openLiveStream(harness, registry, "window-b");
+
+    ack(a);
+    ack(b);
+
+    harness.jar.emitDelta(delta());
+
+    expect(a.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+    expect(b.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+  });
+
+  it("an old incarnation's ack does not qualify a reconnected stream", async () => {
+    const a = await openLiveStream(harness, registry, "window-a");
+    const b = await openLiveStream(harness, registry, "window-b");
+
+    ack(a);
+
+    // `a` reconnects: a fresh incarnation that has been told nothing yet, so
+    // it can ack nothing yet either - the retirement must reset its flag.
+    a.emitStatus("reconnecting");
+    a.emitStatus("open");
+    a.emit(snapshotFrame(), null);
+
+    harness.jar.emitDelta(delta());
+
+    // Neither stream is acked now, so both are candidates - if the retired
+    // incarnation's ack had survived the reconnect, `b` would be starved here.
+    expect(a.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+    expect(b.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+  });
+
+  it("delivers to each host once when one desktop holds a live stream to two hosts", async () => {
+    const hostA = await openLiveStreamForHost(
+      harness,
+      registry,
+      "window-1",
+      "host-1",
+    );
+    const hostASibling = await openLiveStreamForHost(
+      harness,
+      registry,
+      "window-2",
+      "host-1",
+    );
+    const hostB = await openLiveStreamForHost(
+      harness,
+      registry,
+      "window-1",
+      "host-2",
+    );
+    const hostBSibling = await openLiveStreamForHost(
+      harness,
+      registry,
+      "window-2",
+      "host-2",
+    );
+    ack(hostA);
+    ack(hostB);
+
+    harness.jar.emitDelta(delta());
+
+    expect(hostA.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+    expect(hostB.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+    expect(hostASibling.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+    expect(hostBSibling.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+  });
+
+  it("a stream that closes stops being a candidate on the next delta", async () => {
+    const a = await openLiveStream(harness, registry, "window-a");
+    const b = await openLiveStream(harness, registry, "window-b");
+
+    ack(a);
+    a.emitStatus("closed");
+
+    harness.jar.emitDelta(delta());
+
+    expect(a.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+    expect(b.framesOfKind("primaryProfileDelta")).toHaveLength(1);
   });
 });

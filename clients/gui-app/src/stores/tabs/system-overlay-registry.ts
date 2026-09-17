@@ -53,6 +53,20 @@ export interface SystemOverlayModule<K extends SystemOverlayKind> {
    * rather than the modal).
    */
   readonly isOverlayPath: (pathname: string) => boolean;
+  /**
+   * Offered every Escape that would close the modal, before it does. Returns
+   * `true` when the body consumed the key for itself (the modal then stays
+   * open), `false` to let the modal close. It runs from the dialog's own
+   * document-level capture listener, ahead of any handler inside the body,
+   * so it is the only place a body can keep Escape from closing the frame.
+   */
+  readonly consumeEscape: () => boolean;
+  /**
+   * Runs just before the modal is promoted into its strip tab, while the
+   * modal's body is still mounted — for state that has to survive the body
+   * unmounting and the tab's body mounting later.
+   */
+  readonly prepareForPromotion: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +98,16 @@ export function overlayMeta(active: SystemModalActive): {
   readonly Icon: ComponentType<{ className: string | undefined }>;
 } {
   return SYSTEM_OVERLAYS[active.kind];
+}
+
+/** Whether the active overlay's body consumed an Escape the modal received. */
+export function overlayConsumesEscape(active: SystemModalActive): boolean {
+  return SYSTEM_OVERLAYS[active.kind].consumeEscape();
+}
+
+/** Lets the active overlay's body hand state over before promotion. */
+export function prepareOverlayForPromotion(active: SystemModalActive): void {
+  SYSTEM_OVERLAYS[active.kind].prepareForPromotion();
 }
 
 /**

@@ -100,7 +100,11 @@ function buildFakeBridge(
             user: identity,
           };
         },
-        rotate: async () => ({ outcome: "deleted", pair: null }),
+        rotate: async () => ({
+          outcome: "deleted",
+          pair: null,
+          rejection: null,
+        }),
         delete: async () => {
           stored = null;
         },
@@ -220,6 +224,9 @@ function buildFakeBridge(
     menu: {
       platform: "darwin",
       onCommand: (_handler) => ({ dispose: () => undefined }),
+      getSnapshot: async () => ({ revision: 0, menus: [] }),
+      executeItem: async (_revision: number, _itemId: string) => undefined,
+      onChange: (_handler: () => void) => ({ dispose: () => undefined }),
       openTopLevel: async () => undefined,
     },
     appUpdates: {
@@ -405,6 +412,7 @@ function buildFakeBridge(
           profile: null,
         }),
         set: async () => ({ outcome: "accepted" as const }),
+        revoke: async () => undefined,
         onChange: (_handler) => ({ dispose: () => undefined }),
       },
     },
@@ -449,6 +457,9 @@ function buildFakeBridge(
       onChange: () => ({ dispose: () => undefined }),
     },
     platform: {
+      crashTelemetry: {
+        persist: () => Promise.resolve(),
+      },
       recentDocuments: { add: async () => undefined },
       window: {
         flashFrame: async () => undefined,
@@ -553,11 +564,6 @@ function buildFakeBridge(
         sha256: "",
         capturedAt: 0,
       }),
-      getDebugSnapshot: async (input) => ({
-        ...input,
-        consoleEntries: [],
-        networkEntries: [],
-      }),
       startAnnotation: async () => ({ ok: true as const }),
       cancelAnnotation: async () => undefined,
       setAnnotationTargetChatLabel: async () => undefined,
@@ -610,6 +616,8 @@ function buildFakeBridge(
       onNativeTabStatusChange: (_handler) => ({ dispose: () => undefined }),
       onGuestMountRequested: (_handler) => ({ dispose: () => undefined }),
       onGuestReleaseRequested: (_handler) => ({ dispose: () => undefined }),
+      onGuestViewportRequested: (_handler) => ({ dispose: () => undefined }),
+      reportGuestViewportResult: async () => undefined,
       reportAnnotationAttachResult: async () => undefined,
     },
     hostManagement: {

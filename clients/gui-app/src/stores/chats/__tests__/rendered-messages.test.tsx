@@ -7,6 +7,7 @@ import type {
   ChatSessionAnchor,
   ContentBlock,
   Message,
+  ProviderNoticeKind,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
@@ -34,6 +35,11 @@ import {
   isTaskTodoToolName,
   parseTaskTodoToolPayloads,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
+import {
+  RETRY_ENDED_ERROR_CODE,
+  RETRY_IN_PROGRESS_ERROR_CODE,
+  RETRY_RECOVERED_ERROR_CODE,
+} from "@traycer/protocol/host/agent/gui/retry-feedback";
 
 // Mirror the host accumulator: a persisted tool_call/approval block carries
 // precomputed display fields, not the raw input. Computed via the same protocol
@@ -275,6 +281,39 @@ function plainTextBlock(
     timestamp,
     text,
     providerNotice: null,
+  };
+}
+
+function codexAssistantMessage(
+  turnId: string,
+  timestamp: number,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    ...assistantMessage(turnId, timestamp),
+    sender: {
+      ...ASSISTANT_SENDER,
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+    },
+  };
+}
+
+function codexRetryBlock(input: {
+  readonly blockId: string;
+  readonly timestamp: number;
+  readonly code: string;
+  readonly message: string;
+}): Extract<Message, { role: "assistant" }>["blocks"][number] {
+  return {
+    type: "error",
+    blockId: input.blockId,
+    status: "completed",
+    timestamp: input.timestamp,
+    message: input.message,
+    recoverable: true,
+    code: input.code,
+    failure: null,
   };
 }
 
@@ -615,17 +654,25 @@ describe("useRenderedMessages", () => {
     };
 
     const driver = renderRenderedMessages(initial);
-    const firstSegment = driver.result.current[0]?.segments[0];
-    expect(firstSegment.kind).toBe("plan");
-    if (firstSegment.kind !== "plan") throw new Error("expected plan segment");
+    // `.at(0)` rather than `[0]` throughout this file: with
+    // `noUncheckedIndexedAccess` off, an indexed read is typed non-optional, so
+    // a `=== undefined` guard is a no-overlap condition `no-unnecessary-condition`
+    // rejects - while the value really can be absent at runtime, and `.kind` then
+    // throws a TypeError over the intended diagnostic. `.at()` returns the honest
+    // `| undefined`, which makes the guard both necessary and legal.
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "plan") {
+      throw new Error("expected plan segment");
+    }
     expect(firstSegment.contentIdentity).toBe("hash-1");
     expect(firstSegment.markdownPreview).toContain("First plan");
 
     driver.set(updated);
 
-    const secondSegment = driver.result.current[0]?.segments[0];
-    expect(secondSegment.kind).toBe("plan");
-    if (secondSegment.kind !== "plan") throw new Error("expected plan segment");
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (secondSegment === undefined || secondSegment.kind !== "plan") {
+      throw new Error("expected plan segment");
+    }
     expect(secondSegment.planId).toBe("plan-1");
     expect(secondSegment.contentIdentity).toBe("hash-2");
     expect(secondSegment.markdownPreview).toContain("Second plan");
@@ -751,6 +798,454 @@ describe("useRenderedMessages", () => {
       { label: "Reason", value: "highRiskCyberActivity" },
     ]);
     expect(notice.parentId).toBeNull();
+  });
+
+  it.each([true, false])(
+    "projects a live Codex retry as an informational harness provider notice when activeTurn is present: %s",
+    (hasActiveTurn) => {
+      const assistant = codexAssistantMessage("turn-codex-retry", 2000);
+      assistant.blocks = [
+        codexRetryBlock({
+          blockId: "codex-retry-1",
+          timestamp: 2001,
+          code: RETRY_IN_PROGRESS_ERROR_CODE,
+          message: "Reconnecting… 2/5",
+        }),
+      ];
+
+      const activeTurn = {
+        agentMode: "regular" as const,
+        sameTurnSteeringSupported: false,
+        turnId: "turn-codex-retry",
+        status: "running" as const,
+        harnessId: "codex" as const,
+        model: "gpt-5-codex",
+        profileId: null,
+        userMessageId: null,
+        startedAt: 2000,
+        updatedAt: 2001,
+        reasoningEffort: null,
+        serviceTier: null,
+      };
+      const { result } = renderRenderedMessages({
+        messages: [assistant],
+        activeTurn: hasActiveTurn ? activeTurn : null,
+        runStatus: hasActiveTurn ? "running" : "idle",
+      });
+
+      const segment = result.current[0]?.segments[0];
+      expect(segment).toMatchObject({
+        kind: "provider_notice",
+        noticeKind: "harness_message",
+        presentation: "retry",
+        tone: "info",
+        title: "Reconnecting 2/5",
+        message: null,
+        details: [{ label: "Reported by Codex", value: "Reconnecting… 2/5" }],
+      });
+    },
+  );
+
+  it.each([
+    RETRY_RECOVERED_ERROR_CODE,
+    RETRY_ENDED_ERROR_CODE,
+    RETRY_IN_PROGRESS_ERROR_CODE,
+  ])(
+    "hides a finished Codex retry marker (%s) without hiding an ordinary error",
+    (code) => {
+      const assistant = codexAssistantMessage(`turn-finished-${code}`, 2000);
+      assistant.blocks = [
+        codexRetryBlock({
+          blockId: "codex-retry-finished",
+          timestamp: 2001,
+          code,
+          message: "Provider retry feedback",
+        }),
+        {
+          type: "error",
+          blockId: "ordinary-error",
+          status: "errored",
+          timestamp: 2002,
+          message: "The Codex turn failed permanently.",
+          recoverable: false,
+          code: "server_error",
+          failure: null,
+        },
+      ];
+
+      const completedEvent: ChatEvent = {
+        eventId: `event:turn.completed:${assistant.turnId}`,
+        type: "turn.completed",
+        timestamp: 2003,
+        clientActionId: null,
+        actor: null,
+        message: "Turn completed.",
+        turnId: assistant.turnId,
+        messageId: null,
+        queueItemId: null,
+        approvalId: null,
+        blockId: null,
+        severity: "info",
+        metadata: null,
+      };
+      const { result } = renderRenderedMessages({
+        messages: [assistant],
+        events: [completedEvent],
+      });
+      const assistantRow = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistantRow?.segments.map((segment) => segment.kind)).toEqual([
+        "error",
+      ]);
+      expect(assistantRow?.segments[0]).toMatchObject({
+        kind: "error",
+        message: "The Codex turn failed permanently.",
+      });
+    },
+  );
+
+  it("invalidates a same-millisecond active retry row when its message changes", () => {
+    const retryBlock = (message: string) =>
+      codexRetryBlock({
+        blockId: "codex-retry-same-ms",
+        timestamp: 2001,
+        code: RETRY_IN_PROGRESS_ERROR_CODE,
+        message,
+      });
+    const before = codexAssistantMessage("turn-codex-same-ms", 2000);
+    before.blocks = [retryBlock("Reconnecting… 2/5")];
+    const after = codexAssistantMessage("turn-codex-same-ms", 2000);
+    after.blocks = [retryBlock("Reconnecting… 3/5")];
+    const activeTurn = {
+      agentMode: "regular" as const,
+      sameTurnSteeringSupported: false,
+      turnId: "turn-codex-same-ms",
+      status: "running" as const,
+      harnessId: "codex" as const,
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: null,
+      startedAt: 2000,
+      updatedAt: 2001,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    const driver = renderRenderedMessages({
+      messages: [before],
+      activeTurn,
+      runStatus: "running",
+    });
+
+    expect(driver.result.current[0]?.segments[0]).toMatchObject({
+      kind: "provider_notice",
+      presentation: "retry",
+      title: "Reconnecting 2/5",
+      message: null,
+    });
+    driver.patch({ messages: [after] });
+    expect(driver.result.current[0]?.segments[0]).toMatchObject({
+      kind: "provider_notice",
+      presentation: "retry",
+      title: "Reconnecting 3/5",
+      message: null,
+      details: [{ value: "Reconnecting… 3/5" }],
+    });
+  });
+
+  it("invalidates a legacy assistant error when recoverable and failure fields change", () => {
+    const before: Message = {
+      ...codexAssistantMessage("turn-legacy-error", 2000),
+      blocks: [
+        {
+          type: "error",
+          blockId: "legacy-error",
+          status: "completed",
+          timestamp: 2001,
+          message: "The provider stream ended unexpectedly.",
+          recoverable: true,
+          code: "PROVIDER_STREAM_ERROR",
+          failure: null,
+        },
+      ],
+    };
+    const after: Message = {
+      ...codexAssistantMessage("turn-legacy-error", 2000),
+      blocks: [
+        {
+          type: "error",
+          blockId: "legacy-error",
+          status: "completed",
+          timestamp: 2001,
+          message: "The provider stream ended unexpectedly.",
+          recoverable: false,
+          code: "PROVIDER_STREAM_ERROR",
+          failure: {
+            reason: "rate_limit",
+            resetsAt: 3000,
+            resetsAtSource: "provider",
+            scope: "five_hour",
+            providerDetail: "usage_limit_exceeded",
+          },
+        },
+      ],
+    };
+    const driver = renderRenderedMessages({ messages: [before] });
+
+    expect(driver.result.current.at(0)?.segments.at(0)).toMatchObject({
+      kind: "error",
+      recoverable: true,
+      failure: null,
+    });
+
+    driver.patch({ messages: [after] });
+
+    expect(driver.result.current.at(0)?.segments.at(0)).toMatchObject({
+      kind: "error",
+      recoverable: false,
+      failure: {
+        reason: "rate_limit",
+        resetsAt: 3000,
+        resetsAtSource: "provider",
+        scope: "five_hour",
+        providerDetail: "usage_limit_exceeded",
+      },
+    });
+  });
+
+  it("does not emit a row or completion footer for a finished all-hidden retry-only turn", () => {
+    const assistant = codexAssistantMessage("turn-hidden-retry", 2000);
+    assistant.blocks = [
+      codexRetryBlock({
+        blockId: "hidden-retry",
+        timestamp: 2001,
+        code: RETRY_ENDED_ERROR_CODE,
+        message: "The Codex retry attempt ended.",
+      }),
+    ];
+
+    const completedEvent: ChatEvent = {
+      eventId: "event:turn.completed:turn-hidden-retry",
+      type: "turn.completed",
+      timestamp: 2002,
+      clientActionId: null,
+      actor: null,
+      message: "Turn completed.",
+      turnId: "turn-hidden-retry",
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    };
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+      events: [completedEvent],
+    });
+
+    expect(
+      result.current.find((message) => message.role === "assistant"),
+    ).toBeUndefined();
+    expect(
+      result.current.some((message) => message.showCompletionFooter === true),
+    ).toBe(false);
+  });
+
+  it("keeps the canonical answer at part:1 when a settled retry row precedes a steer", () => {
+    const content = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "continue" }],
+        },
+      ],
+    };
+    const assistant = codexAssistantMessage("turn-codex-steer-retry", 2000);
+    assistant.blocks = [
+      codexRetryBlock({
+        blockId: "codex-retry-settled",
+        timestamp: 2001,
+        code: RETRY_RECOVERED_ERROR_CODE,
+        message: "Codex resumed this turn.",
+      }),
+      {
+        type: "steer",
+        blockId: "steer:codex-retry",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-codex-retry",
+        messageId: "message-codex-retry-steer",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+      {
+        type: "text",
+        blockId: "answer-after-retry",
+        status: "completed",
+        timestamp: 2003,
+        text: "Answer after retry.",
+        providerNotice: null,
+      },
+    ];
+    const steered = {
+      ...userMessage("message-codex-retry-steer"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+    });
+    expect(result.current.map((message) => message.id)).toEqual([
+      "message-codex-retry-steer",
+      "assistant:turn-codex-steer-retry:part:1",
+    ]);
+    expect(
+      result.current.some((message) => message.id.endsWith("part:0")),
+    ).toBe(false);
+    expect(result.current[1]?.segments).toMatchObject([
+      { kind: "text", markdown: "Answer after retry." },
+    ]);
+  });
+
+  it("retains a hidden trailing retry boundary below a steer while the turn is still running", () => {
+    const content = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+    const assistant = codexAssistantMessage("turn-retry-boundary", 2000);
+    assistant.blocks = [
+      plainTextBlock("answer-before-steer", 2001, "Answer before steer."),
+      {
+        type: "steer",
+        blockId: "steer:retry-boundary",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-retry-boundary",
+        messageId: "message-retry-boundary",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+      codexRetryBlock({
+        blockId: "retry-ended-boundary",
+        timestamp: 2003,
+        code: RETRY_ENDED_ERROR_CODE,
+        message: "The Codex retry attempt ended.",
+      }),
+    ];
+    const steered = {
+      ...userMessage("message-retry-boundary"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+      activeTurn: {
+        agentMode: "regular",
+        sameTurnSteeringSupported: false,
+        turnId: "turn-retry-boundary",
+        status: "running",
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        profileId: null,
+        userMessageId: null,
+        startedAt: 2000,
+        updatedAt: 2003,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      runStatus: "running",
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual([
+      "assistant:turn-retry-boundary:part:0",
+      "message-retry-boundary",
+      "assistant:turn-retry-boundary:part:1",
+    ]);
+    expect(result.current[2]).toMatchObject({
+      id: "assistant:turn-retry-boundary:part:1",
+      role: "assistant",
+      runState: "running",
+      segments: [],
+    });
+  });
+
+  it("keeps the completion footer below a steer on the hidden trailing retry slice", () => {
+    const content = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+    const assistant = {
+      ...codexAssistantMessage("turn-complete-boundary", 2000),
+      timestamp: 2004,
+    };
+    assistant.blocks = [
+      plainTextBlock(
+        "answer-before-complete-steer",
+        2001,
+        "Answer before steer.",
+      ),
+      {
+        type: "steer",
+        blockId: "steer:complete-boundary",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-complete-boundary",
+        messageId: "message-complete-boundary",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+      codexRetryBlock({
+        blockId: "retry-ended-complete-boundary",
+        timestamp: 2003,
+        code: RETRY_ENDED_ERROR_CODE,
+        message: "The Codex retry attempt ended.",
+      }),
+    ];
+    const steered = {
+      ...userMessage("message-complete-boundary"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+    const completedEvent: ChatEvent = {
+      eventId: "event:turn.completed:turn-complete-boundary",
+      type: "turn.completed",
+      timestamp: 2004,
+      clientActionId: null,
+      actor: null,
+      message: "Turn completed.",
+      turnId: "turn-complete-boundary",
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+      events: [completedEvent],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual([
+      "assistant:turn-complete-boundary:part:0",
+      "message-complete-boundary",
+      "assistant:turn-complete-boundary:part:1",
+    ]);
+    expect(result.current[2]).toMatchObject({
+      id: "assistant:turn-complete-boundary:part:1",
+      role: "assistant",
+      segments: [],
+      showCompletionFooter: true,
+      completedAt: 2004,
+    });
   });
 
   it("caches user-message renders by Message reference identity", () => {
@@ -1450,21 +1945,79 @@ describe("useRenderedMessages", () => {
     });
 
     const driver = renderRenderedMessages(input);
-    const firstSegment = driver.result.current[0]?.segments[0];
-    expect(firstSegment.kind).toBe("provider_notice");
-    if (firstSegment.kind !== "provider_notice") {
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "provider_notice") {
       throw new Error("expected a provider_notice segment");
     }
     expect(firstSegment.title).toBe("Model changed");
 
     driver.patch({ messages: [after] });
 
-    const secondSegment = driver.result.current[0]?.segments[0];
-    expect(secondSegment.kind).toBe("provider_notice");
-    if (secondSegment.kind !== "provider_notice") {
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (
+      secondSegment === undefined ||
+      secondSegment.kind !== "provider_notice"
+    ) {
       throw new Error("expected a provider_notice segment");
     }
     expect(secondSegment.title).toBe("Model re-verified");
+  });
+
+  it("invalidates the cached provider_notice segment when only its noticeKind changes", () => {
+    // The kind is NOT a block identity: `provider_notice.upsert` replaces the
+    // whole `providerNotice` object for an existing `blockId`, so a repeat
+    // upsert can land a different kind on the same block. Everything else the
+    // turn signature hashes is pinned equal here - same `text` (so the
+    // ordinary length signature is blind), same `timestamp`, same `status`,
+    // same tone/title/message/details - which is the only shape that can
+    // reach the stale-cache path: two upserts inside one millisecond.
+    //
+    // Falsification: drop `notice.noticeKind` from `textBlockContentVersion`
+    // and the second read returns the CACHED segment, so this reads
+    // "fallback_applied" while the block says "fallback_wait_resumed".
+    const providerNoticeBlock = (noticeKind: ProviderNoticeKind) => ({
+      type: "text" as const,
+      blockId: "text-1",
+      text: "Notice.",
+      status: "completed" as const,
+      timestamp: 2001,
+      providerNotice: {
+        harnessId: "codex" as const,
+        noticeKind,
+        tone: "info" as const,
+        title: "Fallback",
+        message: null,
+        details: [],
+        metadata: null,
+      },
+    });
+    const before: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("fallback_applied")],
+    };
+    const after: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("fallback_wait_resumed")],
+    };
+    const input = renderedMessagesInput({ messages: [before] });
+
+    const driver = renderRenderedMessages(input);
+    const firstSegment = driver.result.current.at(0)?.segments.at(0);
+    if (firstSegment === undefined || firstSegment.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(firstSegment.noticeKind).toBe("fallback_applied");
+
+    driver.patch({ messages: [after] });
+
+    const secondSegment = driver.result.current.at(0)?.segments.at(0);
+    if (
+      secondSegment === undefined ||
+      secondSegment.kind !== "provider_notice"
+    ) {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(secondSegment.noticeKind).toBe("fallback_wait_resumed");
   });
 
   it("uses host-supplied blocksVersion to invalidate assistant turn cache", () => {
@@ -2717,6 +3270,8 @@ describe("useRenderedMessages", () => {
           description: "Apply edit",
           input: null,
           requestedAt: 15_000,
+          reason: null,
+          reviewing: null,
           kind: "tool",
           planId: null,
           actions: [],
@@ -3726,6 +4281,38 @@ describe("useRenderedMessages setup card integration", () => {
     expect(indicator?.id).toBe("assistant:turn-setup");
   });
 
+  it("threads the active turn's real startedAt onto the pre-turn indicator, distinct from its createdAt list anchor", () => {
+    const { result } = renderRenderedMessages({
+      activeTurn: { ...RUNNING_ACTIVE_TURN, startedAt: 5000 },
+      runStatus: "running",
+    });
+
+    const indicator = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    // `createdAt` stays the list anchor (`max(rendered.createdAt) + 1`, here
+    // `0 + 1` on an empty transcript) - it must not be reused as the elapsed
+    // clock's start, which is why 5000 was chosen to be unmistakably not 1.
+    expect(indicator?.createdAt).toBe(1);
+    expect(indicator?.elapsedStartedAt).toBe(5000);
+    expect(indicator?.elapsedStartedAt).not.toBe(indicator?.createdAt);
+  });
+
+  it("omits elapsedStartedAt from the pre-turn indicator when no active turn exists yet", () => {
+    const { result } = renderRenderedMessages({
+      activeTurn: null,
+      runStatus: "running",
+    });
+
+    const indicator = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    // Same list anchor as the active-turn case above - only the presence of
+    // `elapsedStartedAt` differs, since there is genuinely no known start.
+    expect(indicator?.createdAt).toBe(1);
+    expect(indicator?.elapsedStartedAt).toBeUndefined();
+  });
+
   it("still shows the Working indicator when setup has already completed", () => {
     const { result } = renderRenderedMessages({
       events: [
@@ -3876,6 +4463,7 @@ describe("useRenderedMessages head/tail partition", () => {
       message: "Claude is signed out. Reconnect your account to continue.",
       recoverable: true,
       code,
+      failure: null,
     };
   }
 
@@ -4217,6 +4805,7 @@ describe("useRenderedMessages turn.stopped", () => {
       message: "The provider stream ended unexpectedly.",
       recoverable: true,
       code: "PROVIDER_STREAM_ERROR",
+      failure: null,
     };
   }
 
@@ -5725,6 +6314,56 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(
       collectAssistantReplyText(trailingRow.stopped?.turnReplySegments ?? []),
     ).toBe("");
+  });
+
+  it("preserves the real send instant on an orphaned steer row's sentAt while re-anchoring createdAt to the turn start", () => {
+    // No persisted user message for "steer-msg-1" - renderSteerBlockUserMessage
+    // falls through to the orphaned (renderSteeredUserMessage) branch.
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 100_500,
+      blocks: [steerBlock("block-1", "steer-msg-1", 100_000)],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+    });
+
+    const steerRow = result.current.find(
+      (row) => row.id === "steer:queue:block-1",
+    );
+    // A turn that started at 10_000 carries a steer actually sent at 100_000 -
+    // the gap is deliberately large so the two values can never be confused.
+    expect(steerRow?.sentAt).toBe(100_000);
+    // createdAt still anchors to the turn start (the sort position), not the
+    // real send time - re-deriving it from sentAt would reorder the row out
+    // of its turn.
+    expect(steerRow?.createdAt).toBe(10_000);
+    expect(steerRow?.sentAt).not.toBe(steerRow?.createdAt);
+  });
+
+  it("preserves the real send instant on a persisted-message steer row's sentAt while re-anchoring createdAt to the turn start", () => {
+    // A persisted user message for the steer exists - renderSteerBlockUserMessage
+    // takes the renderUserMessage branch instead of the orphaned one above.
+    const steeredUser = userMessageAt("m2", 100_000);
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 100_500,
+      blocks: [steerBlock("block-1", steeredUser.messageId, 100_000)],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+    });
+
+    const steerRow = result.current.find(
+      (row) => row.id === steeredUser.messageId,
+    );
+    // Same large, unmistakable gap between the turn's start and the steer's
+    // real send time as the orphaned-branch case above.
+    expect(steerRow?.sentAt).toBe(100_000);
+    expect(steerRow?.createdAt).toBe(10_000);
+    expect(steerRow?.sentAt).not.toBe(steerRow?.createdAt);
   });
 
   it("shows the stopped marker only once the turn.stopped event actually lands, across a rerender", () => {

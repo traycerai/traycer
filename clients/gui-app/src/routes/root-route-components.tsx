@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
@@ -6,22 +6,29 @@ import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { AppShell } from "@/components/layout/app-shell";
-import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
-import { useWindowsMenuBarActive } from "@/components/layout/header/use-windows-menu-bar-active";
+import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
+import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
+import { AuthLandingPage } from "@/components/auth/auth-landing-page";
+import {
+  useShellLocalPlaneAdmission,
+  type ShellAdmissionRefusal,
+} from "@/hooks/auth/use-shell-local-plane-admission";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
@@ -43,11 +50,21 @@ export function RootComponent() {
       state.location.pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   });
   // A signed-in user who hasn't finished onboarding sees the tour on any route.
+  // Deliberately `signed-in` and not `admitsLocalPlane`: the tour walks through
+  // account-backed setup, so an unverified session has no business starting it
+  // (and a user with no stored credentials at all is `signed-out`, never
+  // `unverified`, so nobody loses their first-run tour to this).
   const showOnboarding =
     authStatus === "signed-in" && onboardingCompletedAt === null;
-  // Sign-in and the tour render bare, without the app shell.
+  // Sign-in and the tour render bare, without the app shell. This is the
+  // structural half of renderer admission - `RootLandingPage` decides what the
+  // route BODY renders, this decides whether the shell exists around it at all
+  // - so it reads the SAME predicate, which admits `unverified` for the same
+  // reason and refuses it on a shell with no local host (see
+  // `admitsLocalPlaneOnShell`).
+  const admission = useShellLocalPlaneAdmission();
   const isStandalone =
-    authStatus !== "signed-in" || showOnboarding || isOnboardingRoute;
+    !admission.admitted || showOnboarding || isOnboardingRoute;
 
   return (
     <>
@@ -83,15 +100,22 @@ export function RootComponent() {
           than it buys: from up there it also sees the transient `/` that a cold
           launch redirects ITSELF to (`requireSignedIn` fires while stored
           tokens are still validating), which is not user intent. */}
-      {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
+      {admission.admitted ? <TabNavigationRouteBridge /> : null}
       {/* The window narrator (D10). It MUST be outside HostReadyGate: the gate
           replaces its children during cold start, so a modal mounted inside it
           could never narrate the cold start it exists for. Signed-in only -
           which is also what resets its "this window has been served" latch,
           since signing out unmounts it. */}
-      {authStatus === "signed-in" ? (
+      {admission.admitted ? (
         <WindowHostModalHost bypassed={isHostIndependentRoute} />
       ) : null}
+      {/* The local-store repair. Mounted BESIDE the window narrator rather
+          than inside any composer: it answers a refused `epic.create`, and the
+          population it exists for is a user with no openable epic - the only
+          other route to the rebind hangs off `SnapshotErrorBanner`, which
+          requires opening an epic that fails to load. Signed-in only, like its
+          neighbour; an unadmitted shell has no create to refuse. */}
+      {admission.admitted ? <LocalStoreRepairDialogHost /> : null}
       <ChatSessionWakeRetryController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
@@ -112,10 +136,12 @@ export function RootComponent() {
         <RootSurface
           showOnboarding={showOnboarding}
           isStandalone={isStandalone}
+          admissionRefusal={admission.refusal}
         />
         {isStandalone ? null : (
           <>
             <SystemTabModalHost />
+            <ChatSearchDialogHost />
             {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
             <NotificationsMobileSheet />
@@ -129,6 +155,21 @@ export function RootComponent() {
 function RootSurface(props: {
   readonly showOnboarding: boolean;
   readonly isStandalone: boolean;
+  /**
+   * Set when the SHELL turned away a session the status would have admitted -
+   * today, `unverified` on a shell with no local host.
+   *
+   * It is handled here rather than left to the route bodies because it has to
+   * hold for EVERY route, and only `/`, `/draft` and `/settings` render
+   * `RootLandingPage` at all. Without this arm an `unverified` phone deep-linked
+   * into `/epics/…` sat in a standalone shell rendering an epic route that no
+   * host could serve - the same empty screen, minus even the app chrome.
+   *
+   * `null` covers signed-out and signing-in, which reach the standalone shell
+   * for the ordinary reason and whose route bodies already answer for
+   * themselves. That path is unchanged.
+   */
+  readonly admissionRefusal: ShellAdmissionRefusal | null;
 }) {
   if (!props.isStandalone) {
     return (
@@ -148,22 +189,38 @@ function RootSurface(props: {
     );
   }
   // Sign-in and the onboarding tour render without AppShell, so they lose the
-  // frameless Windows title bar the app header provides. Give them the same
+  // Windows/Linux title bar the app header provides. Give them the same
   // full-width band - menu strip, drag region, native window controls in one
   // strip - instead of floating a chip over the artwork.
   return (
     <StandaloneShell>
-      {props.showOnboarding ? <OnboardingPage replay={false} /> : <Outlet />}
+      <StandaloneBody
+        showOnboarding={props.showOnboarding}
+        admissionRefusal={props.admissionRefusal}
+      />
     </StandaloneShell>
   );
 }
 
-// `-webkit-app-region` isn't in the standard CSSProperties typings (mirrors
-// `app-header.tsx`). The band itself drags; the menu strip inside opts out.
-const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
+/**
+ * Which of the three standalone bodies this is, in precedence order: the tour
+ * (a `signed-in` user, so no refusal can coexist with it), a shell refusal,
+ * and otherwise the route's own body - which for a signed-out user is
+ * `RootLandingPage` and its `AuthLandingPage`.
+ */
+function StandaloneBody(props: {
+  readonly showOnboarding: boolean;
+  readonly admissionRefusal: ShellAdmissionRefusal | null;
+}) {
+  if (props.showOnboarding) return <OnboardingPage replay={false} />;
+  if (props.admissionRefusal !== null) {
+    return <AuthLandingPage refusal={props.admissionRefusal} />;
+  }
+  return <Outlet />;
+}
 
 // Owns the viewport for standalone surfaces, which size themselves with
-// h-full/min-h-full: on the Windows desktop shell a title-bar band takes the
+// h-full/min-h-full: on Windows/Linux a title-bar band takes the
 // top and the content gets the rest; elsewhere the band collapses and the
 // content keeps the full height.
 //
@@ -179,17 +236,10 @@ const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
 // below the bar, applied by each surface to its own content layer - artwork and
 // content are siblings there, so the shell cannot inset one without the other.
 function StandaloneShell(props: { readonly children: ReactNode }) {
-  const menuBarActive = useWindowsMenuBarActive();
+  const menuBarActive = useDesktopMenuBarActive();
   return (
     <div data-full-bleed-surface="" className="fixed inset-0 flex flex-col">
-      {menuBarActive ? (
-        <div
-          className="relative z-20 flex h-10 shrink-0 items-center bg-canvas after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']"
-          style={DRAG_STYLE}
-        >
-          <WindowsMenuBar />
-        </div>
-      ) : null}
+      {menuBarActive ? <DesktopMenuHeader /> : null}
       <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
     </div>
   );

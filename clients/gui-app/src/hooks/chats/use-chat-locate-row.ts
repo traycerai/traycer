@@ -7,12 +7,14 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
  * The ordinal a cross-tile jump target sits at, when only the host can say.
  *
  * The client resolves some jump targets itself and reads the ordinal off the
- * skeleton it already holds. Four kinds it cannot. A `block` anchor, a
- * `sent-message` anchor and a `receipt` anchor are all found by walking
- * RENDERED models, and a cold row has none. A `message` anchor naming an ASSISTANT record has no row id to
- * look up either way: those rows are turn-keyed, and the durable id survives
- * only as the rendered model's `persistentMessageId` - so the skeleton read
- * misses and the rendered read needs the very hydration being waited on.
+ * skeleton it already holds. Five kinds it cannot. A `block` anchor, a
+ * `sent-message` anchor, a `receipt` anchor and an `approval` anchor (the
+ * inline plan card) are all found by walking RENDERED models, and a cold
+ * row has none. A `message` anchor naming an ASSISTANT record has no row
+ * id to look up either way: those rows are turn-keyed, and the durable id
+ * survives only as the rendered model's `persistentMessageId` - so the
+ * skeleton read misses and the rendered read needs the very hydration
+ * being waited on.
  *
  * Waiting for such a row is a deadlock rather than a delay - the scroll drives
  * hydration and the scroll is what the unresolved jump is holding back - so the

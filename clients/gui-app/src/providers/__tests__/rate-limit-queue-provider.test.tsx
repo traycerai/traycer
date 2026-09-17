@@ -19,7 +19,7 @@ type MockState = {
   client: { requestWithResponseTimeout: () => Promise<unknown> } | null;
   configured: ReadonlyArray<ConfiguredFixture>;
   profileSelection: {
-    activeChatSettings: null;
+    shownProfiles: Readonly<Record<string, ReadonlyArray<string | null>>>;
     lastProfileByHarness: Readonly<Record<string, string | null>>;
   };
 };
@@ -28,7 +28,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   hostId: "host-a",
   client: { requestWithResponseTimeout: () => Promise.resolve({}) },
   configured: [],
-  profileSelection: { activeChatSettings: null, lastProfileByHarness: {} },
+  profileSelection: { shownProfiles: {}, lastProfileByHarness: {} },
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -161,7 +161,7 @@ describe("<RateLimitQueueProvider />", () => {
     };
     mocks.configured = [];
     mocks.profileSelection = {
-      activeChatSettings: null,
+      shownProfiles: {},
       lastProfileByHarness: {},
     };
     configureSpy.mockClear();
@@ -334,7 +334,7 @@ describe("<RateLimitQueueProvider /> background profile polling", () => {
     };
     mocks.configured = [];
     mocks.profileSelection = {
-      activeChatSettings: null,
+      shownProfiles: {},
       lastProfileByHarness: {},
     };
     configureSpy.mockClear();
@@ -397,7 +397,7 @@ describe("<RateLimitQueueProvider /> background profile polling", () => {
       },
     ];
     mocks.profileSelection = {
-      activeChatSettings: null,
+      shownProfiles: {},
       lastProfileByHarness: { codex: "selected" },
     };
     render(tree());

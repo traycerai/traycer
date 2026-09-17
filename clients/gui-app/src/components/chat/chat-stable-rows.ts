@@ -114,10 +114,13 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   browserAnnotations: (a, b) => a.browserAnnotations === b.browserAnnotations,
   settings: (a, b) => a.settings === b.settings,
   createdAt: (a, b) => a.createdAt === b.createdAt,
+  sentAt: (a, b) => a.sentAt === b.sentAt,
   elapsedStartedAt: (a, b) => a.elapsedStartedAt === b.elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments: (a, b) =>
     a.turnHasOnlyAutonomousResumeSegments ===
     b.turnHasOnlyAutonomousResumeSegments,
+  turnId: (a, b) => a.turnId === b.turnId,
+  manualRungAnchorId: (a, b) => a.manualRungAnchorId === b.manualRungAnchorId,
   showCompletionFooter: (a, b) =>
     a.showCompletionFooter === b.showCompletionFooter,
   completedAt: (a, b) => a.completedAt === b.completedAt,

@@ -15,6 +15,7 @@ import type {
   FileAssetRequest,
   FileAssetState,
 } from "@/hooks/assets/use-file-asset";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 
@@ -52,6 +53,7 @@ const state = vi.hoisted(() => ({
   updateView: vi.fn(),
   assetRequests: [] as Array<FileAssetRequest | null>,
   asset: null as FileAssetState | null,
+  hostEntry: null as HostDirectoryEntry | null,
 }));
 
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
@@ -63,12 +65,8 @@ const state = vi.hoisted(() => ({
 // `use-surface-host-stream-binding.test.tsx`.
 // The hook returns the value to PROVIDE: the ambient binding while following
 // (this suite's), the pin's own once built, null while pending. Following here.
-// These tiles resolve the user's default open target, which asks whether the
-// tile's host is the LOCAL one before it may offer Finder. That read wants the
-// host runtime, which this suite does not mount; `null` is the honest answer
-// here and simply leaves Finder unoffered.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: () => state.hostEntry,
 }));
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
@@ -171,7 +169,17 @@ vi.mock("@/components/epic-canvas/git-diff/diff-tab-shell", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/git-diff/diff-tab-toolbar", () => ({
-  DiffTabToolbar: () => null,
+  DiffTabToolbar: (props: {
+    readonly openFile: {
+      readonly onClick: () => void;
+      readonly label: string;
+    } | null;
+  }) =>
+    props.openFile === null ? null : (
+      <button type="button" onClick={props.openFile.onClick}>
+        {props.openFile.label}
+      </button>
+    ),
 }));
 
 vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
@@ -199,20 +207,27 @@ vi.mock("@/components/epic-canvas/binary-placeholder", () => ({
   BinaryPlaceholder: (props: {
     readonly fileName: string;
     readonly reason: string | null;
+    readonly onOpenExternally: (() => void) | null;
   }) => (
     <div data-testid="binary-placeholder" data-file-name={props.fileName}>
       {props.reason}
+      {props.onOpenExternally !== null ? (
+        <button type="button" onClick={props.onOpenExternally}>
+          Open Externally
+        </button>
+      ) : null}
     </div>
   ),
 }));
 
-// The compact PDF diff block pulls in useDraggable/useEpicCanvasStore
+// The compact document diff block pulls in useDraggable/useEpicCanvasStore
 // selectors this suite does not stub end to end - the routing contract under
-// test is only "a PDF row shows the compact block and skips the text query",
-// which a stub component pins the same way `ImagePreview` is stubbed above.
-vi.mock("@/components/epic-canvas/pdf-preview/pdf-diff-view", () => ({
-  PdfDiffView: (props: { readonly filePath: string }) => (
-    <div data-testid="pdf-diff-block" data-file-name={props.filePath} />
+// test is only "a document row shows the compact block and skips the text
+// query", which a stub component pins the same way `ImagePreview` is stubbed
+// above.
+vi.mock("@/components/epic-canvas/document-diff/document-diff-view", () => ({
+  DocumentDiffView: (props: { readonly filePath: string }) => (
+    <div data-testid="document-diff-block" data-file-name={props.filePath} />
   ),
 }));
 
@@ -352,6 +367,17 @@ function changedFile(args: {
   };
 }
 
+function hostEntry(kind: HostDirectoryEntry["kind"]): HostDirectoryEntry {
+  return {
+    hostId: "host-A",
+    label: "Host A",
+    kind,
+    websocketUrl: "ws://127.0.0.1:1234",
+    version: "1.2.0",
+    transportDialability: "dialable",
+  };
+}
+
 function tileFor(filePath: string, stage: GitChangedFile["stage"]) {
   return makeGitFileDiffTile({
     hostId: "host-A",
@@ -423,6 +449,7 @@ beforeEach(() => {
     totalBytes: 1,
     servedFromCache: false,
   };
+  state.hostEntry = hostEntry("local");
   state.subscribe.mockReset();
   state.open.mockReset();
   state.openFeedback.mockReset();
@@ -441,7 +468,73 @@ describe("<GitDiffTile /> image routing", () => {
 
     expect(screen.getAllByTestId("image-preview-side")).toHaveLength(2);
     expect(screen.queryByTestId("binary-placeholder")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open in editor" })).toBeTruthy();
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  it("keeps local image opens wired through the toolbar and image fallback controls", () => {
+    state.asset = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This image could not be loaded.",
+      totalBytes: 42,
+      servedFromCache: false,
+    };
+    renderTile(changedFile({ path: "assets/photo.png", isBinary: true }));
+
+    expect(screen.getByRole("button", { name: "Open in editor" })).toBeTruthy();
+    expect(
+      screen.getAllByRole("button", { name: "Open Externally" }),
+    ).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in editor" }));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Open Externally" })[0],
+    );
+
+    expect(state.open).toHaveBeenNthCalledWith(1, {
+      editorId: "vscode",
+      paths: ["/work/repo/assets/photo.png"],
+    });
+    expect(state.open).toHaveBeenNthCalledWith(2, {
+      editorId: "vscode",
+      paths: ["/work/repo/assets/photo.png"],
+    });
+  });
+
+  it("hides remote image toolbar and fallback open controls", () => {
+    state.hostEntry = hostEntry("remote");
+    state.asset = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This image could not be loaded.",
+      totalBytes: 42,
+      servedFromCache: false,
+    };
+
+    renderTile(changedFile({ path: "assets/photo.png", isBinary: true }));
+
+    expect(screen.getAllByTestId("binary-placeholder")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Open Externally" }),
+    ).toBeNull();
+    expect(state.open).not.toHaveBeenCalled();
+  });
+
+  it("hides remote binary fallback and toolbar open controls", () => {
+    state.hostEntry = hostEntry("remote");
+
+    renderTile(changedFile({ path: "assets/archive.zip", isBinary: true }));
+
+    expect(screen.getByTestId("binary-placeholder")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Open Externally" }),
+    ).toBeNull();
+    expect(state.open).not.toHaveBeenCalled();
   });
 
   it("remounts image subscriptions only when the git revision changes", () => {
@@ -712,8 +805,8 @@ describe("<GitDiffTile /> image routing", () => {
 
   it("keeps the text diff for an svg -> pdf rename toggled to source, instead of the PDF block", () => {
     // Straddles both allowlists: the current path (.pdf) routes to
-    // `gitRoutesToPdfDiffCards`, the previous path (.svg) routes to the image
-    // diff with a source toggle. `showsPdfDiffBlock` must key off the RAW
+    // `gitRoutesToDocumentDiffBlock`, the previous path (.svg) routes to the
+    // image diff with a source toggle. The block gate must key off the RAW
     // image-routing decision (always true here), not the post-toggle
     // `showImageDiff` - otherwise picking Source would hand the row to the
     // PDF block instead of revealing the text diff.
@@ -732,13 +825,13 @@ describe("<GitDiffTile /> image routing", () => {
     expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
     expect(screen.getByText("PDF diffs aren't previewed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
-    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+    expect(screen.queryByTestId("document-diff-block")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "View source" }));
 
     expect(screen.getByTestId("file-diff-content")).toBeTruthy();
     expect(screen.queryByTestId("image-preview-side")).toBeNull();
-    expect(screen.queryByTestId("pdf-diff-block")).toBeNull();
+    expect(screen.queryByTestId("document-diff-block")).toBeNull();
   });
 
   it("offers no source toggle for a BINARY svg -> pdf rename, keeping the side-by-side view", () => {
@@ -764,6 +857,25 @@ describe("<GitDiffTile /> image routing", () => {
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
 
+  // The non-image side's copy names the format it actually is, so a Word
+  // document must not be described in the PDF's words.
+  it("names a Word document on the non-image side of an svg -> docx rename", () => {
+    renderTile(
+      changedFile({
+        path: "assets/new.docx",
+        previousPath: "assets/old.svg",
+        status: "renamed",
+        isBinary: true,
+      }),
+    );
+
+    expect(screen.getAllByTestId("image-preview-side")).toHaveLength(1);
+    expect(
+      screen.getByText("Word document diffs aren't previewed."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("document-diff-block")).toBeNull();
+  });
+
   it("offers no source toggle for a binary .svg, whose text diff is never fetched", () => {
     renderTile(changedFile({ path: "assets/icon.svg", isBinary: true }));
 
@@ -782,7 +894,18 @@ describe("<GitDiffTile /> image routing", () => {
 
     renderTile(changed);
 
-    expect(screen.getByTestId("pdf-diff-block")).toBeTruthy();
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
+    expect(screen.queryByTestId("file-diff-content")).toBeNull();
+    expect(screen.queryByTestId("binary-placeholder")).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  // The block is a document-format union, so a Word document takes the same
+  // route and never falls through to the generic binary placeholder.
+  it("routes a .docx row to the compact document block and skips the text diff query", () => {
+    renderTile(changedFile({ path: "docs/brief.docx", isBinary: true }));
+
+    expect(screen.getByTestId("document-diff-block")).toBeTruthy();
     expect(screen.queryByTestId("file-diff-content")).toBeNull();
     expect(screen.queryByTestId("binary-placeholder")).toBeNull();
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);

@@ -16,6 +16,7 @@ export const providersMutationKeys = {
   setProfileApiKey: () => ["providers.setProfileApiKey"] as const,
   clearProfileApiKey: () => ["providers.clearProfileApiKey"] as const,
   setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
+  setAutoJudge: () => ["providers.setAutoJudge"] as const,
   setEnvOverride: () => ["providers.setEnvOverride"] as const,
   deleteEnvOverride: () => ["providers.deleteEnvOverride"] as const,
   startLogin: () => ["providers.startLogin"] as const,
@@ -42,9 +43,15 @@ export const providersMutationKeys = {
   cancelModelProviderAuth: () => ["providers.cancelModelProviderAuth"] as const,
   pluginsMutate: () => ["providers.pluginsMutate"] as const,
   skillsMutate: () => ["providers.skillsMutate"] as const,
-  acknowledgeAmbientDrift: () => ["providers.acknowledgeAmbientDrift"] as const,
   consumeRateLimitResetCredit: () =>
     ["providers.consumeRateLimitResetCredit"] as const,
   refreshProfileStatus: (hostId: string | null) =>
     ["providers.refreshProfileStatus", hostId] as const,
+  // The three fallback-policy writes are separate keys, not one, because the
+  // settings panel disables a different control for each: an ordinary save
+  // must not make "Reset all" look busy, and vice versa.
+  setFallbackPolicy: () => ["providers.fallbackPolicy.set"] as const,
+  restoreFallbackTierGroups: () =>
+    ["providers.fallbackPolicy.restoreTierGroups"] as const,
+  resetFallbackPolicy: () => ["providers.fallbackPolicy.reset"] as const,
 };

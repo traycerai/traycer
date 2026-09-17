@@ -1,3 +1,4 @@
+import type { DesktopMenuSnapshot } from "../ipc-contracts/window-types";
 import type {
   ActivateInstalledOk,
   ApplyStagedOk,
@@ -39,6 +40,7 @@ import type {
   IFileSaveHost,
   IMigrationHost,
   INotificationHost,
+  IRendererCrashTelemetryHost,
   IRunnerHost,
   ISecureStorage,
   IServiceHost,
@@ -394,6 +396,7 @@ export interface DesktopMigrationBridge {
 }
 
 export interface DesktopPlatformBridge {
+  crashTelemetry: IRendererCrashTelemetryHost;
   clipboard?: {
     writeImage(input: {
       readonly type: string;
@@ -492,7 +495,11 @@ export interface DesktopPlatformBridge {
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
-    setTitleBarOverlay(color: string, symbolColor: string): Promise<void>;
+    setTitleBarOverlay(
+      color: string,
+      symbolColor: string,
+      themeSource: "system" | "light" | "dark",
+    ): Promise<void>;
   };
 }
 
@@ -545,6 +552,12 @@ export interface DesktopServiceBridge {
 }
 
 export interface DesktopMenuBridge {
+  getSnapshot(): Promise<DesktopMenuSnapshot>;
+  onChange(handler: () => void): {
+    dispose: () => void;
+  };
+  executeItem(revision: number, itemId: string): Promise<void>;
+
   readonly platform: DesktopRuntimePlatform;
   onCommand(handler: (payload: MenuCommandPayload) => void): {
     dispose: () => void;
@@ -636,6 +649,8 @@ export interface DesktopWindowsBridge {
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
+    /** See `AuthSessionBridgeSurface.revoke` in the preload. */
+    revoke(rejectedToken: string): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };
@@ -686,6 +701,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly traycerCli: ITraycerCli;
   readonly migration: IMigrationHost;
   readonly platform: DesktopPlatformBridge;
+  readonly crashTelemetry: IRendererCrashTelemetryHost;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
   readonly browserView: BrowserViewBridge;
@@ -723,6 +739,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.globalShortcuts = options.bridge.globalShortcuts;
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
+    this.crashTelemetry = options.bridge.platform.crashTelemetry;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;
     // Passed straight through: the client instance, its issued attach

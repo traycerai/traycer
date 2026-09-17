@@ -29,6 +29,7 @@ import {
   CHAT_ANCHOR_SETTLE_FALLBACK_MS,
   ChatMessages,
   type ChatMessageScrollRequest,
+  type ChatScrollRequestOutcome,
 } from "@/components/chat/chat-messages";
 import {
   TileFindContext,
@@ -124,30 +125,39 @@ vi.mock("@/stores/epics/canvas/tile-instance-liveness", () => ({
 
 // Lightweight rows: ChatMessages mounts real ChatTimeline/LegendList; full
 // ChatMessage UI is heavy and unrelated to scroll-policy assertions.
-vi.mock("@/components/chat/chat-message", () => ({
-  ChatMessage: function MockChatMessage(props: {
-    message: ChatMessageModel;
-  }): ReactElement {
-    const interview = props.message.segments.find(
-      (segment): segment is InterviewSegment => segment.kind === "interview",
-    );
-    const answer = interview?.answers[0]?.values[0] ?? null;
-    const interviewUnitId =
-      interview === undefined || answer === null
-        ? null
-        : `interview:${interview.id}:question:0:answer:value:0`;
-    return (
-      <div data-testid={`mock-message-${props.message.id}`}>
-        {props.message.role}:{props.message.id}
-        {interviewUnitId === null ? (
-          props.message.content
-        ) : (
-          <span data-chat-find-unit={interviewUnitId}>{answer}</span>
-        )}
-      </div>
-    );
-  },
-}));
+vi.mock("@/components/chat/chat-message", async () => {
+  const { ChatBlockNavigationAnchor } =
+    await import("@/components/chat/chat-navigation-highlight");
+  return {
+    ChatMessage: function MockChatMessage(props: {
+      message: ChatMessageModel;
+    }): ReactElement {
+      const interview = props.message.segments.find(
+        (segment): segment is InterviewSegment => segment.kind === "interview",
+      );
+      const answer = interview?.answers[0]?.values[0] ?? null;
+      const interviewUnitId =
+        interview === undefined || answer === null
+          ? null
+          : `interview:${interview.id}:question:0:answer:value:0`;
+      return (
+        <div data-testid={`mock-message-${props.message.id}`}>
+          {props.message.segments.map((segment) => (
+            <ChatBlockNavigationAnchor key={segment.id} blockId={segment.id}>
+              {null}
+            </ChatBlockNavigationAnchor>
+          ))}
+          {props.message.role}:{props.message.id}
+          {interviewUnitId === null ? (
+            props.message.content
+          ) : (
+            <span data-chat-find-unit={interviewUnitId}>{answer}</span>
+          )}
+        </div>
+      );
+    },
+  };
+});
 
 // Ticket 17 (review round 2, finding 2 residual): a thin, behavior-preserving
 // pass-through around the REAL `LegendList` component - re-exports everything
@@ -782,6 +792,12 @@ interface RenderChatMessagesOptions {
   readonly tileFindContext?: TileFindContextValue;
   readonly transcriptWindow?: TranscriptWindow | null;
   readonly onVisibleOrdinalRangeChange?: (range: OrdinalRange | null) => void;
+  /** `ChatMessages.onScrollRequestSettled`; only the scrollRequest coverage
+   *  suite passes a spy here, so this defaults to `null` (no-op) for every
+   *  other test in this file. */
+  readonly onScrollRequestSettled?:
+    | ((requestId: number, outcome: ChatScrollRequestOutcome) => void)
+    | null;
 }
 
 interface ChatMessagesRenderState {
@@ -799,6 +815,9 @@ interface ChatMessagesRenderState {
   composerOverlayHeight: number;
   transcriptWindow: TranscriptWindow | null;
   onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
+  onScrollRequestSettled:
+    | ((requestId: number, outcome: ChatScrollRequestOutcome) => void)
+    | null;
 }
 
 /** Synthetic dual-key identity for tests (ticket 15). */
@@ -849,6 +868,7 @@ function initialRenderState(
     transcriptWindow: options.transcriptWindow ?? null,
     onVisibleOrdinalRangeChange:
       options.onVisibleOrdinalRangeChange ?? noOpOnVisibleOrdinalRangeChange,
+    onScrollRequestSettled: options.onScrollRequestSettled ?? null,
   };
 }
 
@@ -924,6 +944,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           visible={state.visible}
           systemOverlayActive={state.systemOverlayActive}
           scrollRequest={state.scrollRequest}
+          onScrollRequestSettled={state.onScrollRequestSettled}
           composerOverlayHeight={state.composerOverlayHeight}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={state.onVisibleOrdinalRangeChange}
@@ -2902,6 +2923,405 @@ describe("ChatMessages scroll policy", () => {
       // Dedup: scroll position not re-driven by a second navigateToMessage.
       expect(getScrollNode().scrollTop).toBe(scrollAfterFirst);
     });
+
+    it("highlights the named block instead of the whole assistant row", async () => {
+      const blockId = "text-block-1";
+      const assistant = {
+        ...makeAssistantMessage("assistant-target", "act-1"),
+        segments: [
+          {
+            id: blockId,
+            kind: "text" as const,
+            markdown: "Hello",
+            isStreaming: false,
+          },
+        ],
+        completedAt: 1,
+      };
+      const messages: ReadonlyArray<ChatMessageModel> = [
+        makeMessage(0, "user"),
+        assistant,
+      ];
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-block-highlight",
+      });
+      await settleLegendList();
+
+      const block = document.querySelector<HTMLElement>(
+        `[data-block-id="${blockId}"]`,
+      );
+      expect(block).not.toBeNull();
+      // Installed BEFORE the request: the row landing is non-animated and
+      // settles on the library's own promise, so the inner card reveal can
+      // fire within a couple of frames of issue.
+      const scrollIntoView = vi.spyOn(block as HTMLElement, "scrollIntoView");
+
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: assistant.id,
+          blockId,
+          requestId: 43,
+        },
+      });
+
+      const targetRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${assistant.id}"]`,
+      );
+      expect(targetRow).not.toBeNull();
+      expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
+      expect(block?.dataset.navigationHighlighted).toBe("true");
+      // The card is centered only after the ROW landing has validated - never
+      // during the settle window, where it would fail the row-top check.
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      });
+      expect(block?.dataset.navigationHighlighted).toBe("true");
+    });
+
+    // New coverage: onScrollRequestSettled outcome reporting for `kind:
+    // "message"` requests (landed/exhausted/cancelled), pending-row retention
+    // until the row's key is rendered, and hidden->visible re-issue.
+    const ROW_HEIGHT_PX = 90;
+    const HARNESS_HEADER_PX = 40;
+
+    function expectedRowScrollTop(index: number): number {
+      return (
+        index * ROW_HEIGHT_PX +
+        HARNESS_HEADER_PX -
+        CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX
+      );
+    }
+
+    it("reports landed for a message request once its row is mounted at the offset", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 10;
+      const target = messages[targetIndex];
+      expect(target).toBeTruthy();
+      // Snapshot scrollTop synchronously INSIDE the settle callback rather
+      // than reading it back after an `await`: under real timers, a later
+      // unrelated frame in this shim can nudge the scroller (observed
+      // test-order-dependent, e.g. right after a preceding test that opens
+      // an inner-card reveal) well after the landing has already validated,
+      // which would fail a post-await DOM read for a reason unrelated to the
+      // settle contract under test - what "landed" means is the position at
+      // the moment it was reported, which this captures directly.
+      const atSettle: { scrollTop: number | null } = { scrollTop: null };
+      const onScrollRequestSettled = vi.fn(() => {
+        atSettle.scrollTop = getScrollNode().scrollTop;
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-settled-landed",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: target.id,
+          blockId: null,
+          requestId: 50,
+        },
+      });
+
+      await waitFor(() => {
+        expect(onScrollRequestSettled).toHaveBeenCalledWith(50, "landed");
+      });
+      expect(onScrollRequestSettled).toHaveBeenCalledTimes(1);
+      expect(atSettle.scrollTop).not.toBeNull();
+      expect(
+        Math.abs((atSettle.scrollTop ?? 0) - expectedRowScrollTop(targetIndex)),
+      ).toBeLessThanOrEqual(1);
+    });
+
+    it("reports cancelled when a reader gesture interrupts the landing", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 10;
+      const target = messages[targetIndex];
+      expect(target).toBeTruthy();
+      const onScrollRequestSettled = vi.fn();
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-settled-cancelled",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: target.id,
+          blockId: null,
+          requestId: 51,
+        },
+      });
+
+      act(() => {
+        fireEvent.pointerDown(getScrollNode());
+      });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(onScrollRequestSettled).toHaveBeenCalledWith(51, "cancelled");
+      expect(onScrollRequestSettled).not.toHaveBeenCalledWith(51, "landed");
+    });
+
+    it("supersedes a pending request with a newer one", async () => {
+      const messages = makeCompletedTranscript(30);
+      const firstTarget = messages[10];
+      const secondTarget = messages[20];
+      expect(firstTarget).toBeTruthy();
+      expect(secondTarget).toBeTruthy();
+      const onScrollRequestSettled = vi.fn();
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-settled-supersede",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: firstTarget.id,
+          blockId: null,
+          requestId: 52,
+        },
+      });
+      // Issue the newer request before the first has settled - both are
+      // driven through the same synchronous layout-effect choke point, so
+      // this reflects "before settling" faithfully rather than needing a
+      // timer straddle.
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: secondTarget.id,
+          blockId: null,
+          requestId: 53,
+        },
+      });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(onScrollRequestSettled).toHaveBeenCalledWith(52, "cancelled");
+      expect(onScrollRequestSettled).toHaveBeenCalledWith(53, "landed");
+    });
+
+    it("keeps a request whose row is not rendered yet and lands it when the row arrives", async () => {
+      const full = makeCompletedTranscript(8);
+      const initial = full.slice(0, 6);
+      const lateTarget = full[7];
+      expect(lateTarget).toBeTruthy();
+      const onScrollRequestSettled = vi.fn();
+      const { rerenderWith } = renderChatMessages({
+        messages: initial,
+        scrollStateKey: "scroll-req-settled-pending-row",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      const request: ChatMessageScrollRequest = {
+        kind: "message",
+        messageId: lateTarget.id,
+        blockId: null,
+        requestId: 54,
+      };
+      rerenderWith({ scrollRequest: request });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      // Not burned: the row key was not in the rendered index, so nothing
+      // settled yet.
+      expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+      rerenderWith({ messages: full, scrollRequest: request });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(onScrollRequestSettled).toHaveBeenCalledWith(54, "landed");
+      const targetRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${lateTarget.id}"]`,
+      );
+      expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+    });
+
+    it("re-issues a pending request on hidden->visible instead of replaying the saved position", async () => {
+      const messages = makeCompletedTranscript(30);
+      const target = messages[10];
+      expect(target).toBeTruthy();
+      // Snapshot the highlight attribute synchronously INSIDE the settle
+      // callback rather than reading it back after an `await`: issuing
+      // `scrollToOffset` twice back-to-back in the same tick (an artifact of
+      // this test compressing hide+show into zero elapsed real time, not a
+      // realistic browser gap) lets LegendList's own windowing drift the
+      // target row out of the rendered set on a LATER frame, which would
+      // fail a post-await DOM read for a reason unrelated to the settle/
+      // re-issue contract under test - the contract is what the landing
+      // produced at settle time, which this captures directly.
+      const atSettle: { highlighted: string | undefined } = {
+        highlighted: undefined,
+      };
+      const onScrollRequestSettled = vi.fn(() => {
+        atSettle.highlighted = document.querySelector<HTMLElement>(
+          `[data-message-id="${target.id}"]`,
+        )?.dataset.navigationHighlighted;
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-settled-hidden-visible",
+        onScrollRequestSettled,
+        visible: true,
+      });
+      await settleLegendList();
+
+      const request: ChatMessageScrollRequest = {
+        kind: "message",
+        messageId: target.id,
+        blockId: null,
+        requestId: 55,
+      };
+      // Issue the request, then hide before it settles: the pending landing
+      // must be re-issued on the next show rather than replayed over. Both
+      // rerenders land in one synchronous act() flush (no time elapses
+      // between them), so the FIRST landing's promise-settle chain is always
+      // still in flight when the "now visible" transition cancels and
+      // re-issues it - this is the only way to observe "before settling"
+      // deterministically under real timers.
+      rerenderWith({ scrollRequest: request, visible: false });
+      rerenderWith({ visible: true });
+
+      await waitFor(() => {
+        expect(onScrollRequestSettled).toHaveBeenCalledWith(55, "landed");
+      });
+      expect(atSettle.highlighted).toBe("true");
+    });
+    it("reports cancelled (never landed) when a later end navigation tears down a pending message landing", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 10;
+      const target = messages[targetIndex];
+      expect(target).toBeTruthy();
+      const onScrollRequestSettled = vi.fn();
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-settled-end-cancels-message",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: target.id,
+          blockId: null,
+          requestId: 56,
+        },
+      });
+      // Before the message landing settles, an explicit end navigation tears
+      // it down through the shared `activeNavigationSettleCleanupRef` cleanup
+      // (`scrollToEnd`'s own teardown at the top of its callback) - this is
+      // NOT the same-request re-issue path (`reissuingScrollRequestIdRef`),
+      // so it must report the torn-down request cancelled rather than
+      // leaving it pending.
+      rerenderWith({
+        scrollRequest: { kind: "end", requestId: 57 },
+      });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(onScrollRequestSettled).toHaveBeenCalledWith(56, "cancelled");
+      expect(onScrollRequestSettled).not.toHaveBeenCalledWith(56, "landed");
+    });
+
+    it("does not re-issue a message landing already cancelled by an end navigation on a later hidden->visible transition", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 10;
+      const target = messages[targetIndex];
+      expect(target).toBeTruthy();
+      const onScrollRequestSettled = vi.fn();
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-settled-end-cancels-message-hidden-visible",
+        onScrollRequestSettled,
+        visible: true,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: target.id,
+          blockId: null,
+          requestId: 58,
+        },
+      });
+      rerenderWith({
+        scrollRequest: { kind: "end", requestId: 59 },
+      });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(onScrollRequestSettled).toHaveBeenCalledWith(58, "cancelled");
+      const scrollTopAfterCancel = getScrollNode().scrollTop;
+      onScrollRequestSettled.mockClear();
+
+      // The cleared pending landing must NOT come back on the next
+      // hidden->visible transition - a re-issue there would be scrolling
+      // toward a request that already reached a terminal outcome.
+      rerenderWith({ visible: false });
+      rerenderWith({ visible: true });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+        58,
+        expect.anything(),
+      );
+      // The viewport stays at the tail. Not pixel-exact: the end navigation's
+      // own settle/re-issue loop is still running here (LegendList's
+      // `scrollToEnd` parks one footer past the latch's strict end, so each
+      // attempt validates invalid and re-issues on its 750ms fallback), and
+      // on CI a late attempt can land a footer's height away from the value
+      // read above. A re-issue of request 58 would move the viewport by more
+      // than a dozen rows, which is what this pins.
+      expect(
+        Math.abs(getScrollNode().scrollTop - scrollTopAfterCancel),
+      ).toBeLessThan(TICKET_13_ROW_HEIGHT_PX);
+      expect(getScrollNode().scrollTop).not.toBe(
+        expectedRowScrollTop(targetIndex),
+      );
+    });
+
+    it("does not report an outcome for end requests", async () => {
+      const messages = makeCompletedTranscript(30);
+      const onScrollRequestSettled = vi.fn();
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-settled-end",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: { kind: "end", requestId: 60 },
+      });
+
+      await waitForNavigationSettle();
+      await waitForNavigationSettle();
+
+      expect(onScrollRequestSettled).not.toHaveBeenCalled();
+    });
   });
 
   describe("quote gating under systemOverlayActive (coverage restore)", () => {
@@ -4226,6 +4646,7 @@ describe("ChatMessages scroll policy", () => {
             visible
             systemOverlayActive={false}
             scrollRequest={null}
+            onScrollRequestSettled={null}
             composerOverlayHeight={80}
             transcriptWindow={null}
             onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}

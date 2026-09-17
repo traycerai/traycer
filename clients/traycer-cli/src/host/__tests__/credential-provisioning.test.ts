@@ -83,7 +83,7 @@ const mocks = vi.hoisted(() => {
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
     ): void {
-      this.statusHandler?.(status, reason);
+      this.statusHandler?.(status, reason, null);
     }
   }
 

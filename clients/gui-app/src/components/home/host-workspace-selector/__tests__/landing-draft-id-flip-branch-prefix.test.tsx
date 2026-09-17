@@ -100,29 +100,6 @@ const hostClient: MockHostClient = {
   onChange: () => () => undefined,
 };
 
-vi.mock("@/components/ui/select", () => ({
-  Select: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SelectTrigger: (props: { readonly children: ReactNode }) => (
-    <button type="button">{props.children}</button>
-  ),
-  SelectValue: () => <span />,
-  SelectContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SelectItem: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-}));
-
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ directory: { selectById: mocks.selectHost } }),
-  useHostClient: () => hostClient,
-  // The SPINE, a separate export since redesign P2.1.
-  useHostRuntimeClient: () => hostClient,
-}));
-
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
@@ -330,9 +307,7 @@ function renderLandingLikeHarness(draftId: string | null): {
 async function openEnvironmentDialog(): Promise<void> {
   fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
   await screen.findByTestId("home-workspace-rows-popover");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Edit setup and teardown scripts" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
   await screen.findByTestId("scripts-dialog");
 }
 
@@ -392,6 +367,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("landing draftId flip preserves Environment branch-prefix edit", () => {
+  it("opens the landing workspace picker below its trigger", async () => {
+    renderLandingLikeHarness(null);
+
+    fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+    const popover = await screen.findByTestId("home-workspace-rows-popover");
+    expect(popover.getAttribute("data-side")).toBe("bottom");
+  });
+
   it("keeps an in-progress prefix edit and confirmed branch across null → uuid", async () => {
     const { rerenderWithDraftId } = renderLandingLikeHarness(null);
 

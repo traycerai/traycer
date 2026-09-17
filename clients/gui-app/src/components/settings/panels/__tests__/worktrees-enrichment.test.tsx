@@ -16,6 +16,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   useCachedWorktreeEnrichment,
+  useRevalidateStaleWorktreeActivity,
   useWorktreeActivityEnrichment,
 } from "@/components/settings/panels/worktrees-enrichment";
 import {
@@ -603,6 +604,115 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     expect(requests).toHaveLength(2);
   });
 
+  it("retries a first cold-host unresolved row and converges once the host resolves it", async () => {
+    vi.useFakeTimers();
+    // Identity is still unknown, unlike a resolved local or detached row.
+    const unresolvedEntry: WorktreeHostEntryV16 = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      branch: null,
+      repoIdentifier: null,
+      gitRemovable: false,
+      prState: null,
+      resolvedAt: null,
+      submodules: [],
+    };
+    const resolvedEntry: WorktreeHostEntryV16 = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "open",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/app/pull/42",
+    };
+    const entriesByPath = new Map<string, WorktreeHostEntryV16>([
+      ["/wt/a", unresolvedEntry],
+    ]);
+    const requests: string[] = [];
+    const fixture = createFixture(
+      entriesByPath,
+      (path) => {
+        requests.push(path);
+        if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+      },
+      null,
+      new QueryClient(),
+    );
+    const { result } = renderHook(
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      result.current.reportVisiblePaths(["/wt/a"]);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+    });
+    expect(requests).toHaveLength(1);
+    // Still unresolved after the first probe - the retry ledger must treat
+    // the placeholder as pending rather than as a settled row.
+    expect(result.current.enrichedByPath.get("/wt/a")?.resolvedAt).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(requests).toHaveLength(2);
+    expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("open");
+    expect(
+      result.current.enrichedByPath.get("/wt/a")?.resolvedAt,
+    ).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(requests).toHaveLength(2);
+  });
+
+  it("does not poll intentionally omitted PR probes for local, detached, or at-base rows", async () => {
+    vi.useFakeTimers();
+    const entries: WorktreeHostEntryV16[] = [
+      { ...enrichedEntry("/wt/local", "local"), repoIdentifier: null },
+      { ...enrichedEntry("/wt/detached", "detached"), branch: null },
+      { ...enrichedEntry("/wt/base", "base"), atBaseCommit: true },
+    ];
+    const paths = entries.map((entry) => entry.worktreePath);
+    const requests: string[] = [];
+    const fixture = createFixture(
+      new Map(entries.map((entry) => [entry.worktreePath, entry])),
+      (path) => requests.push(path),
+      null,
+      new QueryClient(),
+    );
+    const { result } = renderHook(
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      result.current.reportVisiblePaths(paths);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+    });
+    expect(requests).toEqual(paths);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    expect(requests).toEqual(paths);
+    expect(result.current.erroredPaths.size).toBe(0);
+  });
+
   it("stops cold PR refetching after the bounded retry budget", async () => {
     vi.useFakeTimers();
     const entriesByPath = new Map<string, WorktreeHostEntryV16>([
@@ -815,6 +925,68 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       });
       expect(requests).toHaveLength(2);
       expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("none");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(requests).toHaveLength(2);
+    });
+
+    it("sweeps a first cold-host unresolved row and converges once the host resolves it", async () => {
+      vi.useFakeTimers();
+      // Same unresolved-placeholder shape as the viewport-leg regression
+      // above, but reached only through the background sweep (no
+      // reportVisiblePaths at all).
+      const unresolvedEntry: WorktreeHostEntryV16 = {
+        ...enrichedEntry("/wt/a", "feat-a"),
+        branch: null,
+        repoIdentifier: null,
+        gitRemovable: false,
+        prState: null,
+        resolvedAt: null,
+        submodules: [],
+      };
+      const resolvedEntry = warmEntry("/wt/a", "feat-a");
+      const entriesByPath = new Map<string, WorktreeHostEntryV16>([
+        ["/wt/a", unresolvedEntry],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+          if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // The mount-time sweep chunk fires without any visible-paths report.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      expect(requests).toHaveLength(1);
+      expect(result.current.enrichedByPath.get("/wt/a")?.resolvedAt).toBeNull();
+
+      // Still unresolved → the sweep's exponential backoff re-probes it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      expect(requests).toHaveLength(2);
+      expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("none");
+      expect(
+        result.current.enrichedByPath.get("/wt/a")?.resolvedAt,
+      ).not.toBeNull();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
@@ -1234,6 +1406,103 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         );
       });
     });
+  });
+
+  it("re-probes warm activity when the inventory advances, without looping on an unchanged response", async () => {
+    const cached = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "none" as const,
+    };
+    const rows = new Map([[cached.worktreePath, cached]]);
+    const requests: string[] = [];
+    const fixture = createFixture(
+      rows,
+      (path) => requests.push(path),
+      null,
+      createAppQueryClient(),
+    );
+    seedEnriched(fixture.queryClient, cached);
+    const { result, rerender } = renderHook(
+      ({ base }) => {
+        const activity = useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          [cached.worktreePath],
+        );
+        useRevalidateStaleWorktreeActivity(
+          HOST_ID,
+          true,
+          [base],
+          activity.enrichedByPath,
+        );
+        return activity;
+      },
+      { initialProps: { base: cached }, wrapper: fixture.Wrapper },
+    );
+    expect(requests).toEqual([]);
+    const newer = { ...cached, resolvedAt: 2 };
+    rerender({ base: newer });
+    await waitFor(() => expect(requests).toEqual([cached.worktreePath]));
+    await waitFor(() =>
+      expect(
+        fixture.queryClient.getQueryState(perPathKey(cached.worktreePath))
+          ?.fetchStatus,
+      ).toBe("idle"),
+    );
+    // The host returned the older revision again. It remains gated for delete,
+    // but neither a new Map identity nor another render may retry endlessly.
+    rerender({ base: { ...newer } });
+    expect(requests).toEqual([cached.worktreePath]);
+    expect(
+      result.current.enrichedByPath.get(cached.worktreePath)?.resolvedAt,
+    ).toBe(1);
+    const latest = { ...cached, resolvedAt: 3 };
+    rows.set(cached.worktreePath, latest);
+    rerender({ base: latest });
+    await waitFor(() =>
+      expect(
+        result.current.enrichedByPath.get(cached.worktreePath)?.resolvedAt,
+      ).toBe(3),
+    );
+    expect(requests).toEqual([cached.worktreePath, cached.worktreePath]);
+  });
+
+  it("keeps stale-activity invalidation scoped to a reachable host", () => {
+    const qc = new QueryClient();
+    const cached = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "none" as const,
+    };
+    const newer = { ...cached, resolvedAt: 2 };
+    const overlay = new Map([[cached.worktreePath, cached]]);
+    seedEnriched(qc, cached);
+    const otherHostKey = [...perPathKey(cached.worktreePath)];
+    otherHostKey[1] = "other-host";
+    qc.setQueryData(otherHostKey, { worktrees: [cached], nextCursor: null });
+    const { rerender } = renderHook(
+      ({ reachable }) =>
+        useRevalidateStaleWorktreeActivity(
+          HOST_ID,
+          reachable,
+          [newer],
+          overlay,
+        ),
+      {
+        initialProps: { reachable: false },
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        ),
+      },
+    );
+    expect(
+      qc.getQueryState(perPathKey(cached.worktreePath))?.isInvalidated,
+    ).toBe(false);
+    rerender({ reachable: true });
+    expect(
+      qc.getQueryState(perPathKey(cached.worktreePath))?.isInvalidated,
+    ).toBe(true);
+    expect(qc.getQueryState(otherHostKey)?.isInvalidated).toBe(false);
   });
 
   describe("overlay identity stability (render-churn regression)", () => {

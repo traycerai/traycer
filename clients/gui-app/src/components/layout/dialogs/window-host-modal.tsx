@@ -8,6 +8,11 @@ import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/pl
 import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
+import {
+  PLAN_RESTRICTED_MOBILE_DETAIL,
+  PLAN_RESTRICTED_MOBILE_TITLE,
+} from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { usePressStartActivation } from "@/lib/host/press-start-activation";
@@ -122,7 +127,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
           data-testid="window-host-modal-overlay"
-          className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0"
+          className="fixed inset-0 isolate z-60 bg-black/40 duration-100 data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
@@ -147,7 +152,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
           // and the raw centre lines run through the reserved strips (the
           // same rule `dialog.tsx` and the migration modal follow). The width
           // clamp carries `--safe-area-width` for the same reason.
-          className="fixed top-safe-center-y left-safe-center-x z-[60] flex max-h-[85svh] w-[min(92vw,32rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
+          className="fixed top-safe-center-y left-safe-center-x z-60 flex max-h-[85svh] w-[min(92vw,32rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
         >
           <DialogPrimitive.Title
             data-slot="dialog-title"
@@ -413,7 +418,8 @@ function WindowHostModalBody(props: {
  * the full boot body (`buildBootBody`), and drawing this boxed line there
  * instead was the "weird-looking Setting up Traycer" report - a bordered
  * strip with a truncated heading and a percentage where every other phase of
- * the launch draws the headline, the bar and the details footer.
+ * the launch draws the headline, the bar when there is a percentage, and the
+ * details footer.
  *
  * Heading and percentage ONLY - the same two things the boot body's bar says.
  * The lane's byte count and its own message line (`transferLabel`, `detail`)
@@ -552,6 +558,24 @@ function modalCopy(
   cause: WindowNarrationCause,
 ): WindowHostModalCopy {
   if (variant.kind === "plan-restricted") {
+    // The installed mobile app may neither name the plan nor tell the reader
+    // to upgrade (App Store guideline 3.1.1); `PlanRestrictedUpgradeAction`
+    // withholds the button beside this, so the words have to stand alone. The
+    // report fields are diagnostics, not copy, and stay as they are.
+    //
+    // The HOST-NEUTRAL heading, unlike the scope gate's and the resource
+    // monitor's: this variant is the "every lease on the account is
+    // plan-restricted" arm (`window-narration.ts`), so it carries no one host
+    // to name and the desktop copy is plural too.
+    if (isMobileApp()) {
+      return {
+        title: PLAN_RESTRICTED_MOBILE_TITLE,
+        description: PLAN_RESTRICTED_MOBILE_DETAIL,
+        reportTitle: "No host available on this plan",
+        reportMessage: "Every host on this account is plan-restricted.",
+        reportCode: "HOST_PLAN_RESTRICTED",
+      };
+    }
     return {
       title: "Your plan doesn't include remote hosts",
       description:

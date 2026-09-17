@@ -17,16 +17,25 @@ import {
   browserSessionsOpenRequestSchema,
   canonicalDesktopIdentityAttestBytes,
   browserSessionsServerFrameSchema,
-  browserSessionsV1,
+  browserSessionsV20,
+  browserSessionsV21,
   browserScreencastClientFrameSchema,
   browserScreencastOpenRequestSchema,
   browserScreencastServerFrameSchema,
-  browserScreencastV1,
+  browserScreencastV20,
+  browserScreencastV21,
 } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_VIEWPORT_MAX_EDGE,
+  BROWSER_VIEWPORT_MAX_PIXELS,
+  BROWSER_VIEWPORT_MIN_EDGE,
+  browserViewportIntentSchema,
+  browserViewportSizeSchema,
+} from "@traycer/protocol/host/browser/viewport";
 
 const SAMPLE_SESSION = {
   sessionId: "session-1",
-  epicId: "epic-1",
+  scope: { kind: "epic" as const, epicId: "epic-1" },
   hostId: "host-1",
   profile: "primary" as const,
   lastActivityAt: 20,
@@ -120,7 +129,7 @@ describe("browser frame unions reject unknown fields", () => {
   });
 });
 
-describe("browser.screencast@1.0 control frames", () => {
+describe("browser.screencast@2.0 control frames", () => {
   it("carries arming and subscription-bound input on the unreleased baseline", () => {
     const clientFrames = [
       { kind: "arm", hasBinaryPayload: false, armEpoch: 3 },
@@ -165,7 +174,7 @@ describe("browser.screencast@1.0 control frames", () => {
         true,
       );
       expect(
-        browserScreencastV1.clientFrameSchema.safeParse(frame).success,
+        browserScreencastV20.clientFrameSchema.safeParse(frame).success,
       ).toBe(true);
     }
 
@@ -182,7 +191,7 @@ describe("browser.screencast@1.0 control frames", () => {
         true,
       );
       expect(
-        browserScreencastV1.serverFrameSchema.safeParse(frame).success,
+        browserScreencastV20.serverFrameSchema.safeParse(frame).success,
       ).toBe(true);
     }
   });
@@ -209,13 +218,13 @@ describe("browser.screencast@1.0 control frames", () => {
       true,
     );
     expect(
-      browserScreencastV1.serverFrameSchema.safeParse(opened).success,
+      browserScreencastV20.serverFrameSchema.safeParse(opened).success,
     ).toBe(true);
     expect(browserScreencastClientFrameSchema.safeParse(response).success).toBe(
       true,
     );
     expect(
-      browserScreencastV1.clientFrameSchema.safeParse(response).success,
+      browserScreencastV20.clientFrameSchema.safeParse(response).success,
     ).toBe(true);
 
     expect(
@@ -233,14 +242,15 @@ describe("browser.screencast@1.0 control frames", () => {
   });
 });
 
-describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () => {
-  it("parses tabOpened as a one-way tab lifecycle event carrying source", () => {
+describe("browser.sessions@2.0 epic-scoped open + tab-shaped session info", () => {
+  it("parses tabOpened as a one-way tab lifecycle event carrying source and opener", () => {
     const opened = {
       kind: "tabOpened",
       hasBinaryPayload: false,
       sessionId: "session-1",
       tabId: "tab-2",
       source: "agent",
+      openerTabId: null,
     };
     expect(browserSessionsServerFrameSchema.safeParse(opened).success).toBe(
       true,
@@ -249,6 +259,7 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
       browserSessionsServerFrameSchema.safeParse({
         ...opened,
         source: "page",
+        openerTabId: "tab-1",
       }).success,
     ).toBe(true);
     // `source` is required, and the frame is closed - the retired
@@ -259,6 +270,19 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         hasBinaryPayload: false,
         sessionId: "session-1",
         tabId: "tab-2",
+        openerTabId: null,
+      }).success,
+    ).toBe(false);
+    // `openerTabId` is required too: a producer that cannot name the opener
+    // says `null`, so a consumer never has to guess between "unknown" and
+    // "not sent".
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "tabOpened",
+        hasBinaryPayload: false,
+        sessionId: "session-1",
+        tabId: "tab-2",
+        source: "page",
       }).success,
     ).toBe(false);
     expect(
@@ -269,16 +293,34 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     ).toBe(false);
   });
 
-  it("requires only the authorizing epicId on the open request", () => {
+  it("requires only the authorizing scope on the open request", () => {
     expect(
       browserSessionsOpenRequestSchema.safeParse({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         chatId: "legacy-route",
       }).success,
     ).toBe(false);
     expect(
-      browserSessionsOpenRequestSchema.safeParse({ epicId: "epic-1" }).success,
+      browserSessionsOpenRequestSchema.safeParse({
+        scope: { kind: "epic", epicId: "epic-1" },
+      }).success,
     ).toBe(true);
+    expect(
+      browserSessionsOpenRequestSchema.safeParse({
+        scope: { kind: "independent" },
+      }).success,
+    ).toBe(true);
+    // The pre-scope shape. It parsed until this contract was edited in place,
+    // and a host on the old pin answers it - which is exactly why the wire
+    // change and the host change land coupled.
+    expect(
+      browserSessionsOpenRequestSchema.safeParse({ epicId: "epic-1" }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsOpenRequestSchema.safeParse({
+        scope: { kind: "independent", epicId: "epic-1" },
+      }).success,
+    ).toBe(false);
     expect(
       browserSessionsOpenRequestSchema.safeParse({ chatId: "chat-1" }).success,
     ).toBe(false);
@@ -394,10 +436,10 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     ).toBe(false);
   });
 
-  it("requires epicId and tabId on screencast open requests", () => {
+  it("requires scope and tabId on screencast open requests", () => {
     expect(
       browserScreencastOpenRequestSchema.safeParse({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         sessionId: "session-1",
         tabId: "session-1",
         maxWidth: 1280,
@@ -405,6 +447,20 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         quality: 80,
         format: "jpeg",
         role: "tile",
+        handoffToken: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      browserScreencastOpenRequestSchema.safeParse({
+        scope: { kind: "independent" },
+        sessionId: "session-1",
+        tabId: "session-1",
+        maxWidth: 1280,
+        maxHeight: 720,
+        quality: 80,
+        format: "jpeg",
+        role: "tile",
+        handoffToken: null,
       }).success,
     ).toBe(true);
     expect(
@@ -416,23 +472,73 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         quality: 80,
         format: "jpeg",
         role: "tile",
+        handoffToken: null,
       }).success,
     ).toBe(false);
     expect(
       browserScreencastOpenRequestSchema.safeParse({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         sessionId: "session-1",
         maxWidth: 1280,
         maxHeight: 720,
         quality: 80,
         format: "jpeg",
         role: "tile",
+        handoffToken: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries the opener's handoff token on the screencast open, and answers it on the open", () => {
+    const open = {
+      scope: { kind: "independent" as const },
+      sessionId: "session-1",
+      tabId: "tab-1",
+      maxWidth: 1280,
+      maxHeight: 720,
+      quality: 80,
+      format: "jpeg" as const,
+      role: "tile" as const,
+    };
+    expect(
+      browserScreencastOpenRequestSchema.parse({
+        ...open,
+        handoffToken: "handoff-1",
+      }).handoffToken,
+    ).toBe("handoff-1");
+    // A bystander says so explicitly; a viewer that omits the field is a client
+    // built against a contract without it.
+    expect(browserScreencastOpenRequestSchema.safeParse(open).success).toBe(
+      false,
+    );
+
+    const answered = browserSessionsServerFrameSchema.parse({
+      kind: "openTabResult",
+      hasBinaryPayload: false,
+      requestId: "open-1",
+      result: {
+        ok: true,
+        sessionId: "session-1",
+        tabId: "tab-1",
+        handoffToken: "handoff-1",
+      },
+    });
+    if (answered.kind !== "openTabResult" || !answered.result.ok) {
+      throw new Error("expected a successful openTabResult");
+    }
+    expect(answered.result.handoffToken).toBe("handoff-1");
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "openTabResult",
+        hasBinaryPayload: false,
+        requestId: "open-1",
+        result: { ok: true, sessionId: "session-1", tabId: "tab-1" },
       }).success,
     ).toBe(false);
   });
 });
 
-describe("browser.sessions@1.0 correlation", () => {
+describe("browser.sessions@2.0 correlation", () => {
   it("rejects fake request ids on events and one-way retirement", () => {
     const clientEvents = [
       {
@@ -576,7 +682,7 @@ describe("browser.sessions@1.0 correlation", () => {
   });
 });
 
-describe("browser.sessions@1.0 primary-profile cookie delta (ticket 06)", () => {
+describe("browser.sessions@2.0 primary-profile cookie delta (ticket 06)", () => {
   const COOKIE = {
     name: "sid",
     value: "abc",
@@ -659,7 +765,7 @@ describe("browser.sessions@1.0 primary-profile cookie delta (ticket 06)", () => 
   });
 });
 
-describe("browser.sessions@1.0 store-key handshake", () => {
+describe("browser.sessions@2.0 store-key handshake", () => {
   // 32 zero bytes: the exact shape of a minted store key on the wire.
   const RAW_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
   const WRAPPED_KEY = "d3JhcHBlZA==";
@@ -688,9 +794,9 @@ describe("browser.sessions@1.0 store-key handshake", () => {
       expect(browserSessionsClientFrameSchema.safeParse(frame).success).toBe(
         true,
       );
-      expect(browserSessionsV1.clientFrameSchema.safeParse(frame).success).toBe(
-        true,
-      );
+      expect(
+        browserSessionsV20.clientFrameSchema.safeParse(frame).success,
+      ).toBe(true);
     }
   });
 
@@ -712,9 +818,9 @@ describe("browser.sessions@1.0 store-key handshake", () => {
       expect(browserSessionsServerFrameSchema.safeParse(frame).success).toBe(
         true,
       );
-      expect(browserSessionsV1.serverFrameSchema.safeParse(frame).success).toBe(
-        true,
-      );
+      expect(
+        browserSessionsV20.serverFrameSchema.safeParse(frame).success,
+      ).toBe(true);
     }
   });
 
@@ -770,7 +876,7 @@ describe("browser.sessions@1.0 store-key handshake", () => {
   });
 });
 
-describe("browser.sessions@1.0 desktop identity attestation", () => {
+describe("browser.sessions@2.0 desktop identity attestation", () => {
   const NONCE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
   const PUBLIC_KEY = "cHVibGlj";
   const SIGNATURE = "c2ln";
@@ -837,14 +943,14 @@ describe("browser.sessions@1.0 desktop identity attestation", () => {
   });
 });
 
-describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
+describe("browser.sessions@2.0 forget all browser logins (ticket 08)", () => {
   it("accepts the payload-free client trigger", () => {
     const forgetLogins = { kind: "forgetLogins", hasBinaryPayload: false };
     expect(
       browserSessionsClientFrameSchema.safeParse(forgetLogins).success,
     ).toBe(true);
     expect(
-      browserSessionsV1.clientFrameSchema.safeParse(forgetLogins).success,
+      browserSessionsV20.clientFrameSchema.safeParse(forgetLogins).success,
     ).toBe(true);
   });
 
@@ -861,7 +967,7 @@ describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
   });
 });
 
-describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
+describe("browser.sessions@2.0 clear cookies for one site (ticket 07)", () => {
   it("has no server evict frame left: the host cannot remove from a jar", () => {
     // universal-sign-in ticket 08 retired `primaryProfileEvict`. It was the
     // last host-driven removal primitive over the master jar, and the write
@@ -875,13 +981,13 @@ describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
     expect(browserSessionsServerFrameSchema.safeParse(evict).success).toBe(
       false,
     );
-    expect(browserSessionsV1.serverFrameSchema.safeParse(evict).success).toBe(
+    expect(browserSessionsV20.serverFrameSchema.safeParse(evict).success).toBe(
       false,
     );
   });
 });
 
-describe("browser.sessions@1.0 clear one site from Settings (ticket 10)", () => {
+describe("browser.sessions@2.0 clear one site from Settings (ticket 10)", () => {
   const clearSite = {
     kind: "clearSite",
     hasBinaryPayload: false,
@@ -893,7 +999,7 @@ describe("browser.sessions@1.0 clear one site from Settings (ticket 10)", () => 
       true,
     );
     expect(
-      browserSessionsV1.clientFrameSchema.safeParse(clearSite).success,
+      browserSessionsV20.clientFrameSchema.safeParse(clearSite).success,
     ).toBe(true);
   });
 });
@@ -960,7 +1066,7 @@ describe("browser.savedLoginSites@1.0 (ticket 10)", () => {
   });
 });
 
-describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => {
+describe("browser.sessions@2.0 universal sign-in carry-over (ticket 01)", () => {
   const COOKIE = {
     name: "sid",
     value: "abc",
@@ -988,7 +1094,7 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
   };
 
   it("parses an observed frame without stripping the payload it validated", () => {
-    // `browserSessionsV1.serverFrameSchema` is the same object reference as
+    // `browserSessionsV20.serverFrameSchema` is the same object reference as
     // this union - `defineStreamRpcContract` stores the schema as given - so
     // parsing through it proves nothing extra and is not asserted twice. What
     // this does pin is the chat-subscribe projection-strip class of bug: the
@@ -1074,7 +1180,7 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
       revision: LEDGER.revision,
     };
     expect(browserSessionsServerFrameSchema.safeParse(ack).success).toBe(true);
-    expect(browserSessionsV1.serverFrameSchema.safeParse(ack).success).toBe(
+    expect(browserSessionsV20.serverFrameSchema.safeParse(ack).success).toBe(
       true,
     );
     expect(
@@ -1112,7 +1218,7 @@ describe("browser.sessions@1.0 universal sign-in carry-over (ticket 01)", () => 
  * keeping its own copy of the list. That only holds while the sets name kinds
  * the unions actually declare, which is what these check.
  */
-describe("browser.sessions@1.0 frame-kind sets", () => {
+describe("browser.sessions@2.0 frame-kind sets", () => {
   it("names jar server frames the union declares, and only those", () => {
     for (const kind of BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS) {
       expect(
@@ -1157,5 +1263,152 @@ describe("browser.sessions@1.0 frame-kind sets", () => {
     );
     expect(uxKinds.has("forgetLogins")).toBe(false);
     expect(uxKinds.has("clearSite")).toBe(false);
+  });
+});
+
+describe("browser viewport contracts", () => {
+  it("accepts integer edges from the tiny floor through a valid 4K viewport", () => {
+    expect(
+      browserViewportSizeSchema.safeParse({ width: 64, height: 64 }).success,
+    ).toBe(true);
+    expect(
+      browserViewportSizeSchema.safeParse({ width: 3_840, height: 2_160 })
+        .success,
+    ).toBe(true);
+    expect(
+      browserViewportSizeSchema.safeParse({ width: 8_192, height: 2_048 })
+        .success,
+    ).toBe(true);
+    expect(BROWSER_VIEWPORT_MIN_EDGE).toBe(64);
+    expect(BROWSER_VIEWPORT_MAX_EDGE).toBe(8_192);
+    expect(BROWSER_VIEWPORT_MAX_PIXELS).toBe(16_777_216);
+  });
+
+  it("rejects fractional, out-of-range, and over-area viewport sizes", () => {
+    for (const size of [
+      { width: 63, height: 64 },
+      { width: 64, height: 8_193 },
+      { width: 64.5, height: 64 },
+      { width: 8_192, height: 2_049 },
+    ]) {
+      expect(browserViewportSizeSchema.safeParse(size).success).toBe(false);
+    }
+  });
+
+  it("keeps fit and fixed intent discriminated", () => {
+    expect(browserViewportIntentSchema.safeParse({ mode: "fit" }).success).toBe(
+      true,
+    );
+    expect(
+      browserViewportIntentSchema.safeParse({
+        mode: "fixed",
+        width: 3_840,
+        height: 2_160,
+      }).success,
+    ).toBe(true);
+    expect(
+      browserViewportIntentSchema.safeParse({
+        mode: "fixed",
+        width: 64.5,
+        height: 64,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("browser stream 2.1 viewport additions", () => {
+  const viewportState = {
+    kind: "viewportState",
+    hasBinaryPayload: false,
+    sessionId: "session-1",
+    tabId: "tab-1",
+    intent: { mode: "fixed", width: 3_840, height: 2_160 },
+    applied: { width: 3_840, height: 2_160, dpr: 2 },
+    revision: 4,
+    source: "user",
+    fitOwnerId: null,
+  };
+  const electronViewportRequest = {
+    kind: "electronViewportRequest",
+    hasBinaryPayload: false,
+    requestId: "request-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    registrationId: "registration-1",
+    revision: 4,
+    intent: { mode: "fit" },
+    geometry: { width: 1_280, height: 720, dpr: 1 },
+  };
+
+  it("adds sessions frames on 2.1 while 2.0 rejects them", () => {
+    expect(
+      browserSessionsV21.serverFrameSchema.safeParse(viewportState).success,
+    ).toBe(true);
+    expect(
+      browserSessionsV20.serverFrameSchema.safeParse(viewportState).success,
+    ).toBe(false);
+    expect(
+      browserSessionsV21.serverFrameSchema.safeParse(electronViewportRequest)
+        .success,
+    ).toBe(true);
+    expect(
+      browserSessionsV20.serverFrameSchema.safeParse(electronViewportRequest)
+        .success,
+    ).toBe(false);
+    expect(
+      isBrowserSessionsJarServerFrame(
+        browserSessionsV21.serverFrameSchema.parse(electronViewportRequest),
+      ),
+    ).toBe(true);
+    expect(
+      new Set<string>(BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS).has(
+        "electronViewportRequest",
+      ),
+    ).toBe(true);
+    expect(
+      new Set<string>(BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS).has(
+        "electronViewportRequest",
+      ),
+    ).toBe(false);
+  });
+
+  it("adds client viewport frames without changing the 2.0 line", () => {
+    const setViewport = {
+      kind: "setViewport",
+      hasBinaryPayload: false,
+      requestId: "request-2",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      intent: { mode: "fixed", width: 1_280, height: 720 },
+    };
+    expect(
+      browserSessionsV21.clientFrameSchema.safeParse(setViewport).success,
+    ).toBe(true);
+    expect(
+      browserSessionsV20.clientFrameSchema.safeParse(setViewport).success,
+    ).toBe(false);
+  });
+
+  it("keeps the 2.0 screencast shape and gates logicalViewport to 2.1", () => {
+    const oldFrame = {
+      kind: "viewportEpoch",
+      hasBinaryPayload: false,
+      epoch: 4,
+    };
+    expect(
+      browserScreencastV20.serverFrameSchema.safeParse(oldFrame).success,
+    ).toBe(true);
+    expect(
+      browserScreencastV20.serverFrameSchema.safeParse({
+        ...oldFrame,
+        logicalViewport: { width: 1_280, height: 720, dpr: 1 },
+      }).success,
+    ).toBe(false);
+    expect(
+      browserScreencastV21.serverFrameSchema.safeParse({
+        ...oldFrame,
+        logicalViewport: { width: 1_280, height: 720, dpr: 1 },
+      }).success,
+    ).toBe(true);
   });
 });

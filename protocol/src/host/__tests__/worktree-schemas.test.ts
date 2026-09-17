@@ -33,8 +33,11 @@ import {
   worktreeListAllForHostResponseSchemaV15,
   worktreeListAllForHostRequestSchemaV16,
   worktreeListAllForHostResponseSchemaV16,
+  worktreeListAllForHostRequestSchemaV17,
+  worktreeListAllForHostResponseSchemaV17,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
+  worktreeListBindingsForEpicRequestSchemaV13,
   worktreeListByWorkspacePathsRequestSchemaV11,
   worktreeListByWorkspacePathsRequestSchemaV12,
   worktreeListByWorkspacePathsResponseSchemaV12,
@@ -59,6 +62,7 @@ const V13 = { major: 1, minor: 3 } as const;
 const V14 = { major: 1, minor: 4 } as const;
 const V15 = { major: 1, minor: 5 } as const;
 const V16 = { major: 1, minor: 6 } as const;
+const V17 = { major: 1, minor: 7 } as const;
 
 const listAllForHostRegistry = hostRpcRegistry["worktree.listAllForHost"];
 const listByWorkspacePathsRegistry =
@@ -899,8 +903,8 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     ).not.toHaveProperty("resolvedAt");
   });
 
-  it("exposes v1.6 as the latest installed minor of major 1", () => {
-    expect(listAllForHostRegistry[1].latestMinor).toBe(6);
+  it("exposes v1.7 as the latest installed minor of major 1", () => {
+    expect(listAllForHostRegistry[1].latestMinor).toBe(7);
     expect(Object.keys(listAllForHostRegistry[1].versions).sort()).toEqual([
       "0",
       "1",
@@ -909,6 +913,7 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
       "4",
       "5",
       "6",
+      "7",
     ]);
   });
 
@@ -1029,6 +1034,69 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     expect(
       worktreeListAllForHostResponseSchemaV15.parse(upgraded).worktrees[0],
     ).not.toHaveProperty("gitUnreadable");
+  });
+
+  /**
+   * v1.7 is a SEMANTIC minor: it re-defines what `lastActivityAt` means (the
+   * authoritative `max(birthtime, reflog, durable activity)` automatic cleanup
+   * applies its cutoff to) without touching a single field. These two cases pin
+   * the two halves of that claim - the shape did not move, and a v1.6 peer's
+   * value is carried across verbatim rather than being silently re-labelled as
+   * authoritative, which is the whole reason the semantics ride a negotiated
+   * minor instead of a new field.
+   */
+  it("keeps the v1.7 request and response shapes identical to v1.6", () => {
+    expect(worktreeListAllForHostRequestSchemaV17).toBe(
+      worktreeListAllForHostRequestSchemaV16,
+    );
+    expect(worktreeListAllForHostResponseSchemaV17).toBe(
+      worktreeListAllForHostResponseSchemaV16,
+    );
+  });
+
+  it("bridges v1.6 to v1.7 without inventing an authoritative lastActivityAt", () => {
+    const request = {
+      includeActivity: true,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    };
+    expect(
+      upgradeRequestToVersion(listAllForHostRegistry, V16, V17, request),
+    ).toEqual(request);
+
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          // A v1.6 host derived this under the OLD formula. The bridge cannot
+          // recompute it (it has none of the inputs), so it must survive
+          // unchanged - a client that needs the authoritative age negotiates
+          // v1.7 with the host rather than trusting a bridged row.
+          lastActivityAt: 1_600_000_000_000,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+          resolvedAt: 1_700_000_000_000,
+          presence: "present" as const,
+          gitUnreadable: false,
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V16,
+      V17,
+      response,
+    );
+    expect(upgraded).toEqual(response);
+    expect(worktreeListAllForHostResponseSchemaV17.parse(upgraded)).toEqual(
+      upgraded,
+    );
   });
 });
 
@@ -1412,7 +1480,7 @@ describe("worktreeListBindingsForEpicResponseSchemaV11 (folderlessCwd)", () => {
   });
 });
 
-describe("worktree.listBindingsForEpic v1.1 <-> v1.2 negotiation", () => {
+describe("worktree.listBindingsForEpic v1.1 <-> v1.3 negotiation", () => {
   // NEW CLIENT + OLD HOST: a v1.2 client bridges an inbound v1.1 response up to
   // canonical. Every bridged row must be stamped isGitResolvePending:false - a
   // pre-v1.2 host has no pending concept and never sends a signal to clear it,
@@ -1465,10 +1533,35 @@ describe("worktree.listBindingsForEpic v1.1 <-> v1.2 negotiation", () => {
     ).toThrow();
   });
 
-  it("exposes v1.2 as the latest installed minor of major 1", () => {
-    expect(listBindingsForEpicRegistry[1].latestMinor).toBe(2);
+  it("upgrades an old request to the explicit Git-purpose request", () => {
+    const upgraded = upgradeRequestToVersion(
+      listBindingsForEpicRegistry,
+      V12,
+      V13,
+      { epicId: "epic-1" },
+    );
+
+    expect(upgraded).toEqual({ epicId: "epic-1", purpose: "git" });
+    expect(worktreeListBindingsForEpicRequestSchemaV13.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("keeps the v1.2 response projection compatible with v1.3", () => {
+    const response = {
+      rows: [{ ...v11SelectorRow, isGitResolvePending: true }],
+      folderlessCwd: null,
+    };
+
+    expect(
+      worktreeListBindingsForEpicResponseSchemaV12.parse(response),
+    ).toEqual(response);
+  });
+
+  it("exposes v1.3 as the latest installed minor of major 1", () => {
+    expect(listBindingsForEpicRegistry[1].latestMinor).toBe(3);
     expect(Object.keys(listBindingsForEpicRegistry[1].versions).sort()).toEqual(
-      ["0", "1", "2"],
+      ["0", "1", "2", "3"],
     );
   });
 });

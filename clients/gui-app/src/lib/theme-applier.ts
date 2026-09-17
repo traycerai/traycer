@@ -1,4 +1,4 @@
-import { formatHex8, parse, rgb, wcagContrast } from "culori";
+import { formatHex8, parse, rgb, wcagContrast, type Rgb } from "culori";
 import {
   buildFontFamilyValue,
   DEFAULT_UI_FONT_STACK,
@@ -107,7 +107,6 @@ function applyFromState(): void {
   for (const [token, color] of Object.entries(colors)) {
     root.style.setProperty(`--${token}`, color);
   }
-  root.style.setProperty("--glass-opacity", String(library.glassOpacity / 100));
   root.style.setProperty(
     "--traycer-font-prompt",
     library.promptFontFamily === null
@@ -124,7 +123,27 @@ function applyFromState(): void {
     "--panel-animation-duration",
     `${library.panelAnimationDuration}ms`,
   );
-  if (library.contrast !== 100) {
+  applyContrast(root, library.contrast);
+  root.setAttribute("data-theme-id", custom?.id ?? preset);
+  root.toggleAttribute(
+    "data-theme-sidebar-artwork",
+    custom?.sidebarArtwork === true,
+  );
+  themeRevision += 1;
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  return {
+    mode: "rgb",
+    r: from.r + (to.r - from.r) * amount,
+    g: from.g + (to.g - from.g) * amount,
+    b: from.b + (to.b - from.b) * amount,
+    alpha: from.alpha,
+  };
+}
+
+function applyContrast(root: HTMLElement, contrast: number): void {
+  if (contrast !== 100) {
     const computed = getComputedStyle(root);
     for (const [foreground, background] of [
       ["foreground", "background"],
@@ -139,33 +158,21 @@ function applyFromState(): void {
       const bg = parse(computed.getPropertyValue(`--${background}`).trim());
       if (!fg || !bg) continue;
       const source = rgb(fg);
+      const surface = rgb(bg);
       const destination =
-        library.contrast < 100
-          ? rgb(bg)
+        contrast < 100
+          ? surface
           : rgb(
-              wcagContrast(bg, "#fff") > wcagContrast(bg, "#000")
+              wcagContrast(surface, "#fff") > wcagContrast(surface, "#000")
                 ? { mode: "rgb", r: 1, g: 1, b: 1 }
                 : { mode: "rgb", r: 0, g: 0, b: 0 },
             );
-      const amount = Math.abs(library.contrast - 100) / 100;
       root.style.setProperty(
         `--${foreground}`,
-        formatHex8({
-          mode: "rgb",
-          r: source.r + (destination.r - source.r) * amount,
-          g: source.g + (destination.g - source.g) * amount,
-          b: source.b + (destination.b - source.b) * amount,
-          alpha: source.alpha,
-        }),
+        formatHex8(mixRgb(source, destination, Math.abs(contrast - 100) / 100)),
       );
     }
   }
-  root.setAttribute("data-theme-id", custom?.id ?? preset);
-  root.toggleAttribute(
-    "data-theme-sidebar-artwork",
-    custom?.sidebarArtwork === true,
-  );
-  themeRevision += 1;
 }
 
 function notify(): void {
@@ -198,7 +205,6 @@ function install(): void {
       state.themes === prev.themes &&
       state.selected === prev.selected &&
       state.draft === prev.draft &&
-      state.glassOpacity === prev.glassOpacity &&
       state.promptFontFamily === prev.promptFontFamily &&
       state.promptFontSize === prev.promptFontSize &&
       state.fontLigatures === prev.fontLigatures &&

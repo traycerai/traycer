@@ -6,6 +6,7 @@ import {
   type WindowNarrationState,
 } from "@/lib/host/window-narration";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concluded";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -50,6 +51,11 @@ export function useWindowNarration(): WindowNarrationState {
   // local host looks like, so the entry answers null for exactly the interval
   // this arm is about and the grace would collapse in the state it exists for.
   const localHostId = useReactiveLocalHostId();
+  // WHETHER DISCOVERY HAS ANSWERED, which the authority's own projection
+  // cannot say: its leases are a map over the fleet it has been given, so an
+  // unanswered fleet and an empty account produce the identical empty list.
+  // Subscribed rather than derived from the directory rows - see the hook.
+  const discoveryConcluded = useHostDiscoveryConcluded();
 
   const servingNow =
     attached && isServingLease(findLease(leases, effectiveHostId));
@@ -79,10 +85,12 @@ export function useWindowNarration(): WindowNarrationState {
         leases,
         hasBeenServed,
         localHostExpected,
+        discoveryConcluded,
         localHostId,
       }),
     [
       attached,
+      discoveryConcluded,
       effectiveHostId,
       hasBeenServed,
       leases,

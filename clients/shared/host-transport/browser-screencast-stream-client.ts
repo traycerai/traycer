@@ -5,6 +5,10 @@ import {
   type BrowserScreencastServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  projectBrowserScreencastOpenRequestToV10,
+  subscribeAtScopeAddressedBrowserVersion,
+} from "./browser-contracts-v1-bridge";
 import type {
   IStreamSession,
   StreamCloseReason,
@@ -40,15 +44,16 @@ export type BrowserScreencastStreamClientOptions =
   };
 
 /**
- * Typed wrapper over one `browser.screencast` subscription - an
- * epic-authorized, tab-addressed media stream for a single viewer.
+ * Typed wrapper over one `browser.screencast` subscription - a
+ * scope-authorized, tab-addressed media stream for a single viewer.
  *
- * `browser.screencast` serves a single minor (`@1.0`) - when the first
- * additive minor lands, the per-session schema selection belongs in
- * `handleServerFrame`, keyed off `session.getNegotiatedSchemaVersion()` the
- * way `TerminalStreamClient` does it. Every viewer opens its own session, so
- * parsing at a sibling viewer's minor is exactly the skew that placing the
- * parse here exists to prevent.
+ * The frozen @1 and @2.0 lines share frames; @2.1 also reports the logical
+ * viewport for padded video capture. The live schema lifts older epochs with
+ * a null logicalViewport, retaining their original video geometry.
+ *
+ * Epic requests are projected per negotiated session. Independent requests
+ * negotiate the newest scope-addressed minor; a @1 host refuses their strict
+ * scope-shaped params rather than serving another inventory.
  */
 export class BrowserScreencastStreamClient {
   private readonly session: IStreamSession;
@@ -59,7 +64,7 @@ export class BrowserScreencastStreamClient {
     const { wsStreamClient, callbacks, ...openRequest } = options;
     this.callbacks = callbacks;
     this.closed = false;
-    this.session = wsStreamClient.subscribe("browser.screencast", openRequest);
+    this.session = openScreencastSubscription(wsStreamClient, openRequest);
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
@@ -70,6 +75,13 @@ export class BrowserScreencastStreamClient {
 
   sendClientFrame(frame: BrowserScreencastClientFrame): void {
     if (this.closed) return;
+    const version = this.session.getNegotiatedSchemaVersion();
+    if (
+      frame.kind === "viewport" &&
+      version !== null &&
+      (version.major > 2 || (version.major === 2 && version.minor >= 1))
+    )
+      return;
     this.session.sendClientFrame(frame, null);
   }
 
@@ -99,4 +111,28 @@ export class BrowserScreencastStreamClient {
     }
     this.callbacks.onServerFrame(parsed.data, binaryPayload);
   }
+}
+
+function openScreencastSubscription(
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+  request: BrowserScreencastOpenRequest,
+): IStreamSession {
+  const scope = request.scope;
+  if (scope.kind === "independent") {
+    return subscribeAtScopeAddressedBrowserVersion(
+      wsStreamClient,
+      "browser.screencast",
+      request,
+    );
+  }
+  const epicId = scope.epicId;
+  // Re-read at every wire subscribe: the major belongs to the CONNECTION, and a
+  // reconnect can land on a host incarnation that serves the other one.
+  return wsStreamClient.subscribeWithParamsProvider(
+    "browser.screencast",
+    (onWireVersion) =>
+      onWireVersion?.major === 1
+        ? projectBrowserScreencastOpenRequestToV10(request, epicId)
+        : request,
+  );
 }

@@ -3,6 +3,7 @@ import { ChevronRight, Menu } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
@@ -10,6 +11,7 @@ import { MobileNotificationsButton } from "@/components/notifications/mobile-not
 import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
+import { cn } from "@/lib/utils";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -52,16 +54,21 @@ export function MobileAppHeader(): ReactNode {
       // reserved by `#root`, and `bg-background` is the same token the strip
       // shows, so the two read as one surface without the header having to
       // reach under the bar.
-      className="relative z-20 flex h-10 shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome"
+      // The height is the shared token the toaster clears on the phone, so
+      // the two cannot drift apart.
+      className={cn(
+        APP_HEADER_HEIGHT_CLASS,
+        "relative z-20 flex shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome",
+      )}
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label="Open menu"
         data-testid="mobile-nav-trigger"
         onClick={() => setNavOpen(true)}
-        className="shrink-0 text-muted-foreground hover:text-foreground"
+        className="shrink-0"
       >
         <Menu className="size-4" />
       </Button>
@@ -78,7 +85,15 @@ export function MobileAppHeader(): ReactNode {
       <div className="flex shrink-0 items-center gap-1">
         <RateLimitIconButton />
         {showGlobalResourceMonitor ? (
-          <ResourceMonitorPopover className={undefined} />
+          // The owner of `app.resources.open` on this viewport. The footer
+          // strip can be on screen at the same time (it is opt-in here rather
+          // than a placement), and it stands down for this mount - the header
+          // is the one that survives an open keyboard or nav drawer.
+          <ResourceMonitorPopover
+            trigger="header-button"
+            className={undefined}
+            claimsOpenAction
+          />
         ) : null}
         {/* Last of the global controls, matching the desktop header's order
             (rate limit -> resource monitor -> bell). */}
@@ -168,11 +183,13 @@ function MobileHeaderTitleSlot(props: MobileHeaderTitleSlotProps): ReactNode {
 type MobileHeaderSurface =
   | { readonly kind: "epic"; readonly tabId: string }
   | { readonly kind: "history" }
+  | { readonly kind: "home" }
   | { readonly kind: "settings"; readonly path: string | null }
   | { readonly kind: "composer" };
 
 const COMPOSER_SURFACE: MobileHeaderSurface = { kind: "composer" };
 const HISTORY_SURFACE: MobileHeaderSurface = { kind: "history" };
+const HOME_SURFACE: MobileHeaderSurface = { kind: "home" };
 
 /**
  * Resolves the presented surface from the tab layout that renders it, NOT from
@@ -188,15 +205,27 @@ const HISTORY_SURFACE: MobileHeaderSurface = { kind: "history" };
  * screen - for an epic, for History and for Settings alike.
  */
 function useMobileHeaderSurface(): MobileHeaderSurface {
+  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
   return useTabsStore(
     useShallow((state): MobileHeaderSurface => {
       const focused = selectHostFocusedRef(state);
-      if (focused === null) return COMPOSER_SURFACE;
+      // Home is the one presented surface with no focused ref to resolve: it
+      // holds the selection as `activeItemId === null`, which reads here as "no
+      // ref" exactly like an empty layout does.
+      if (focused === null) {
+        return homeTabEnabled && state.activeItemId === null
+          ? HOME_SURFACE
+          : COMPOSER_SURFACE;
+      }
       switch (focused.kind) {
         case "epic":
           return { kind: "epic", tabId: focused.id };
         case "history":
           return HISTORY_SURFACE;
+        // Unreachable: Home is never a strip ref, so `selectHostFocusedRef`
+        // cannot answer with one. Present for the exhaustive switch.
+        case "home":
+          return HOME_SURFACE;
         case "settings":
           return {
             kind: "settings",
@@ -265,6 +294,7 @@ function useMobileHeaderTitle(
   if (surface.kind === "epic") return firstResolvedTitle(liveTitle, tabName);
   if (surface.kind === "settings") return "Settings";
   if (surface.kind === "history") return "History";
+  if (surface.kind === "home") return "Home";
   // Titles name a place you navigated TO. The composer surfaces - landing and
   // drafts - are where you already are, and each one opens with a hero greeting
   // that carries the page, so "Traycer" and "New task" were both labelling the

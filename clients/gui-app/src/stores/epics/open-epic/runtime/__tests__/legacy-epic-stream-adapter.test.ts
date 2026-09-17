@@ -321,7 +321,7 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
     adapter.attach(host);
 
     const reason: StreamCloseReason = { kind: "caller" };
-    latest().callbacks.onConnectionStatus("closed", reason);
+    latest().callbacks.onConnectionStatus("closed", reason, false);
 
     expect(host.statuses).toEqual([
       { connection: "closed", closeReason: reason },
@@ -331,6 +331,7 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
         plane: "control",
         event: {
           kind: "transport-status",
+          durabilityStatusNegotiated: false,
           status: "closed",
           reason,
           // `@1` has one socket carrying every plane, the root snapshot
@@ -351,7 +352,7 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
     adapter.attach(host);
 
     const status: StreamConnectionStatus = "reconnecting";
-    latest().callbacks.onConnectionStatus(status, null);
+    latest().callbacks.onConnectionStatus(status, null, false);
 
     expect(host.statuses).toEqual([
       { connection: "reconnecting", closeReason: null },
@@ -361,6 +362,7 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
         plane: "control",
         event: {
           kind: "transport-status",
+          durabilityStatusNegotiated: false,
           status,
           reason: null,
           ownsControlCycle: true,
@@ -398,7 +400,7 @@ describe("createLegacyEpicStreamAdapter - generation guard", () => {
     adapter.detach("disposed");
 
     staleCallbacks.onUpdate(new Uint8Array([1]));
-    staleCallbacks.onConnectionStatus("closed", { kind: "caller" });
+    staleCallbacks.onConnectionStatus("closed", { kind: "caller" }, false);
 
     expect(host.emitted).toEqual([]);
     expect(host.statuses).toEqual([]);

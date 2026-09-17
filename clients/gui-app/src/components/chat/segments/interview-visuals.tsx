@@ -2,6 +2,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Circle,
   CircleHelp,
   Pencil,
 } from "lucide-react";
@@ -37,6 +38,42 @@ export function InterviewDraftStatus() {
   );
 }
 
+/**
+ * Decorative selection glyph. Listed rows stay buttons (`aria-pressed`)
+ * because a single-choice pick continues — that is not radio semantics.
+ */
+export function InterviewChoiceGlyph(props: {
+  readonly multiSelect: boolean;
+  readonly selected: boolean;
+}) {
+  const kind = props.multiSelect ? "checkbox" : "radio";
+  let fill = "border-input bg-background/60";
+  let indicator: ReactNode = null;
+  if (props.selected && props.multiSelect) {
+    fill = "border-primary bg-primary text-primary-foreground";
+    indicator = <Check className="size-3.5" aria-hidden />;
+  } else if (props.selected) {
+    fill = "border-primary bg-background/60";
+    indicator = (
+      <Circle className="size-2 fill-primary text-primary" aria-hidden />
+    );
+  }
+  return (
+    <span
+      aria-hidden
+      data-interview-choice-glyph={kind}
+      data-selected={props.selected ? "true" : "false"}
+      className={cn(
+        "pointer-events-none relative z-10 inline-flex size-4 shrink-0 items-center justify-center border shadow-xs",
+        props.multiSelect ? "rounded-sm" : "rounded-full",
+        fill,
+      )}
+    >
+      {indicator}
+    </span>
+  );
+}
+
 function meaningfulText(value: string | null): string | null {
   const trimmed = value?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : null;
@@ -68,6 +105,7 @@ export function InterviewQuestionHeader(props: {
   readonly questionText: string;
   readonly headerFindUnitId: string | null;
   readonly questionFindUnitId: string | null;
+  readonly modeHint: string | null;
 }) {
   const header = meaningfulText(props.header);
   return (
@@ -86,6 +124,14 @@ export function InterviewQuestionHeader(props: {
       >
         {props.questionText}
       </p>
+      {props.modeHint === null ? null : (
+        <p
+          data-testid="interview-choice-mode-hint"
+          className="m-0 text-ui-xs text-muted-foreground"
+        >
+          {props.modeHint}
+        </p>
+      )}
     </div>
   );
 }
@@ -253,23 +299,27 @@ function OptionBadge(props: {
   readonly selected: boolean;
   readonly custom: boolean;
 }) {
-  let content: ReactNode = props.index;
-  if (props.selected) {
-    content = <Check className="size-3" aria-hidden />;
-  } else if (props.custom) {
-    content = <Pencil className="size-3" aria-hidden />;
+  if (props.custom) {
+    return (
+      <span
+        aria-hidden
+        className={cn(
+          "inline-flex size-5 shrink-0 items-center justify-center rounded-full border text-[0.625rem] font-semibold tabular-nums",
+          props.selected
+            ? "border-primary/70 bg-primary/90 text-primary-foreground"
+            : "border-border/70 bg-background/60 text-muted-foreground/70",
+        )}
+      >
+        <Pencil className="size-3" aria-hidden />
+      </span>
+    );
   }
   return (
     <span
       aria-hidden
-      className={cn(
-        "inline-flex size-5 shrink-0 items-center justify-center rounded-full border text-[0.625rem] font-semibold tabular-nums",
-        props.selected
-          ? "border-primary/70 bg-primary/90 text-primary-foreground"
-          : "border-border/70 bg-background/60 text-muted-foreground/70",
-      )}
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-[0.625rem] font-semibold tabular-nums text-muted-foreground/70"
     >
-      {content}
+      {props.index}
     </span>
   );
 }
@@ -280,6 +330,7 @@ function StaticOptionRow(props: {
   readonly index: number;
   readonly selected: boolean;
   readonly custom: boolean;
+  readonly choiceKind: "single" | "multi" | null;
   readonly labelFindUnitId: string | null;
   readonly pinnedDetailRegionId: string | null;
   readonly children: ReactNode;
@@ -295,6 +346,12 @@ function StaticOptionRow(props: {
             : "text-muted-foreground",
         )}
       >
+        {props.choiceKind === null ? null : (
+          <InterviewChoiceGlyph
+            multiSelect={props.choiceKind === "multi"}
+            selected={props.selected}
+          />
+        )}
         {/* Historical option labels intentionally wrap while live rows truncate for review readability. */}
         <span
           data-chat-find-unit={props.labelFindUnitId ?? undefined}
@@ -378,6 +435,7 @@ export function StaticInterviewOptions(props: {
               index={index + 1}
               selected={isSelected}
               custom={false}
+              choiceKind={props.question.multiSelect ? "multi" : "single"}
               labelFindUnitId={findUnitIds.label}
               pinnedDetailRegionId={detailRegionId}
             >
@@ -404,6 +462,7 @@ export function StaticInterviewOptions(props: {
             index={props.question.options.length + 1}
             selected={props.customText !== null}
             custom
+            choiceKind={null}
             labelFindUnitId={props.customFindUnitId}
             pinnedDetailRegionId={null}
           >

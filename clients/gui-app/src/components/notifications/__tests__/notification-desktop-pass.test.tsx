@@ -40,6 +40,7 @@ import {
   openNotificationsStream,
 } from "@/stores/notifications/notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -94,6 +95,18 @@ vi.mock("@/lib/host", async (importActual) => {
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostIdRef.value,
+}));
+
+// The notification centre reads its host from `useNotificationResolveHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => activeHostIdRef.value,
+  useNotificationResolveHost: () => ({
+    hostId: activeHostIdRef.value,
+    client: hostBindingState.current?.hostClient ?? null,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
@@ -519,6 +532,16 @@ function resetStores(): void {
 describe("notification desktop-pass design corrections", () => {
   beforeEach(() => {
     resetStores();
+    // The collaboration rows below are cloud-held, and marking one read is a
+    // Notifications-room write - gated on the session's cloud verdict, so
+    // this suite runs signed in. The host rows need no verdict.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-desktop-pass", userName: "U", email: "u@example.com" },
+        { userId: "user-desktop-pass", username: "U" },
+        [],
+      );
   });
 
   afterEach(() => {
@@ -526,6 +549,7 @@ describe("notification desktop-pass design corrections", () => {
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
     useNotificationsPopoverStore.getState().setOpen(false);
+    useAuthStore.getState().setSignedOut();
   });
 
   describe("unread rail", () => {

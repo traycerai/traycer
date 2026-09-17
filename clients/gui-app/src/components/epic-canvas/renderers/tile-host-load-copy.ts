@@ -1,5 +1,7 @@
 import type { HostLeaseDeadState } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { BoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
+import { isMobileApp } from "@/lib/mobile-app";
 
 /**
  * The words for every bounded tile-load state, as pure functions.
@@ -52,13 +54,41 @@ const DEAD_MESSAGE: Record<
 > = {
   offline: (noun, named) =>
     `Host ${named} is offline, so this ${noun} can't be loaded. It will load once that host is back.`,
+  // The fact is the same everywhere; only the remedy differs. The installed
+  // mobile app may not tell the reader to upgrade (App Store guideline 3.1.1),
+  // so it points at the shell that may, and keeps the local alternative.
   "plan-restricted": (noun, named) =>
-    `Host ${named} is local only on your current plan, so this ${noun} can't be reached from here. Upgrade to use that host remotely, or open it on that machine.`,
+    isMobileApp()
+      ? `Host ${named} is local only on your current plan, so this ${noun} can't be reached from here. ${PLAN_RESTRICTED_MOBILE_REMEDY} Or open it on that machine.`
+      : `Host ${named} is local only on your current plan, so this ${noun} can't be reached from here. Upgrade to use that host remotely, or open it on that machine.`,
   removed: (noun, named) =>
     `Host ${named} was removed from your account, so this ${noun} can't be loaded.`,
   incompatible: (noun, named) =>
     `Host ${named} needs to be updated before this ${noun} can be loaded.`,
 };
+
+/**
+ * How tile copy names a host: its label, quoted, or "the host" when the
+ * directory has not resolved a label, instead of printing a raw uuid at a
+ * person. Shared with the chat tile's pre-content copy, so a chat and every
+ * other tile name one host the same way.
+ */
+export function tileHostName(hostLabel: string | null): string {
+  return hostLabel === null ? "the host" : `"${hostLabel}"`;
+}
+
+/**
+ * The dead-lease sentence on its own, for a surface that decides its own arms
+ * (the chat tile's pre-content presentation) but must word a dead host exactly
+ * as every other tile does.
+ */
+export function tileDeadMessage(
+  dead: HostLeaseDeadState,
+  noun: string,
+  hostLabel: string | null,
+): string {
+  return DEAD_MESSAGE[dead.reason](noun, tileHostName(hostLabel));
+}
 
 /**
  * The sentence for one bounded load state. Asserted directly by the S1-S6
@@ -70,9 +100,7 @@ export function tileHostLoadMessage(
   load: Exclude<BoundedHostLoad, { kind: "ready" }>,
   noun: string,
 ): string {
-  // `null` means the directory has not resolved a label, so the sentence says
-  // "the host" instead of printing a raw uuid at a person.
-  const named = load.hostLabel === null ? "the host" : `"${load.hostLabel}"`;
+  const named = tileHostName(load.hostLabel);
   switch (load.kind) {
     case "connecting":
       return `Waiting for ${named} to start…`;

@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_LEFT_PANEL_ID,
   type LeftPanelId,
+  type LeftPanelGroup,
   type PanelVisibilityOverrideById,
 } from "@/stores/epics/left-panel-store";
 
@@ -144,6 +145,23 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
     },
   ];
 
+const PANEL_DEFINITION_BY_ID = new Map(
+  LEFT_PANEL_DEFINITIONS.map((definition) => [definition.id, definition]),
+);
+
+/**
+ * A panel's label and icon by id, for any surface rendering panels in the
+ * user's own order (the rail, and Layout settings' panel list). Falls back to
+ * the first definition rather than widening every caller to a nullable, since
+ * every `LeftPanelId` has a definition by construction and a persisted id this
+ * build does not know is already dropped when the groups are normalized.
+ */
+export function getLeftPanelDefinition(
+  panelId: LeftPanelId,
+): LeftPanelMetadataDefinition {
+  return PANEL_DEFINITION_BY_ID.get(panelId) ?? LEFT_PANEL_DEFINITIONS[0];
+}
+
 /**
  * The one visibility answer every render path uses: the user's explicit choice
  * if they made one, the panel's own rule otherwise.
@@ -179,4 +197,24 @@ export function resolveActiveVisibleGroupIndex(
   );
   if (defaultIndex >= 0) return defaultIndex;
   return visibleGroupPanelIds.length === 0 ? null : 0;
+}
+
+/** Retain the PR section in the displayed group while its host has no rows yet. */
+export function retainDisplayedPrPanel(
+  groups: ReadonlyArray<LeftPanelGroup>,
+  activePanelId: LeftPanelId,
+  context: LeftPanelAvailabilityContext,
+): LeftPanelAvailabilityContext {
+  const candidateContext = { ...context, hasPullRequests: true };
+  const visibleGroups = groups
+    .map((group) =>
+      group.panelIds.filter((id) =>
+        isLeftPanelVisible(getLeftPanelDefinition(id), candidateContext),
+      ),
+    )
+    .filter((ids) => ids.length > 0);
+  const index = resolveActiveVisibleGroupIndex(visibleGroups, activePanelId);
+  return index !== null && visibleGroups[index].includes("pull-requests")
+    ? candidateContext
+    : context;
 }

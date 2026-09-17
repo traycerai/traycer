@@ -22,6 +22,10 @@ import {
   deriveChatSharingDefaultOn,
 } from "@/lib/chats/chat-sharing-ux";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 const MY_AGENTS_HINT =
   "Collaborators can view and clone your agent chats, but never act in them. Turning this off makes all of your agents on this task private, including future ones. You can override per agent from its row menu.";
@@ -62,7 +66,15 @@ function MyAgentsSharingSectionBody(props: {
   // "future chats only" while the request exposes every existing private
   // chat. A loading, failed, or disabled list therefore keeps the switch
   // inert; `isSuccess` is the only state whose count is evidence.
-  const canArm = cloudChats.isSuccess;
+  // `isSuccess` is also NOT permission: the list's last success is retained
+  // across a demotion to `unverified`, and `epic.setChatSharingDefault` is a
+  // cloud write sent through the session's local-host context, which does
+  // not carry the renderer's verdict. So the switch follows the live verdict
+  // as well, and the confirm re-reads it at dispatch.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canArm = cloudChats.isSuccess && cloudAuthorized;
 
   const confirm = sharingDefaultConfirmCopy(pendingDirection, privateCount);
 
@@ -75,7 +87,8 @@ function MyAgentsSharingSectionBody(props: {
         <div className="flex min-w-0 items-center gap-1.5">
           <Label
             htmlFor="epic-sharing-my-agents-switch"
-            className="truncate text-ui-sm font-normal text-muted-foreground"
+            className="truncate"
+            variant="muted"
           >
             Share my agents
           </Label>
@@ -123,6 +136,11 @@ function MyAgentsSharingSectionBody(props: {
         isPending={sharingInFlight}
         onConfirm={() => {
           if (pendingDirection === null || sharingInFlight) return;
+          // The dialog may have been opened before a demotion.
+          if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+            setPendingDirection(null);
+            return;
+          }
           setSharingDefault.mutate(
             {
               taskId: props.epicId,
@@ -192,15 +210,14 @@ function SharingDefaultConfirmDialog(props: {
       onOpenChange={props.isPending ? undefined : props.onOpenChange}
     >
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
         data-testid="epic-sharing-my-agents-confirm"
       >
         <div className="flex min-w-0 flex-col gap-1.5 p-5">
-          <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-            {props.title}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+          <DialogTitle className="wrap-anywhere">{props.title}</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
             {props.description}
           </DialogDescription>
         </div>

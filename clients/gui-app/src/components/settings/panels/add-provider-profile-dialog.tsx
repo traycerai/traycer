@@ -46,6 +46,10 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
 import { handleSignInLinkCopyError } from "./provider-sign-in-link";
+import {
+  openBrowserLabel,
+  useAutoOpenLoginUrl,
+} from "./use-auto-open-login-url";
 import { waitingStepCopy } from "./waiting-step-copy";
 import {
   useProviderProfileLoginFlow,
@@ -111,6 +115,7 @@ export interface FailedProviderProfileAttempt {
 export function AddProviderProfileDialog({
   state,
   client,
+  isLocalHost,
   open,
   onOpenChange,
   onFailedAttempt,
@@ -118,6 +123,7 @@ export function AddProviderProfileDialog({
 }: {
   readonly state: ProviderCliState;
   readonly client: HostClient<HostRpcRegistry> | null;
+  readonly isLocalHost: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** `null` retracts a previously reported failure: fired when a new attempt
@@ -300,7 +306,8 @@ export function AddProviderProfileDialog({
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent
-        className="max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] gap-0 overflow-y-auto p-0 sm:max-w-none"
+        layout="banded"
+        className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
         showCloseButton={!linking}
         onEscapeKeyDown={(event) => {
           if (dismissalLocked) event.preventDefault();
@@ -309,17 +316,17 @@ export function AddProviderProfileDialog({
           if (dismissalLocked) event.preventDefault();
         }}
       >
-        <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
-          <DialogTitle className="text-ui font-semibold leading-snug">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle>
             Add new {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
           </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
+          <DialogDescription>
             Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
             its color, then link the account it should use.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-5 px-5 pb-5">
+        <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
           <ProviderProfileCard
             profile={null}
             profiles={state.profiles}
@@ -340,6 +347,7 @@ export function AddProviderProfileDialog({
 
           <AddProfileAccountSection
             flowState={flow.state}
+            isLocalHost={isLocalHost}
             startPending={flow.startPending}
             cancelPending={flow.cancelPending}
             cancelDisabled={flow.commitPending}
@@ -363,7 +371,7 @@ export function AddProviderProfileDialog({
         </div>
 
         {flow.state.kind === "start" ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -375,7 +383,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {naming !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -389,7 +397,7 @@ export function AddProviderProfileDialog({
           </DialogFooter>
         ) : null}
         {duplicateProfile !== null ? (
-          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3">
+          <DialogFooter>
             <Button
               type="button"
               size="sm"
@@ -415,6 +423,7 @@ export function AddProviderProfileDialog({
 
 function AddProfileAccountSection({
   flowState,
+  isLocalHost,
   startPending,
   cancelPending,
   cancelDisabled,
@@ -434,6 +443,7 @@ function AddProfileAccountSection({
   onRetryFinalize,
 }: {
   readonly flowState: ProviderProfileLoginFlowState;
+  readonly isLocalHost: boolean;
   readonly startPending: boolean;
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
@@ -482,6 +492,8 @@ function AddProfileAccountSection({
       <div className="border-t border-border/60 pt-4">
         <AddProfileWaitingStep
           loginUrl={flowState.kind === "waiting" ? flowState.url : null}
+          userCode={flowState.kind === "waiting" ? flowState.userCode : null}
+          isLocalHost={isLocalHost}
           queuePending={startPending}
           cancelRequested={
             flowState.kind === "starting" && flowState.cancelRequested
@@ -556,7 +568,7 @@ function DuplicateAccountNotice({
   readonly profile: ProviderProfile;
 }): ReactNode {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-200">
+    <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning-foreground">
       <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0">
         <div className="text-ui-sm font-medium">Account already linked</div>
@@ -637,8 +649,110 @@ function ShareSkillsAndPluginsField({
   );
 }
 
+function WaitingStepDeviceCode(props: {
+  readonly processingCode: boolean;
+  readonly userCode: string | null;
+  readonly copied: boolean;
+  readonly copy: (value: string) => void;
+}): ReactNode {
+  if (props.processingCode || props.userCode === null) return null;
+  const { userCode, copied, copy } = props;
+  return (
+    <div className="flex flex-wrap items-center gap-2 pl-6">
+      <code className="rounded-md border border-border/60 bg-foreground/5 px-2.5 py-1 font-mono text-ui tracking-[0.12em] text-foreground">
+        {userCode}
+      </code>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
+        onClick={() => copy(userCode)}
+      >
+        {copied ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
+      </Button>
+    </div>
+  );
+}
+
+function WaitingStepUrlActions(props: {
+  readonly processingCode: boolean;
+  readonly loginUrl: string | null;
+  readonly autoOpen: boolean;
+  readonly copied: boolean;
+  readonly copy: (value: string) => void;
+  readonly onOpenExternalLink: (url: string) => void;
+}): ReactNode {
+  if (props.processingCode || props.loginUrl === null) return null;
+  const { loginUrl, autoOpen, copied, copy, onOpenExternalLink } = props;
+  return (
+    <div className="flex flex-wrap items-center gap-2 pl-6">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onOpenExternalLink(loginUrl)}
+      >
+        <ExternalLink className="size-3.5" />
+        {openBrowserLabel(autoOpen)}
+      </Button>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
+        onClick={() => copy(loginUrl)}
+      >
+        {copied ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
+      </Button>
+    </div>
+  );
+}
+
+function WaitingStepPasteFallback(props: {
+  readonly waiting: boolean;
+  readonly processingCode: boolean;
+  readonly userCode: string | null;
+  readonly cancelRequested: boolean;
+  readonly codePaste: ProviderProfileLoginFlowCodePaste;
+}): ReactNode {
+  if (!props.waiting || !props.codePaste.enabled || props.userCode !== null) {
+    return null;
+  }
+  return (
+    <div className="border-t border-border/50 pt-3">
+      {props.processingCode ? null : (
+        <div className="mb-2">
+          <p className="text-ui-xs font-medium text-foreground">
+            Didn&apos;t return automatically?
+          </p>
+          <p className="mt-0.5 text-ui-xs text-muted-foreground">
+            If the browser shows a code, paste it here.
+          </p>
+        </div>
+      )}
+      <CodePasteField
+        key={props.codePaste.attemptId}
+        codePaste={props.codePaste}
+        disabled={props.cancelRequested}
+        visibleLabel={false}
+      />
+    </div>
+  );
+}
+
 export function AddProfileWaitingStep({
   loginUrl,
+  userCode,
+  isLocalHost,
   queuePending,
   cancelRequested,
   cancelPending,
@@ -649,6 +763,8 @@ export function AddProfileWaitingStep({
   onCancel,
 }: {
   readonly loginUrl: string | null;
+  readonly userCode: string | null;
+  readonly isLocalHost: boolean;
   readonly queuePending: boolean;
   readonly cancelRequested: boolean;
   readonly cancelPending: boolean;
@@ -663,16 +779,24 @@ export function AddProfileWaitingStep({
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
 }): ReactNode {
+  const autoOpen = useAutoOpenLoginUrl(
+    isLocalHost,
+    userCode,
+    loginUrl,
+    onOpenExternalLink,
+  );
   const { copied, copy } = useClipboardCopy({
     resetMs: COPY_CONFIRMATION_RESET_MS,
     onSuccess: null,
     onError: handleSignInLinkCopyError,
   });
   const processingCode = codePaste.phase !== "idle";
+  const deviceCode = userCode !== null;
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
     queuePending,
     cancelRequested,
+    deviceCode,
   });
 
   return (
@@ -692,53 +816,27 @@ export function AddProfileWaitingStep({
         </div>
       </div>
 
-      {!processingCode && loginUrl !== null ? (
-        <div className="flex flex-wrap items-center gap-2 pl-6">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => onOpenExternalLink(loginUrl)}
-          >
-            <ExternalLink className="size-3.5" />
-            Open browser again
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-            onClick={() => copy(loginUrl)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
-        </div>
-      ) : null}
-
-      {waiting && codePaste.enabled ? (
-        <div className="border-t border-border/50 pt-3">
-          {!processingCode ? (
-            <div className="mb-2">
-              <p className="text-ui-xs font-medium text-foreground">
-                Didn&apos;t return automatically?
-              </p>
-              <p className="mt-0.5 text-ui-xs text-muted-foreground">
-                If the browser shows a code, paste it here.
-              </p>
-            </div>
-          ) : null}
-          <CodePasteField
-            key={codePaste.attemptId}
-            codePaste={codePaste}
-            disabled={cancelRequested}
-            visibleLabel={false}
-          />
-        </div>
-      ) : null}
+      <WaitingStepDeviceCode
+        processingCode={processingCode}
+        userCode={userCode}
+        copied={copied}
+        copy={copy}
+      />
+      <WaitingStepUrlActions
+        processingCode={processingCode}
+        loginUrl={loginUrl}
+        autoOpen={autoOpen}
+        copied={copied}
+        copy={copy}
+        onOpenExternalLink={onOpenExternalLink}
+      />
+      <WaitingStepPasteFallback
+        waiting={waiting}
+        processingCode={processingCode}
+        userCode={userCode}
+        cancelRequested={cancelRequested}
+        codePaste={codePaste}
+      />
 
       <div className="flex justify-end">
         <Button
@@ -800,14 +898,14 @@ export function AddProfileIdentityStep({
             </button>
           ) : null}
           {tier !== null && tier.length > 0 ? (
-            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+            <Badge variant="outline" className="h-5" size="xs">
               {tier}
             </Badge>
           ) : null}
         </div>
       </div>
       {duplicateLabel !== null ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-ui-xs text-amber-900 dark:text-amber-200">
+        <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-ui-xs text-warning-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>This is the same account as {duplicateLabel}.</span>
         </div>
@@ -846,7 +944,7 @@ function AddProfileFailureStep({
             source: "Add profile",
           })}
           presentation="link"
-          className="h-auto p-0 text-current"
+          className={undefined}
         />
       </div>
     </div>

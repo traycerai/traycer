@@ -4,8 +4,10 @@ import {
   clientStreamOpenFrameSchema,
   hostStreamOpenAckFrameSchema,
   clientStreamCredentialUpdateFrameSchema,
+  clientStreamCloudVerdictUpdateFrameSchema,
   clientStreamHostCredentialProvisionFrameSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
+  STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
 } from "@traycer/protocol/framework/stream-ws-protocol";
 
@@ -37,6 +39,79 @@ describe("stream-ws-protocol cross-version compatibility", () => {
         expect("someFutureField" in parsed.data).toBe(false);
       }
     });
+
+    /**
+     * THE WHOLE DESIGN, pinned at the parse boundary: absence and an asserted
+     * `true` are different facts about the peer (a legacy client that has no
+     * unauthorized state to be in, versus a verdict-speaking client that is
+     * currently authorized), and only `.optional()` keeps them apart. A
+     * `.default(true)` here would collapse both into the same parsed value and
+     * make the distinction unrecoverable everywhere downstream.
+     */
+    it("parses an absent cloudAuthorized to undefined, not true - a legacy client has no verdict to default", () => {
+      const parsed = clientStreamOpenFrameSchema.safeParse({
+        kind: "open",
+        token: "bearer",
+        manifest,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.cloudAuthorized).toBeUndefined();
+        expect("cloudAuthorized" in parsed.data).toBe(false);
+      }
+    });
+
+    it("preserves an explicit cloudAuthorized: false - a demoted client's own assertion", () => {
+      const parsed = clientStreamOpenFrameSchema.safeParse({
+        kind: "open",
+        token: "bearer",
+        manifest,
+        cloudAuthorized: false,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.cloudAuthorized).toBe(false);
+      }
+    });
+
+    it("preserves an explicit cloudAuthorized: true", () => {
+      const parsed = clientStreamOpenFrameSchema.safeParse({
+        kind: "open",
+        token: "bearer",
+        manifest,
+        cloudAuthorized: true,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.cloudAuthorized).toBe(true);
+      }
+    });
+  });
+
+  describe("clientStreamCloudVerdictUpdateFrame (client -> host)", () => {
+    it("accepts a valid frame", () => {
+      const parsed = clientStreamCloudVerdictUpdateFrameSchema.safeParse({
+        kind: "cloudVerdictUpdate",
+        cloudAuthorized: false,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.cloudAuthorized).toBe(false);
+      }
+    });
+
+    it("rejects a frame missing cloudAuthorized - the verdict is required here, unlike on open", () => {
+      expect(
+        clientStreamCloudVerdictUpdateFrameSchema.safeParse({
+          kind: "cloudVerdictUpdate",
+        }).success,
+      ).toBe(false);
+    });
+  });
+
+  it("pins the wire value of the cloudVerdictUpdate capability tag", () => {
+    // This string is on the wire; changing it silently breaks negotiation.
+    expect(STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE).toBe("cloudVerdictUpdate");
   });
 
   describe("hostStreamOpenAckFrame (host -> client)", () => {

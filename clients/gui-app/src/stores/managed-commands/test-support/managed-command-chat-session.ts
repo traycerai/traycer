@@ -93,6 +93,7 @@ export function installManagedCommandChatSession(args: {
             sendAction: () => undefined,
             close: () => undefined,
             sameTurnSteeringProtocolSupported: () => true,
+            draftBlobBridgeSupported: () => true,
             requestTranscriptRange: () => undefined,
             requestResnapshot: () => undefined,
           };
@@ -100,6 +101,7 @@ export function installManagedCommandChatSession(args: {
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         onAuthError: null,
         onProviderAuthError: null,
+        wakeTransport: null,
       }),
   );
 
@@ -151,7 +153,7 @@ export function installManagedCommandChatSession(args: {
     },
     setConnectionStatus: (status: StreamConnectionStatus) => {
       const reason: StreamCloseReason | null = null;
-      callbacks().onConnectionStatus(status, reason);
+      callbacks().onConnectionStatus(status, reason, null);
     },
     dispose: () => {
       registry.forceRelease(epicId, chatId, hostId);

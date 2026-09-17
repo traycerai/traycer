@@ -13,10 +13,12 @@ import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
   projectChatClientFrameForVersion,
+  supportsAutoPermissionMode,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   IStreamSession,
   StreamCloseReason,
@@ -141,9 +143,15 @@ export interface ChatStreamCallbacks {
       { readonly kind: "heldUpdatesChanged" }
     >,
   ) => void;
+  /**
+   * `retryCause` is the host's reason for a retryable close, on the
+   * `reconnecting` transition it causes, and `null` otherwise (see
+   * `StatusChangeHandler`).
+   */
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
   ) => void;
 
   // ─── The windowed line (`chat.subscribe@1.8`) ─────────────────────────────
@@ -233,8 +241,8 @@ export class ChatStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause);
     });
   }
 
@@ -282,6 +290,42 @@ export class ChatStreamClient {
     // the exact failure this guard exists to prevent.
     const version = this.session.getNegotiatedSchemaVersion();
     return version !== null && version.major === 1 && version.minor >= 5;
+  }
+
+  /** Whether THIS session's host can materialize hash-only draft images at send. */
+  draftBlobBridgeSupported(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 1 && version.minor >= 12;
+  }
+
+  /**
+   * Whether THIS session's negotiated line can CARRY `permissionMode: "auto"`
+   * on a client frame.
+   *
+   * The same question {@link projectChatClientFrameForVersion} asks one layer
+   * down, asked EARLY so a surface can decline to offer the mode instead of
+   * throwing at the projection cliff once the user has already chosen it. Both
+   * read `supportsAutoPermissionMode`, so the offer and the send can never
+   * disagree about a line.
+   *
+   * **This is the only honest source for that fact, and the obvious substitute
+   * is silently wrong.** `chat.subscribe` is a STREAM method, and the
+   * negotiated-manifest registry behind `useHostMethodSchemaVersion` is fed
+   * from exactly one place - the UNARY connection's `openAck`, whose manifest
+   * the host derives from the unary registry alone. So
+   * `getNegotiatedHostMethodVersion(hostId, "chat.subscribe")` is `null` for
+   * every host that has ever connected, and a gate built on it would read
+   * "cannot carry auto" everywhere, including on hosts that carry it fine.
+   *
+   * It is also per-SESSION and not per-host, for the reason
+   * {@link sameTurnSteeringProtocolSupported} gives: every open chat tab
+   * negotiates its own line, so there is no host-wide answer to read even in
+   * principle.
+   */
+  autoPermissionModeProtocolSupported(): boolean {
+    return supportsAutoPermissionMode(
+      this.session.getNegotiatedSchemaVersion(),
+    );
   }
 
   /**
@@ -588,7 +632,7 @@ export class ChatStreamClient {
       // FULL-SNAPSHOT-LINE ONLY: the deep schemas' compatibility defaults
       // (`imageResolutions: []`, `serviceTier: null`, ...) are what
       // up-convert a down-negotiated host's pre-image messages; the
-      // structural check skips them, so a 1.5 snapshot taken shallow would
+      // structural check skips them, so a 1.6 snapshot taken shallow would
       // hand the GUI assistant messages missing fields it types as present
       // (`imageResolutions.map` throws). Down-negotiated hosts predate
       // full-chat-on-subscribe, so their snapshots are the small ones the

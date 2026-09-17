@@ -13,6 +13,10 @@ import { forwardRef, type ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -30,6 +34,7 @@ import {
   ChatTreeSurfaceContext,
   type ChatTreeSurface,
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
@@ -142,6 +147,14 @@ interface TestState {
         {
           readonly hostId: string;
           readonly profileId: string | null;
+          /**
+           * The session facet (`@1.3`'s `sessionState`/`lastExit`), for the
+           * "Asleep"/"Stopped" sidebar badge. Optional and defaulted to `null`
+           * in the store mock below - every fixture that predates the badge
+           * never sets these, and `null` is the honest "not stated" answer.
+           */
+          readonly sessionState?: AgentSessionState | null;
+          readonly lastExit?: AgentSessionLastExit | null;
         }
       >
     >
@@ -377,6 +390,9 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
+    // The host that ANSWERED - the query files its rows under this origin, so
+    // an omitted field (undefined, not null) would scope them to no host.
+    hostId: "host-1",
   }),
 }));
 
@@ -590,11 +606,17 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
     // decides: a hard-coded `true` here would hide the difference between "this
     // query will never run" and "its answer has not arrived yet", which is the
     // one distinction the panel's empty state depends on.
-    isCloudChatListSettled: (query: {
-      readonly isEnabled: boolean;
-      readonly isSuccess: boolean;
-      readonly isError: boolean;
-    }) => !query.isEnabled || query.isSuccess || query.isError,
+    isCloudChatListSettled: (
+      query: {
+        readonly isEnabled: boolean;
+        readonly isSuccess: boolean;
+        readonly isError: boolean;
+      },
+      cloudAuthorized: boolean,
+    ) => {
+      if (!cloudAuthorized) return false;
+      return !query.isEnabled || query.isSuccess || query.isError;
+    },
   };
 });
 
@@ -880,6 +902,18 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => testState.activeAgentIds,
   useEpicAgentRoleClaims: () => [],
+  // The row's session facet, sourced from the same `tuiAgentById` fixture the
+  // `useEpicStore` mock builds `tuiAgents.byId` from - one source, so the
+  // badge (this selector) and the row's aria-label (which reads the same
+  // facet through `useEpicStore`, per the production comment on that read)
+  // cannot disagree in a fixture.
+  useEpicAgentSessionFacet: (nodeId: string) => {
+    const agent = testState.tuiAgentById[nodeId];
+    return {
+      sessionState: agent?.sessionState ?? null,
+      lastExit: agent?.lastExit ?? null,
+    };
+  },
   // Awareness reports a tier per working agent. An agent whose host did not
   // classify it reads as "turn", so tests that only set `activeAgentIds` keep
   // their pre-tier behaviour.
@@ -911,6 +945,14 @@ vi.mock("@/lib/epic-selectors", () => ({
     };
   },
   useEpicArchivedNodeIds: () => testState.archivedIds,
+  // The sidebar's archive-hidden and chat-order hooks read the tree and the
+  // archived ids through the PROVIDER-OPTIONAL selectors, so the picker can
+  // also resolve on the Start Page where there is no epic session. A
+  // whole-module mock has to answer those forms too, with the same test state
+  // as their strict twins below - a fake that disagreed would make the panel
+  // and the picker read different trees.
+  useMaybeEpicArchivedNodeIds: () => testState.archivedIds,
+  useMaybeEpicTreeIndex: () => testState.tree,
   useEpicArtifactRecords: () => testState.records,
   // Dedup input for the cloud-chat section. Empty: this suite is about the
   // LOCAL tree, and the section hides itself when the cloud list has nothing
@@ -947,58 +989,78 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRootIds: () => testState.tree.rootIds,
 }));
 
+function fakeEpicStoreState() {
+  const tuiAgentEntries = Object.entries(testState.tuiAgentById).flatMap(
+    ([id, agent]) => {
+      if (agent === undefined) return [];
+      return [
+        [
+          id,
+          {
+            id,
+            hostId: agent.hostId,
+            profileId: agent.profileId,
+            sessionState: agent.sessionState ?? null,
+            lastExit: agent.lastExit ?? null,
+          },
+        ] as const,
+      ];
+    },
+  );
+  const chatRecords = testState.records.filter(
+    (record) => record.type === "chat",
+  );
+  return {
+    snapshotLoaded: testState.snapshotLoaded,
+    // The list's sort-clock override reads the record heads, which these
+    // fixtures still publish none of, so the override stays empty and every
+    // row sorts by the stamp on its node; `chats` itself is populated below
+    // so the real `useEpicNodeHostIds`/`useSurfaceHostPin` selector can see
+    // this task's GUI hosts alongside `tuiAgents`' TUI ones.
+    chatRecordHeads: {},
+    chats: {
+      allIds: chatRecords.map((record) => record.id),
+      byId: Object.fromEntries(
+        chatRecords.map((record) => [record.id, { hostId: record.hostId }]),
+      ),
+    },
+    // The tree index, because the row-level tree reads subscribe HERE now
+    // rather than through `useEpicTreeIndex`. A row that used to take the
+    // whole slice re-rendered on every record change; it now selects its own
+    // answer out of the store, so this fake has to carry what production
+    // reads. Same object the `epic-selectors` fake hands back, so the two
+    // mocks cannot disagree about the shape of the tree.
+    tree: testState.tree,
+    artifacts: {
+      allIds: testState.records
+        .filter((record) => record.type !== "chat")
+        .filter((record) => record.type !== "terminal-agent")
+        .map((record) => record.id),
+      byId: Object.fromEntries(
+        testState.records.map((record) => [
+          record.id,
+          {
+            id: record.id,
+            kind: record.type,
+            status: record.status,
+            title: record.name,
+            updatedAt: 1,
+          },
+        ]),
+      ),
+    },
+    tuiAgents: {
+      allIds: tuiAgentEntries.map(([id]) => id),
+      byId: Object.fromEntries(tuiAgentEntries),
+    },
+  };
+}
+
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      snapshotLoaded: testState.snapshotLoaded,
-      // The list's sort-clock override reads the record heads and the chat
-      // projection; these fixtures publish no heads, so the override is
-      // empty and every row sorts by the stamp on its node.
-      chatRecordHeads: {},
-      chats: { byId: {}, allIds: [] },
-      // The tree index, because the row-level tree reads subscribe HERE now
-      // rather than through `useEpicTreeIndex`. A row that used to take the
-      // whole slice re-rendered on every record change; it now selects its own
-      // answer out of the store, so this fake has to carry what production
-      // reads. Same object the `epic-selectors` fake hands back, so the two
-      // mocks cannot disagree about the shape of the tree.
-      tree: testState.tree,
-      artifacts: {
-        allIds: testState.records
-          .filter((record) => record.type !== "chat")
-          .filter((record) => record.type !== "terminal-agent")
-          .map((record) => record.id),
-        byId: Object.fromEntries(
-          testState.records.map((record) => [
-            record.id,
-            {
-              id: record.id,
-              kind: record.type,
-              status: record.status,
-              title: record.name,
-              updatedAt: 1,
-            },
-          ]),
-        ),
-      },
-      tuiAgents: {
-        byId: Object.fromEntries(
-          Object.entries(testState.tuiAgentById).flatMap(([id, agent]) => {
-            if (agent === undefined) return [];
-            return [
-              [
-                id,
-                {
-                  id,
-                  hostId: agent.hostId,
-                  profileId: agent.profileId,
-                },
-              ],
-            ];
-          }),
-        ),
-      },
-    }),
+    selector(fakeEpicStoreState()),
+  useMaybeEpicStore: (selector: (state: unknown) => unknown) =>
+    selector(fakeEpicStoreState()),
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -1085,6 +1147,10 @@ vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
       "terminal-agent": undefined,
     },
     tilePlacement: actual.DEFAULT_TILE_PLACEMENT_SETTINGS,
+    // The chat tree reads this to decide whether a row carries a resource
+    // chip at all. The mock is a hand-built state, so a key the tree starts
+    // reading has to be added here or every row throws on it.
+    navigatorResourceMetrics: actual.DEFAULT_NAVIGATOR_RESOURCE_METRICS,
   };
   return {
     ...actual,
@@ -1136,8 +1202,21 @@ function clearLocalChatFailure(chatId: string): void {
     );
 }
 
+// `isCloudChatListSettled` / `cloudChatListAuthorizesRecordSweep` now take the
+// cloud-capability verdict as a required argument, read here off the REAL
+// `useAuthStore` (only `useCloudChatList` itself is stubbed above). The store
+// defaults to `signed-out`, under which every "settled" assertion in this
+// file would fail closed vacuously - stage `signed-in` for the whole file,
+// module-scope, so every describe block below gets it without its own copy.
+beforeEach(() => {
+  useAuthStore.setState({ status: "signed-in" });
+});
+
 afterEach(() => {
   useAppLocalNotificationsStore.getState().resetForTests();
+  // Zustand stores are module scope, so a status staged here outlives this
+  // file inside the same worker.
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 describe("epic sidebar selection mode", () => {
@@ -2344,9 +2423,9 @@ describe("epic sidebar selection mode", () => {
     expect(row.contains(marker)).toBe(true);
     expect(marker.className).not.toContain("absolute");
     expect(marker.getAttribute("data-unread-marker")).toBe("self");
-    // Solid bar (exact token, not the muted `bg-blue-500/50` descendant class)
+    // Solid bar (exact token, not the muted `bg-info/50` descendant class)
     // for the artifact's own unread state.
-    expect(marker.classList.contains("bg-blue-500")).toBe(true);
+    expect(marker.classList.contains("bg-info")).toBe(true);
     // An expanded, read parent shows no marker (its child carries its own bar).
     expect(screen.queryByTestId("epic-sidebar-unread-spec-root")).toBeNull();
   });
@@ -2366,7 +2445,7 @@ describe("epic sidebar selection mode", () => {
     ).toBe(true);
     expect(marker.getAttribute("data-unread-marker")).toBe("descendant");
     // A muted (not full-opacity) bar distinguishes "contains unread" from "is unread".
-    expect(marker.className).toContain("bg-blue-500/50");
+    expect(marker.className).toContain("bg-info/50");
   });
 
   it("hides the descendant marker once the parent is expanded", () => {
@@ -3319,10 +3398,12 @@ function createSessionHandle(chatId: string): ChatSessionStoreHandle {
     userId: null,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => false,
+      draftBlobBridgeSupported: () => false,
       requestTranscriptRange: () => undefined,
       requestResnapshot: () => undefined,
       close: () => undefined,
@@ -3812,6 +3893,207 @@ describe("sidebar leading identity icon", () => {
     // Identity-only icons carry no status role to announce in the first place.
     const harnessSlot = screen.getByTestId("sidebar-agent-harness-agent-root");
     expect(harnessSlot.getAttribute("role")).toBeNull();
+  });
+});
+
+describe("terminal-agent row session-state badge", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.tuiHarnessIds = {};
+    testState.tuiAgentById = {};
+    // The archive knobs too, because this block is OUTSIDE the top describe
+    // whose `beforeEach` resets them - the archived-row case below sets both,
+    // and a leaked "all" visibility makes the `chat row archive` block's
+    // hidden-subtree assertions find rows that should not be on screen.
+    testState.archivedIds = [];
+    testState.archiveVisibility = "unarchived";
+  });
+
+  it('renders "Asleep" for a sleeping agent, with the process-exit sentence only for that reason', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "sleeping",
+        lastExit: "process-exit",
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Asleep");
+    expect(badge.getAttribute("data-session-state")).toBe("sleeping");
+    // Focus, not hover: Radix honours it immediately, where pointer-enter
+    // sits behind the provider's open delay. `getAllByRole` and a filter,
+    // rather than `getByRole`, because the focus event bubbles to the row's
+    // own ancestor tooltip triggers (e.g. the offline lock) as well.
+    fireEvent.focus(badge);
+    const tooltips = screen.getAllByRole("tooltip").map((el) => el.textContent);
+    expect(tooltips).toContain(
+      "Sleeping. Resumes on the next message or when you open it. Last run exited on its own.",
+    );
+
+    // And the channel a keyboard user actually has. The assertion above proves
+    // the tooltip's CONTENT, not its reachability: the trigger is a decorative
+    // `span`, so `fireEvent.focus` works here and a real Tab key would never
+    // land on it - and the row button's explicit `aria-label` replaces its
+    // subtree anyway, so nothing on the badge is announced either.
+    //
+    // The row's own name is therefore the only place the guidance can reach
+    // assistive tech, and "asleep" alone would state a condition without
+    // saying it is recoverable - the exact misreading this change exists to
+    // stop. Asserted as a SUBSTRING of the row name rather than by re-stating
+    // the whole label, so an unrelated suffix (archived, shared, an offline
+    // lock) does not make this case red for the wrong reason.
+    // Reached from the badge rather than by name, so it is provably the SAME
+    // row this case seeded rather than whichever row happens to match.
+    const sleepingRow = badge.closest("button[aria-label]");
+    expect(sleepingRow?.getAttribute("aria-label")).toContain(
+      "asleep, resumes on the next message or when you open it",
+    );
+
+    // The other three reasons resume identically and are deliberately not
+    // spelled out - only `process-exit` contradicts what a reader would
+    // otherwise assume.
+    for (const lastExit of ["reaped", "user-stop", "restart"] as const) {
+      cleanup();
+      testState.tuiAgentById = {
+        "agent-root": {
+          hostId: "host-1",
+          profileId: null,
+          sessionState: "sleeping",
+          lastExit,
+        },
+      };
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+      const rowBadge = screen.getByTestId("chat-row-session-state-agent-root");
+      expect(rowBadge.textContent).toBe("Asleep");
+      fireEvent.focus(rowBadge);
+      expect(
+        screen.getAllByRole("tooltip").map((el) => el.textContent),
+      ).toContain("Sleeping. Resumes on the next message or when you open it.");
+    }
+  });
+
+  it("keeps the session state visible AND spoken in selection mode", () => {
+    // Selection mode takes its own early return and rebuilds the row, so the
+    // badge is not inherited - it has to be rendered there too. This is also
+    // the moment the state matters most: bulk-selecting is where a reader
+    // decides what to act on, and asleep-versus-stopped changes that decision.
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "sleeping",
+        lastExit: "reaped",
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+
+    expect(
+      screen.getByTestId("chat-row-session-state-agent-root").textContent,
+    ).toBe("Asleep");
+
+    // And spoken: the checkbox is the only NAMED control on a selection row -
+    // the row is a `<label>` with no name of its own - so its label is the
+    // whole of what a screen reader gets. A visible badge beside an unchanged
+    // "Select X" would be the same visible-but-unspoken split the row button
+    // already has to close.
+    expect(
+      screen
+        .getByTestId("epic-sidebar-select-agent-root")
+        .getAttribute("aria-label"),
+    ).toBe("Select Terminal agent, asleep");
+  });
+
+  it('renders "Stopped" for an agent whose record is over', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Stopped");
+    expect(badge.getAttribute("data-session-state")).toBe("stopped");
+  });
+
+  it('says "Stopped" once, not twice, on a row that already reads Archived', () => {
+    seedChatTree();
+    // The only way a row normally reaches `stopped`: the archive mutation
+    // writes it, and a delete tombstones the row before anything could. So
+    // this pairing is the COMMON case for the badge, not an edge one - and
+    // "Archived · Stopped" would be the same fact said twice.
+    testState.archivedIds = ["agent-root"];
+    testState.archiveVisibility = "all";
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // The prefix still renders - suppressing the badge must not cost the row
+    // the state it does still need to show.
+    expect(
+      screen.getAllByTestId("chat-row-archived-label").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+    // And the same suppression in the ACCESSIBLE NAME, which replaces the
+    // row's subtree: a badge hidden visually while the name still said both
+    // would leave the repeat only for the reader who cannot see the row.
+    const rowName =
+      screen
+        .getByTestId("epic-sidebar-item-agent-root")
+        .getAttribute("aria-label") ?? "";
+    expect(rowName).toContain("archived");
+    expect(rowName).not.toContain("stopped");
+  });
+
+  it("renders NO badge for `null` (unknown) or `running` - the same row as before the facet shipped", () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: null, sessionState: null },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+
+    cleanup();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "running",
+      },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
   });
 });
 

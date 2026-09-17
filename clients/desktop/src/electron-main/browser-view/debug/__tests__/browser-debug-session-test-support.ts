@@ -1,6 +1,5 @@
 import { EventEmitter } from "node:events";
 import { BrowserDebugSession } from "../browser-debug-session";
-import type { PipCaptureIpcPayload } from "../../../../ipc-contracts/pip-capture-types";
 import type {
   BrowserViewCapturedImage,
   BrowserViewDebugger,
@@ -58,7 +57,11 @@ export class FakeDebugger implements BrowserViewDebugger {
   }
 
   detach(): void {
+    // Electron's `Debugger::Detach()` emits `detach` ("target closed") for the
+    // detaches we ask for too, so the listener-ordering invariant is only real
+    // if the fake does the same.
     this.attached = false;
+    this.events.emit("detach", {}, "target closed");
   }
 
   deferResponse(method: string, sessionId: string | undefined): void {
@@ -175,7 +178,13 @@ export class FakeWebContents
   implements BrowserViewWebContents
 {
   readonly id = 1;
-  readonly debugger = new FakeDebugger();
+  private readonly debuggerImpl = new FakeDebugger();
+  /** Electron's native getter throws once the WebContents is destroyed. */
+  get debugger(): FakeDebugger {
+    if (this.destroyed) throw new Error("Object has been destroyed");
+    return this.debuggerImpl;
+  }
+  destroyed = false;
   readonly session = {
     cookies: {
       get: () => Promise.resolve([]),
@@ -229,7 +238,7 @@ export class FakeWebContents
   }
 
   isDestroyed(): boolean {
-    return false;
+    return this.destroyed;
   }
 
   close(): void {}
@@ -264,15 +273,18 @@ export class FakeWebContents
 export interface BrowserDebugSessionHarness {
   readonly session: BrowserDebugSession;
   readonly webContents: FakeWebContents;
-  readonly frames: PipCaptureIpcPayload[];
+  /** Every detach the session reported as one it did not ask for. */
+  readonly detachReports: string[];
 }
 
 export function createHarness(): BrowserDebugSessionHarness {
   const webContents = new FakeWebContents();
-  const frames: PipCaptureIpcPayload[] = [];
+  const detachReports: string[] = [];
   const session = new BrowserDebugSession({
     webContents,
-    onDetached: () => undefined,
+    onDetached: (reason) => {
+      detachReports.push(reason);
+    },
   });
-  return { session, webContents, frames };
+  return { session, webContents, detachReports };
 }

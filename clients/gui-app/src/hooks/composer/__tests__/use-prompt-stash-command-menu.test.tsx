@@ -164,6 +164,7 @@ describe("usePromptStash command/menu state", () => {
         {
           kind: "entry",
           entry: {
+            annotations: [],
             id: "existing-entry",
             createdAt: 1,
             content: textDoc("already stashed"),
@@ -337,6 +338,7 @@ describe("usePromptStash command/menu state", () => {
         {
           kind: "entry",
           entry: {
+            annotations: [],
             id: "existing-entry",
             createdAt: 1,
             content: textDoc("already stashed"),
@@ -369,6 +371,7 @@ describe("usePromptStash command/menu state", () => {
   });
   it("supports explicit delete from the popover without restoring", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-delete",
       createdAt: 1,
       content: textDoc("bye"),
@@ -412,6 +415,7 @@ describe("usePromptStash command/menu state", () => {
     let ok = true;
     await act(async () => {
       ok = await result.current.restore({
+        annotations: [],
         id: "x",
         createdAt: 1,
         content: textDoc("nope"),
@@ -423,6 +427,7 @@ describe("usePromptStash command/menu state", () => {
   });
   it("returns false without import when captureIdentity is null", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "entry-no-dest",
       createdAt: 1,
       content: textDoc("nowhere"),

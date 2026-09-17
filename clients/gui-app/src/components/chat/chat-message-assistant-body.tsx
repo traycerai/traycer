@@ -1,5 +1,6 @@
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
+import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import {
   WorkingVerbContext,
   pickWorkingVerb,
@@ -22,6 +23,10 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { formatClockDuration } from "@/lib/format-duration";
+import {
+  formatMessageTimeWithSeconds,
+  useSampledNow,
+} from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { ChatMessageForkAction } from "./chat-message";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
@@ -38,6 +43,7 @@ import { InterviewSegment } from "./segments/interview-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import { PlanSegment } from "./segments/plan-segment";
 import { ProviderNoticeSegment } from "./segments/provider-notice-segment";
+import { FallbackWaitResumedMarker } from "@/components/chat/fallback/fallback-notice-attribution";
 import { ReasoningSegment } from "./segments/reasoning-segment";
 import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
@@ -100,6 +106,26 @@ interface AssistantBodyProps {
    * predate the persisted run-metadata fields.
    */
   meta: AssistantTurnMeta | null;
+  /**
+   * The host turn this row is. Null on user rows, synthesized event rows, and
+   * records persisted before `turnId` existed - all of which correctly match
+   * no host-named attempt and therefore offer no manual rungs.
+   */
+  turnId: string | null;
+  /**
+   * The error segment on THIS row that carries the manual recovery actions, or
+   * `null` when the row carries none - resolved once per turn at projection
+   * time (see `manualRungAnchorSegmentId`) and read here rather than
+   * recomputed.
+   *
+   * It is not derivable from this component's own inputs, which is why it is a
+   * prop: a steered turn splits into several rows that share one `turnId`, and
+   * this row sees only its own slice. A walk over that slice answers "which
+   * block of this FRAGMENT describes the failure", and on a turn whose failure
+   * straddles a steer both fragments answer confidently - two recovery groups
+   * for one failed attempt.
+   */
+  manualRungAnchorId: string | null;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
@@ -118,6 +144,8 @@ export function AssistantMessageBody({
   completedAt,
   stopped,
   meta,
+  turnId,
+  manualRungAnchorId,
   nextStepActions,
   forkAction,
   interviewDeliveryRetry,
@@ -195,42 +223,68 @@ export function AssistantMessageBody({
         }
         if (item.kind === "promoted_subagent") {
           return (
-            <SubagentSegment
-              key={item.id}
-              id={item.id}
-              name={item.segment.name}
-              agentType={item.segment.agentType}
-              task={item.segment.task}
-              progressUpdates={item.segment.progressUpdates}
-              result={item.segment.result}
-              isStreaming={item.segment.isStreaming}
-              endState={item.segment.endState}
-              stopped={item.segment.stopped}
-              startedAt={item.segment.startedAt}
-              durationMs={item.segment.durationMs}
-              workflowMeta={item.segment.workflowMeta}
-              nested={item.segment.children}
-              variant="promoted"
-            />
+            <ChatBlockNavigationAnchor key={item.id} blockId={item.segment.id}>
+              <SubagentSegment
+                id={item.id}
+                name={item.segment.name}
+                agentType={item.segment.agentType}
+                task={item.segment.task}
+                progressUpdates={item.segment.progressUpdates}
+                result={item.segment.result}
+                isStreaming={item.segment.isStreaming}
+                endState={item.segment.endState}
+                stopped={item.segment.stopped}
+                startedAt={item.segment.startedAt}
+                durationMs={item.segment.durationMs}
+                workflowMeta={item.segment.workflowMeta}
+                nested={item.segment.children}
+                variant="promoted"
+              />
+            </ChatBlockNavigationAnchor>
           );
         }
         return (
-          <AssistantSegment
-            key={item.id}
-            id={item.id}
-            segment={item.segment}
-            backgroundToolBlockIds={backgroundToolBlockIds}
-            nextStepActions={nextStepActions}
-            forkAction={forkAction}
-            interviewDeliveryRetry={interviewDeliveryRetry}
-            // The turn's OWN harness, for an error row that offers to open that
-            // provider's settings. Taken from the row rather than from ambient
-            // app state so the link points at the provider that actually failed,
-            // even when the transcript is scrolled back to a turn from a harness
-            // the chat has since switched away from. `null` on legacy turns with
-            // no metadata; the affordance then falls back to the section root.
-            harnessId={meta?.provider ?? null}
-          />
+          <ChatBlockNavigationAnchor key={item.id} blockId={item.id}>
+            <AssistantSegment
+              id={item.id}
+              segment={item.segment}
+              backgroundToolBlockIds={backgroundToolBlockIds}
+              nextStepActions={nextStepActions}
+              forkAction={forkAction}
+              interviewDeliveryRetry={interviewDeliveryRetry}
+              // The turn's OWN harness, for an error row that offers to open that
+              // provider's settings. Taken from the row rather than from ambient
+              // app state so the link points at the provider that actually failed,
+              // even when the transcript is scrolled back to a turn from a harness
+              // the chat has since switched away from. `null` on legacy turns with
+              // no metadata; the affordance then falls back to the section root.
+              harnessId={meta?.provider ?? null}
+              // ONE segment, not every error row on the turn, and not one per
+              // row of a split turn. A failed turn routinely carries several
+              // error blocks that all share this `turnId` - the queue-pause
+              // notice the host appends beside the failure, a non-terminal
+              // extension error before the real terminal - and handing the id to
+              // each of them rendered a full recovery group under each,
+              // including under "Resume the queue to send them", where Retry
+              // retried the failed prompt instead.
+              //
+              // The anchor names the segment that describes the failed ATTEMPT.
+              // It is resolved over the WHOLE turn, but not before the split -
+              // `planAssistantTurnRows` splits first and the rows are built, then
+              // `withManualRungAnchor` runs LAST and rebuilds the ordered
+              // whole-turn segment list from those finished rows
+              // (`assistantTurnSegments`). Whole-turn is a claim about the INPUT
+              // to the walk, not about its position in the pipeline. Either way a
+              // turn rendered as several rows still names exactly one. On every
+              // other row `manualRungAnchorId` is null and nothing here matches
+              // - the same answer a row with no turn identity already gets.
+              turnId={
+                manualRungAnchorId !== null && item.id === manualRungAnchorId
+                  ? turnId
+                  : null
+              }
+            />
+          </ChatBlockNavigationAnchor>
         );
       })}
       {/* Trailing indicator keeps the in-progress cue visible for the whole
@@ -361,9 +415,13 @@ function AssistantElapsedFooter({
   silentAutonomousResume: boolean;
 }) {
   if (completedAt === null) return null;
-  // Wind-down time counts toward the elapsed duration - a Stop doesn't get a
-  // separate truncated-at-click timer, it uses the same
-  // `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
+  // One rule for both endings: a Stop gets no separate truncated-at-click
+  // timer, it uses the same `completedAt - createdAt - pausedDurationMs` as a
+  // natural finish. It still READS as truncated at the click, because the
+  // projection resolves a stopped turn's `completedAt` to the stop instant
+  // itself - `assistantTurnTiming` takes `stoppedAt ?? persistedCompletedAt`,
+  // and its one call site always passes `stoppedAt` when the row is stopped.
+  // So the stop's wind-down is excluded by the DATA, not by a second formula.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
   const nonStoppedElapsedLabel = silentAutonomousResume
@@ -382,43 +440,43 @@ function AssistantElapsedFooter({
       )}
     </>
   );
-  // Hovering the whole footer reveals the agent run details (provider, model,
-  // reasoning effort, fast mode) - no separate info icon, so the row stays
-  // clean. `w-fit` keeps the hover target tight to the text.
-  const elapsed =
-    meta === null && stopped === null ? (
-      <div
-        data-testid="assistant-elapsed-footer"
-        className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
-      >
-        {elapsedContent}
-      </div>
-    ) : (
-      <button
-        type="button"
-        data-testid="assistant-elapsed-footer"
-        className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
-      >
-        {elapsedContent}
-      </button>
-    );
-  // The meta tooltip wraps only the elapsed text, not the copy button, so the
-  // copy hit-target stays its own affordance rather than re-triggering the
-  // agent-details popover. Shown whenever there's either agent metadata or
-  // stop detail to surface.
-  const elapsedWithTooltip =
-    meta === null && stopped === null ? (
-      elapsed
-    ) : (
-      <TooltipWrapper
-        label={<AssistantMetaTooltip meta={meta} stopped={stopped} />}
-        side="top"
-        align="start"
-        sideOffset={6}
-      >
-        {elapsed}
-      </TooltipWrapper>
-    );
+  // Hovering the whole footer reveals the turn's details (provider, model,
+  // reasoning effort, fast mode, and when it ran) - no separate info icon, so
+  // the row stays clean. `w-fit` keeps the hover target tight to the text.
+  //
+  // Always a button, never a bare div: every completed turn now has timing to
+  // disclose, so there is no such thing as a footer with nothing behind it,
+  // and the button is what puts the card on the keyboard path as well as the
+  // pointer's.
+  const elapsed = (
+    <button
+      type="button"
+      data-testid="assistant-elapsed-footer"
+      className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
+    >
+      {elapsedContent}
+    </button>
+  );
+  // The tooltip wraps only the elapsed text, not the copy button, so the copy
+  // hit-target stays its own affordance rather than re-triggering the details
+  // card.
+  const elapsedWithTooltip = (
+    <TooltipWrapper
+      label={
+        <AssistantMetaTooltip
+          meta={meta}
+          stopped={stopped}
+          startedAt={createdAt}
+          completedAt={completedAt}
+        />
+      }
+      side="top"
+      align="start"
+      sideOffset={6}
+    >
+      {elapsed}
+    </TooltipWrapper>
+  );
   return (
     <div className="flex items-center gap-1">
       {elapsedWithTooltip}
@@ -499,19 +557,41 @@ function AssistantForkButton({
 }
 
 /**
- * Hover content for the elapsed-footer info icon: provider, profile, model,
- * reasoning effort, and fast mode (only when enabled), plus - for a
- * user-stopped turn - the stop time and reason from the `turn.stopped` event.
- * Mirrors the context-usage chip's label/value row layout so the two tooltips
- * read consistently. Either section is optional; `AssistantElapsedFooter`
- * only renders this tooltip at all when at least one is present.
+ * Hover content for the elapsed footer: provider, profile, model, reasoning
+ * effort, and fast mode (only when enabled); then when the turn ran and when
+ * it finished; then - for a user-stopped turn - the stop time and reason from
+ * the `turn.stopped` event. Mirrors the context-usage chip's label/value row
+ * layout so the two tooltips read consistently.
+ *
+ * Timing answers what the visible footer deliberately does not: the footer
+ * states a DURATION, and a single clock time next to a duration cannot say
+ * which end of it it names. Two labelled rows can, and they also cover the
+ * turns whose start no user row records - a queued message, an autonomous
+ * wakeup, an agent-to-agent send. Every completed footer has it, which is why
+ * the footer no longer has an un-hoverable variant.
+ *
+ * A stopped turn's end row is `Stopped at`, REPLACING `Finished` rather than
+ * joining it. The projection resolves a stopped turn's `completedAt` to the
+ * stop instant itself (`assistantTurnTiming`'s `stoppedAt ?? persisted`), so
+ * rendering both would print one instant twice under two labels and invite
+ * the reader to look for a difference that is not there.
+ *
+ * `startedAt` is `null` for a row whose `createdAt` is a synthetic sort
+ * anchor rather than a real instant - the pre-turn pending indicator, whose
+ * anchor is "newest row + 1ms" and is epoch+1 on an empty transcript. Such a
+ * row states no time at all: a live turn already shows an elapsed counter,
+ * and a wrong start is worse than no start.
  */
 function AssistantMetaTooltip({
   meta,
   stopped,
+  startedAt,
+  completedAt,
 }: {
   meta: AssistantTurnMeta | null;
   stopped: ChatMessageStoppedInfo | null;
+  startedAt: number | null;
+  completedAt: number | null;
 }) {
   const reasoning = meta?.reasoningEffortLabel ?? null;
   const fastModeEnabled = meta !== null && isFastModeEnabled(meta.serviceTier);
@@ -552,40 +632,20 @@ function AssistantMetaTooltip({
           ) : null}
         </>
       )}
-      {stopped === null ? null : (
-        <>
-          <div
-            className={cn(
-              "font-medium",
-              meta !== null && "border-t border-background/20 pt-1.5",
-            )}
-          >
-            Stopped
-          </div>
-          <AssistantMetaRow
-            label="Time"
-            value={formatStoppedAt(stopped.stoppedAt)}
-          />
-          {stopped.reason === null ? null : (
-            <AssistantMetaRow label="Reason" value={stopped.reason} />
-          )}
-        </>
+      {startedAt === null ? null : (
+        <AssistantTimingSection
+          startedAt={startedAt}
+          completedAt={completedAt}
+          stopped={stopped}
+          dividerAbove={meta !== null}
+        />
       )}
+      <AssistantStoppedSection
+        stopped={stopped}
+        dividerAbove={meta !== null || startedAt !== null}
+      />
     </div>
   );
-}
-
-/**
- * Absolute clock time for the stop-detail tooltip row (e.g. "3:45 PM"). A
- * user Stop is a here-and-now action the user just took, so the exact time of
- * day is more useful than a relative/elapsed label - unlike `formatWorkedFor`,
- * which measures the turn's duration, not when it ended.
- */
-function formatStoppedAt(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 /**
@@ -628,6 +688,95 @@ function assistantProfileMetaValue(meta: AssistantTurnMeta): string {
     return `env: ${meta.envCredentialVar} (sign-in bypassed)`;
   }
   return `${meta.profileLabel} (bypassed — env: ${meta.envCredentialVar})`;
+}
+
+/**
+ * How a turn ENDED, named for the way it ended rather than for the slot it
+ * occupies. A stopped turn's end is the stop itself: the projection resolves
+ * its `completedAt` to the stop instant, so "Finished" and "Stopped at" would
+ * be one time printed twice. `null` is a turn with no end yet.
+ */
+function assistantTurnEndRow(
+  stopped: ChatMessageStoppedInfo | null,
+  completedAt: number | null,
+): { readonly label: string; readonly at: number } | null {
+  if (stopped !== null) return { label: "Stopped at", at: stopped.stoppedAt };
+  if (completedAt === null) return null;
+  return { label: "Finished", at: completedAt };
+}
+
+/**
+ * The card's Timing section. Its own component so the shared clock is
+ * subscribed only where a time is actually rendered - a card with no timing
+ * to show (the pre-turn indicator) reads no clock at all. Radix keeps tooltip
+ * content unmounted at rest, so even then it is the hovered row subscribing,
+ * never every finished turn in the transcript.
+ */
+function AssistantTimingSection({
+  startedAt,
+  completedAt,
+  stopped,
+  dividerAbove,
+}: {
+  startedAt: number;
+  completedAt: number | null;
+  stopped: ChatMessageStoppedInfo | null;
+  dividerAbove: boolean;
+}) {
+  const now = useSampledNow();
+  const end = assistantTurnEndRow(stopped, completedAt);
+  return (
+    <>
+      <div
+        className={cn(
+          "font-medium",
+          dividerAbove && "border-t border-background/20 pt-1.5",
+        )}
+      >
+        Timing
+      </div>
+      <AssistantMetaRow
+        label="Started"
+        value={formatMessageTimeWithSeconds(startedAt, now)}
+      />
+      {end === null ? null : (
+        <AssistantMetaRow
+          label={end.label}
+          value={formatMessageTimeWithSeconds(end.at, now)}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * The stop's own section, which survives only to carry the reason - not a
+ * timing fact, and with nowhere else to go. With no reason recorded there is
+ * nothing to put here at all: `Stopped at` in the Timing section above
+ * already says everything the stop knows, and a bare header would announce a
+ * section with no rows.
+ */
+function AssistantStoppedSection({
+  stopped,
+  dividerAbove,
+}: {
+  stopped: ChatMessageStoppedInfo | null;
+  dividerAbove: boolean;
+}) {
+  if (stopped === null || stopped.reason === null) return null;
+  return (
+    <>
+      <div
+        className={cn(
+          "font-medium",
+          dividerAbove && "border-t border-background/20 pt-1.5",
+        )}
+      >
+        Stopped
+      </div>
+      <AssistantMetaRow label="Reason" value={stopped.reason} />
+    </>
+  );
 }
 
 function AssistantMetaRow({ label, value }: { label: string; value: string }) {
@@ -757,7 +906,18 @@ function AssistantRunIndicator({
   if (meta === null) return indicator;
   return (
     <TooltipWrapper
-      label={<AssistantMetaTooltip meta={meta} stopped={null} />}
+      label={
+        // No Timing on the pre-turn indicator: this row's `createdAt` is a
+        // synthetic list anchor ("newest row + 1ms"), not an instant the turn
+        // actually started at, and the live counter beside it already answers
+        // how long the turn has been going.
+        <AssistantMetaTooltip
+          meta={meta}
+          stopped={null}
+          startedAt={null}
+          completedAt={null}
+        />
+      }
       side="top"
       align="start"
       sideOffset={6}
@@ -797,6 +957,8 @@ interface AssistantSegmentProps {
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
   /** Harness that ran this turn, for provider-targeted error affordances. */
   harnessId: GuiHarnessId | null;
+  /** See `AssistantBodyProps.turnId`. */
+  turnId: string | null;
 }
 
 function ApprovalSegmentCard({
@@ -834,6 +996,7 @@ function AssistantSegment({
   forkAction,
   interviewDeliveryRetry,
   harnessId,
+  turnId,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -975,6 +1138,8 @@ function AssistantSegment({
           recoverable={segment.recoverable}
           findUnitId={findUnitId}
           harnessId={harnessId}
+          failure={segment.failure}
+          turnId={turnId}
         />
       );
     case "compaction":
@@ -991,9 +1156,23 @@ function AssistantSegment({
         />
       );
     case "provider_notice":
-      return (
+      // The resumed-turn marker is a different FRAME, not a different notice:
+      // the turn it heads had no user message, so the transcript's existing
+      // answer to "why is the agent talking" - the autonomous-resume marker -
+      // is the shape that reads correctly. A hairline rule between two
+      // assistant messages does not.
+      return segment.noticeKind === "fallback_wait_resumed" ? (
+        <FallbackWaitResumedMarker
+          title={segment.title}
+          message={segment.message}
+          details={segment.details}
+          findUnitId={findUnitId}
+        />
+      ) : (
         <ProviderNoticeSegment
           status={segment.status}
+          noticeKind={segment.noticeKind}
+          presentation={segment.presentation}
           tone={segment.tone}
           title={segment.title}
           message={segment.message}
@@ -1032,6 +1211,10 @@ function AssistantSegment({
     case "imported-chat-marker":
       // Import provenance, same as the fork link above: synthesized system row
       // only. Listed here so the exhaustive switch stays complete.
+      return null;
+    case "auto-judge-unattended-denial":
+      // An auto-mode refusal nobody was asked about: synthesized system row
+      // only, like the two above. Listed here so the switch stays exhaustive.
       return null;
     default: {
       const _exhaustive: never = segment;

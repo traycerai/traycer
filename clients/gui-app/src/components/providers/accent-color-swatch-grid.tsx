@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { Check } from "lucide-react";
 import {
@@ -31,12 +32,12 @@ export function AccentColorSwatchGrid(
           aria-pressed={selectedColor === color}
           disabled={disabled}
           className={cn(
-            "flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50",
+            "flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 bg-[var(--swatch)] outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50",
             selectedColor === color
               ? "border-foreground/40 ring-2 ring-ring/80 ring-offset-1 ring-offset-popover"
               : "",
           )}
-          style={{ backgroundColor: color }}
+          style={{ "--swatch": color } as CSSProperties}
           onClick={() => onSelectColor(color)}
         >
           {selectedColor === color ? (

@@ -11,9 +11,13 @@ import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
+import { useHostSessionConnectivity } from "@/lib/host/session-connectivity";
+import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
+import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
+import { MobileAppStatusBar } from "@/components/layout/status-bar/mobile-app-status-bar";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -25,6 +29,7 @@ import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 
 interface AppShellProps {
   children: ReactNode;
@@ -41,6 +46,22 @@ export function AppShell(props: AppShellProps) {
   // Phones get the hamburger navigation drawer; it is only mounted below md so
   // desktop mounts nothing extra and stays unchanged.
   const isMobile = useIsMobileViewport();
+  // A mobile VIEWPORT, not a mobile build: a narrow desktop window behaves the
+  // same way.
+  //
+  // Mobile ignores `placement` entirely and answers with its own switch, which
+  // is off by default. `placement` names which of two surfaces hosts the usage
+  // gauge and the resource monitor, and on a phone that question has no second
+  // answer: `MobileAppHeader` keeps both controls whatever the strip does, so
+  // a phone reading `placement` would be reading a preference about a surface
+  // it does not have. The footer still competes with the software keyboard and
+  // the nav drawer, which is what `MobileAppStatusBar` gates on and why it is
+  // off until asked for.
+  const showStatusBar = useLayoutStore((state) =>
+    isMobile
+      ? state.statusBar.mobileFooter
+      : state.statusBar.placement === "status-bar",
+  );
   // Observed, never rendered. A publication fork resolves itself now - the
   // banner and the dialog that used to read this query are gone - but the
   // per-chat `pendingFork` indicator is derived from an open fork episode and
@@ -63,6 +84,12 @@ export function AppShell(props: AppShellProps) {
   // history through the same `goBack`. Self-gated on the shell capability, so
   // every other shell attaches nothing.
   useSystemBack();
+  // Read ONCE, here, and handed both to the strip that renders it and to the
+  // surfaces that defer to it. `useHostSessionConnectivity` builds a store per
+  // call - its own poll timer and its own latched episode - so a second reader
+  // would be a second episode, and the two could disagree about whether a bar
+  // is on screen.
+  const sessionConnectivity = useHostSessionConnectivity();
 
   return (
     <PrimaryFocusCoordinatorProvider>
@@ -82,7 +109,7 @@ export function AppShell(props: AppShellProps) {
                 interruption the strip reports, so if both are showing the
                 actionable one has to be read first. */}
               <ClockSkewBanner />
-              <SessionConnectivityStrip />
+              <SessionConnectivityStrip connectivity={sessionConnectivity} />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal.
@@ -96,7 +123,7 @@ export function AppShell(props: AppShellProps) {
                   by one toolbar row, so the epic status row and sidebar rail
                   sat under the app header until a tab switch remounted the
                   surface. A clipped box has no scroll offset to drift. */}
-                <div className="relative flex min-h-0 flex-1 overflow-clip">
+                <div className="relative flex min-h-0 flex-1 overflow-clip md:task-surface-frame">
                   <TopLevelSurfaceActivationProvider>
                     <TopLevelTabHost />
                   </TopLevelSurfaceActivationProvider>
@@ -119,9 +146,30 @@ export function AppShell(props: AppShellProps) {
                 <TileFindOwnerBridge />
                 <TileSelectAllBridge />
               </main>
+              {/* After `</main>` so the strip spans the full window under the
+                sidebar and the canvas alike (both live inside
+                `TopLevelTabHost`), and stays visible on Settings so a change
+                there previews live. NOT the last child: the swipe transition
+                below must stay last, or the frozen screen it renders would
+                slide under a strip it was copied with.
+
+                A React gate, never CSS hiding. The mobile header keeps its own
+                gauge and resource controls, and the dynamic action registry is
+                single-handler - a hidden second mount would take
+                `app.rate-limits.open` from the header that is still on screen.
+
+                Mobile goes through `MobileAppStatusBar`, which owns the two
+                further gates that only exist there (the software keyboard and
+                the nav drawer) so their subscriptions stay out of this root. */}
+              {showStatusBar && isMobile ? <MobileAppStatusBar /> : null}
+              {showStatusBar && !isMobile ? <AppStatusBar /> : null}
               <OpenFolderDialog />
               <RemoteFolderPickerDialog />
               <QuitInterceptBridge />
+              {/* Mounted unconditionally: the bridge itself reads the action's
+                `desktopOnly` flag and registers nothing in the installed
+                mobile app, the same fact the palette reads to drop its row. */}
+              <StatusBarKeybindingBridge />
               <MigrationRunController />
               <MigrationBlockingModalHost />
               {isMobile ? <MobileNavDrawer /> : null}

@@ -5,7 +5,10 @@ import {
   ChatStreamClient,
   type ChatStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type {
+  IStreamClient,
+  StreamParamsProvider,
+} from "@traycer-clients/shared/host-transport/i-stream-client";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   IStreamSession,
@@ -98,7 +101,7 @@ class FakeChatWireSession implements IStreamSession {
   }
 
   close(): void {
-    this.statusChangeHandler?.("closed", { kind: "caller" });
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
   }
 
   /** Feed a raw wire envelope through the REAL `ChatStreamClient` parse. */
@@ -113,7 +116,7 @@ class FakeChatWireSession implements IStreamSession {
     status: "connecting" | "open" | "reconnecting" | "closed",
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason);
+    this.statusChangeHandler?.(status, reason, null);
   }
 }
 
@@ -131,7 +134,7 @@ class FakeChatStreamRpcClient implements IStreamClient<HostStreamRpcRegistry> {
     Method extends keyof HostStreamRpcRegistry & string,
   >(
     _method: Method,
-    _paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     throw new Error(
       "FakeChatStreamRpcClient.subscribeWithParamsProvider is unused by ChatStreamClient",
@@ -174,6 +177,7 @@ function createConsumerHarness(): ConsumerHarness {
     userId: "owner-1",
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (
       epicId: string,
@@ -191,6 +195,7 @@ function createConsumerHarness(): ConsumerHarness {
         sendAction: (frame) => streamClient.sendAction(frame),
         sameTurnSteeringProtocolSupported: () =>
           streamClient.sameTurnSteeringProtocolSupported(),
+        draftBlobBridgeSupported: () => streamClient.draftBlobBridgeSupported(),
         requestTranscriptRange: (request) =>
           streamClient.requestTranscriptRange(request),
         requestResnapshot: () => streamClient.requestResnapshot(),

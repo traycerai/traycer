@@ -31,6 +31,9 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
   useAgentStop: () => ({ mutate: () => undefined }),
 }));
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
 
 import {
   ChatLowerInteractionSurfaces,
@@ -40,8 +43,10 @@ import {
 import { UNANSWERABLE_INTERVIEW_DISMISS_REASON } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import type { PendingInterviewView } from "@/components/epic-canvas/renderers/chat-tile-types";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
+import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
@@ -77,9 +82,11 @@ const ANSWERABLE_CARD: PendingInterviewView = {
 
 function render(ui: ReactElement) {
   return testingRender(
-    <TooltipProvider delayDuration={0}>
-      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
-    </TooltipProvider>,
+    <TabHostProvider hostId="host-1">
+      <TooltipProvider delayDuration={0}>
+        <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+      </TooltipProvider>
+    </TabHostProvider>,
   );
 }
 
@@ -98,6 +105,8 @@ function props(
       activeTurnStatus: null,
       steerCapable: false,
       steerProtocolSupported: true,
+      autoPermissionModeProtocolSupported: null,
+      getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
       stopDisabled: true,
       onStopTurn: () => null,
@@ -108,6 +117,7 @@ function props(
       pendingApprovals: [],
       onFileEditDecision: () => undefined,
       onApprovalDecision: () => undefined,
+      highlightedApprovalId: null,
     },
     queue: {
       editingItem: null,
@@ -143,6 +153,7 @@ function props(
     },
     todo: null,
     restoreContext: RESTORE_CONTEXT,
+    providerFallback: NO_PROVIDER_FALLBACK,
     backgroundItems: undefined,
     backgroundStopPendingTaskIds: EMPTY_BACKGROUND_STOP_TASK_IDS,
     backgroundStopAllPending: false,
@@ -162,6 +173,7 @@ function interviewState(
     onAnswer: () => null,
     onSkip: () => null,
     onFork: null,
+    highlightedBlockId: null,
     ...overrides,
   };
 }

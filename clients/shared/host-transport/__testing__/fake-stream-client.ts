@@ -48,7 +48,7 @@ export class FakeStreamSession implements IStreamSession {
    */
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
-    if (this.status === "open") handler("open", null);
+    if (this.status === "open") handler("open", null, null);
   }
 
   requestReconnect(): void {}
@@ -63,21 +63,25 @@ export class FakeStreamSession implements IStreamSession {
 
   emitStatus(status: StreamStatus): void {
     this.status = status;
-    this.statusHandler?.(status, null);
+    this.statusHandler?.(status, null, null);
   }
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
     this.status = "closed";
-    this.statusHandler?.("closed", {
-      kind: "fatalError",
-      details: {
-        code: "UNAUTHORIZED",
-        reason,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
       },
-    });
+      null,
+    );
   }
 
   /**
@@ -105,6 +109,12 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     readonly method: string;
     readonly params: unknown;
   }> = [];
+  /** Version-pinned opens only; each one also lands in {@link subscribes}. */
+  readonly subscribesAtVersion: Array<{
+    readonly method: string;
+    readonly schemaVersion: SchemaVersion;
+    readonly params: unknown;
+  }> = [];
   private readonly autoOpen: boolean;
   private closed = false;
 
@@ -130,9 +140,32 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
 
   subscribeWithParamsProvider(
     method: string,
-    paramsProvider: () => unknown,
+    paramsProvider: (onWireVersion: SchemaVersion | null) => unknown,
   ): FakeStreamSession {
-    return this.subscribe(method, paramsProvider());
+    // `null`: this double negotiates nothing, so it has no version to report -
+    // which is exactly the "answer with your newest line" case the seam
+    // documents.
+    return this.subscribe(method, paramsProvider(null));
+  }
+
+  /**
+   * Answered rather than omitted, even though this double pins nothing.
+   *
+   * The method is optional on `IStreamClient`, and a consumer that pins has to
+   * degrade when it is absent (see `subscribeAtScopeAddressedBrowserVersion`).
+   * A double that omits it therefore silently routes every such consumer down
+   * its FALLBACK path, so the suite stops testing what production runs - which
+   * is how `browser.sessions`' `independent` pin came to be exercised nowhere.
+   * The version is recorded on `subscribesAtVersion` for a test that cares
+   * which one was asked for.
+   */
+  subscribeAtVersion(
+    method: string,
+    schemaVersion: SchemaVersion,
+    params: unknown,
+  ): FakeStreamSession {
+    this.subscribesAtVersion.push({ method, schemaVersion, params });
+    return this.subscribe(method, params);
   }
 
   getMethodSchemaVersion(): SchemaVersion | null {
@@ -169,10 +202,41 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     }
   }
 
+  /**
+   * The verdict counterpart of {@link notifyBearerRotated}: push a
+   * `cloudVerdictUpdate` onto every open session, so a test can observe that a
+   * verdict transition reached the wire rather than only the store.
+   *
+   * A DISTINCT frame kind from `credentialUpdate`, matching production. A fake
+   * that emitted one kind for both would make the two indistinguishable to any
+   * test asserting on what was sent - which is precisely the property the
+   * sibling-frame design exists to give, so collapsing it here would hide the
+   * thing under test.
+   */
+  notifyCloudVerdictChanged(): void {
+    for (const session of this.sessions) {
+      session.sendClientFrame(
+        { kind: "cloudVerdictUpdate", hasBinaryPayload: false },
+        null,
+      );
+    }
+  }
+
   reconnectAll(): void {}
 
   isReady(): boolean {
     return true;
+  }
+
+  /**
+   * What {@link isSilentFor} answers. Mutable so a suite can drive BOTH arms of
+   * a silence gate off one fake - the escalation and the plain path - without
+   * a second client class.
+   */
+  silentFor = false;
+
+  isSilentFor(): boolean {
+    return this.silentFor;
   }
 
   getMethodSupport(): "unknown" {

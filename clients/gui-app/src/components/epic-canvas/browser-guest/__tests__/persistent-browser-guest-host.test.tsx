@@ -46,7 +46,9 @@ function TileProbe() {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   usePublishBrowserGuestTile({
     surfaceRef,
+    stageRef: null,
     registrationId: REGISTRATION_A,
+    viewport: null,
     instanceId: "tile-1",
     viewTabId: "view-1",
     paneId: "pane-1",
@@ -86,7 +88,7 @@ describe("PersistentBrowserGuestHost", () => {
   });
 
   it("keeps a mounted publisher presented across browserView replacement", () => {
-    const firstBridge = new FakeBrowserViewBridge();
+    const firstBridge = new FakeBrowserViewBridge({});
     const view = render(<HostApp bridge={firstBridge} />);
     const firstHost = queryHost();
     if (firstHost === null) throw new Error("expected persistent host");
@@ -104,7 +106,7 @@ describe("PersistentBrowserGuestHost", () => {
     if (firstGuest === null) throw new Error("expected presented guest");
     expect(wrapperState(REGISTRATION_A)).toBe("presented");
 
-    const secondBridge = new FakeBrowserViewBridge();
+    const secondBridge = new FakeBrowserViewBridge({});
     view.rerender(<HostApp bridge={secondBridge} />);
     const replacementHost = queryHost();
     if (replacementHost === null) {
@@ -126,8 +128,13 @@ describe("PersistentBrowserGuestHost", () => {
     );
     const remounted = queryWrapper(REGISTRATION_A);
     if (remounted === null) throw new Error("expected remounted guest");
+    const remountedClipper = remounted.parentElement;
+    if (remountedClipper === null) {
+      throw new Error("expected remounted guest clipper");
+    }
     expect(remounted).not.toBe(firstGuest);
-    expect(remounted.parentNode).toBe(replacementHost);
+    expect(remountedClipper.parentNode).toBe(replacementHost);
+    expect(remounted.parentNode).toBe(remountedClipper);
     expect(wrapperState(REGISTRATION_A)).toBe("presented");
 
     view.unmount();

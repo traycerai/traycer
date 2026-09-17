@@ -5,9 +5,12 @@ import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-clie
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   composerHostLabel,
+  refuseCreateWithoutCloudVerdict,
   resolveLandingPlacement,
   type LandingPlacementTarget,
 } from "@/lib/composer/landing-placement";
+
+const TEST_WEBSOCKET_URL = "ws://127.0.0.1:4917/rpc";
 
 /**
  * Submit-time re-validation for the landing composer (redesign P1.2,
@@ -27,7 +30,7 @@ import {
  */
 function clientAddressing(
   hostId: string,
-  websocketUrl: string | null = "ws://127.0.0.1:4917/rpc",
+  websocketUrl: string | null,
 ): HostClient<HostRpcRegistry> {
   const activeHost: HostDirectoryEntry = {
     hostId,
@@ -86,7 +89,7 @@ function targetWith(
 ): LandingPlacementTarget {
   return {
     resolvedHostId: "host-a",
-    client: clientAddressing("host-a"),
+    client: clientAddressing("host-a", TEST_WEBSOCKET_URL),
     hostLabel: "Studio Mac",
     isPinned: false,
     namedHostDead: false,
@@ -96,7 +99,7 @@ function targetWith(
 
 describe("resolveLandingPlacement", () => {
   it("is ready when the resolved host is exactly what the client addresses", () => {
-    const client = clientAddressing("host-a");
+    const client = clientAddressing("host-a", TEST_WEBSOCKET_URL);
     const placement = resolveLandingPlacement(targetWith({ client }));
     expect(placement).toEqual({
       kind: "ready",
@@ -106,7 +109,7 @@ describe("resolveLandingPlacement", () => {
   });
 
   it("is ready for a pin whose own requester addresses the pinned host", () => {
-    const client = clientAddressing("host-b");
+    const client = clientAddressing("host-b", TEST_WEBSOCKET_URL);
     const placement = resolveLandingPlacement(
       targetWith({ resolvedHostId: "host-b", client, isPinned: true }),
     );
@@ -197,7 +200,7 @@ describe("resolveLandingPlacement", () => {
     const placement = resolveLandingPlacement(
       targetWith({
         resolvedHostId: "host-b",
-        client: clientAddressing("host-a"),
+        client: clientAddressing("host-a", TEST_WEBSOCKET_URL),
         isPinned: true,
         hostLabel: "Build Box",
       }),
@@ -212,7 +215,7 @@ describe("resolveLandingPlacement", () => {
     const placement = resolveLandingPlacement(
       targetWith({
         resolvedHostId: "host-next",
-        client: clientAddressing("host-previous"),
+        client: clientAddressing("host-previous", TEST_WEBSOCKET_URL),
         isPinned: false,
       }),
     );
@@ -224,7 +227,7 @@ describe("resolveLandingPlacement", () => {
   // `resolvedHostId` names the live host, `namedHostDead` stays false, and a
   // good client for it resolves ready, exactly like an unpinned target.
   it("does not refuse a pinned target through the namedHostDead arm", () => {
-    const client = clientAddressing("host-a");
+    const client = clientAddressing("host-a", TEST_WEBSOCKET_URL);
     const placement = resolveLandingPlacement(
       targetWith({ isPinned: true, namedHostDead: false, client }),
     );
@@ -257,5 +260,61 @@ describe("composerHostLabel", () => {
 
   it("has copy for the ∅ case", () => {
     expect(composerHostLabel(entries, null)).toBe("This device");
+  });
+});
+
+describe("refuseCreateWithoutCloudVerdict", () => {
+  it("never refuses a signed-in session, whatever the host's line", () => {
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "signed-in",
+        negotiatedCreate: null,
+        hostLabel: "Laptop",
+      }),
+    ).toBeNull();
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "signed-in",
+        negotiatedCreate: { major: 1, minor: 0 },
+        hostLabel: "Laptop",
+      }),
+    ).toBeNull();
+  });
+
+  it("admits an unverified session on a host that serves the local-first line", () => {
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "unverified",
+        negotiatedCreate: { major: 1, minor: 1 },
+        hostLabel: "Laptop",
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses an unverified session on a pre-1.1 host, naming the device", () => {
+    // `epic.create@1.0` would send this create to the cloud on the retained
+    // credential. `@1.1` is the minor that tells the two hosts apart; it used
+    // to be read off `epic.listTasks@1.6`, a proxy for the same release.
+    const refusal = refuseCreateWithoutCloudVerdict({
+      status: "unverified",
+      negotiatedCreate: { major: 1, minor: 0 },
+      hostLabel: "Laptop",
+    });
+    expect(refusal?.kind).toBe("refused");
+    expect(refusal?.kind === "refused" ? refusal.message : "").toContain(
+      "Laptop",
+    );
+  });
+
+  it("refuses an unverified session before the host's manifest has arrived", () => {
+    // Fails closed on `null`: a decision that could spend the withheld
+    // capability does not assert the host's line without evidence.
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "unverified",
+        negotiatedCreate: null,
+        hostLabel: "Laptop",
+      })?.kind,
+    ).toBe("refused");
   });
 });

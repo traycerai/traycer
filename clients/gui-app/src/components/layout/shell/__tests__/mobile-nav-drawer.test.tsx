@@ -14,6 +14,9 @@ const testState: {
   items: ReadonlyArray<HistoryItem>;
   signOut: () => Promise<void>;
   openSettings: () => void;
+  isPending: boolean;
+  cloudPagePending: boolean;
+  hostRequiresCloudToList: boolean;
   /** Live agent activity per epic id; anything unlisted is idle. */
   activity: Readonly<Record<string, EpicActivityStatus>>;
   /**
@@ -27,6 +30,9 @@ const testState: {
   items: [],
   signOut: () => Promise.resolve(),
   openSettings: () => undefined,
+  isPending: false,
+  cloudPagePending: false,
+  hostRequiresCloudToList: false,
   activity: {},
   indicators: {},
   indicatorEpicIdCalls: [],
@@ -67,8 +73,13 @@ const trackMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/home/use-history-query", () => ({
   useHistoryQuery: () => ({
-    data: { items: testState.items, totalCount: testState.items.length },
-    isPending: false,
+    data: {
+      items: testState.items,
+      totalCount: testState.items.length,
+      hostRequiresCloudToList: testState.hostRequiresCloudToList,
+    },
+    isPending: testState.isPending,
+    cloudPagePending: testState.cloudPagePending,
     isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
@@ -188,6 +199,9 @@ describe("MobileNavDrawer", () => {
     testState.indicatorEpicIdCalls = [];
     testState.signOut = () => Promise.resolve();
     testState.openSettings = () => undefined;
+    testState.isPending = false;
+    testState.cloudPagePending = false;
+    testState.hostRequiresCloudToList = false;
     openLink.mockClear();
     trackMock.mockClear();
     useMobileNavStore.setState({ open: true });
@@ -744,6 +758,24 @@ describe("MobileNavDrawer", () => {
       expect(useMobileNavStore.getState().open).toBe(true);
     });
 
+    // App Store review guideline 3.1.1: the installed app must not link out
+    // to a subscription that cannot be bought through Apple, and this icon
+    // opened exactly that page. It stays on the OTHER shell this drawer
+    // renders in - a narrow desktop window - which is why the branch reads the
+    // product flag rather than the viewport, and why the test above still
+    // finds the icon.
+    it("withholds the billing link in the installed mobile app", async () => {
+      setMobileApp(true);
+      renderDrawer();
+      await screen.findByTestId("mobile-nav-new-task");
+
+      expect(screen.queryByTestId("mobile-nav-manage-subscription")).toBeNull();
+      expect(screen.queryByLabelText("Manage subscription")).toBeNull();
+      // The rest of the identity row is untouched.
+      expect(screen.queryByTestId("mobile-nav-sign-out")).not.toBeNull();
+      expect(screen.queryByTestId("mobile-nav-settings")).not.toBeNull();
+    });
+
     // Notifications live in the header now (`MobileNotificationsButton`), so
     // an unresolved profile simply drops the whole account block, actions
     // included.
@@ -839,6 +871,90 @@ describe("MobileNavDrawer", () => {
       ).toBeTruthy();
     });
 
+    it("shows the local-only provenance status for a local-home row", async () => {
+      testState.items = [
+        {
+          ...historyItem({
+            id: "a",
+            title: "local only",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          isLocalHome: true,
+        },
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const status = rows[0]?.querySelector(
+        '[data-testid="mobile-nav-task-provenance-local-only-a"]',
+      );
+      expect(status).not.toBeNull();
+      expect(status?.getAttribute("role")).toBe("status");
+    });
+
+    it("shows the local-only provenance text label for a local-home row", async () => {
+      testState.items = [
+        {
+          ...historyItem({
+            id: "a",
+            title: "local only",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          isLocalHome: true,
+        },
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const label = rows[0]?.querySelector(
+        '[data-testid="mobile-nav-task-provenance-label-local-only"]',
+      );
+      expect(label?.textContent).toBe("Not synced");
+    });
+
+    it("shows the preserved-orphan provenance text label for a deleted-with-edits-kept row", async () => {
+      testState.items = [
+        {
+          ...historyItem({
+            id: "a",
+            title: "orphaned",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          isPreservedOrphan: true,
+        },
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const label = rows[0]?.querySelector(
+        '[data-testid="mobile-nav-task-provenance-label-preserved-orphan"]',
+      );
+      expect(label?.textContent).toBe("Deleted, edits kept");
+    });
+
+    it("shows neither provenance text label for an ordinary row carrying no marker", async () => {
+      testState.items = [
+        historyItem({
+          id: "a",
+          title: "ordinary",
+          updatedAtMs: NOW_MS - DAY_MS,
+        }),
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(
+        rows[0]?.querySelector(
+          '[data-testid="mobile-nav-task-provenance-label-local-only"]',
+        ),
+      ).toBeNull();
+      expect(
+        rows[0]?.querySelector(
+          '[data-testid="mobile-nav-task-provenance-label-preserved-orphan"]',
+        ),
+      ).toBeNull();
+    });
+
     it("shows the indicator for a task with an unread result, through its own provider", async () => {
       // No live activity, only notification state: this is the case that
       // needs the drawer to supply indicators itself, since the shell mounts
@@ -884,6 +1000,40 @@ describe("MobileNavDrawer", () => {
 
       expect(rows[0]?.querySelector('[role="status"]')).toBeNull();
       expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(["a"]);
+    });
+
+    it("keeps loading while the local-first cloud page is pending", async () => {
+      testState.items = [];
+      testState.isPending = false;
+      testState.cloudPagePending = true;
+      renderDrawer();
+
+      expect(
+        await screen.findByTestId("mobile-nav-task-list-loading"),
+      ).not.toBeNull();
+      expect(screen.queryByText("No tasks yet")).toBeNull();
+    });
+
+    // A refused initial leg (no cloud verdict, host too old to list locally)
+    // is a SETTLED refusal, not a load in progress - `isPending: false` is
+    // what makes that true, and it is also exactly what makes "No tasks yet"
+    // reachable for a session that was simply never asked. Both false
+    // statements must be absent at once, or the fix for one just becomes the
+    // other.
+    it("says sign-in must be confirmed instead of loading forever or claiming there are no tasks", async () => {
+      testState.items = [];
+      testState.isPending = false;
+      testState.hostRequiresCloudToList = true;
+      renderDrawer();
+
+      const notice = await screen.findByTestId(
+        "mobile-nav-task-list-host-requires-cloud",
+      );
+      expect(notice.textContent).toContain(
+        "Tasks can't be listed until your sign-in is confirmed",
+      );
+      expect(screen.queryByTestId("mobile-nav-task-list-loading")).toBeNull();
+      expect(screen.queryByText("No tasks yet")).toBeNull();
     });
   });
 });

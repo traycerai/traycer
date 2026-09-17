@@ -14,6 +14,7 @@ import {
   acceptExhaustedPersistedRestoreFallback,
   buildRowKeyToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
+  CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
   selectActiveUserMessageId,
@@ -34,6 +35,13 @@ import {
 } from "@/components/chat/chat-transcript-row-height-memory";
 import { unhydratedRowCount } from "@/stores/chats/transcript-window";
 import { chatFindCoverageMessage } from "@/components/chat/chat-find";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS,
+  resolvedScrollBlockId,
+  useChatNavigationBlockReveal,
+  type ChatNavigationHighlightTarget,
+} from "@/components/chat/chat-navigation-highlight";
+import { queryMountedChatMessageRoot } from "@/components/chat/chat-find-highlighter";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -116,14 +124,48 @@ import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import type { ChatAnnouncementKind } from "@/stores/chats/chat-announcements";
-import { useChatAnnouncements } from "@/stores/chats/chat-announcements";
-import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  createFallbackAnnouncementObserver,
+  fallbackNoticeAnnouncements,
+  fallbackOutcomeAnnouncement,
+  fallbackReturnAnnouncement,
+  fallbackTraversalAnnouncement,
+  NO_TRANSCRIPT_BASELINE,
+  useChatAnnouncementQueue,
+  useChatAnnouncements,
+  type ChatAnnouncement,
+  type ChatAnnouncementKind,
+  type FallbackAnnouncement,
+  type FallbackAnnouncementObserver,
+  type FallbackAnnouncementPlan,
+  type FallbackNoticeAnnouncement,
+} from "@/stores/chats/chat-announcements";
+import {
+  fallbackDestinationOfTuple,
+  fallbackDestinationSentence,
+  fallbackResolvedIdentitySentence,
+  useFallbackProfileLabels,
+  type FallbackProfileLabelResolver,
+} from "@/components/chat/fallback/fallback-identity";
+import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+  ConfirmedManualFallbackAction,
+  UnattendedFallbackOutcome,
+} from "@/stores/chats/chat-session-store";
+import { useStore } from "zustand";
+import type {
+  BackgroundItem,
+  FallbackImpendingAction,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
   use,
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useInsertionEffect,
   useMemo,
@@ -190,9 +232,35 @@ interface ChatMessagesProps {
   /** A frontmost system modal overlays the chat; body-portaled quote UI must stay hidden. */
   systemOverlayActive: boolean;
   scrollRequest: ChatMessageScrollRequest | null;
+  /**
+   * How a `kind: "message"` scroll request ended. `landed` means the hydrated
+   * target row was mounted at the navigation offset; `exhausted` means the
+   * bounded re-issue loop gave up; `cancelled` means a reader gesture or a
+   * newer request superseded it. The owner uses this to release whatever it
+   * was holding open for the landing (the windowed line's required
+   * hydration ordinal). Never called for `kind: "end"`.
+   */
+  onScrollRequestSettled:
+    | ((requestId: number, outcome: ChatScrollRequestOutcome) => void)
+    | null;
   /** Measured height of the overlaid composer/queue/pinned/agents dock
    *  (chat-tile.tsx), reserved as the transcript's bottom content inset. */
   composerOverlayHeight: number;
+}
+
+export type ChatScrollRequestOutcome = "landed" | "exhausted" | "cancelled";
+
+/**
+ * A `kind: "message"` request whose landing has not reached a terminal
+ * outcome: issued and settling, or still waiting for its row key to appear in
+ * the rendered index. Kept in a ref so a `listRows` change or a hidden→visible
+ * transition can re-issue it - a request must not be burned by a row that has
+ * not hydrated yet.
+ */
+interface PendingScrollRequestLanding {
+  readonly requestId: number;
+  readonly messageId: string;
+  readonly blockId: string | null;
 }
 
 export type ChatMessageScrollRequest =
@@ -212,7 +280,6 @@ const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const EMPTY_ROW_INDEX_BY_KEY: ReadonlyMap<string, number> = new Map();
 /** Stable identity, so the legacy line's skeleton hand-off stays a no-op. */
 const EMPTY_ROW_SKELETON: readonly (RowSkeletonEntry | undefined)[] = [];
-const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 /** `awaitScrollSettle`'s fallback timeout when `scrollend` never fires
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
  *  hardcoding a copy of this number. Used only by the DOM-event-based
@@ -943,6 +1010,444 @@ function announcementTextFor(
   }
 }
 
+interface ChatAnnouncementScope {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string | null;
+}
+
+interface ChatLiveAnnouncementsProps extends ChatAnnouncementScope {
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly baselineEpoch: number;
+  readonly hydrationSequence: number;
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
+  readonly visible: boolean;
+  readonly taskTitle: string;
+  readonly completion: ChatAnnouncement | null;
+}
+
+function fallbackPlanForAnnouncement(
+  action: FallbackImpendingAction | null,
+  destination: string | null,
+): FallbackAnnouncementPlan | null {
+  if (action === null) return null;
+  let kind: FallbackAnnouncementPlan["action"];
+  if (action.pending !== null) {
+    kind = "checking";
+  } else if (action.rung === "profile" || action.rung === "tier") {
+    kind = "switch";
+  } else {
+    kind = action.rung;
+  }
+  return {
+    planId: action.planId,
+    action: kind,
+    destination,
+    resumesAt: action.resumesAt,
+  };
+}
+
+interface ManualFallbackAnnouncementObservation {
+  readonly sequence: number;
+  readonly announcement: FallbackAnnouncement | null;
+}
+
+function observeManualFallbackAction(
+  manual: ConfirmedManualFallbackAction | null,
+  scope: ChatAnnouncementScope,
+  lastSequence: number,
+  labelFor: FallbackProfileLabelResolver,
+): ManualFallbackAnnouncementObservation {
+  if (
+    manual === null ||
+    manual.hostId !== scope.hostId ||
+    manual.epicId !== scope.epicId ||
+    manual.chatId !== scope.chatId
+  ) {
+    return { sequence: lastSequence, announcement: null };
+  }
+  const newManual = manual.sequence > lastSequence;
+  const sequence = Math.max(lastSequence, manual.sequence);
+  if (!newManual || manual.rung !== "switch" || manual.target === null) {
+    return { sequence, announcement: null };
+  }
+  return {
+    sequence,
+    announcement: {
+      key: JSON.stringify([
+        "manual",
+        manual.hostId,
+        manual.epicId,
+        manual.chatId,
+        manual.userMessageId,
+        manual.turnId,
+        manual.sequence,
+      ]),
+      text: `Switched this chat to ${fallbackDestinationSentence(
+        fallbackDestinationOfTuple(manual.target, labelFor),
+        true,
+      )}.`,
+    },
+  };
+}
+
+interface UnattendedFallbackAnnouncementObservation {
+  readonly sequence: number;
+  readonly announcement: FallbackAnnouncement | null;
+}
+
+/**
+ * A fallback answer that reached no surface, as an announcement (MF11).
+ *
+ * Same shape as {@link observeManualFallbackAction} and the same two guards,
+ * for the same reasons: a warm store outlives the surfaces that write to it, so
+ * the scope triple is re-checked here rather than trusted, and a high-water
+ * mark keeps a replayed frame carrying an older record silent.
+ *
+ * No copy of its own. The publisher records the sentence its own surface would
+ * have shown (`describeFallbackOutcome`), because a second wording for one set
+ * of outcomes is how the transcript and the toast come to disagree about what
+ * happened.
+ */
+function observeUnattendedFallbackOutcome(
+  outcome: UnattendedFallbackOutcome | null,
+  scope: ChatAnnouncementScope,
+  lastSequence: number,
+): UnattendedFallbackAnnouncementObservation {
+  if (
+    outcome === null ||
+    outcome.hostId !== scope.hostId ||
+    outcome.epicId !== scope.epicId ||
+    outcome.chatId !== scope.chatId
+  ) {
+    return { sequence: lastSequence, announcement: null };
+  }
+  if (outcome.sequence <= lastSequence) {
+    return { sequence: lastSequence, announcement: null };
+  }
+  return {
+    sequence: outcome.sequence,
+    announcement: {
+      key: JSON.stringify([
+        "unattended",
+        outcome.hostId,
+        outcome.epicId,
+        outcome.chatId,
+        outcome.sequence,
+      ]),
+      text: outcome.text,
+    },
+  };
+}
+
+/**
+ * `fallbackNoticeAnnouncements(messages)`, held at its PREVIOUS reference for
+ * as long as the notices it produces have not changed.
+ *
+ * `messages` is rebuilt wholesale on every store update - which is every
+ * streamed token; `useStableChatTimelineRows` in `chat-timeline.tsx` exists for
+ * that same fact and says so. So a plain `useMemo` on `messages` handed out a
+ * fresh array per token even for a transcript whose notices had not moved, and
+ * the observation effect below lists this among its dependencies: an otherwise
+ * idle chat re-ran `observer.observe` and the whole announcement pipeline once
+ * per token, over the whole transcript, to recompute exactly what it had the
+ * token before.
+ *
+ * Reuse is taken only on a field-for-field match of everything the observer
+ * reads, so a reused reference always agrees with the transcript on screen.
+ *
+ * **The carry is `useState`, not `useRef`, and that is not a style choice.**
+ * A ref read and written during render is what the React Compiler's
+ * `Cannot access refs during render` rejects, and the reason it rejects it is
+ * exactly the case this cache lives in: React may discard a render, and a ref
+ * written by a discarded render is NOT rolled back, so the next attempt starts
+ * from a "previous" value that never reached the screen. `setState` during
+ * render is the sanctioned form of the same carry - React re-runs this
+ * component with the new state and commits nothing from the discarded pass.
+ */
+function useStableFallbackNotices(
+  messages: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<FallbackNoticeAnnouncement> {
+  const next = useMemo(() => fallbackNoticeAnnouncements(messages), [messages]);
+  const [stable, setStable] =
+    useState<ReadonlyArray<FallbackNoticeAnnouncement>>(next);
+  if (stable !== next && !fallbackNoticeListsEqual(stable, next)) {
+    setStable(next);
+    // The re-render this schedules returns `stable`, which will BE `next` by
+    // then. Returning it here keeps this pass self-consistent rather than
+    // handing the observer one render of a list it is about to replace.
+    return next;
+  }
+  return stable;
+}
+
+function fallbackNoticeListsEqual(
+  left: ReadonlyArray<FallbackNoticeAnnouncement>,
+  right: ReadonlyArray<FallbackNoticeAnnouncement>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((notice, index) => {
+      // `noUncheckedIndexedAccess` is off, and the lengths already match, so
+      // this index is a value rather than a value-or-undefined.
+      const other = right[index];
+      return (
+        notice.key === other.key &&
+        notice.messageId === other.messageId &&
+        notice.text === other.text
+      );
+    })
+  );
+}
+
+/**
+ * The resident message-id set, on the same hot path and the same terms as
+ * {@link useStableFallbackNotices} - with one extra thing at stake.
+ *
+ * The observer RETAINS this set and compares the next observation against it
+ * (`priorResidentMessageIds`, which decides whether a hydrated notice is news
+ * or history). What that comparison needs is the SET, not the object: a reused
+ * reference carries exactly the same ids, and the only observation this skips
+ * is one where the ids did not move - in which case the prior set and the
+ * current set are the same set either way.
+ *
+ * Carried in state rather than a ref for the reason given on
+ * {@link useStableFallbackNotices}.
+ */
+function useStableResidentMessageIds(
+  messages: ReadonlyArray<ChatMessageModel>,
+): ReadonlySet<string> {
+  const next = useMemo(
+    () => new Set(messages.map((message) => message.id)),
+    [messages],
+  );
+  const [stable, setStable] = useState<ReadonlySet<string>>(next);
+  if (stable !== next && !residentMessageIdsEqual(stable, next)) {
+    setStable(next);
+    return next;
+  }
+  return stable;
+}
+
+/**
+ * Size plus membership IS set equality here, because both sides are sets of
+ * transcript message ids and a `Set` already collapsed any duplicate.
+ */
+function residentMessageIdsEqual(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const id of right) {
+    if (!left.has(id)) return false;
+  }
+  return true;
+}
+
+function ChatFallbackAnnouncementSource(
+  props: ChatLiveAnnouncementsProps & {
+    readonly hostId: string;
+    readonly handle: ChatSessionStoreHandle;
+    readonly enqueue: (texts: ReadonlyArray<string>) => void;
+    readonly reset: () => void;
+  },
+) {
+  const { handle, enqueue, reset } = props;
+  const client = useHostClientForHostId(props.hostId);
+  const hasFallback = useStore(
+    handle.store,
+    (state) =>
+      state.pendingFallback !== undefined ||
+      state.pendingReturn !== undefined ||
+      state.confirmedManualFallbackAction?.rung === "switch",
+  );
+  const labelFor = useFallbackProfileLabels(
+    client,
+    props.visible && hasFallback,
+  );
+  const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
+  const lastManualSequence = useRef(0);
+  const lastUnattendedSequence = useRef(0);
+  const notices = useStableFallbackNotices(props.messages);
+  const residentMessageIds = useStableResidentMessageIds(props.messages);
+
+  const observeState = useEffectEvent((state: ChatSessionState) => {
+    const observer = observerRef.current;
+    if (observer === null) return;
+    const pending = state.pendingFallback;
+    const targetIdentity =
+      pending === undefined
+        ? null
+        : fallbackResolvedIdentitySentence(
+            { kind: "fallback", pending },
+            labelFor,
+          );
+    const plan = fallbackPlanForAnnouncement(
+      pending?.impendingAction ?? null,
+      targetIdentity,
+    );
+    const returning = state.pendingReturn;
+    const preferredIdentity =
+      returning === undefined
+        ? null
+        : fallbackResolvedIdentitySentence(
+            { kind: "return", pending: returning },
+            labelFor,
+          );
+    const manual = observeManualFallbackAction(
+      state.confirmedManualFallbackAction,
+      props,
+      lastManualSequence.current,
+      labelFor,
+    );
+    lastManualSequence.current = manual.sequence;
+    const unattended = observeUnattendedFallbackOutcome(
+      state.unattendedFallbackOutcome,
+      props,
+      lastUnattendedSequence.current,
+    );
+    lastUnattendedSequence.current = unattended.sequence;
+    // A store rebase can precede React's new transcript props. Do not pair
+    // that epoch with the OLD rows, or its history would arrive as live news.
+    // Transport `open` can also precede its authoritative snapshot. The
+    // subscribed connection epoch detects this even after a warm remount
+    // whose observer never saw the disconnect.
+    const ready =
+      props.visible &&
+      state.connectionStatus === "open" &&
+      state.snapshotLoaded &&
+      state.transcriptBaselineEpoch === state.connectionEpoch &&
+      props.baselineEpoch !== NO_TRANSCRIPT_BASELINE &&
+      props.baselineEpoch === state.transcriptBaselineEpoch;
+    if (!ready) reset();
+    const next = observer.observe({
+      ready,
+      baselineEpoch: props.baselineEpoch,
+      hydrationSequence: props.hydrationSequence,
+      coldRewrittenMessageIds: props.coldRewrittenMessageIds,
+      residentMessageIds,
+      traversal: fallbackTraversalAnnouncement({
+        pending,
+        plan,
+        failedIdentity:
+          pending === undefined
+            ? ""
+            : fallbackDestinationSentence(
+                fallbackDestinationOfTuple(pending.failedTuple, labelFor),
+                true,
+              ),
+        targetIdentity,
+        now: Date.now(),
+      }),
+      returnOffer:
+        preferredIdentity === null
+          ? null
+          : fallbackReturnAnnouncement(returning, preferredIdentity),
+      liveOutcome: fallbackOutcomeAnnouncement(state.lastFallbackOutcome),
+      notices,
+      manualOutcome: manual.announcement,
+      unattendedOutcome: unattended.announcement,
+    });
+    enqueue(next.map((entry) => entry.text));
+  });
+
+  useLayoutEffect(() => {
+    observerRef.current = createFallbackAnnouncementObserver();
+    lastManualSequence.current = 0;
+    lastUnattendedSequence.current = 0;
+    reset();
+    observeState(handle.store.getState());
+    // Observe the store itself: React may batch hold, choosing and switching
+    // into one render, and the initiating popover can unmount before success.
+    return handle.store.subscribe((state, prior) => {
+      if (
+        state.pendingFallback !== prior.pendingFallback ||
+        state.pendingReturn !== prior.pendingReturn ||
+        state.lastFallbackOutcome !== prior.lastFallbackOutcome ||
+        state.confirmedManualFallbackAction !==
+          prior.confirmedManualFallbackAction ||
+        state.unattendedFallbackOutcome !== prior.unattendedFallbackOutcome ||
+        state.connectionEpoch !== prior.connectionEpoch ||
+        state.connectionStatus !== prior.connectionStatus ||
+        state.snapshotLoaded !== prior.snapshotLoaded ||
+        state.transcriptBaselineEpoch !== prior.transcriptBaselineEpoch
+      ) {
+        observeState(state);
+      }
+    });
+  }, [handle, reset]);
+
+  useLayoutEffect(() => {
+    observeState(handle.store.getState());
+  }, [
+    handle,
+    notices,
+    residentMessageIds,
+    props.baselineEpoch,
+    props.hydrationSequence,
+    props.coldRewrittenMessageIds,
+    props.visible,
+    labelFor,
+  ]);
+  return null;
+}
+
+function ChatLiveAnnouncements(props: ChatLiveAnnouncementsProps) {
+  const handle = useExistingChatSessionHandle(
+    props.epicId,
+    props.chatId,
+    props.hostId,
+  );
+  const { announcement, enqueue, reset } = useChatAnnouncementQueue();
+  const lastCompletion = useRef<number | null>(null);
+  const observeCompletion = useEffectEvent((rebase: boolean) => {
+    if (rebase) {
+      lastCompletion.current = props.completion?.sequence ?? null;
+      reset();
+      return;
+    }
+    const completion = props.completion;
+    if (completion === null || completion.sequence === lastCompletion.current) {
+      return;
+    }
+    lastCompletion.current = completion.sequence;
+    if (props.visible) {
+      enqueue([announcementTextFor(props.taskTitle, completion.kind)]);
+    }
+  });
+  useLayoutEffect(() => {
+    observeCompletion(true);
+  }, [props.baselineEpoch, props.visible]);
+  useLayoutEffect(() => {
+    observeCompletion(false);
+  }, [props.completion]);
+
+  return (
+    <>
+      {handle !== null && props.hostId !== null ? (
+        <ChatFallbackAnnouncementSource
+          {...props}
+          hostId={props.hostId}
+          handle={handle}
+          enqueue={enqueue}
+          reset={reset}
+        />
+      ) : null}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {props.visible && announcement !== null ? (
+          <span key={announcement.sequence}>{announcement.text}</span>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+// eslint-disable-next-line complexity
 function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const {
     getMessageActions,
@@ -956,6 +1461,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     messages,
     nextStepActions,
     onVisibleOrdinalRangeChange,
+    onScrollRequestSettled,
     scrollRequest,
     systemOverlayActive,
     taskId,
@@ -1099,6 +1605,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const rowIndexByKeyRef = useRef(EMPTY_ROW_INDEX_BY_KEY);
   const scrollRequestRef = useRef(scrollRequest);
   const handledScrollRequestIdRef = useRef<number | null>(null);
+  const pendingScrollRequestLandingRef =
+    useRef<PendingScrollRequestLanding | null>(null);
+  /** The pending request whose landing has been issued at least once. */
+  const scrollRequestLandingIssuedRef = useRef<number | null>(null);
+  /**
+   * Set while `landScrollRequestRow` supersedes its OWN earlier landing of
+   * the same request (a `listRows` retry, a hidden→visible re-issue), so the
+   * superseded landing's cleanup does not report the request `cancelled`.
+   */
+  const reissuingScrollRequestIdRef = useRef<number | null>(null);
+  const onScrollRequestSettledRef = useRef(onScrollRequestSettled);
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
@@ -1116,9 +1633,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const scrolledActiveUserMessageIdRef = useRef(
     restoredTabState.anchorMessageId,
   );
-  const [navigationHighlightedMessageId, setNavigationHighlightedMessageId] =
-    useState<string | null>(null);
+  const [navigationHighlight, setNavigationHighlight] =
+    useState<ChatNavigationHighlightTarget | null>(null);
   const navigationHighlightTimeoutRef = useRef<number | null>(null);
+  const getScroller = useCallback(
+    (): HTMLElement | null =>
+      chatTimelineRef.current?.getScrollableNode() ?? null,
+    [],
+  );
+  const blockReveal = useChatNavigationBlockReveal({
+    getScroller,
+  });
   const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
   const resolveSuppressedEndLanding = useCallback((): boolean => {
     const resolvePendingEndLanding = resolvePendingRestoreEndLandingRef.current;
@@ -1174,18 +1699,23 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       window.clearTimeout(navigationHighlightTimeoutRef.current);
       navigationHighlightTimeoutRef.current = null;
     }
-    setNavigationHighlightedMessageId(null);
-  }, []);
-  const showNavigationHighlight = useCallback((messageId: string): void => {
-    if (navigationHighlightTimeoutRef.current !== null) {
-      window.clearTimeout(navigationHighlightTimeoutRef.current);
-    }
-    setNavigationHighlightedMessageId(messageId);
-    navigationHighlightTimeoutRef.current = window.setTimeout(() => {
-      navigationHighlightTimeoutRef.current = null;
-      setNavigationHighlightedMessageId(null);
-    }, NAVIGATION_HIGHLIGHT_DURATION_MS);
-  }, []);
+    blockReveal.clearReveal();
+    setNavigationHighlight(null);
+  }, [blockReveal]);
+  const showNavigationHighlight = useCallback(
+    (messageId: string, blockId: string | null): void => {
+      if (navigationHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(navigationHighlightTimeoutRef.current);
+      }
+      setNavigationHighlight({ messageId, blockId });
+      navigationHighlightTimeoutRef.current = window.setTimeout(() => {
+        navigationHighlightTimeoutRef.current = null;
+        blockReveal.clearReveal();
+        setNavigationHighlight(null);
+      }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
+    },
+    [blockReveal],
+  );
   useEffect(
     () => () => {
       if (navigationHighlightTimeoutRef.current !== null) {
@@ -1435,6 +1965,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     (animated: boolean): void => {
       activeNavigationSettleCleanupRef.current?.();
       activeNavigationSettleCleanupRef.current = null;
+      clearNavigationHighlight();
       pendingHydrationRestoreAnchorIdRef.current = null;
       forgetPendingHydrationRestore(identity);
       setTimelineMode("following-end", true);
@@ -1481,6 +2012,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [
       beginImperativeScrollOperation,
+      clearNavigationHighlight,
       finishImperativeScrollOperation,
       identity,
       reconcileInvalidTimelineLanding,
@@ -1592,6 +2124,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     scrollRequestRef.current = scrollRequest;
   }, [scrollRequest]);
+
+  useLayoutEffect(() => {
+    onScrollRequestSettledRef.current = onScrollRequestSettled;
+  }, [onScrollRequestSettled]);
 
   const backgroundToolBlockIds = useMemo<ReadonlySet<string>>(() => {
     if (backgroundItems === undefined || backgroundItems.length === 0) {
@@ -1948,12 +2484,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     captureLastVisibleScrollSnapshot();
   }, [captureLastVisibleScrollSnapshot, scheduleActiveViewportUpdate, visible]);
 
-  const getScroller = useCallback(
-    (): HTMLElement | null =>
-      chatTimelineRef.current?.getScrollableNode() ?? null,
-    [],
-  );
-
   const scrollToTimelineLocation = useCallback(
     (location: ChatTimelineNavigationLocation): void => {
       void chatTimelineRef.current?.scrollToIndex({
@@ -1975,8 +2505,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Ticket 10: settle/re-issue against the CURRENT geometry - an ANIMATED
   // long jump targets ESTIMATED heights; no mid-flight retargeting in the
   // installed LegendList.
-  const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
-    (location: ChatTimelineNavigationLocation): void => {
+  //
+  // `afterSettle` runs once the ROW landing is done (valid or exhausted), so
+  // a block-level `scrollIntoView` cannot fight the 1px row-top re-issue.
+  // Find passes `null`; `navigateToMessage` requests the inner reveal here.
+  const issueFreeTimelineNavigation = useCallback(
+    (
+      location: ChatTimelineNavigationLocation,
+      afterSettle: (() => void) | null,
+    ): void => {
       activeNavigationSettleCleanupRef.current?.();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
@@ -1987,6 +2524,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       );
       scrollToTimelineLocation(location);
       const scrollNode = list.getScrollableNode();
+      const finishFreeNavigation = (): void => {
+        finishImperativeScrollOperation(imperativeScrollGeneration);
+        followLatchRef.current?.completeOwnedFreeNavigation();
+        afterSettle?.();
+      };
       activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
           awaitScrollSettle(
@@ -2020,13 +2562,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           });
         },
         onSettledValid: () => {
-          finishImperativeScrollOperation(imperativeScrollGeneration);
-          followLatchRef.current?.completeOwnedFreeNavigation();
+          finishFreeNavigation();
           restorePersistencePendingRef.current = false;
         },
         onSettledInvalid: () => {
-          finishImperativeScrollOperation(imperativeScrollGeneration);
-          followLatchRef.current?.completeOwnedFreeNavigation();
+          finishFreeNavigation();
           acceptExhaustedPersistedRestoreFallback(
             restorePersistencePendingRef,
             pendingMeasuredFreeRestoreRef,
@@ -2044,6 +2584,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       finishImperativeScrollOperation,
       scrollToTimelineLocation,
     ],
+  );
+
+  const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
+    (location: ChatTimelineNavigationLocation): void => {
+      issueFreeTimelineNavigation(location, null);
+    },
+    [issueFreeTimelineNavigation],
   );
 
   // Ticket 20 (no-visible-traversal requirement): `animated` is an explicit
@@ -2191,6 +2738,184 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return true;
     },
     [captureLiveChatTabScrollSnapshot, setTimelineMode],
+  );
+
+  const settleScrollRequest = useCallback(
+    (requestId: number, outcome: ChatScrollRequestOutcome): void => {
+      const pending = pendingScrollRequestLandingRef.current;
+      if (pending === null || pending.requestId !== requestId) return;
+      pendingScrollRequestLandingRef.current = null;
+      onScrollRequestSettledRef.current?.(requestId, outcome);
+    },
+    [],
+  );
+
+  /**
+   * Lands a cross-tile / panel scroll request's row. Same semantic-key,
+   * promise-settled, NON-animated mechanics as the reading-position restore
+   * above, because that is the path already proven across unmeasured rows on
+   * the windowed line: the row is placed where its position was computed
+   * from, so the first frame is right by construction, and the re-issue loop
+   * only absorbs the remeasurement of what just came into view. An ANIMATED
+   * `scrollToIndex` targets estimated geometry for the whole flight and the
+   * library never retargets mid-way, which is how a cold tile landed a
+   * viewport short with nothing to correct it.
+   *
+   * Success is the HYDRATED target row mounted at the navigation offset - a
+   * placeholder at the right pixel is still pending, since nothing can ring
+   * or center inside it. The row's index is re-read on every issue and check
+   * so a reindex mid-flight is followed rather than fought.
+   *
+   * Returns `false` when it could not issue at all (no list, or the row key
+   * is not in the rendered index yet); the request then stays pending and the
+   * `listRows` effect below re-attempts it. Navigation ownership and the
+   * reader-gesture generation are the same as `navigateToMessage`'s.
+   */
+  const landScrollRequestRow = useCallback(
+    (request: PendingScrollRequestLanding): boolean => {
+      const { messageId, blockId, requestId } = request;
+      const list = chatTimelineRef.current;
+      const initialIndex = rowIndexByKeyRef.current.get(messageId);
+      if (!list || initialIndex === undefined) return false;
+
+      // Superseding an earlier landing of THIS request is a re-issue, not a
+      // cancellation; any other active navigation is torn down as cancelled.
+      reissuingScrollRequestIdRef.current = requestId;
+      activeNavigationSettleCleanupRef.current?.();
+      reissuingScrollRequestIdRef.current = null;
+      const generationAtIssue = anchorUserScrollGenerationRef.current;
+      followLatchRef.current?.beginOwnedFreeNavigation();
+      const imperativeScrollGeneration = beginImperativeScrollOperation(false);
+      const scrollNode = list.getScrollableNode();
+      const viewOffset = CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+      const targetIndex = (): number | null =>
+        rowIndexByKeyRef.current.get(messageId) ?? null;
+      const issue = (index: number): Promise<void> => {
+        const target = expectedTimelineScrollTop(
+          list,
+          index,
+          viewOffset,
+          listTopOffsetAdjustmentRef.current,
+        );
+        if (target === null) return Promise.resolve();
+        return list.scrollToOffset({ offset: target, animated: false });
+      };
+      const landedOnHydratedRow = (): boolean => {
+        const index = targetIndex();
+        if (index === null) return false;
+        if (
+          !chatTimelineNavigationLandedAtLocation(
+            {
+              positionAtIndex: (positionIndex) =>
+                list.getState().positionAtIndex(positionIndex),
+              scroll: scrollNode.scrollTop,
+              topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            },
+            { index, viewOffset, animated: false },
+            CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX,
+          )
+        ) {
+          return false;
+        }
+        return queryMountedChatMessageRoot(scrollNode, messageId) !== null;
+      };
+      // Idempotent: the cleanup below runs `finish` again after a landing
+      // that already settled, and ownership must be released exactly once.
+      let landingFinished = false;
+      const finish = (): void => {
+        if (landingFinished) return;
+        landingFinished = true;
+        finishImperativeScrollOperation(imperativeScrollGeneration);
+        followLatchRef.current?.completeOwnedFreeNavigation();
+      };
+
+      let pendingScrollPromise = issue(initialIndex);
+      let lastSettleTimedOut = false;
+      const cancelLandingLoop = settleChatTimelineNavigation({
+        awaitSettle: (onSettle) =>
+          awaitChatTimelineScrollPromiseSettle(
+            () => pendingScrollPromise,
+            (timedOut) => {
+              lastSettleTimedOut = timedOut;
+              onSettle();
+            },
+            CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
+          ),
+        isAborted: () => {
+          if (anchorUserScrollGenerationRef.current === generationAtIssue) {
+            return false;
+          }
+          // A reader gesture (or a newer navigation, which bumps the same
+          // generation first) took the viewport. The settle helper calls
+          // neither settled callback on abort, so this is the only place the
+          // owner can learn the request is over.
+          settleScrollRequest(requestId, "cancelled");
+          return true;
+        },
+        shouldYieldToReader: () => false,
+        validate: () => !lastSettleTimedOut && landedOnHydratedRow(),
+        reissue: () => {
+          const index = targetIndex();
+          if (index !== null) pendingScrollPromise = issue(index);
+        },
+        onSettledValid: () => {
+          finish();
+          restorePersistencePendingRef.current = false;
+          // Re-arm from the real landing so the 3s is measured from when the
+          // reader can actually see the target; an already-in-view row
+          // rang at issue and simply keeps ringing.
+          showNavigationHighlight(messageId, blockId);
+          if (blockId !== null) {
+            // Inner card centering only after the row landing is done: a
+            // `scrollIntoView` during the settle window would fail the 1px
+            // row-top check and be snapped back to the turn header.
+            blockReveal.requestReveal(messageId, blockId);
+          }
+          settleScrollRequest(requestId, "landed");
+        },
+        onSettledInvalid: () => {
+          finish();
+          acceptExhaustedPersistedRestoreFallback(
+            restorePersistencePendingRef,
+            pendingMeasuredFreeRestoreRef,
+          );
+          // The offset can be unreachable - a transcript shorter than the
+          // viewport, or a target in the last screenful - while the row is
+          // nonetheless mounted where the browser clamped. That is a landing
+          // the reader can see, so it still rings and reveals its card; only
+          // a row that never mounted is a genuine miss.
+          if (queryMountedChatMessageRoot(scrollNode, messageId) !== null) {
+            showNavigationHighlight(messageId, blockId);
+            if (blockId !== null) blockReveal.requestReveal(messageId, blockId);
+            settleScrollRequest(requestId, "landed");
+            return;
+          }
+          settleScrollRequest(requestId, "exhausted");
+        },
+        maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
+      });
+      // Another navigation (`scrollToEnd`, find, a restore, unmount) tears
+      // this landing down through the shared cleanup without bumping the
+      // reader generation, so `isAborted` never sees it. Report `cancelled`
+      // from here instead - otherwise the request stays pending, a later
+      // hidden→visible transition re-issues the stale landing over the tail,
+      // and the tile keeps the target row's hydration hold until its TTL.
+      activeNavigationSettleCleanupRef.current = (): void => {
+        cancelLandingLoop();
+        finish();
+        if (reissuingScrollRequestIdRef.current !== requestId) {
+          settleScrollRequest(requestId, "cancelled");
+        }
+      };
+      return true;
+    },
+    [
+      beginImperativeScrollOperation,
+      blockReveal,
+      finishImperativeScrollOperation,
+      settleScrollRequest,
+      showNavigationHighlight,
+    ],
   );
 
   useLayoutEffect(() => {
@@ -2353,6 +3078,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
 
+    // A scroll request that has not reached a terminal outcome is the newer
+    // intent: re-issue it against the now-measurable geometry instead of
+    // replaying the saved reading position over it. Its ring stays. The
+    // re-issue supersedes its own earlier landing itself (silently, as the
+    // same request); the shared cleanup runs here only when no request is
+    // pending, or it would report that request cancelled and release it.
+    const pendingLanding = pendingScrollRequestLandingRef.current;
+    if (pendingLanding !== null) {
+      if (landScrollRequestRow(pendingLanding)) {
+        scrollRequestLandingIssuedRef.current = pendingLanding.requestId;
+      }
+      return;
+    }
+    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current = null;
+    queueMicrotask(() => {
+      clearNavigationHighlight();
+    });
     const replay = restoreChatTabState(
       identity,
       listRowsRef.current.map((row) => row.key),
@@ -2392,19 +3135,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     );
     if (!issued) acceptFailedReplayLanding();
   }, [
+    clearNavigationHighlight,
     identity,
+    landScrollRequestRow,
     reconcileInvalidTimelineLanding,
     restorePersistedTimelineLocation,
     visible,
   ]);
 
   const navigateToMessage = useCallback(
-    (messageId: string, highlight: boolean, animated: boolean): void => {
+    (
+      messageId: string,
+      highlight: boolean,
+      animated: boolean,
+      blockId: string | null,
+    ): void => {
       // Decision #21: minimap/find/deep-link navigation all perform
       // manual-navigation cancellation first. Not a real gesture - a plain
       // release, no freeze: the navigation's own scroll (right below, via
-      // scrollToTimelineLocationSuppressingFollowRestore) takes over
-      // immediately regardless.
+      // issueFreeTimelineNavigation) takes over immediately regardless.
       forgetPendingHydrationRestore(identity);
       pendingHydrationRestoreAnchorIdRef.current = null;
       cancelTimelineLiveFollowForUserNavigation({
@@ -2420,14 +3169,28 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       );
       if (location === null) return;
       if (highlight) {
-        showNavigationHighlight(messageId);
+        showNavigationHighlight(messageId, blockId);
       }
-      scrollToTimelineLocationSuppressingFollowRestore(location);
+      // Inner card centering has to wait until the row-top settle/re-issue
+      // loop is done: a `scrollIntoView` during that window fails the 1px
+      // row-top check and the re-issue snaps back to the turn header. Paint
+      // at issue so an already-in-view card rings immediately; re-arm in
+      // `afterSettle` so the 3s is measured from the real landing.
+      issueFreeTimelineNavigation(
+        location,
+        highlight && blockId !== null
+          ? () => {
+              showNavigationHighlight(messageId, blockId);
+              blockReveal.requestReveal(messageId, blockId);
+            }
+          : null,
+      );
     },
     [
+      blockReveal,
       cancelTimelineLiveFollowForUserNavigation,
       identity,
-      scrollToTimelineLocationSuppressingFollowRestore,
+      issueFreeTimelineNavigation,
       setScrolledActiveUserMessageIdIfChanged,
       showNavigationHighlight,
     ],
@@ -2490,7 +3253,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [identity, listRows, rawSavedTabState, restorePersistedTimelineLocation]);
 
   const onMinimapItemSelect = useCallback(
-    (messageId: string): void => navigateToMessage(messageId, false, true),
+    (messageId: string): void =>
+      navigateToMessage(messageId, false, true, null),
     [navigateToMessage],
   );
 
@@ -2553,9 +3317,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     onTimelineItemSizeChanged();
   }, [onTimelineItemSizeChanged]);
 
-  const onChatTimelineRowMount = useCallback((): void => {
-    scheduleChatFindMountedHighlightSync();
-  }, [scheduleChatFindMountedHighlightSync]);
+  const onChatTimelineRowMount = useCallback(
+    (messageId: string): void => {
+      scheduleChatFindMountedHighlightSync();
+      blockReveal.onRowMount(messageId);
+    },
+    [blockReveal, scheduleChatFindMountedHighlightSync],
+  );
 
   // The controller does not diff message arrays to decide scrolling - append,
   // prepend, reorder/weave, in-place update, and suffix replacement all flow
@@ -2603,51 +3371,69 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // it added a warning without actually closing the race.
       activityGroupOpenStore.getState().setOpen(activityGroupId, true);
     }
-    // Cross-tile jumps use the same programmatic-navigation choke point as
-    // every in-tile navigation: suppression, settle validation, and bounded
-    // re-issue are all armed before the scroll. The highlight is visual only.
-    // Animated (ticket 20 does not change minimap/deep-link semantics - find
-    // is unrelated to this call site, see navigateToMessage's own comment):
-    // a cross-tile jump is a real navigation the reader triggered elsewhere.
-    navigateToMessage(request.messageId, true, true);
+    // A newer request supersedes whatever the previous one was still doing.
+    const superseded = pendingScrollRequestLandingRef.current;
+    if (superseded !== null)
+      settleScrollRequest(superseded.requestId, "cancelled");
+    const landing: PendingScrollRequestLanding = {
+      requestId: request.requestId,
+      messageId: request.messageId,
+      blockId: resolvedScrollBlockId(request.blockId),
+    };
+    pendingScrollRequestLandingRef.current = landing;
+    // Same prelude as `navigateToMessage`: a cross-tile jump is an explicit
+    // navigation, so it releases any pending hydration restore and the live
+    // follow, and the ring paints at issue so an already-in-view target rings
+    // immediately (it is re-armed from the real landing).
+    forgetPendingHydrationRestore(identity);
+    pendingHydrationRestoreAnchorIdRef.current = null;
+    cancelTimelineLiveFollowForUserNavigation({
+      direction: "indeterminate",
+      freezeInFlightScroll: false,
+      publishesReaderPosition: false,
+    });
+    setScrolledActiveUserMessageIdIfChanged(request.messageId);
+    showNavigationHighlight(landing.messageId, landing.blockId);
+    // Deliberately NOT the animated `navigateToMessage` path: the landing
+    // effect right below issues `landScrollRequestRow` in this same commit,
+    // and keeps retrying while the row key is not rendered yet.
     scrollRequestRef.current = null;
   }, [
     activityGroupOpenStore,
-    navigateToMessage,
+    cancelTimelineLiveFollowForUserNavigation,
+    identity,
     scrollRequest?.requestId,
     scrollToEnd,
+    setScrolledActiveUserMessageIdIfChanged,
+    settleScrollRequest,
+    showNavigationHighlight,
   ]);
 
-  // --- Accessibility (decision #24): polite turn-completion announcement ----
+  // A request whose row was not in the rendered index when it arrived (cold
+  // row on the windowed line, or a tile that learned about the message before
+  // its own stream delivered it) is re-attempted as the rows change, rather
+  // than burned. Only while it has not been ISSUED: an issued landing owns its
+  // own re-issue loop and re-reads the index itself.
+  useLayoutEffect(() => {
+    const pending = pendingScrollRequestLandingRef.current;
+    if (pending === null) return;
+    if (scrollRequestLandingIssuedRef.current === pending.requestId) return;
+    if (landScrollRequestRow(pending)) {
+      scrollRequestLandingIssuedRef.current = pending.requestId;
+    }
+  }, [landScrollRequestRow, listRows, scrollRequest?.requestId]);
 
-  // Liveness is NOT inferred here: `useChatAnnouncements` reads the store's
-  // transcript baseline (which connection hydrated these rows) and reports
-  // the semantic transition. This layer only renders it.
+  // --- Transcript completion signal (decision #24) -------------------------
+
+  // The transcript observer uses the store's provenance to identify live
+  // completions. They feed both the shared region and the "New reply" latch;
+  // the separate fallback observer never changes that latch.
   const announcement = useChatAnnouncements({
     messages,
     baselineEpoch,
     coldRewrittenMessageIds,
     hydrationSequence,
   });
-  // The rendered sentence is FROZEN when the announcement is made, not
-  // recomputed per render: `taskTitle` is live (a chat is auto-titled right
-  // after its first turn, and can be renamed any time). Recomputing would
-  // rewrite the text inside the already-announced live-region node, and a
-  // screen reader re-announces on content change - a phantom completion for
-  // a rename. A later announcement re-freezes with the title current then.
-  const [renderedAnnouncement, setRenderedAnnouncement] = useState<{
-    readonly sequence: number;
-    readonly text: string;
-  } | null>(null);
-  if (
-    announcement !== null &&
-    renderedAnnouncement?.sequence !== announcement.sequence
-  ) {
-    setRenderedAnnouncement({
-      sequence: announcement.sequence,
-      text: announcementTextFor(taskTitle, announcement.kind),
-    });
-  }
   useLayoutEffect(() => {
     if (announcement === null) return;
     // Decision #10/#16: turn completion below the fold stays anchored - no
@@ -2709,7 +3495,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             followLatchRef={followLatchRef}
             isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
             resolveSuppressedEndLanding={resolveSuppressedEndLanding}
-            navigationHighlightedMessageId={navigationHighlightedMessageId}
+            navigationHighlightedMessageId={
+              navigationHighlight?.messageId ?? null
+            }
+            navigationHighlightedBlockId={navigationHighlight?.blockId ?? null}
             rowHeightMemory={rowHeightMemory}
             onItemSizeChanged={onChatTimelineItemSizeChanged}
             onRowMount={onChatTimelineRowMount}
@@ -2758,15 +3547,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             />
           ) : null}
         </div>
-        <div aria-live="polite" className="sr-only">
-          {renderedAnnouncement === null ? null : (
-            // Keyed by the deriver's monotonic sequence so consecutive
-            // identical announcements still mutate the live region.
-            <span key={renderedAnnouncement.sequence}>
-              {renderedAnnouncement.text}
-            </span>
-          )}
-        </div>
+        <ChatLiveAnnouncements
+          epicId={props.epicId}
+          chatId={taskId}
+          hostId={props.hostId}
+          messages={messages}
+          baselineEpoch={baselineEpoch}
+          hydrationSequence={hydrationSequence}
+          coldRewrittenMessageIds={coldRewrittenMessageIds}
+          visible={visible}
+          taskTitle={taskTitle}
+          completion={announcement}
+        />
       </ActivityGroupOpenStoreProvider>
     </ChatOpenStoreScopeProvider>
   );

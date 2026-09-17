@@ -1,3 +1,7 @@
+import {
+  pruneRecoveryDraft,
+  recoveryDraftIds,
+} from "@/lib/tab-recovery/history";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -7,14 +11,13 @@ import {
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import {
   adoptDraftImageHandoff,
   draftImageHashes,
 } from "@/lib/composer/landing-image-move";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { isMobileApp } from "@/lib/mobile-app";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
@@ -39,6 +42,12 @@ import type {
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
+  completeLandingDraftDelete,
+  isLandingDraftRetirementKey,
+  landingDraftIsRetired,
+  retireLandingDraft,
+} from "@/lib/drafts/landing-draft-retirement";
+import {
   resolvePrimaryPath,
   trimFoldersPreservingPrimary,
 } from "@/lib/worktree/resolve-primary-path";
@@ -53,6 +62,16 @@ import {
 } from "@/lib/composer/landing-image-gc";
 import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
+import {
+  landingPlacementHostId,
+  notifyDraftLocalDelete,
+  notifyDraftLocalEdit,
+  notifyDraftLocalFlush,
+} from "@/lib/drafts/draft-local-edits";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /**
  * In-flight "new epic" draft shown in the global tab strip. Multiple drafts
@@ -74,7 +93,50 @@ export interface LandingDraftTab {
   readonly settings: ChatRunSettings | null;
   readonly composerMode: ComposerMode;
   readonly workspace: LandingDraftWorkspaceSnapshot;
+  readonly adoption: LandingDraftAdoption;
+  readonly hostRevision: number;
+  readonly generation: number;
+  readonly syncedGeneration: number;
+  readonly ownerHostId: string | null;
+  readonly origin: "own" | "replica" | null;
+  /**
+   * Ancestor draft id this row was forked from, carried until the fork's
+   * first host write is acknowledged. The write plane sends it once
+   * (`DraftWrite.supersedes`) and the host retracts the ancestor's cloud
+   * row; the pointer is cleared on that ACK so no later write repeats it.
+   */
+  readonly supersedes: string | null;
+  readonly publication: DraftPublication | null;
+  /**
+   * Image hashes confirmed on the adopting host via `drafts.putBlob` /
+   * `drafts.readBlob`. LRU may drop the local mirror once every live
+   * hash is in this set; unconfirmed hashes pin the row so eviction
+   * cannot GC bytes that have no host home yet.
+   */
+  readonly confirmedHostBlobHashes: ReadonlyArray<string>;
+  /**
+   * Explicit tab-strip membership. Existence in the store no longer implies
+   * the draft is open: closing a non-empty start-task draft retains the row
+   * and sets this true. Reloads and other devices read the same bit from the
+   * draft/v1 portable payload (`closed`), not from a host SQLite column.
+   */
+  readonly closed: boolean;
 }
+
+export type LandingDraftAdoption =
+  | { readonly state: "unadopted" }
+  | { readonly state: "adopted"; readonly hostId: string };
+
+export const UNADOPTED_LANDING_DRAFT: LandingDraftAdoption = {
+  state: "unadopted",
+};
+
+export function isOpenLandingDraft(draft: LandingDraftTab): boolean {
+  return !draft.closed && !landingDraftIsRetired(draft.id);
+}
+
+/** Local persist cap for adopted mirrors; unadopted drafts are never LRU'd. */
+export const MAX_LOCAL_ADOPTED_LANDING_MIRRORS = 30;
 
 // Defined in the dependency-free leaf `./landing-draft-content` (so the store
 // import cycle can't TDZ on it); re-exported here for existing importers.
@@ -103,10 +165,46 @@ interface LandingDraftStoreState {
    * and default settings; non-null settings are an explicit caller override.
    */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
-  /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
-   *  strip-neighbor navigation in the close-flow handles where the user lands. */
+  /**
+   * Mint `nextId` as a fresh, unadopted draft carrying `sourceId`'s content,
+   * caret, settings, mode and workspace, with `supersedes` naming the
+   * source. The fork rule for a foreign row: the copy adopts and publishes
+   * through the normal path as this host's own row, and the source is
+   * retired locally afterwards. False when the source is missing or
+   * `nextId` already exists.
+   */
+  forkDraft: (sourceId: string, nextId: string) => boolean;
+  /**
+   * Put a start-task draft away. A non-empty draft is retained (`closed:
+   * true`) and leaves the tab strip; an empty one is deleted so stray Cmd-N
+   * tabs do not accumulate. If it was the active draft, clears
+   * `activeDraftId`; strip-neighbor navigation in the close-flow handles
+   * where the user lands.
+   */
   closeDraft: (id: string) => void;
-  /** Set the active draft without creating a new one. No-op if id not found. */
+  /**
+   * Explicit destroy — local row plus host delete when adopted. T11
+   * surfaces this; submit/replace-with-epic also uses it. Close does not.
+   */
+  deleteDraft: (id: string) => void;
+  /**
+   * Destroy the local row for a delete the HOST already performed. Same
+   * removal as `deleteDraft` minus the outbound `drafts.delete`: routing one
+   * back for a tombstone we are applying is a redundant request whose only
+   * possible outcome is `deleted: false`.
+   */
+  applyHostDelete: (id: string) => void;
+  /**
+   * Restore a retained draft to the tab strip (`closed: false`) and make
+   * it active. T11's "open" action. No-op if id is not in the store.
+   */
+  openDraft: (id: string) => void;
+  /**
+   * Drop the local mirror of an adopted draft without deleting the host
+   * row. LRU eviction uses this; user close uses `closeDraft`.
+   */
+  dropLocalMirror: (id: string) => void;
+  /** Set the active draft without creating a new one. No-op if id not found or closed. */
   setActiveDraft: (id: string) => void;
   /** Clear the active draft when focus leaves the landing draft surface. */
   clearActiveDraft: () => void;
@@ -276,6 +374,8 @@ function readProjectedDrafts(
         settings: parseChatRunSettings(draft.settings),
         composerMode: parseComposerMode(draft.composerMode),
         workspace: parseLandingDraftWorkspaceSnapshot(draft.workspace),
+        ...mirrorFieldsFromExisting(draft.id),
+        closed: draft.closed === true,
       },
     ];
   });
@@ -329,7 +429,7 @@ function readProjectedActiveDraftId(
 ): string | null {
   const activeDraftId = snapshot.activeLandingDraftId;
   if (activeDraftId === null) return null;
-  return drafts.some((draft) => draft.id === activeDraftId)
+  return drafts.some((draft) => draft.id === activeDraftId && !draft.closed)
     ? activeDraftId
     : null;
 }
@@ -364,6 +464,8 @@ function parsePersistedLandingDrafts(
           settings: parseChatRunSettings(raw.settings),
           composerMode: parsePersistedComposerMode(raw.composerMode),
           workspace: parseLandingDraftWorkspaceSnapshot(raw.workspace),
+          ...parseLandingMirrorFields(raw),
+          closed: raw.closed === true,
         },
       ];
     }),
@@ -375,7 +477,9 @@ function parsePersistedActiveDraftId(
   drafts: ReadonlyArray<LandingDraftTab>,
 ): string | null {
   if (typeof value !== "string") return null;
-  return drafts.some((draft) => draft.id === value) ? value : null;
+  return drafts.some((draft) => draft.id === value && !draft.closed)
+    ? value
+    : null;
 }
 
 // Rehydration-safe composer-mode parse. Unlike `parseComposerMode` (which seeds
@@ -389,22 +493,80 @@ function parsePersistedComposerMode(value: unknown): ComposerMode {
 }
 
 /**
+ * A row this device may not write through its adoption host: a replica, or
+ * an own row adopted on a host the landing placement has auto-followed away
+ * from. Ownership never moves: closing, reopening and caret moves on such a
+ * row stay local, and the first substantive edit FORKS it onto the
+ * placement host (`forkLandingDraftInPlace`) instead of writing through.
+ */
+export function landingRowIsForeign(draft: {
+  readonly origin: "own" | "replica" | null;
+  readonly adoption: LandingDraftAdoption;
+}): boolean {
+  if (draft.origin === "replica") return true;
+  const placement = landingPlacementHostId();
+  return (
+    placement !== null &&
+    draft.adoption.state === "adopted" &&
+    draft.adoption.hostId !== placement
+  );
+}
+
+function destroyLandingDraft(
+  get: () => LandingDraftStoreState,
+  set: (partial: Partial<LandingDraftStoreState>) => void,
+  id: string,
+  routeHostDelete: boolean,
+): void {
+  const { drafts, activeDraftId } = get();
+  const closing = drafts.find((d) => d.id === id);
+  // A local delete needs a row to route its host request. A host tombstone is
+  // already authoritative even when its local mirror was evicted.
+  if (closing === undefined && routeHostDelete) return;
+  // A foreign row is never deleted THROUGH its adoption host's session: that
+  // session's `drafts.delete` names a row the host holds for another owner
+  // (or none). Its receipt completes locally; the coordinator is still told,
+  // and retracts the owner's cloud row on a best-effort basis instead.
+  const routeDelete =
+    routeHostDelete && closing !== undefined && !landingRowIsForeign(closing);
+  if (closing !== undefined) {
+    retireLandingDraft(
+      id,
+      routeDelete && closing.adoption.state === "adopted"
+        ? closing.adoption.hostId
+        : null,
+    );
+  }
+  if (!routeDelete) completeLandingDraftDelete(id);
+  pruneRecoveryDraft(id);
+  if (closing === undefined) return;
+  draftRuntimeRegistry.close(id);
+  // Route the host delete while the row still exists: `routeLocalDelete`
+  // resolves the session via `hostIdForDraft`, which reads this store.
+  if (routeHostDelete && closing.adoption.state === "adopted") {
+    notifyDraftLocalDelete(id);
+  }
+  set({
+    drafts: drafts.filter((d) => d.id !== id),
+    activeDraftId: activeDraftId === id ? null : activeDraftId,
+  });
+  scheduleLandingImageReconcile();
+}
+
+/**
  * Content-derived emptiness: no typed text AND no image atoms. An image-only
  * draft is real content - discarding or replacing it would drop the image.
  */
 export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
-  if (
-    extractPlainTextFromComposerJSONContent(draft.content).trim().length > 0
-  ) {
-    return false;
-  }
-  return !containsImageAtoms(draft.content);
+  return isEmptyLandingDraftContent(draft.content);
 }
 
 /**
- * Newest existing landing draft, for the installed mobile app's single stable
+ * Newest OPEN landing draft, for the installed mobile app's single stable
  * composer: an id-less "new draft" activation reuses this instead of minting
- * (see `createDraft`). `null` when no draft exists yet.
+ * (see `createDraft`). `null` when no open draft exists. A closed draft is
+ * retained-but-hidden (see `closeDraft`) and is never resurrected implicitly;
+ * it comes back only through `openDraft`.
  */
 export function newestLandingDraftId(): string | null {
   return newestDraft(useLandingDraftStore.getState().drafts);
@@ -413,6 +575,7 @@ export function newestLandingDraftId(): string | null {
 function newestDraft(drafts: ReadonlyArray<LandingDraftTab>): string | null {
   let newest: LandingDraftTab | null = null;
   for (const draft of drafts) {
+    if (!isOpenLandingDraft(draft)) continue;
     // >= so the LATER array entry wins a millisecond tie: drafts are
     // append-ordered, and same-ms timestamps are realistic (restore paths
     // stamp several drafts in one tick).
@@ -449,6 +612,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       createDraftWithId: (id, settings) => {
+        if (landingDraftIsRetired(id)) return id;
         if (get().drafts.some((draft) => draft.id === id)) return id;
         // Workspace and default settings belong to the same placement host,
         // including drafts created through the tab strip or a split pane.
@@ -467,6 +631,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // Seed from the global last-used mode; the draft owns it from here.
           composerMode: useSettingsStore.getState().composerMode,
           workspace: readLandingDraftWorkspaceSnapshotForHost(hostId),
+          ...freshLandingMirrorState(),
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -475,22 +640,145 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         return next.id;
       },
 
+      forkDraft: (sourceId, nextId) => {
+        if (landingDraftIsRetired(nextId)) return false;
+        if (get().drafts.some((draft) => draft.id === nextId)) return false;
+        // The runtime debounces edits; the copy must carry the keystroke
+        // that is still in flight, not the last flushed document.
+        draftRuntimeRegistry.flush(sourceId);
+        const source = get().drafts.find((draft) => draft.id === sourceId);
+        if (source === undefined) return false;
+        const next: LandingDraftTab = {
+          id: nextId,
+          content: source.content,
+          selection: source.selection,
+          lastTouchedAt: Date.now(),
+          settings: copyChatRunSettings(source.settings),
+          composerMode: source.composerMode,
+          workspace: source.workspace,
+          ...freshLandingMirrorState(),
+          // A fresh row with content is dirty by definition: the mirror
+          // adopts and publishes it on the next sweep.
+          generation: 1,
+          // One-shot pointer for that first publish: the host retracts the
+          // ancestor's cloud row, and the ancestor's own host tombstones
+          // (or re-mints) its local row from there.
+          supersedes: sourceId,
+        };
+        set((state) => ({
+          drafts: [...uniqueLandingDrafts(state.drafts), next],
+          activeDraftId:
+            state.activeDraftId === sourceId ? nextId : state.activeDraftId,
+        }));
+        notifyDraftLocalEdit(nextId);
+        return true;
+      },
+
       closeDraft: (id) => {
-        const { drafts, activeDraftId } = get();
-        const next = drafts.filter((d) => d.id !== id);
-        if (next.length === drafts.length) return;
-        // A close is the runtime cancellation boundary. It flushes this exact
-        // draft's pending writer and aborts only a pre-create attempt; another
-        // visible draft's mirror or submission is never consulted.
+        if (!get().drafts.some((d) => d.id === id)) return;
+        // Flush pending runtime writes first so emptiness is judged on the
+        // canonical document, not a still-debounced keystroke.
         draftRuntimeRegistry.close(id);
-        const nextActive = activeDraftId === id ? null : activeDraftId;
-        set({ drafts: next, activeDraftId: nextActive });
-        // Closing a draft can orphan its image bytes — reclaim them (debounced).
+        const closing = get().drafts.find((d) => d.id === id);
+        if (closing === undefined) return;
+        if (isEmptyLandingDraftContent(closing.content)) {
+          // An empty foreign row is dropped locally only: the owner's row
+          // is the owner's to keep, and nothing here was edited (an edit
+          // would have forked it first).
+          destroyLandingDraft(get, set, id, !landingRowIsForeign(closing));
+          return;
+        }
+        if (closing.closed) {
+          if (get().activeDraftId === id) set({ activeDraftId: null });
+          return;
+        }
+        // A row this host does not own closes as local view state only: the
+        // owner keeps its own tab state, and dirtying a foreign row would
+        // leave an edit bound to a host session that never writes it.
+        const local = landingRowIsForeign(closing);
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id
+              ? {
+                  ...d,
+                  closed: true,
+                  generation: local ? d.generation : d.generation + 1,
+                }
+              : d,
+          ),
+          activeDraftId:
+            state.activeDraftId === id ? null : state.activeDraftId,
+        }));
+        if (!local) {
+          notifyDraftLocalEdit(id);
+          notifyDraftLocalFlush(id);
+        }
+        // Retained drafts stay in `currentDrafts()` so this sweep must not
+        // reap their image hashes. The call still drops session entries of
+        // a runtime that just closed.
+        scheduleLandingImageReconcile();
+      },
+
+      deleteDraft: (id) => {
+        destroyLandingDraft(get, set, id, true);
+      },
+
+      applyHostDelete: (id) => {
+        destroyLandingDraft(get, set, id, false);
+      },
+
+      openDraft: (id) => {
+        if (landingDraftIsRetired(id)) return;
+        const draft = get().drafts.find((d) => d.id === id);
+        if (draft === undefined) return;
+        // A pending create keeps the runtime alive through close. Reopen
+        // here is defensive — `openDraft` is synchronous and nothing between
+        // these two reads settlement — so a retained in-flight runtime is
+        // not handed back still closed.
+        draftRuntimeRegistry.reopen(id);
+        if (!draft.closed) {
+          set({ activeDraftId: id });
+          return;
+        }
+        // Reopening a replica is local view state, like closing one: looking
+        // at a draft another host owns must not write to that host's row or
+        // leave a dirty replica behind. The first substantive edit forks.
+        const local = landingRowIsForeign(draft);
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id
+              ? {
+                  ...d,
+                  closed: false,
+                  generation: local ? d.generation : d.generation + 1,
+                }
+              : d,
+          ),
+          activeDraftId: id,
+        }));
+        if (!local) {
+          notifyDraftLocalEdit(id);
+          notifyDraftLocalFlush(id);
+        }
+      },
+
+      dropLocalMirror: (id) => {
+        const { drafts, activeDraftId } = get();
+        const current = drafts.find((d) => d.id === id);
+        if (current === undefined || current.adoption.state !== "adopted") {
+          return;
+        }
+        draftRuntimeRegistry.close(id);
+        set({
+          drafts: drafts.filter((d) => d.id !== id),
+          activeDraftId: activeDraftId === id ? null : activeDraftId,
+        });
         scheduleLandingImageReconcile();
       },
 
       setActiveDraft: (id) => {
-        if (!get().drafts.some((d) => d.id === id)) return;
+        const draft = get().drafts.find((d) => d.id === id);
+        if (draft === undefined || !isOpenLandingDraft(draft)) return;
         set({ activeDraftId: id });
       },
 
@@ -525,21 +813,36 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
                   content,
                   selection,
                   lastTouchedAt: Date.now(),
+                  generation: d.generation + 1,
                 }
               : d,
           ),
         }));
+        notifyDraftLocalEdit(id);
       },
 
       setDraftSelection: (id, selection) => {
         const draft = get().drafts.find((d) => d.id === id);
         if (!draft) return;
         if (sameDraftSelection(draft.selection, selection)) return;
+        // A caret move on a row this host does not own (or whose owner the
+        // placement has left) stays local: it is not an edit, must not
+        // fork, and must not dirty the row (a dirty foreign row suppresses
+        // the owner's later documents and has no queued flush).
+        const local = landingRowIsForeign(draft);
         set((state) => ({
           drafts: state.drafts.map((d) =>
-            d.id === id ? { ...d, selection, lastTouchedAt: Date.now() } : d,
+            d.id === id
+              ? {
+                  ...d,
+                  selection,
+                  lastTouchedAt: Date.now(),
+                  generation: local ? d.generation : d.generation + 1,
+                }
+              : d,
           ),
         }));
+        if (!local) notifyDraftLocalEdit(id);
       },
 
       setDraftSettings: (id, settings) => {
@@ -554,10 +857,17 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           }
           return {
             drafts: state.drafts.map((d) =>
-              d.id === id ? { ...d, settings: { ...settings } } : d,
+              d.id === id
+                ? {
+                    ...d,
+                    settings: { ...settings },
+                    generation: d.generation + 1,
+                  }
+                : d,
             ),
           };
         });
+        notifyDraftLocalEdit(id);
       },
 
       setDraftComposerMode: (id, mode) => {
@@ -565,9 +875,12 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         if (!draft || draft.composerMode === mode) return;
         set((state) => ({
           drafts: state.drafts.map((d) =>
-            d.id === id ? { ...d, composerMode: mode } : d,
+            d.id === id
+              ? { ...d, composerMode: mode, generation: d.generation + 1 }
+              : d,
           ),
         }));
+        notifyDraftLocalEdit(id);
       },
 
       restoreDraftWorkspaceForHost: (id, hostId) => {
@@ -589,6 +902,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         const afterSet = new Set(
           get().drafts.find((d) => d.id === id)?.workspace.folders ?? [],
         );
+        notifyDraftLocalEdit(id);
         return before.filter((path) => !afterSet.has(path));
       },
 
@@ -598,6 +912,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             removeLandingDraftWorkspaceFolder(workspace, folderPath),
           ),
         );
+        notifyDraftLocalEdit(id);
       },
 
       setDraftWorkspacePrimary: (id, folderPath) => {
@@ -606,6 +921,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             setLandingDraftWorkspacePrimary(workspace, folderPath),
           ),
         );
+        notifyDraftLocalEdit(id);
       },
     }),
     {
@@ -749,6 +1065,7 @@ function areLandingDraftsEqual(
     ) {
       return false;
     }
+    if (left[index].closed !== right[index].closed) return false;
   }
   return true;
 }
@@ -758,7 +1075,7 @@ function uniqueLandingDrafts(
 ): ReadonlyArray<LandingDraftTab> {
   const seen = new Set<string>();
   return drafts.flatMap((draft) => {
-    if (seen.has(draft.id)) return [];
+    if (seen.has(draft.id) || landingDraftIsRetired(draft.id)) return [];
     seen.add(draft.id);
     return [draft];
   });
@@ -809,6 +1126,7 @@ function projectLandingDraftForDesktop(
     settings: chatRunSettingsToDesktopValue(draft.settings),
     composerMode: draft.composerMode,
     workspace: landingDraftWorkspaceToDesktopValue(draft.workspace),
+    closed: draft.closed,
   };
 }
 
@@ -865,7 +1183,7 @@ function copyChatRunSettings(
   return settings === null ? null : { ...settings };
 }
 
-function sameNullableChatRunSettings(
+export function sameNullableChatRunSettings(
   left: ChatRunSettings | null,
   right: ChatRunSettings | null,
 ): boolean {
@@ -934,7 +1252,9 @@ function updateDraftWorkspace(
   if (sameLandingDraftWorkspace(draft.workspace, nextWorkspace)) return state;
   return {
     drafts: state.drafts.map((d) =>
-      d.id === id ? { ...d, workspace: nextWorkspace } : d,
+      d.id === id
+        ? { ...d, workspace: nextWorkspace, generation: d.generation + 1 }
+        : d,
     ),
   };
 }
@@ -1153,7 +1473,7 @@ function copyRepoIdentifier(
     : { owner: repoIdentifier.owner, repo: repoIdentifier.repo };
 }
 
-function sameLandingDraftWorkspace(
+export function sameLandingDraftWorkspace(
   a: LandingDraftWorkspaceSnapshot,
   b: LandingDraftWorkspaceSnapshot,
 ): boolean {
@@ -1268,4 +1588,534 @@ function sameDraftSelection(
 ): boolean {
   if (a === null || b === null) return a === b;
   return a.from === b.from && a.to === b.to;
+}
+
+export function freshLandingMirrorState(): Pick<
+  LandingDraftTab,
+  | "adoption"
+  | "hostRevision"
+  | "generation"
+  | "syncedGeneration"
+  | "ownerHostId"
+  | "origin"
+  | "supersedes"
+  | "publication"
+  | "confirmedHostBlobHashes"
+  | "closed"
+> {
+  return {
+    adoption: UNADOPTED_LANDING_DRAFT,
+    hostRevision: 0,
+    generation: 0,
+    syncedGeneration: 0,
+    ownerHostId: null,
+    origin: null,
+    supersedes: null,
+    publication: null,
+    confirmedHostBlobHashes: [],
+    closed: false,
+  };
+}
+
+function parseLandingMirrorFields(
+  raw: Record<string, unknown>,
+): Pick<
+  LandingDraftTab,
+  | "adoption"
+  | "hostRevision"
+  | "generation"
+  | "syncedGeneration"
+  | "ownerHostId"
+  | "origin"
+  | "supersedes"
+  | "publication"
+  | "confirmedHostBlobHashes"
+> {
+  return {
+    adoption: parseLandingAdoption(raw.adoption),
+    hostRevision: nonNegativeNumber(raw.hostRevision),
+    generation: 1,
+    syncedGeneration: 0,
+    ownerHostId: parseNullableId(raw.ownerHostId),
+    origin: parseDraftOrigin(raw.origin),
+    supersedes: parseNullableId(raw.supersedes),
+    publication: parseDraftPublication(raw.publication),
+    confirmedHostBlobHashes: parseConfirmedHashes(raw.confirmedHostBlobHashes),
+  };
+}
+
+function parseLandingAdoption(value: unknown): LandingDraftAdoption {
+  if (!isRecord(value) || value.state !== "adopted") {
+    return UNADOPTED_LANDING_DRAFT;
+  }
+  if (typeof value.hostId !== "string" || value.hostId.length === 0) {
+    return UNADOPTED_LANDING_DRAFT;
+  }
+  return { state: "adopted", hostId: value.hostId };
+}
+
+function mirrorFieldsFromExisting(
+  id: string,
+): Pick<
+  LandingDraftTab,
+  | "adoption"
+  | "hostRevision"
+  | "generation"
+  | "syncedGeneration"
+  | "ownerHostId"
+  | "origin"
+  | "supersedes"
+  | "publication"
+  | "confirmedHostBlobHashes"
+> {
+  const existing = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === id);
+  if (existing === undefined) return freshLandingMirrorState();
+  return {
+    adoption: existing.adoption,
+    hostRevision: existing.hostRevision,
+    generation: existing.generation,
+    syncedGeneration: existing.syncedGeneration,
+    ownerHostId: existing.ownerHostId,
+    origin: existing.origin,
+    supersedes: existing.supersedes,
+    publication: existing.publication,
+    confirmedHostBlobHashes: existing.confirmedHostBlobHashes,
+  };
+}
+
+function parseNullableId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function parseDraftOrigin(value: unknown): "own" | "replica" | null {
+  return value === "own" || value === "replica" ? value : null;
+}
+
+function parseDraftPublication(value: unknown): DraftPublication | null {
+  if (!isRecord(value)) return null;
+  if (
+    value.status !== "unpublished" &&
+    value.status !== "current" &&
+    value.status !== "behind" &&
+    value.status !== "unknown"
+  ) {
+    return null;
+  }
+  const lastPublishedAt =
+    value.lastPublishedAt === null
+      ? null
+      : nonNegativeNumber(value.lastPublishedAt);
+  const publishedRevision =
+    value.publishedRevision === null
+      ? null
+      : nonNegativeNumber(value.publishedRevision);
+  return {
+    status: value.status,
+    lastPublishedAt:
+      value.lastPublishedAt === null ||
+      typeof value.lastPublishedAt === "number"
+        ? lastPublishedAt
+        : null,
+    publishedRevision:
+      value.publishedRevision === null ||
+      typeof value.publishedRevision === "number"
+        ? publishedRevision
+        : null,
+    halted: null,
+  };
+}
+
+function parseConfirmedHashes(value: unknown): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is string =>
+      typeof entry === "string" && SHA256_HEX.test(entry),
+  );
+}
+
+function nonNegativeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+export function landingDraftIsDirty(draftId: string): boolean {
+  if (landingDraftIsRetired(draftId)) return false;
+  const draft = useLandingDraftStore
+    .getState()
+    .drafts.find((entry) => entry.id === draftId);
+  if (draft === undefined) return false;
+  return draft.generation > draft.syncedGeneration;
+}
+
+export function landingDraftRememberSynced(
+  draftId: string,
+  hostRevision: number,
+  collectedGeneration: number,
+  ownerHostId: string | null,
+): void {
+  useLandingDraftStore.setState((state) => ({
+    drafts: state.drafts.map((draft) => {
+      if (draft.id !== draftId) return draft;
+      // A revision numbers a row on ONE host, so the clamp below belongs to
+      // one numbering line and must not outlive it. `adoptLandingDraft` moves
+      // a draft to another host WITHOUT resetting `hostRevision`, and that
+      // host numbers from scratch - clamping its ACK against the old owner's
+      // high-water mark would refuse the new owner's real documents for good.
+      // A null on EITHER side is "not known to be a different line": the
+      // row's first ACK, or a tombstone that carries no document to ask.
+      // Unknown clamps, because never going backward is the safe half.
+      const sameLine =
+        ownerHostId === null ||
+        draft.ownerHostId === null ||
+        draft.ownerHostId === ownerHostId;
+      return {
+        ...draft,
+        hostRevision: sameLine
+          ? Math.max(draft.hostRevision, hostRevision)
+          : hostRevision,
+        // Record WHOSE revision this is. Nothing else on the ACK path does,
+        // so without it a draft that was only ever published - never sent a
+        // host document - keeps a null owner forever, and the frontier check
+        // in `applyLandingHostDocument`, which is keyed on owner equality,
+        // silently opts out on the most ordinary draft there is.
+        ownerHostId:
+          hostRevision > 0 && ownerHostId !== null
+            ? ownerHostId
+            : draft.ownerHostId,
+        syncedGeneration:
+          collectedGeneration >= draft.generation
+            ? draft.generation
+            : draft.syncedGeneration,
+        // The host holds the row (and the retraction debt) from the first
+        // ACK on: the one-shot pointer must not ride a later write.
+        supersedes: hostRevision > 0 ? null : draft.supersedes,
+      };
+    }),
+  }));
+}
+
+/**
+ * Delete an own row through a host the caller KNOWS holds it (History runs
+ * on the app-wide host while the composer may be pinned elsewhere, so the
+ * placement-based routing in `destroyLandingDraft` does not apply). The
+ * receipt names that host; the coordinator routes the delete there.
+ */
+export function deleteLandingDraftOnHost(
+  draftId: string,
+  hostId: string,
+): void {
+  const { drafts, activeDraftId } = useLandingDraftStore.getState();
+  const closing = drafts.find((d) => d.id === draftId);
+  if (closing === undefined) return;
+  retireLandingDraft(draftId, hostId);
+  pruneRecoveryDraft(draftId);
+  draftRuntimeRegistry.close(draftId);
+  // Routed while the row still exists; the receipt names the host.
+  notifyDraftLocalDelete(draftId);
+  useLandingDraftStore.setState({
+    drafts: drafts.filter((d) => d.id !== draftId),
+    activeDraftId: activeDraftId === draftId ? null : activeDraftId,
+  });
+  scheduleLandingImageReconcile();
+}
+
+/**
+ * A host re-mint (or a fork made elsewhere) superseded a row that was open
+ * in this window: the successor inherits that open view state. Local only,
+ * and only for a foreign row - its `closed` is this device's view, while an
+ * own row on the placement host follows the host's portable value.
+ */
+export function reopenLandingDraftView(draftId: string): void {
+  const draft = useLandingDraftStore
+    .getState()
+    .drafts.find((entry) => entry.id === draftId);
+  if (draft === undefined || !draft.closed || !landingRowIsForeign(draft)) {
+    return;
+  }
+  useLandingDraftStore.setState((state) => ({
+    drafts: state.drafts.map((d) =>
+      d.id === draftId ? { ...d, closed: false } : d,
+    ),
+  }));
+}
+
+export function adoptLandingDraft(draftId: string, hostId: string): void {
+  useLandingDraftStore.setState((state) => ({
+    drafts: state.drafts.map((draft) =>
+      draft.id === draftId
+        ? { ...draft, adoption: { state: "adopted", hostId } }
+        : draft,
+    ),
+  }));
+}
+
+/**
+ * A replica's open/closed state is this device's view (its close and reopen
+ * never publish), so a newer head from the owner must not flip it. An own
+ * row otherwise follows the portable value.
+ */
+function incomingClosedState(
+  origin: DraftDocument["origin"],
+  portableClosed: boolean,
+  existing: LandingDraftTab | undefined,
+): boolean {
+  if (existing === undefined) return portableClosed;
+  // Foreign to the placement: a replica, or an own row adopted on a host
+  // the landing placement has auto-followed away from. Its close and
+  // reopen are local view state (`closeDraft` / `openDraft`), so the old
+  // host's echo must not undo them either.
+  if (origin === "replica" || landingRowIsForeign(existing)) {
+    return existing.closed;
+  }
+  return portableClosed;
+}
+
+/**
+ * Applies a landing document to the store. Returns whether the row was
+ * mutated by it: a retired id, or an older document from the row's current
+ * owner, is rejected without touching the row.
+ */
+export function applyLandingHostDocument(
+  document: DraftDocument,
+  content: JsonContent,
+): boolean {
+  if (document.kind !== "landing" || landingDraftIsRetired(document.draftId))
+    return false;
+  const existing = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === document.draftId);
+  // Image reads can finish out of order after subscribe-frame admission.
+  // Cloud heads use synthetic revision 0 (unknown), even for a newer head
+  // fetched while the owner is offline. Compare only actual host revisions;
+  // permanent retirement above independently fences consumed cloud drafts.
+  if (
+    existing !== undefined &&
+    existing.ownerHostId === document.ownerHostId &&
+    document.revision > 0 &&
+    existing.hostRevision > document.revision
+  )
+    return false;
+  if (
+    existing !== undefined &&
+    existing.generation > existing.syncedGeneration
+  ) {
+    // A local edit in flight wins on content; the host wins on placement.
+    adoptLandingDraft(document.draftId, document.adoption.hostId);
+    // The document's OWNER, not its adoption host: this records whose
+    // revision `document.revision` is, and the two differ on a replica.
+    landingDraftRememberSynced(
+      document.draftId,
+      document.revision,
+      existing.syncedGeneration,
+      document.ownerHostId,
+    );
+    return true;
+  }
+  const next: LandingDraftTab = {
+    id: document.draftId,
+    content,
+    selection: document.portable.selection,
+    lastTouchedAt: document.lastTouchedAt,
+    settings: document.portable.runSettings,
+    composerMode: document.portable.composerMode,
+    workspace:
+      document.workspace === null
+        ? emptyLandingDraftWorkspaceSnapshot()
+        : document.workspace,
+    adoption: { state: "adopted", hostId: document.adoption.hostId },
+    hostRevision: document.revision,
+    generation: existing?.generation ?? 0,
+    syncedGeneration: existing?.generation ?? 0,
+    ownerHostId: document.ownerHostId,
+    origin: document.origin,
+    // A host document's `supersedes` is the HOST's debt (a re-mint), already
+    // on the cloud; this device sends nothing for it. Re-keying an open tab
+    // onto the successor is the coordinator's job before the apply.
+    supersedes: null,
+    publication: document.publication,
+    confirmedHostBlobHashes: existing?.confirmedHostBlobHashes ?? [],
+    closed: incomingClosedState(
+      document.origin,
+      document.portable.closed,
+      existing,
+    ),
+  };
+  useLandingDraftStore.setState((state) => {
+    const without = state.drafts.filter((draft) => draft.id !== next.id);
+    const drafts = evictAdoptedLandingMirrors([...without, next]);
+    const activeDraftId =
+      next.closed && state.activeDraftId === next.id
+        ? null
+        : state.activeDraftId;
+    return { drafts, activeDraftId };
+  });
+  return true;
+}
+
+export function applyLandingHostDelete(draftId: string): void {
+  useLandingDraftStore.getState().applyHostDelete(draftId);
+}
+
+export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{
+  readonly draft: LandingDraftTab;
+}> {
+  return useLandingDraftStore
+    .getState()
+    .drafts.filter((draft) => {
+      if (draft.generation <= draft.syncedGeneration) return false;
+      if (draft.adoption.state === "unadopted") return false;
+      // A replica is never written through the owner's session: an edit
+      // forks it first, so a dirty replica is a row the fork already copied.
+      if (draft.origin === "replica") return false;
+      return draft.adoption.hostId === hostId;
+    })
+    .map((draft) => ({ draft }));
+}
+
+export function collectUnadoptedLandingDrafts(): ReadonlyArray<LandingDraftTab> {
+  return useLandingDraftStore
+    .getState()
+    .drafts.filter(
+      (draft) =>
+        draft.adoption.state === "unadopted" &&
+        draft.generation > draft.syncedGeneration,
+    );
+}
+
+/**
+ * Rows whose cloud entry is no longer listed: the owner deleted the draft
+ * on its device, so the mirror here goes too. Only clean rows adopted on a
+ * host other than the ingesting one - a dirty row carries a local edit
+ * still waiting for its flush. `admit` decides the rest (origin,
+ * publication, ingest ordering): see `sweepAbsentCloudDraftMirrors`.
+ */
+export function dropForeignLandingMirrorsAbsent(
+  hostId: string,
+  listed: ReadonlyMap<string, ReadonlySet<string>>,
+  admit: (draft: LandingDraftTab) => boolean,
+): readonly string[] {
+  const dropped: string[] = [];
+  const drafts = useLandingDraftStore.getState().drafts;
+  for (const draft of drafts) {
+    if (draft.adoption.state !== "adopted") continue;
+    if (draft.adoption.hostId === hostId) continue;
+    if (draft.generation > draft.syncedGeneration) continue;
+    // Listed by id AND owner: cloud ids are host-minted and a same id under
+    // another host says nothing about this row. A row with no recorded
+    // owner matches by id alone.
+    const owners = listed.get(draft.id);
+    if (
+      owners !== undefined &&
+      (draft.ownerHostId === null || owners.has(draft.ownerHostId))
+    ) {
+      continue;
+    }
+    if (!admit(draft)) continue;
+    useLandingDraftStore.getState().dropLocalMirror(draft.id);
+    dropped.push(draft.id);
+  }
+  return dropped;
+}
+
+export function dropLandingAbsentFromList(
+  hostId: string,
+  listedIds: ReadonlySet<string>,
+): void {
+  const drafts = useLandingDraftStore.getState().drafts;
+  for (const draft of drafts) {
+    if (draft.adoption.state !== "adopted") continue;
+    if (draft.adoption.hostId !== hostId) continue;
+    if (draft.generation > draft.syncedGeneration) continue;
+    if (listedIds.has(draft.id)) continue;
+    useLandingDraftStore.getState().dropLocalMirror(draft.id);
+  }
+}
+
+/**
+ * Pin the local mirror while any image hash is not yet confirmed on the
+ * host. Once every hash has been `putBlob`/`readBlob`-acked, the row is
+ * evictable again — the host is now the byte home.
+ */
+function landingDraftPinsLocalImageBytes(draft: LandingDraftTab): boolean {
+  const confirmed = new Set(draft.confirmedHostBlobHashes);
+  for (const atom of collectImageAtoms(draft.content)) {
+    if (atom.hash === null || !SHA256_HEX.test(atom.hash)) continue;
+    if (!confirmed.has(atom.hash)) return true;
+  }
+  return false;
+}
+
+export function rememberLandingBlobsOnHost(
+  draftId: string,
+  hashes: ReadonlyArray<string>,
+): void {
+  if (hashes.length === 0) return;
+  useLandingDraftStore.setState((state) => ({
+    drafts: state.drafts.map((draft) => {
+      if (draft.id !== draftId) return draft;
+      const next = new Set(draft.confirmedHostBlobHashes);
+      for (const hash of hashes) next.add(hash);
+      return { ...draft, confirmedHostBlobHashes: [...next] };
+    }),
+  }));
+}
+
+function evictAdoptedLandingMirrors(
+  drafts: ReadonlyArray<LandingDraftTab>,
+): ReadonlyArray<LandingDraftTab> {
+  const activeId = useLandingDraftStore.getState().activeDraftId;
+  // Replicas are the account directory's projection on this device and are
+  // not counted: the History list is the only place they show, so evicting
+  // one would silently drop a draft from the list while its cloud row
+  // remains. Own mirrors keep the cap.
+  const adopted = drafts.filter(
+    (draft) =>
+      draft.adoption.state === "adopted" &&
+      draft.origin !== "replica" &&
+      draft.id !== activeId &&
+      draft.generation <= draft.syncedGeneration,
+  );
+  const overflow = adopted.length - MAX_LOCAL_ADOPTED_LANDING_MIRRORS;
+  if (overflow <= 0) return drafts;
+  const recoveryIds = recoveryDraftIds();
+  const evictable = adopted.filter(
+    (draft) =>
+      !recoveryIds.has(draft.id) && !landingDraftPinsLocalImageBytes(draft),
+  );
+  const evictIds = new Set(
+    [...evictable]
+      .sort((left, right) => left.lastTouchedAt - right.lastTouchedAt)
+      .slice(0, overflow)
+      .map((draft) => draft.id),
+  );
+  return drafts.filter((draft) => !evictIds.has(draft.id));
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (!isLandingDraftRetirementKey(event.key) || event.newValue === null)
+      return;
+    const retired = useLandingDraftStore
+      .getState()
+      .drafts.filter((draft) => landingDraftIsRetired(draft.id));
+    if (retired.length === 0) return;
+    for (const draft of retired) {
+      pruneRecoveryDraft(draft.id);
+      draftRuntimeRegistry.close(draft.id);
+    }
+    // Another window's receipt removes the visible row, but must not ACK its
+    // pending host delete. The owner receipt still routes reconnect retries.
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.filter((draft) => !landingDraftIsRetired(draft.id)),
+      activeDraftId:
+        state.activeDraftId !== null &&
+        landingDraftIsRetired(state.activeDraftId)
+          ? null
+          : state.activeDraftId,
+    }));
+    scheduleLandingImageReconcile();
+  });
 }

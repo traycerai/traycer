@@ -47,7 +47,13 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
       {isMobile ? null : (
         <SettingsSidebar mode={{ kind: "route" }} variant="rail" />
       )}
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+      {/* The pane a page result scrolls to the top: see
+          `useSettingsAnchorReveal`. Marked here, by the surface, rather than
+          by each panel, so a bespoke panel cannot opt out of it. */}
+      <div
+        data-settings-panel-pane
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto"
+      >
         {isMobile && section === null ? (
           <SettingsSidebar mode={{ kind: "route" }} variant="mobile-list" />
         ) : (

@@ -7,6 +7,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
@@ -25,12 +26,13 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
-import { modLabel } from "@/lib/keybindings/platform";
-import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
+import {
+  GENERAL,
+  MOD_ENTER_LABEL,
+} from "@/components/settings/panels/general-settings.definitions";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
-
-const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("general", setting);
@@ -39,24 +41,8 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 export function GeneralSettingsPanel() {
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
-  const showGlobalResourceMonitor = useSettingsStore(
-    (s) => s.showGlobalResourceMonitor,
-  );
-  const setShowGlobalResourceMonitor = useSettingsStore(
-    (s) => s.setShowGlobalResourceMonitor,
-  );
-  const showNavigatorResourceStats = useSettingsStore(
-    (s) => s.showNavigatorResourceStats,
-  );
-  const setShowNavigatorResourceStats = useSettingsStore(
-    (s) => s.setShowNavigatorResourceStats,
-  );
-  const pinContextUsageBreakdown = useSettingsStore(
-    (s) => s.pinContextUsageBreakdown,
-  );
-  const setPinContextUsageBreakdown = useSettingsStore(
-    (s) => s.setPinContextUsageBreakdown,
-  );
+  const defaultPermission = useSettingsStore((s) => s.defaultPermission);
+  const setDefaultPermission = useSettingsStore((s) => s.setDefaultPermission);
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
   const steerOnModEnterEnabled = useSettingsStore(
@@ -68,7 +54,9 @@ export function GeneralSettingsPanel() {
   const compact = useSettingsDensity() === "compact";
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
-  const featureSettingsAvailable = getFeatureSettingsBridge() !== null;
+  const availability = useSettingsAvailabilityContext();
+  const featureSettingsAvailable =
+    GENERAL.definitions.experimental.availableWhen(availability);
 
   return (
     <SettingsPanelShell
@@ -78,15 +66,59 @@ export function GeneralSettingsPanel() {
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <SettingsGroup
-          title="Chat & composer"
+          group={GENERAL.definitions.chatComposer}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
+          <SettingsRow
+            row={GENERAL.definitions.defaultPermission}
+            control={
+              <PermissionsPicker
+                value={defaultPermission}
+                disabled={false}
+                onChange={(next) => {
+                  trackGeneralSetting("defaultPermission");
+                  setDefaultPermission(next);
+                }}
+                // No harness scope: the default is install-wide and every
+                // option stays enabled. A provider that does not honour the
+                // chosen mode narrows it in the composer, where a harness is
+                // actually selected.
+                supportedPermissionModes={null}
+                harnessLabel={null}
+                // Install-wide and harness-agnostic, so there is no catalog to
+                // union, no turn to be mid-way through, no one host whose judge
+                // this row could name, and no negotiated catalog line to read.
+                //
+                // `hostKnowsAutoMode={null}` is the THIRD state, and it is load
+                // bearing rather than a formality: `null` means no host is in
+                // scope, exactly as `supportedPermissionModes={null}` above
+                // means no harness is. `false` would be a different claim -
+                // "a machine was asked and cannot spell `auto`" - and this row
+                // has asked no machine anything. It once passed `false` with a
+                // comment calling the value inert, which was true while the
+                // flag only vetoed the upgrade sentence and stopped being true
+                // the moment it also gated the option: the row silently refused
+                // to let anyone choose Auto as their default.
+                //
+                // Nothing is lost by offering it here. A default is a
+                // preference, and the composer clamps it per host at the point
+                // a host actually exists - the same division of labour the
+                // `supportedPermissionModes` comment above describes for
+                // harnesses.
+                catalogSupportedModes={null}
+                hostKnowsAutoMode={null}
+                turnActive={false}
+                judgeBilling={null}
+                closeFocus="trigger"
+              />
+            }
+          />
           <VoiceSettingsSection />
           <SettingsRow
-            label="Quote reply on text selection"
-            description="Selecting assistant text shows a quote button that inserts the selection into the composer."
+            row={GENERAL.definitions.quoteReply}
             control={
               <Switch
                 checked={quoteReplyEnabled}
@@ -99,8 +131,7 @@ export function GeneralSettingsPanel() {
             }
           />
           <SettingsRow
-            label={`Steer with ${MOD_ENTER_LABEL}`}
-            description={`While a turn is running on a supported harness, ${MOD_ENTER_LABEL} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`}
+            row={GENERAL.definitions.steerOnModEnter}
             control={
               <Switch
                 checked={steerOnModEnterEnabled}
@@ -112,63 +143,19 @@ export function GeneralSettingsPanel() {
               />
             }
           />
-          <SettingsRow
-            label="Pin context usage breakdown"
-            description="Keep the context window breakdown visible near the chat composer when usage data is available."
-            control={
-              <Switch
-                checked={pinContextUsageBreakdown}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("pinContextUsageBreakdown");
-                  setPinContextUsageBreakdown(value);
-                }}
-                aria-label="Pin context usage breakdown"
-              />
-            }
-          />
         </SettingsGroup>
 
         <BrowserSettingsSection />
 
-        <SettingsGroup
-          title="Running agents"
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <PreventSleepSettingsSection />
-          <SettingsRow
-            label="Show global resources button"
-            description="Show the app-wide resource monitor in the header."
-            control={
-              <Switch
-                checked={showGlobalResourceMonitor}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showGlobalResourceMonitor");
-                  setShowGlobalResourceMonitor(value);
-                }}
-                aria-label="Show global resources button"
-              />
-            }
-          />
-          <SettingsRow
-            label="Show navigator resource stats"
-            description="Show compact live CPU and memory chips in task navigator rows."
-            control={
-              <Switch
-                checked={showNavigatorResourceStats}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showNavigatorResourceStats");
-                  setShowNavigatorResourceStats(value);
-                }}
-                aria-label="Show navigator resource stats"
-              />
-            }
-          />
-        </SettingsGroup>
+        {/* Carries its own "Running agents" group: one row is left in it after
+          the two resource-visibility toggles moved to Layout, and that row
+          hides itself on builds with no power bridge - so the heading has to
+          go with it rather than be gated a second time here. */}
+        <PreventSleepSettingsSection />
 
         <SettingsGroup
-          title="Worktrees"
+          group={GENERAL.definitions.worktrees}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -178,17 +165,18 @@ export function GeneralSettingsPanel() {
 
         {featureSettingsAvailable ? (
           <SettingsGroup
-            title="Experimental"
+            group={GENERAL.definitions.experimental}
+            showTitle
             tone="default"
             dataTestId={undefined}
             fill={false}
           >
             <SettingsRow
-              label="Agent roles"
-              description={
+              row={GENERAL.definitions.agentRoles}
+              status={
                 featureSettings.isError
                   ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
-                  : "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts."
+                  : undefined
               }
               control={
                 <Switch
@@ -214,14 +202,14 @@ export function GeneralSettingsPanel() {
             name the machine from here. Both are now on that host's own
             Overview, under the sidebar's host picker. */}
         <SettingsGroup
-          title="Onboarding"
+          group={GENERAL.definitions.onboarding}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Product tour"
-            description="Replay the first-launch onboarding tour."
+            row={GENERAL.definitions.productTour}
             control={
               <Button
                 type="button"
@@ -261,7 +249,8 @@ export function GeneralSettingsPanel() {
 function DangerZoneSection() {
   return (
     <SettingsGroup
-      title="Danger Zone"
+      group={GENERAL.definitions.dangerZone}
+      showTitle
       tone="danger"
       dataTestId="settings-danger-zone"
       fill={false}
@@ -329,8 +318,7 @@ function SettingsLocalAppStateSection() {
   return (
     <>
       <SettingsRow
-        label="Local app state"
-        description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared from the host's own Overview page."
+        row={GENERAL.definitions.localAppState}
         control={
           <Button
             type="button"

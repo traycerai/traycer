@@ -1,4 +1,4 @@
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -222,18 +222,37 @@ function ResumeManagedCommandDoor(props: {
 }) {
   const managedCommand = props.trigger.managedCommand;
   const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
+  const transcript = useMaybeChatTranscript();
+  // The host the digest named as the shell's, or null for a shell the chat's
+  // own host produced. Normalized BEFORE anything reads it: a body that
+  // reached the store through an older host's full-snapshot line
+  // (`chat.subscribe@1.6`/`1.7`) was validated structurally, not deep-parsed,
+  // so a key that host never wrote is `undefined` there - and `undefined`
+  // must classify as "the chat's own host", not as a foreign one.
+  const originHostId = managedCommand?.hostId ?? null;
+  // A shell whose digest named its host is not in this tab's set even when
+  // the two hosts coincide: a chat cloned onto its remote shell's host still
+  // does not own that shell (the source chat does), so a presence read here
+  // would call it deleted the moment the owner's snapshot lands. The named
+  // host is the only one that could answer, and the door stays open - the
+  // output window it opens gives its own account of what it finds, exactly
+  // the `unknown` contract. Only a null-origin digest, which the chat's own
+  // host wrote for its own shell, takes the deletion gate.
   const presence = useManagedCommandPresence({
     epicId,
     commandId: managedCommand?.commandId ?? "",
-    owner: useMaybeChatTranscript(),
+    owner: originHostId === null ? transcript : null,
   });
   const openOutput = useManagedCommandDoor();
   if (managedCommand === null || openOutput === null) return null;
   const door = (
     <ManagedCommandTranscriptDoor
       commandId={managedCommand.commandId}
+      hostId={originHostId}
       gone={presence.kind === "absent"}
-      onOpen={openOutput}
+      onOpen={(commandId) => {
+        openOutput(commandId, originHostId);
+      }}
       testId={`resume-managed-command-door-${props.trigger.blockId}`}
     />
   );
@@ -381,16 +400,16 @@ function ResumeOutputPanel(props: {
   readonly outputFile: NonNullable<AutonomousResumeTrigger["outputFile"]>;
   readonly enabled: boolean;
 }) {
-  // A PDF output file would render as raw bytes through the text pipeline -
-  // don't even fetch it. Show the path and nothing more: the output folder is
-  // often outside every bound root, so any "open it from X" instruction would
-  // point somewhere the file cannot be found.
-  const isPdfOutput = isPdfAssetPath(props.outputFile.filePath);
+  // A document output file (PDF, Word) would render as raw bytes through the
+  // text pipeline - don't even fetch it. Show the path and nothing more: the
+  // output folder is often outside every bound root, so any "open it from X"
+  // instruction would point somewhere the file cannot be found.
+  const isDocumentOutput = isDocumentAssetPath(props.outputFile.filePath);
   const outputQuery = useResumeOutputFileQuery(
     props.outputFile,
-    props.enabled && !isPdfOutput,
+    props.enabled && !isDocumentOutput,
   );
-  if (isPdfOutput) {
+  if (isDocumentOutput) {
     return (
       <SegmentPanel
         label="Output"

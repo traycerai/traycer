@@ -6,11 +6,13 @@ import {
   hostStatusUpgradeV11ToV12,
   hostStatusUpgradeV12ToV13,
   hostStatusUpgradeV13ToV14,
+  hostStatusUpgradeV14ToV15,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
   hostStatusV13,
   hostStatusV14,
+  hostStatusV15,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -291,11 +293,87 @@ describe("host.status@1.4 storeFormats", () => {
   });
 });
 
+describe("host.status@1.5 install", () => {
+  const V14_RESPONSE = {
+    ...V11_RESPONSE,
+    busyBreakdown: BUSY_BREAKDOWN,
+    updateOperation: null,
+    updateTransaction: null,
+    storeFormats: STORE_FORMATS,
+  };
+
+  it("round-trips the install record's provenance and the sidecar's declaration", () => {
+    const install = {
+      source: "local-file" as const,
+      version: "1.3.0-rc.4",
+      declaredFormats: { chatDb: 9 },
+    };
+    const parsed = hostStatusV15.responseSchema.parse({
+      ...V14_RESPONSE,
+      install,
+    });
+    expect(parsed.install).toEqual(install);
+  });
+
+  it("carries an undeclared installed tree as declaredFormats: null under a registry source", () => {
+    const parsed = hostStatusV15.responseSchema.parse({
+      ...V14_RESPONSE,
+      install: {
+        source: "registry",
+        version: "1.2.0",
+        declaredFormats: null,
+      },
+    });
+    expect(parsed.install?.declaredFormats).toBeNull();
+  });
+
+  it("preserves null as no install record, never as a registry install", () => {
+    const parsed = hostStatusV15.responseSchema.parse({
+      ...V14_RESPONSE,
+      install: null,
+    });
+    expect(parsed.install).toBeNull();
+  });
+
+  it("upgrades a v1.4 response with install: null", () => {
+    const parsed = hostStatusV14.responseSchema.parse(V14_RESPONSE);
+    const upgraded = hostStatusUpgradeV14ToV15.upgradeResponse(parsed);
+    expect(upgraded.install).toBeNull();
+    expect(() => hostStatusV15.responseSchema.parse(upgraded)).not.toThrow();
+  });
+
+  it("rejects a source outside the install record's vocabulary, an empty version, and a non-positive declared format", () => {
+    const base = { ...V14_RESPONSE };
+    expect(
+      hostStatusV15.responseSchema.safeParse({
+        ...base,
+        install: { source: "bundled", version: "1.0.0", declaredFormats: null },
+      }).success,
+    ).toBe(false);
+    expect(
+      hostStatusV15.responseSchema.safeParse({
+        ...base,
+        install: { source: "registry", version: "", declaredFormats: null },
+      }).success,
+    ).toBe(false);
+    expect(
+      hostStatusV15.responseSchema.safeParse({
+        ...base,
+        install: {
+          source: "registry",
+          version: "1.0.0",
+          declaredFormats: { chatDb: 0 },
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("host.status registry membership", () => {
-  it("installs @1.0 through @1.4 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.5 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(4);
+    expect(entry[1].latestMinor).toBe(5);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
@@ -309,6 +387,10 @@ describe("host.status registry membership", () => {
     expect(entry[1].versions[4].contract).toBe(hostStatusV14);
     expect(entry[1].versions[4].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV13ToV14,
+    );
+    expect(entry[1].versions[5].contract).toBe(hostStatusV15);
+    expect(entry[1].versions[5].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV14ToV15,
     );
   });
 });

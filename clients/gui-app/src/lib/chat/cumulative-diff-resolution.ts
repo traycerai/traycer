@@ -1,7 +1,7 @@
 import type { ChatReadAccumulatedFileChangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ResolvedSnapshotDiff } from "@/lib/chat/resolve-snapshot-diff-content";
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
 
 /**
  * The two decisions behind a cumulative diff tile's contents, as plain
@@ -23,8 +23,9 @@ export interface FetchableAccumulatedChange {
 /**
  * Whether this path's section renders without ever reading the file's bytes.
  *
- * A PDF row shows `PDF_FILE_DIFF_COPY` on every surface - no patch is built
- * and no line counts are taken - so its before/after are dead weight. An
+ * A document row (PDF, Word) shows `documentFileDiffCopy` on every surface -
+ * no patch is built and no line counts are taken - so its before/after are
+ * dead weight. An
  * ASCII-authored PDF is the case that bites: the snapshot CAN capture it (it
  * is text), so the row carries a digest and would otherwise be downloaded in
  * full to be discarded, and a fetch that failed or came back stale would
@@ -32,7 +33,7 @@ export interface FetchableAccumulatedChange {
  * file whose contents nothing was going to read.
  */
 function rendersWithoutContents(filePath: string): boolean {
-  return isPdfAssetPath(filePath);
+  return isDocumentAssetPath(filePath);
 }
 
 /**
@@ -48,7 +49,7 @@ function rendersWithoutContents(filePath: string): boolean {
  *   and no host version names yet. Resolved inline instead.
  * - **`hasContents: false`.** There is no before/after to ask for at all. A
  *   request would return nothing and the tile would spin waiting for it.
- * - **Renders without contents.** A PDF section is the same on every surface
+ * - **Renders without contents.** A document section is the same on every surface
  *   whatever the bytes say (see {@link rendersWithoutContents}). It still
  *   gets a section - `contentlessAccumulatedChangePaths` names it - just not
  *   a download.
@@ -73,7 +74,7 @@ export function fetchableAccumulatedChanges(
  * row is there, so the section is there, but its bytes are never read.
  *
  * The row requirement is the whole point of taking `hostRows` here. Extension
- * alone would keep synthesizing a section for a PDF that has since left the
+ * alone would keep synthesizing a section for a document that has since left the
  * accumulated set, which is the same "gone rows must read as gone" rule the
  * single-file cumulative tile follows.
  */

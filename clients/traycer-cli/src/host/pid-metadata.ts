@@ -10,6 +10,7 @@ import { createCliLogger, errorFromUnknown } from "../logger";
 import { isProcessAlive } from "../store/cli-lock";
 import { hostPidMetadataPath } from "../store/paths";
 import { readProcessStartIdentity } from "../store/process-identity";
+import { isReadablePid } from "./pid-value";
 
 // Mirror of the writer contract owned by the host (the external
 // Traycer Host). Read by string path so
@@ -157,11 +158,27 @@ export function publishedHostProcessGone(metadata: HostPidMetadata): boolean {
 export async function readHostPidMetadataEvidence(
   environment: Environment | undefined,
 ): Promise<HostPidMetadataEvidence> {
-  const logEnvironment = environment ?? config.environment;
+  return readHostPidMetadataEvidenceAt(
+    hostPidMetadataPath(environment),
+    environment ?? config.environment,
+  );
+}
+
+/**
+ * The same read against an EXPLICIT record path, for the one reader that has
+ * to account for a host home other than its own: the swap quiescence check
+ * walks every dev run slot's record before a swap (`swap-quiescence.ts`).
+ * `logEnvironment` only names the environment in the log lines; it resolves
+ * no path.
+ */
+export async function readHostPidMetadataEvidenceAt(
+  path: string,
+  logEnvironment: Environment,
+): Promise<HostPidMetadataEvidence> {
   const logger = createCliLogger(logEnvironment);
   let raw: string;
   try {
-    raw = await readFile(hostPidMetadataPath(environment), "utf8");
+    raw = await readFile(path, "utf8");
   } catch (err) {
     const code = readErrorCode(err);
     if (code === "ENOENT") return { kind: "absent" };
@@ -191,7 +208,7 @@ export async function readHostPidMetadataEvidence(
   }
   const obj = parsed as Record<string, unknown>;
   if (
-    typeof obj.pid !== "number" ||
+    !isReadablePid(obj.pid) ||
     typeof obj.hostId !== "string" ||
     typeof obj.version !== "string" ||
     typeof obj.websocketUrl !== "string" ||
@@ -199,7 +216,7 @@ export async function readHostPidMetadataEvidence(
   ) {
     logger.warn("Host pid metadata rejected malformed payload", {
       environment: logEnvironment,
-      hasPid: typeof obj.pid === "number",
+      hasPid: isReadablePid(obj.pid),
       hasHostId: typeof obj.hostId === "string",
       hasVersion: typeof obj.version === "string",
       hasWebsocketUrl: typeof obj.websocketUrl === "string",

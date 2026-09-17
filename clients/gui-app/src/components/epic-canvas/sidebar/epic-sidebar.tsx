@@ -1,3 +1,7 @@
+import {
+  withoutTabRecovery,
+  pruneRecoveryTiles,
+} from "@/lib/tab-recovery/history";
 /**
  * This is the main orchestrator that composes extracted sub-components:
  * - epic-sidebar-header.tsx: header with collapse/drag
@@ -23,6 +27,7 @@ import {
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
   resolveActiveVisibleGroupIndex,
+  retainDisplayedPrPanel,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
   type LeftPanelSlotProps,
@@ -36,6 +41,7 @@ import {
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
+import { DeletedArtifactsOpenMenuItem } from "@/components/epic-canvas/deleted-artifacts/deleted-artifacts-open-menu-item";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -45,10 +51,12 @@ import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-wo
 import {
   useSurfaceHostClient,
   useSurfaceHostPin,
+  useSurfaceHostPinWithDefault,
   useTabSurfaceKey,
   type SurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
+import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
@@ -192,7 +200,6 @@ import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
-import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -534,7 +541,7 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
   "pull-requests": {
     live: {
       Body: PrPanelBody,
-      Actions: PrPanelActions,
+      Actions: null,
       Subtitle: null,
     },
     loading: emptyLoadingSlots(GenericLoadingPanelBody),
@@ -647,24 +654,27 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
-  // The SAME host the PR panel records presence under (`pr-panel-body.tsx`
-  // writes `recordPrPresence(useCanvasHostId(), …)`): a producer/consumer
-  // pair keyed by host must read one identity, or the PR icon vanishes for
-  // exactly the window a re-point is in flight - the panel writing under the
-  // session's host A while this rail read under the app-wide B.
-  const hostId = useCanvasHostId();
+  // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
+  const canvasHostId = useCanvasHostId();
+  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
+    tabSurfaceKey("pull-requests", tabId),
+    canvasHostId,
+  );
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
-    () => ({
-      commentsPanelRevealed,
-      hasActiveCommentableArtifact,
-      hasPullRequests,
-      visibilityOverrideById,
-    }),
+    () =>
+      retainDisplayedPrPanel(panelGroups, activePanelId, {
+        commentsPanelRevealed,
+        hasActiveCommentableArtifact,
+        hasPullRequests,
+        visibilityOverrideById,
+      }),
     [
+      panelGroups,
+      activePanelId,
       commentsPanelRevealed,
       hasActiveCommentableArtifact,
       hasPullRequests,
@@ -709,25 +719,32 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
-  // Same key as the live host above. Before the session handle registers this
-  // resolves the effective host (`useCanvasHostId`'s documented fallback),
-  // which is where a fresh open's session is about to be established.
-  const hostId = useCanvasHostId();
-  // The persisted PR baseline is readable before the epic's Y.doc resolves, so
-  // the loading rail already shows the same set of panels the live one will -
-  // no icon appears or disappears as the epic finishes opening.
+  // Share the PR resolver; task-agent hosts become available with the session.
+  const canvasHostId = useCanvasHostId();
+  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
+    tabSurfaceKey("pull-requests", tabId),
+    canvasHostId,
+  );
+  // The persisted PR baseline is readable before the epic's Y.doc resolves.
   const hasPullRequests = usePrPresenceStore(
     selectPrScopeHasItems(hostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
-    () => ({
+    () =>
+      retainDisplayedPrPanel(panelGroups, activePanelId, {
+        commentsPanelRevealed,
+        hasActiveCommentableArtifact: false,
+        hasPullRequests,
+        visibilityOverrideById,
+      }),
+    [
+      panelGroups,
+      activePanelId,
       commentsPanelRevealed,
-      hasActiveCommentableArtifact: false,
       hasPullRequests,
       visibilityOverrideById,
-    }),
-    [commentsPanelRevealed, hasPullRequests, visibilityOverrideById],
+    ],
   );
   const panels = useMemo(
     () =>
@@ -1533,6 +1550,12 @@ function SidebarBulkDeleteController(props: {
         const successfulIds = targets.flatMap((target, index) =>
           results[index].status === "fulfilled" ? [target.id] : [],
         );
+        pruneRecoveryTiles(
+          (tile, epicId) =>
+            epicId === props.epicId &&
+            tile.type !== "chat" &&
+            successfulIds.includes(tile.id),
+        );
         const failedIds = targets.flatMap((target, index) =>
           results[index].status === "rejected" ? [target.id] : [],
         );
@@ -1552,7 +1575,9 @@ function SidebarBulkDeleteController(props: {
         if (openTargets.length > 0) {
           navigateNested(props.epicId, props.tabId, () => {
             openTargets.forEach((found) => {
-              closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+              withoutTabRecovery(() =>
+                closeCanvasTab(props.tabId, found.paneId, found.instanceId),
+              );
             });
             const canvas =
               useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
@@ -2074,15 +2099,12 @@ function TreePanelActions(props: TreePanelActionsProps) {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label={props.addLabel}
         aria-disabled={artifactsPresentation.ariaDisabled ? true : undefined}
         data-testid={props.triggerTestId}
-        className={cn(
-          "text-muted-foreground hover:text-foreground",
-          ARIA_DISABLED_TRIGGER_CLASS,
-        )}
+        className={cn(ARIA_DISABLED_TRIGGER_CLASS)}
         disabled={artifactsPresentation.nativeDisabled}
       >
         {addIsPending ? (
@@ -2150,10 +2172,10 @@ function PanelHeaderMoreMenuTrigger(props: {
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={props.label}
-          className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+          className="shrink-0"
           data-testid={props.testId}
         >
           <MoreHorizontal className="size-4" />
@@ -2253,6 +2275,7 @@ function ChatHeaderMoreMenu(props: {
 }
 
 function ArtifactHeaderMoreMenu(props: {
+  readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
   readonly searching: boolean;
@@ -2303,6 +2326,7 @@ function ArtifactHeaderMoreMenu(props: {
             Search artifacts
           </DropdownMenuItem>
         ) : null}
+        <DeletedArtifactsOpenMenuItem epicId={props.epicId} />
         <DropdownMenuItem onSelect={props.onCollapseAll}>
           <CopyMinus className="size-4" />
           Collapse all
@@ -2346,6 +2370,7 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
         />
       )}
       <ArtifactHeaderMoreMenu
+        epicId={props.epicId}
         tabId={props.tabId}
         collapsed={props.collapsed}
         searching={props.mode === "search"}
@@ -2533,7 +2558,7 @@ function SidebarBulkSelectionActions() {
       />
       <Button
         type="button"
-        variant="ghost"
+        variant="destructive-ghost"
         size="icon-sm"
         aria-label={
           selection.selectedCount > 0
@@ -2547,7 +2572,6 @@ function SidebarBulkSelectionActions() {
           selection.deletePending ||
           chatArchive.pending
         }
-        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={selection.requestDeleteSelected}
       >
         <Trash2 className="size-4" />
@@ -2561,11 +2585,10 @@ function CommentsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label="Close comments"
       data-testid="epic-sidebar-comments-close"
-      className="text-muted-foreground hover:text-foreground"
       onClick={() => setActivePanelId(props.tabId, DEFAULT_LEFT_PANEL_ID)}
     >
       <X className="size-4" />

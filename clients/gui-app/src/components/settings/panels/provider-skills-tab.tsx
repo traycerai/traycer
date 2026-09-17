@@ -602,8 +602,8 @@ function SkillEntryButton({
   return (
     <Button
       type="button"
-      size="sm"
-      className="text-ui-xs"
+      size="xs"
+      className="h-7"
       disabled={disabled}
       onClick={onOpen}
     >
@@ -644,10 +644,10 @@ function SkillSourceFilterMenu({
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={label}
-            className="relative shrink-0 text-muted-foreground hover:text-foreground"
+            className="relative shrink-0"
           >
             <ListFilter className="size-3.5" aria-hidden />
             {/* A dot, not a count: it only has to say "the list is narrowed". */}
@@ -664,9 +664,7 @@ function SkillSourceFilterMenu({
         align="end"
         className="w-[min(10rem,calc(100vw-2rem))]"
       >
-        <DropdownMenuLabel className="text-overline uppercase tracking-wide">
-          Show
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Show</DropdownMenuLabel>
         {present.map((source) => (
           <DropdownMenuCheckboxItem
             key={source}
@@ -910,8 +908,8 @@ function SkillsEmptyState({
       {canAuthor ? (
         <Button
           type="button"
-          size="sm"
-          className="text-ui-xs"
+          size="xs"
+          className="h-7"
           disabled={disabled}
           onClick={onOpenComposer}
         >

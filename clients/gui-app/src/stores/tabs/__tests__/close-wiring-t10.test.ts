@@ -11,12 +11,13 @@
  * resulting `useTabsStore` layout, so a regression back to the direct-source
  * bypass shows up here.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tabRequestClose } from "@/stores/tabs/registry";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { resetLandingDraftRetirementsForTests } from "@/lib/drafts/landing-draft-retirement";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
 import type { TabRef } from "@/stores/tabs/types";
@@ -45,10 +46,15 @@ function seedEpicTabs(
   });
 }
 
+beforeEach(() => {
+  resetLandingDraftRetirementsForTests();
+});
+
 afterEach(() => {
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  resetLandingDraftRetirementsForTests();
 });
 
 describe("T10 Area 1: requestClose routes through the coordinator", () => {
@@ -183,6 +189,38 @@ describe("T10 Area 1: requestClose routes through the coordinator", () => {
 
     expect(useTabsStore.getState().items).toEqual([]);
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("closes a non-empty draft tab from the layout but retains it in the store", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    useLandingDraftStore.getState().setDraftContent(
+      "draft-a",
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "keep" }] },
+        ],
+      },
+      null,
+    );
+    const draftRef: TabRef = { kind: "draft", id: "draft-a" };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: "tab:draft:draft-a", ref: draftRef }],
+      activeItemId: "tab:draft:draft-a",
+      stripOrder: [draftRef],
+      systemTabs: { history: null, settings: null },
+    });
+
+    const draftTab = getHeaderTabs().find((tab) => tab.id === "draft-a");
+    if (draftTab === undefined) throw new Error("expected draft-a");
+    tabRequestClose(draftTab);
+
+    expect(useTabsStore.getState().items).toEqual([]);
+    expect(getHeaderTabs()).toEqual([]);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].id).toBe("draft-a");
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(true);
   });
 
   it("closes the history system tab through the coordinator", () => {

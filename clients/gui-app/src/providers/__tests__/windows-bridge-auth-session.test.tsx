@@ -22,9 +22,10 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: mockUseWindowsBridge,
 }));
 
+const SIGNED_IN_TOKEN = "bearer-token";
 const SIGNED_IN_SNAPSHOT: AuthSessionSnapshot = {
   status: "signed-in",
-  token: "bearer-token",
+  token: SIGNED_IN_TOKEN,
   profile: { userId: "u1", userName: "Ada", email: "ada@example.com" },
   contextMetadata: null,
 };
@@ -47,11 +48,13 @@ type AuthSessionSetResolution =
 interface AuthSessionBridgeTestHarness {
   readonly emitInbound: (snapshot: DesktopAuthSessionSnapshot) => void;
   readonly emitOutbound: (snapshot: AuthSessionSnapshot) => void;
+  readonly emitRevoked: (token: string) => void;
   readonly get: Mock<() => Promise<DesktopAuthSessionSnapshot>>;
   readonly ingest: Mock<(snapshot: AuthSessionSnapshot) => Promise<void>>;
   readonly inboundDispose: Mock<() => void>;
   readonly outboundDispose: Mock<() => void>;
   readonly resolveSet: (resolution: AuthSessionSetResolution) => void;
+  readonly revoke: Mock<(rejectedToken: string) => Promise<void>>;
   readonly set: Mock<
     (
       snapshot: DesktopAuthSessionSnapshot,
@@ -75,6 +78,8 @@ function renderWithFakes(
 ): AuthSessionBridgeTestHarness {
   let outboundListener: ((snapshot: AuthSessionSnapshot) => void) | null = null;
   let inboundListener: ((snapshot: DesktopAuthSessionSnapshot) => void) | null =
+    null;
+  let revokedListener: ((revoked: { readonly token: string }) => void) | null =
     null;
   let resolveSetPromise:
     | ((resolution: AuthSessionSetResolution) => void)
@@ -102,10 +107,21 @@ function renderWithFakes(
         dispose: outboundDispose,
       };
     },
+    onCloudAuthorizationRevoked: (
+      handler: (revoked: { readonly token: string }) => void,
+    ) => {
+      revokedListener = handler;
+      return {
+        dispose: () => {
+          revokedListener = null;
+        },
+      };
+    },
     getIdentityGeneration: () => 0,
     ingestProjectedSessionSnapshot: ingest,
   });
 
+  const revoke = vi.fn((_rejectedToken: string) => Promise.resolve());
   const set = vi.fn((snapshot: DesktopAuthSessionSnapshot) => {
     if (!options.deferSet) {
       if (setResult.outcome === "accepted") {
@@ -131,6 +147,7 @@ function renderWithFakes(
     authSession: {
       get,
       set,
+      revoke,
       onChange: (handler: (snapshot: DesktopAuthSessionSnapshot) => void) => {
         inboundListener = handler;
         return { dispose: inboundDispose };
@@ -157,12 +174,17 @@ function renderWithFakes(
       resolveSetPromise = null;
     },
     set,
+    revoke,
     unmount: rendered.unmount,
     emitInbound: (snapshot) => {
       act(() => inboundListener?.(snapshot));
     },
     emitOutbound: (snapshot) => {
       act(() => outboundListener?.(snapshot));
+    },
+    emitRevoked: (token) => {
+      if (revokedListener === null) throw new Error("no revoke listener");
+      act(() => revokedListener?.({ token }));
     },
   };
 }
@@ -176,6 +198,31 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   afterEach(() => {
     cleanup();
     toast.warning.mockClear();
+  });
+
+  it("asks main to drop its verification on a terminal verdict loss, without projecting a session transition", async () => {
+    const { emitOutbound, emitRevoked, set, revoke } = renderWithFakes(
+      { outcome: "accepted" },
+      {},
+    );
+    await act(async () => {
+      emitOutbound(SIGNED_IN_SNAPSHOT);
+      await Promise.resolve();
+    });
+    expect(set).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitRevoked(SIGNED_IN_TOKEN);
+      await Promise.resolve();
+    });
+
+    // The revoke, and ONLY the revoke: no `signed-out` (which siblings apply
+    // unconditionally) and no `unverified` (which main has no shape for).
+    // It names the rejected bearer, which is main's fence against a revoke
+    // that lands after a sibling window's fresh sign-in.
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith(SIGNED_IN_TOKEN);
+    expect(set).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces a toast naming the reason when main refuses the pushed session", async () => {

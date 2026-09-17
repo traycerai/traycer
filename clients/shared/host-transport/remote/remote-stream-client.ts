@@ -8,12 +8,14 @@ import type {
   ReconnectAllOptions,
 } from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
+import type { StreamParamsProvider } from "../i-stream-client";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
 import {
   PLAN_RESTRICTED_FATAL_CODE,
   planRestrictedClosedReason,
 } from "./config";
 import type { IRemoteSession } from "./remote-session";
+import type { AvailabilityRecoveryKind } from "../availability-recovery-kind";
 
 /** Monotonic source for `RemoteStreamClient.instanceId` (log correlation). */
 let nextRemoteStreamClientId = 0;
@@ -61,7 +63,7 @@ export class RemoteStreamClient<
 
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
   ): IStreamSession {
     return this.session.subscribeWithParamsProvider(method, paramsProvider);
   }
@@ -69,6 +71,11 @@ export class RemoteStreamClient<
   /** Pushes a rotated bearer in place (no reconnect) if the host supports it. */
   notifyBearerRotated(): void {
     this.session.notifyBearerRotated();
+  }
+
+  /** Pushes the current cloud verdict in place if the host supports it. */
+  notifyCloudVerdictChanged(): void {
+    this.session.notifyCloudVerdictChanged();
   }
 
   isClosed(): boolean {
@@ -138,10 +145,10 @@ export class RemoteStreamClient<
 
   /**
    * Whether the session backing THIS client is carrying traffic right now
-   * (see {@link IRemoteSession.isReady}) - full attach, restore evidence
-   * accepted for every live stream (a delivered frame or an in-flight chunk;
-   * completed delivery stays each stream's own status), and the host still
-   * attached at the relay.
+   * (see {@link IRemoteSession.isReady}) - full attach through the host's own
+   * `openAck`, with the host still attached at the relay. What any one stream
+   * has delivered stays that stream's own status: a subscription with nothing
+   * to say is not an unready connection.
    *
    * Exact by construction: one client, one shared session, no lookup by host.
    * A ready one-shot session or a lingering keep-warm one for the same host
@@ -153,46 +160,58 @@ export class RemoteStreamClient<
   }
 
   /**
-   * Bridges the session's ready-boundary transition (full attach + accepted
-   * restore evidence for every live stream; see
-   * `RemoteSession.subscribeAvailabilityRecovered`) to availability-recovered
-   * listeners - the same "endpoint recovered" evidence `WsStreamClient`
+   * The session's own silence verdict (see {@link IRemoteSession.isSilentFor}),
+   * forwarded unchanged - including its `isReady()` term, so a client whose
+   * host is merely DETACHED at the relay answers false and a person's Retry
+   * stays a re-subscribe.
+   *
+   * Production builds this over an ACQUIRED view, so a client whose consumer
+   * has released inherits that view's ownership guard and answers false too.
+   */
+  isSilentFor(ms: number): boolean {
+    return this.session.isSilentFor(ms);
+  }
+
+  /**
+   * Bridges the session's ready-boundary transition (full attach through the
+   * host's `openAck`; see `RemoteSession.subscribeAvailabilityRecovered`) to
+   * availability-recovered listeners - the same "endpoint recovered" evidence
+   * `WsStreamClient`
    * surfaces when a session re-opens after a drop, PLUS the clean first open
    * (a remote session's first dial races the queries that created it; see
    * the session contract for why). This is what un-strands errored
    * host-scoped queries for a tab bound to a NON-active remote host, whose
    * only recovery evidence is its own transport (the registry-liveness +
    * relay-resume path only covers the active host).
+   *
+   * Every emission is reported as a `"reconnect"`. The session has one
+   * recovery edge, its ready boundary, and each one follows a new attach:
+   * the host may have restarted since the last one, so no read that settled
+   * before it can be vouched for. The session contract in `protocol/` stays
+   * kind-free, because with one edge a kind there would always read the
+   * same.
    */
-  subscribeAvailabilityRecovered(listener: () => void): () => void {
-    return this.session.subscribeAvailabilityRecovered(listener);
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void {
+    return this.session.subscribeAvailabilityRecovered(() => {
+      listener("reconnect");
+    });
   }
 
-  /**
-   * Always `"unknown"` (see {@link IHostStreamClient.getMethodSupport}): the
-   * mux session resolves an incompatible method as a fatal error on that
-   * stream's subscribe attempt, not a queryable pre-check, so there is no
-   * learned-support cache to report here yet.
-   */
   getMethodSupport<Method extends keyof StreamRegistry & string>(
-    _method: Method,
+    method: Method,
   ): StreamMethodSupport {
-    return "unknown";
+    return this.session.getMethodSupport(method);
   }
 
-  /** No-op: {@link getMethodSupport} never changes, so nothing to notify. */
-  subscribeMethodSupport(_listener: () => void): () => void {
-    return () => {};
+  subscribeMethodSupport(listener: () => void): () => void {
+    return this.session.subscribeMethodSupport(listener);
   }
 
-  /**
-   * Always `null` (see {@link IHostStreamClient.getMethodSchemaVersion}): the
-   * mux session has no learned-schema-version cache to report, mirroring
-   * {@link getMethodSupport}'s degrade-quietly treatment for remote hosts.
-   */
   getMethodSchemaVersion<Method extends keyof StreamRegistry & string>(
-    _method: Method,
+    method: Method,
   ): SchemaVersion | null {
-    return null;
+    return this.session.getMethodSchemaVersion(method);
   }
 }

@@ -36,7 +36,9 @@ describe("composer revision event contract", () => {
 
     renderHook(() =>
       useChatComposerDraft({
-        taskId,
+        chatId: taskId,
+        epicId: "epic-1",
+        hostId: "host-1",
         editorRef: { current: handle },
         editorReadyTick: 1,
       }),
@@ -56,7 +58,9 @@ describe("composer revision event contract", () => {
     expect(syncContent).toHaveBeenCalledWith(textDoc("restored"), null);
 
     act(() => {
-      useComposerDraftStore.getState().setSelection(taskId, { from: 3, to: 3 });
+      useComposerDraftStore
+        .getState()
+        .setSelection(taskId, { from: 3, to: 3 }, "host-a");
     });
     expect(useComposerDraftStore.getState().drafts[taskId]?.revision).toBe(2);
   });

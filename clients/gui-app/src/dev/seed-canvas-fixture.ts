@@ -509,12 +509,10 @@ export function restoreSeededScroll(): ScrollRestoreReport {
  * composition the canvas fixture already uses - an `EpicViewTab` carries a
  * `name`.
  *
- * HEADER WIDTH IS COUNT-DRIVEN, NOT TITLE-DRIVEN - the opposite of the tile
- * strip. Tabs divide the strip evenly (`762/N` measured exactly) until they hit
- * a MIN-WIDTH CLAMP at 120px, after which the strip overflows and every tab
- * stays at 120 regardless of count. So a title parameter here would be a claim
- * the API makes and the implementation does not keep, and the only knob is
- * `count`.
+ * Header width follows tab count and the strip's responsive width limits,
+ * not title length. The original E7.1 measurements used a 120px minimum;
+ * measureHeaderTabs reads the rendered widths under the current limits.
+ * This fixture therefore controls count rather than title length.
  *
  * This exists because E7.1 cannot otherwise be a REGRESSION test: Sprint 01
  * certified on 4 tabs at 191px and 5 plain tabs at 185.9px, and the live header

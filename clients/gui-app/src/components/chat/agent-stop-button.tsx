@@ -53,12 +53,12 @@ function StopButtonShell(props: {
           type="button"
           variant="ghost"
           size="xs"
-          // NB: no `text-{color}` here. `cn`/tailwind-merge treats the custom
-          // `text-ui-xs` font-size token (from `size="xs"`) as a text-color class,
-          // so adding a real color class would win the conflict and silently drop
-          // the font size - leaving the button at the inherited (larger) size. The
-          // ghost variant already supplies the resting/hover colors, matching the
-          // sibling "Undo all" button.
+          // No `text-{color}` here, but the reason is the variant rather than
+          // the merger. `cn.config.mjs` registers the custom `--text-*` tokens
+          // as font sizes, so `cn("text-ui-xs", "text-destructive")` keeps both
+          // - it did NOT before that landed, which is what this note used to
+          // warn about. The ghost variant already supplies the resting and
+          // hover colors, matching the sibling "Undo all" button.
           className="shrink-0"
           disabled={props.disabled}
           onClick={props.onClick}
@@ -147,7 +147,11 @@ export function AgentStopButton(props: {
     return (
       <StopButtonShell
         tooltip={
-          reachability.status === "unreachable"
+          // `host-starting` names the host too: while a host restarts, its
+          // agents are as far out of reach as an offline host's, and a
+          // disabled button with no reason reads as broken.
+          reachability.status === "unreachable" ||
+          reachability.status === "host-starting"
             ? `Runs on ${reachability.hostLabel}`
             : undefined
         }

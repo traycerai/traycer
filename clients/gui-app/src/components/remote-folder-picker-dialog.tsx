@@ -8,6 +8,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { CornerLeftUp, Folder, Settings2 } from "lucide-react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   WorkspaceBrowseFolderEntryV11,
@@ -30,9 +31,9 @@ import {
 } from "@/components/ui/popover";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { hostQueryKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -76,7 +77,7 @@ import {
  * (remote hosts - phone/browser clients, or a desktop pointed at another
  * machine). Browses the HOST's filesystem via `workspace.browseFolders`.
  *
- * The path field is the single source of truth: everything up to the last
+ * The path field determines the listing: everything up to the last
  * `/` is the directory being browsed, the segment after it live-filters the
  * listing. Choosing a row appends `name/` (descending); deleting characters
  * past a `/` naturally walks back up. Consent-gated folders look and pick
@@ -101,7 +102,8 @@ export function RemoteFolderPickerDialog(): ReactNode {
       }}
     >
       <DialogContent
-        className="top-[18svh] flex h-[min(80dvh,36rem,calc(100dvh-18svh-var(--safe-area-inset-bottom)))] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
+        layout="banded"
+        className="top-[18svh] flex h-[min(80dvh,36rem,calc(100dvh-18svh-var(--safe-area-inset-bottom)))] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col overflow-hidden sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
         data-testid="remote-folder-picker-dialog"
         // Phone-facing portal outside HomePage's touch scope: re-apply the
         // coarse-pointer hit-slop rules (home-touch-targets.css) so every
@@ -137,8 +139,13 @@ function RemoteFolderPickerBody(): ReactNode {
     client,
     "workspace.prepareFolders",
   );
-  // null = not edited yet; the field then shows the host home once known.
-  const [rawInput, setRawInput] = useState<string | null>(null);
+  // Navigation fills the field too, but only manual typing makes its value
+  // authoritative over a later keyboard aim. null initially shows host home.
+  const [pathInput, setPathInput] = useState<FolderPickerPathInput>({
+    source: "navigation",
+    value: null,
+  });
+  const rawInput = pathInput.value;
   const [selectedIndex, setSelectedIndex] = useState(UNSET_SELECTION);
   /** Long-press target: the one path shown in full, verbatim. */
   const [fullPath, setFullPath] = useState<string | null>(null);
@@ -220,10 +227,24 @@ function RemoteFolderPickerBody(): ReactNode {
     upRowPresent,
     matchCount: matches.length,
   });
+  const selectedDirectory = readDirectoryAtRow(
+    matches,
+    clampedIndex,
+    upRowPresent,
+  );
+  const { hostId, aimedAddTarget, setKeyboardAim } = useKeyboardDirectoryAim({
+    pathInput,
+    client,
+    data,
+    showHiddenFolders,
+    listingError,
+    selectedDirectory,
+  });
 
   const setPath = (path: string): void => {
-    setRawInput(path);
+    setPathInput({ source: "navigation", value: path });
     setSelectedIndex(UNSET_SELECTION);
+    setKeyboardAim(null);
   };
 
   const enterEntry = (entry: WorkspaceBrowseFolderEntryV11): void => {
@@ -232,7 +253,7 @@ function RemoteFolderPickerBody(): ReactNode {
 
   const goUp = (): void => {
     if (upPath === null) return;
-    setRawInput(withTrailingSeparator(upPath));
+    setPath(withTrailingSeparator(upPath));
     setSelectedIndex(0);
   };
 
@@ -243,6 +264,7 @@ function RemoteFolderPickerBody(): ReactNode {
     data,
     listingError,
     homePath: effectiveHome,
+    aimedAddTarget,
   });
 
   const addCurrent = (): void => {
@@ -260,8 +282,7 @@ function RemoteFolderPickerBody(): ReactNode {
       goUp();
       return;
     }
-    const match = matches.at(clampedIndex - (upRowPresent ? 1 : 0));
-    if (match !== undefined) enterEntry(match.item);
+    if (selectedDirectory !== null) enterEntry(selectedDirectory);
   };
 
   const moveSelection = (delta: number): void => {
@@ -270,6 +291,25 @@ function RemoteFolderPickerBody(): ReactNode {
       Math.max(rowCount - 1, 0),
     );
     setSelectedIndex(next);
+    // A boundary keypress does not promote the automatic highlight to an
+    // explicit choice. The row's path, not its numeric index, owns the aim.
+    if (next !== clampedIndex) {
+      const directory = readDirectoryAtRow(matches, next, upRowPresent);
+      setKeyboardAim(
+        pathInput.source === "navigation" &&
+          client !== null &&
+          data !== undefined &&
+          directory !== null
+          ? {
+              path: directory.path,
+              client,
+              hostId,
+              listing: data,
+              showHiddenFolders,
+            }
+          : null,
+      );
+    }
     const option = document.getElementById(pickerOptionId(next));
     if (option !== null && typeof option.scrollIntoView === "function") {
       option.scrollIntoView({ block: "nearest" });
@@ -287,8 +327,9 @@ function RemoteFolderPickerBody(): ReactNode {
         onUp={goUp}
         pathValue={shownInput}
         onPathChange={(next) => {
-          setRawInput(next);
+          setPathInput({ source: "typed", value: next });
           setSelectedIndex(UNSET_SELECTION);
+          setKeyboardAim(null);
         }}
         focusPathToken={focusPathToken}
         autoFocusPath={!coarsePointer}
@@ -348,6 +389,7 @@ function RemoteFolderPickerBody(): ReactNode {
         upPath={upPath}
         onShowHiddenFoldersChange={(checked) => {
           setSelectedIndex(UNSET_SELECTION);
+          setKeyboardAim(null);
           setShowHiddenFolders(checked);
         }}
       />
@@ -368,7 +410,11 @@ function readFolderPickerAddState(args: {
   readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
   readonly listingError: Error | null;
   readonly homePath: string | null;
+  readonly aimedAddTarget: string | null;
 }): { readonly addTarget: string | null; readonly createDirectory: boolean } {
+  if (args.aimedAddTarget !== null) {
+    return { addTarget: args.aimedAddTarget, createDirectory: false };
+  }
   const wantsCreateDirectory =
     args.rawInput !== null &&
     args.parsed.valid &&
@@ -674,11 +720,9 @@ function PickerRow(props: {
         role={props.option === null ? undefined : "option"}
         id={props.option?.id}
         aria-selected={props.option?.selected}
-        className={cn(
-          "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
-          props.option?.selected === true &&
-            "bg-foreground/8 hover:bg-foreground/8",
-        )}
+        // The selected fill is `ghost`'s own `aria-selected:` state, keyed off
+        // the attribute already set above.
+        className="h-10 w-full justify-start"
         data-testid={props.testId}
         // Keep focus (and the keyboard model) on the combobox field.
         onMouseDown={(event) => {
@@ -715,9 +759,8 @@ function PickerRow(props: {
  * Deliberately OUTSIDE the listbox: the combobox's keyboard model (arrows
  * move through directories, Enter descends) stays exactly as it was, and
  * these stay plain tab-reachable buttons. Picking one fills the field with
- * that path rather than adding it outright - the field is the picker's single
- * source of truth, so this arms Add with the recent while still showing it in
- * context (its parent, filtered to it) and leaving it editable.
+ * that path rather than adding it outright. This arms Add with the recent
+ * while showing it in context (its parent, filtered to it) and leaving it editable.
  */
 function RemoteFolderPickerRecents(props: {
   readonly entries: ReadonlyArray<WorkspaceRecentEntry>;
@@ -813,11 +856,7 @@ function RemoteFolderPickerListing(props: {
             role="option"
             id={pickerOptionId(0)}
             aria-selected={props.selectedIndex === 0}
-            className={cn(
-              "h-10 w-full justify-start gap-2 px-2 hover:bg-foreground/8",
-              props.selectedIndex === 0 &&
-                "bg-foreground/8 hover:bg-foreground/8",
-            )}
+            className="h-10 w-full justify-start"
             data-testid="remote-folder-picker-up-row"
             // Keep focus (and the keyboard model) on the combobox field.
             onMouseDown={(event) => {
@@ -1030,6 +1069,55 @@ function isHostUnsupported(error: Error): boolean {
  */
 const UNSET_SELECTION = -1;
 
+type FolderPickerPathInput =
+  | { readonly source: "navigation"; readonly value: string | null }
+  | { readonly source: "typed"; readonly value: string };
+
+interface KeyboardDirectoryAim {
+  readonly path: string;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
+  /** A changed cached listing invalidates the gesture targeting the old list. */
+  readonly listing: WorkspaceBrowseFoldersResponseV11;
+  readonly showHiddenFolders: boolean;
+}
+
+function useKeyboardDirectoryAim(args: {
+  readonly pathInput: FolderPickerPathInput;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
+  readonly showHiddenFolders: boolean;
+  readonly listingError: Error | null;
+  readonly selectedDirectory: WorkspaceBrowseFolderEntryV11 | null;
+}): {
+  readonly hostId: string | null;
+  readonly aimedAddTarget: string | null;
+  readonly setKeyboardAim: (aim: KeyboardDirectoryAim | null) => void;
+} {
+  const [keyboardAim, setKeyboardAim] = useState<KeyboardDirectoryAim | null>(
+    null,
+  );
+  const hostId = args.client?.getActiveHostId() ?? null;
+  const aimedAddTarget =
+    keyboardAim !== null &&
+    args.pathInput.source === "navigation" &&
+    keyboardAim.client === args.client &&
+    keyboardAim.hostId === hostId &&
+    keyboardAim.listing === args.data &&
+    keyboardAim.showHiddenFolders === args.showHiddenFolders &&
+    args.listingError === null &&
+    args.selectedDirectory?.path === keyboardAim.path
+      ? keyboardAim.path
+      : null;
+  // Clear invalid intent during render, before an Add handler can use it.
+  // Merely ignoring it would revive the old aim if a failed/refreshed listing
+  // later restored the same row, without another deliberate movement.
+  if (keyboardAim !== null && aimedAddTarget === null) {
+    setKeyboardAim(null);
+  }
+  return { hostId, aimedAddTarget, setKeyboardAim };
+}
+
 interface RowSelection {
   /** Rows actually painted, `..` included when it is showing. */
   readonly rowCount: number;
@@ -1060,6 +1148,16 @@ function readRowSelection(args: {
   };
 }
 
+function readDirectoryAtRow(
+  matches: ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>>,
+  rowIndex: number,
+  upRowPresent: boolean,
+): WorkspaceBrowseFolderEntryV11 | null {
+  const entryIndex = rowIndex - (upRowPresent ? 1 : 0);
+  // Array.at(-1) is the last folder, not the parent navigation row.
+  return entryIndex < 0 ? null : (matches.at(entryIndex)?.item ?? null);
+}
+
 function pickerOptionId(index: number): string {
   return `remote-folder-picker-option-${String(index)}`;
 }
@@ -1067,8 +1165,9 @@ function pickerOptionId(index: number): string {
 /**
  * Keyboard model on the path field (the dialog auto-focuses it): arrows move
  * the row selection, Enter opens the selected row, cmd/ctrl+Enter adds the
- * current path. Backspace needs no handler - deleting characters past a `/`
- * IS up-navigation, because the field is the source of truth.
+ * deliberately aimed directory or the authoritative field path. Backspace
+ * needs no handler - deleting characters past a `/` IS up-navigation, and
+ * manual edits keep the field authoritative until the user navigates again.
  */
 function handlePickerFieldKeys(
   event: KeyboardEvent<HTMLInputElement>,
@@ -1265,10 +1364,12 @@ function matchEntries(
 }
 
 /**
- * What Add picks: exactly what the field shows (with `~` expanded and any
- * trailing `/` dropped), whether or not that folder was ever listed -
+ * What the field contributes to Add: exactly what it shows (with `~` expanded
+ * and any trailing `/` dropped), whether or not that folder was ever listed -
  * selecting a folder needs no read. An unedited field picks the home the
- * field displays; a field the user explicitly cleared picks nothing.
+ * field displays; a field the user explicitly cleared picks nothing. An
+ * explicit keyboard aim can supersede this fallback on a navigation-filled
+ * field, but never a manually typed path.
  */
 function readAddTarget(
   rawInput: string | null,

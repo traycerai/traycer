@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -28,12 +29,12 @@ export function EpicNodeIconColorPicker(props: ArtifactIconColorPickerProps) {
     <div className="flex w-80 max-w-full flex-col gap-2">
       <div className="flex items-center justify-end gap-2">
         <span className="text-ui-sm text-muted-foreground">
-          Use type colors
+          Color icons by type
         </span>
         <Switch
           checked={enabled}
           onCheckedChange={onEnabledChange}
-          aria-label="Use artifact type colors"
+          aria-label="Color icons by type"
         />
       </div>
       {enabled ? (
@@ -50,7 +51,10 @@ export function EpicNodeIconColorPicker(props: ArtifactIconColorPickerProps) {
                   className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border/60 bg-background/50 px-2 py-1.5"
                 >
                   <span className="flex min-w-0 items-center gap-2">
-                    <Icon className="size-4 shrink-0" style={{ color }} />
+                    <Icon
+                      className="size-4 shrink-0 text-[var(--swatch)]"
+                      style={{ "--swatch": color } as CSSProperties}
+                    />
                     <span className="truncate text-ui-xs text-foreground">
                       {label}
                     </span>
@@ -75,7 +79,7 @@ export function EpicNodeIconColorPicker(props: ArtifactIconColorPickerProps) {
               size="sm"
               onClick={onReset}
               disabled={!hasCustomColors}
-              aria-label="Reset artifact icon colors"
+              aria-label="Reset icon colors"
             >
               <RotateCcw className="size-3.5" />
               Reset

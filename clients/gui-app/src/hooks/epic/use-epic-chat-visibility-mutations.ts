@@ -22,6 +22,31 @@ import {
   reconcileCloudChatSummary,
 } from "@/lib/chats/cloud-chat-visibility-cache";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import { toast } from "sonner";
+
+/**
+ * Thrown from `onMutate` when the session holds no cloud verdict. Both
+ * sharing writes are CLOUD mutations sent through the Epic session's
+ * local-host context, whose wire connection does not carry the renderer's
+ * verdict - so an already-open row menu or confirm dialog could otherwise
+ * spend the retained credential after a demotion. The gate is re-read HERE,
+ * at dispatch, not only where the control was rendered.
+ */
+export const CHAT_SHARING_UNAUTHORIZED_MESSAGE =
+  "chat sharing refused: the session holds no cloud verdict";
+
+const UNVERIFIED_SHARING_TOAST =
+  "Your sign-in couldn't be confirmed, so sharing changes are paused.";
+
+function assertCloudAuthorizedForSharing(): void {
+  if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+    throw new Error(CHAT_SHARING_UNAUTHORIZED_MESSAGE);
+  }
+}
 import { epicMutationKeys } from "@/lib/query-keys";
 
 /**
@@ -67,6 +92,9 @@ export function useEpicSetCloudChatVisibility(): UseMutationResult<
     options: {
       mutationKey: epicMutationKeys.chatSharing(viewerUserId),
       onMutate: (variables) => {
+        // Before the in-flight gate, so a refusal here never takes the gate
+        // it would then have to release.
+        assertCloudAuthorizedForSharing();
         if (!beginChatSharingInFlight(variables.taskId, viewerUserId)) {
           throw new Error(CHAT_SHARING_IN_FLIGHT_MESSAGE);
         }
@@ -89,6 +117,10 @@ export function useEpicSetCloudChatVisibility(): UseMutationResult<
       },
       onError: (error) => {
         if (error.message === CHAT_SHARING_IN_FLIGHT_MESSAGE) return;
+        if (error.message === CHAT_SHARING_UNAUTHORIZED_MESSAGE) {
+          toast.error(UNVERIFIED_SHARING_TOAST);
+          return;
+        }
         toastFromHostError(error, "Couldn't update sharing.");
       },
       onSettled: (_data, _error, variables, ctx) => {
@@ -133,6 +165,9 @@ export function useEpicSetChatSharingDefault(): UseMutationResult<
     options: {
       mutationKey: epicMutationKeys.chatSharing(viewerUserId),
       onMutate: (variables) => {
+        // Before the in-flight gate, so a refusal here never takes the gate
+        // it would then have to release.
+        assertCloudAuthorizedForSharing();
         if (!beginChatSharingInFlight(variables.taskId, viewerUserId)) {
           throw new Error(CHAT_SHARING_IN_FLIGHT_MESSAGE);
         }
@@ -158,6 +193,10 @@ export function useEpicSetChatSharingDefault(): UseMutationResult<
       },
       onError: (error) => {
         if (error.message === CHAT_SHARING_IN_FLIGHT_MESSAGE) return;
+        if (error.message === CHAT_SHARING_UNAUTHORIZED_MESSAGE) {
+          toast.error(UNVERIFIED_SHARING_TOAST);
+          return;
+        }
         toastFromHostError(error, "Couldn't update sharing.");
       },
       onSettled: (_data, _error, variables, ctx) => {

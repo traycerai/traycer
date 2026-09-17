@@ -30,6 +30,7 @@ import { GitDiffTile } from "./git-diff-tile";
 import { SnapshotDiffTile } from "./snapshot-diff-tile";
 import { ManagedCommandOutputTile } from "./managed-command-output-tile";
 import { CommGraphTile } from "./comm-graph-tile";
+import { DeletedArtifactsTile } from "./deleted-artifacts-tile";
 import { PublishedChatTile } from "./published-chat-tile";
 import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
@@ -145,6 +146,7 @@ const TILE_RENDERERS: TileRendererRegistry = {
   "comm-graph": ({ node, viewTabId }) => (
     <CommGraphTile node={node} viewTabId={viewTabId} />
   ),
+  "deleted-artifacts": ({ node }) => <DeletedArtifactsTile node={node} />,
   // The ordinary chat surface fed from a published copy - see the tile's own
   // note. Bound, like every tile, to the tab's host: that host SERVES the cloud
   // read, and the chat's owning host is metadata the locked composer names.
@@ -217,7 +219,7 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
     <TabHostProvider hostId={args.node.hostId}>
       <BrowserSessionsHostBoundary
         hostId={args.node.hostId}
-        epicId={args.epicId}
+        scope={{ kind: "epic", epicId: args.epicId }}
       >
         <LinkTargetProvider epicId={args.epicId} viewTabId={args.viewTabId}>
           <TileFindScope

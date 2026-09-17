@@ -3,7 +3,6 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  type DraggableAttributes,
   type DraggableSyntheticListeners,
 } from "@dnd-kit/core";
 import {
@@ -201,10 +200,11 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       onOpenChange={setOpen}
       data-testid="queued-message-rows"
       className={cn(
-        "@container bg-muted/30",
+        "@container",
         props.separated === true ? "border-t border-border/50" : null,
         props.readOnly ? "opacity-95" : null,
       )}
+      variant="panel"
     >
       <QueuedMessageHeader
         open={open}
@@ -430,8 +430,9 @@ function QueuedMessageHeader(props: {
         align={undefined}
       >
         <CollapsibleTrigger
-          className="group/queue flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="group/queue flex min-w-0 flex-1 items-center text-left"
           data-testid="queued-message-header-toggle"
+          variant="panel"
         >
           <ChevronDown
             aria-hidden
@@ -477,9 +478,9 @@ function QueuedMessageHeader(props: {
         <div className="flex shrink-0 items-center gap-1 pr-1.5">
           <Button
             type="button"
-            size="sm"
+            size="xs"
             variant="outline"
-            className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+            className="h-7 shrink-0"
             disabled={!canAct || showKeepPausedButton}
             onClick={handleResume}
             data-testid="resume-queue-button"
@@ -490,9 +491,9 @@ function QueuedMessageHeader(props: {
           {showKeepPausedButton ? (
             <Button
               type="button"
-              size="sm"
+              size="xs"
               variant="outline"
-              className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+              className="h-7 shrink-0"
               disabled={!canAct || keepPausedRequested}
               onClick={handlePause}
               data-testid="keep-paused-queue-button"
@@ -507,9 +508,9 @@ function QueuedMessageHeader(props: {
         <div className="flex shrink-0 items-center pr-1.5">
           <Button
             type="button"
-            size="sm"
+            size="xs"
             variant="outline"
-            className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+            className="h-7 shrink-0"
             disabled={!canAct}
             onClick={handlePause}
             data-testid="pause-queue-button"
@@ -651,7 +652,6 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         visible={!readOnly}
         disabled={!actionState.canReorder}
         setHandleElement={rowSortable.setActivatorNodeRef}
-        attributes={rowSortable.attributes}
         listeners={rowSortable.listeners}
       />
       <QueuedMessageRowContent
@@ -708,6 +708,7 @@ function QueuedMessageRowContent(props: {
           <ManagedCommandBadge
             commandId={item.commandId}
             monitoring={item.monitoring}
+            hostId={item.hostId}
           />
         </div>
       ) : null}
@@ -776,6 +777,8 @@ function QueuedMessageRowContent(props: {
 export function ManagedCommandBadge(props: {
   readonly commandId: string;
   readonly monitoring: boolean | null;
+  /** The host the shell runs on when it is not this tab's; see the door. */
+  readonly hostId: string | null;
 }) {
   const openOutput = useManagedCommandDoor();
 
@@ -792,7 +795,7 @@ export function ManagedCommandBadge(props: {
         data-testid="queued-managed-command-badge"
         disabled={openOutput === null}
         onClick={() => {
-          openOutput?.(props.commandId);
+          openOutput?.(props.commandId, props.hostId);
         }}
       >
         {/* An unrecorded flag renders NO glyph: the label already names the
@@ -827,8 +830,8 @@ function ManagedCommandCancelButton(props: { readonly onCancel: () => void }) {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             aria-label="Cancel queued command output"
             onClick={props.onCancel}
           >
@@ -852,7 +855,7 @@ function QueuedMessageFloatingChrome(props: {
       className={cn(
         "sticky top-0 z-10 float-right ml-2 mb-1 flex shrink-0 items-center",
         props.framed
-          ? "gap-1 rounded-md border border-border/60 bg-background/70 p-0.5 shadow-lg backdrop-blur-md supports-backdrop-filter:bg-background/60"
+          ? "gap-1 rounded-md border border-border/60 bg-background/70 p-0.5 shadow-lg supports-backdrop-filter:bg-background/60"
           : null,
       )}
       data-testid="queued-message-row-toolbar"
@@ -1038,13 +1041,11 @@ function QueuedMessageDragHandle({
   visible,
   disabled,
   setHandleElement,
-  attributes,
   listeners,
 }: {
   readonly visible: boolean;
   readonly disabled: boolean;
   readonly setHandleElement: (element: HTMLElement | null) => void;
-  readonly attributes: DraggableAttributes;
   readonly listeners: DraggableSyntheticListeners;
 }) {
   if (!visible) return null;
@@ -1063,20 +1064,42 @@ function QueuedMessageDragHandle({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
+        {/* AX7, one surface over. dnd-kit's `attributes` were spread here, and
+            they advertise a keyboard gesture this surface does not implement:
+            `aria-roledescription="sortable"` plus an `aria-describedby`
+            pointing at "press the space bar to lift". `useSensors` registers
+            `PointerSensor` ONLY, so space and the arrow keys did nothing, on a
+            control that was in the tab order and named itself as draggable.
+
+            Registering `KeyboardSensor` was the other resolution and it is not
+            available here - not without redesigning the reorder hook. A
+            keyboard drag carries no `pointerCoordinates`, so
+            `queued-message-reorder-dnd.ts` resolves NO drop preview (its own
+            doc comment says exactly this), and `handleDragEnd` calls
+            `onReorder` only when a preview exists. Adding the sensor would turn
+            a false advertisement into a lift-move-drop that silently reorders
+            nothing, which is worse. Making that work means an index-based
+            preview path for keyboard drags, replacing the pointer-midline
+            math - a change to that hook's core, not to this handle.
+
+            So: pointer listeners only, out of the accessibility tree and out of
+            the tab order, which is what the `disabled` branch above already
+            does. Nothing is taken away - there is no keyboard reorder path on
+            this surface today either, and this stops claiming one. That gap is
+            real and is reported separately; it is a product decision, not an
+            attribute. */}
+        <span
           ref={setHandleElement}
-          type="button"
-          {...attributes}
           {...listeners}
+          aria-hidden
           className={cn(
             "inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground transition-colors",
-            "hover:bg-muted hover:text-foreground focus-visible:border focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:cursor-grabbing",
+            "hover:bg-muted hover:text-foreground active:cursor-grabbing",
           )}
-          aria-label="Drag to reorder queued message"
           data-testid="queued-message-drag-handle"
         >
-          <GripVertical className="size-3.5" aria-hidden />
-        </button>
+          <GripVertical className="size-3.5" />
+        </span>
       </TooltipTrigger>
       <TooltipContent sideOffset={6}>Drag to reorder</TooltipContent>
     </Tooltip>
@@ -1122,8 +1145,8 @@ function QueuedMessageAbortSteerButton(props: {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             aria-label="Cancel steer"
             onClick={props.onAbortSteer}
           >
@@ -1159,8 +1182,8 @@ function QueuedMessageRowActions(props: {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             disabled={props.actionsDisabled}
             aria-label={props.editLabel}
             onClick={props.onEdit}
@@ -1177,8 +1200,8 @@ function QueuedMessageRowActions(props: {
           <Button
             type="button"
             size="icon"
-            variant="ghost"
-            className="size-7 shrink-0 text-muted-foreground"
+            variant="muted"
+            className="size-7 shrink-0"
             disabled={props.actionsDisabled}
             aria-label="Delete queued message"
             onClick={props.onCancel}
@@ -1193,8 +1216,8 @@ function QueuedMessageRowActions(props: {
             <Button
               type="button"
               size="icon"
-              variant="ghost"
-              className="size-7 shrink-0 text-muted-foreground"
+              variant="muted"
+              className="size-7 shrink-0"
               disabled={props.steerNowDisabled}
               aria-label="Steer queued message now"
               onClick={props.onSteerNow}

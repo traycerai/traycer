@@ -3,7 +3,11 @@ import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
-import { messageSchema } from "@traycer/protocol/persistence/epic/messages";
+import {
+  messageSchema,
+  messageSchemaPreFallback,
+  messageSchemaPreShellHost,
+} from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   checkpointArtifactTagSchema,
@@ -18,6 +22,7 @@ import {
   type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { transcriptRowContextSchemaPreFallback } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
   interviewAnswerabilitySchema,
   judgeInterviewAnswerability,
@@ -325,12 +330,13 @@ export {
  *
  * The windowed line's other half of a cross-tile jump. A client resolves some
  * targets itself and reads the ordinal off the skeleton it holds, but `block`,
- * `sent-message` and `receipt` anchors are identified by walking RENDERED
- * models, which a cold row has none of - and a `message` anchor naming an ASSISTANT record has
- * no row id to read at all, because those rows are turn-keyed and keep the
- * durable id only on the rendered model. Without this the jump deadlocks rather
- * than degrading: the scroll drives hydration and the scroll is what is being
- * held back, so the target is never requested and the request parks forever.
+ * `sent-message`, `receipt` and `approval` anchors are identified by walking
+ * RENDERED models, which a cold row has none of - and a `message` anchor
+ * naming an ASSISTANT record has no row id to read at all, because those
+ * rows are turn-keyed and keep the durable id only on the rendered model.
+ * Without this the jump deadlocks rather than degrading: the scroll drives
+ * hydration and the scroll is what is being held back, so the target is
+ * never requested and the request parks forever.
  */
 export const chatLocateRowRequestSchema = z.object({
   /**
@@ -694,6 +700,54 @@ export const chatTranscriptWindowSchema = z.object({
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
 
 /**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.9`.
+ *
+ * `@1.9`, not `@1.8`: this copy binds `messageSchemaPreFallback` and
+ * `transcriptRowContextSchemaPreFallback` below, which is 1.9's contract.
+ * 1.8 has its own pair - `chatTranscriptWindowSchemaV18` /
+ * `chatRangeResponseSchemaV18` in `subscribe.ts`, carrying
+ * `transcriptRowContextSchemaPreAntigravity` - because 1.8 predates the
+ * Antigravity session-anchor arm and 1.9 does not. Naming the wrong minor here
+ * is not cosmetic: these two lines are frozen against DIFFERENT byte shapes,
+ * and the checkpoint digests are per minor.
+ *
+ * The windowed line is the reason round-4 finding F1 exists: a notice kind is
+ * carried by MESSAGE BODIES, and on this line bodies arrive on three channels,
+ * not one - the snapshot's tail (here), a `range` response
+ * ({@link chatRangeResponseSchemaPreFallback}) and the live `blockDelta`
+ * upsert. Freezing only the upsert would leave a `1.8` peer strict-rejecting a
+ * historical row it scrolled back to.
+ *
+ * Hand-frozen field-for-field, NOT `.extend()` off the live shape.
+ */
+export const chatTranscriptWindowSchemaPreFallback = z.object({
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()).optional(),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreFallback),
+  events: z.array(chatEventSchema),
+  rowContext: z
+    .record(z.string(), transcriptRowContextSchemaPreFallback)
+    .optional(),
+});
+
+/**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.10`: the live tail
+ * with `messages` swapped for `messageSchemaPreShellHost`, so a resume
+ * trigger's shell host - which `1.11` added - reaches none of that line's
+ * three body channels. `rowContext` stays live: `1.10` is the line that
+ * introduced the live row context. Hand-frozen field-for-field.
+ */
+export const chatTranscriptWindowSchemaPreShellHost = z.object({
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()).optional(),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreShellHost),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+});
+
+/**
  * A slice of the skeleton.
  *
  * The skeleton is delivered in chunks rather than inline on the snapshot for
@@ -835,6 +889,47 @@ export const chatRangeResponseSchema = z.object({
   truncatedAtOrdinal: z.number().int().nonnegative().optional(),
 });
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
+
+/**
+ * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.9` -
+ * the second of the windowed line's three body channels. See
+ * {@link chatTranscriptWindowSchemaPreFallback} for why all three are frozen
+ * together. Hand-frozen field-for-field.
+ */
+export const chatRangeResponseSchemaPreFallback = z.object({
+  requestId: rangeRequestIdSchema,
+  epoch: z.number().int().nonnegative(),
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreFallback),
+  events: z.array(chatEventSchema),
+  rowContext: z
+    .record(z.string(), transcriptRowContextSchemaPreFallback)
+    .default({}),
+  reachedStart: z.boolean(),
+  reachedEnd: z.boolean(),
+  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.10` -
+ * see {@link chatTranscriptWindowSchemaPreShellHost}. Hand-frozen
+ * field-for-field.
+ */
+export const chatRangeResponseSchemaPreShellHost = z.object({
+  requestId: rangeRequestIdSchema,
+  epoch: z.number().int().nonnegative(),
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreShellHost),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+  reachedStart: z.boolean(),
+  reachedEnd: z.boolean(),
+  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+});
 
 /**
  * A request for a span of bodies.

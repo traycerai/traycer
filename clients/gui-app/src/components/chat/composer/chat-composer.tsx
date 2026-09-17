@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { useStore } from "zustand";
-import { AlertTriangle } from "lucide-react";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -21,8 +20,9 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
 import {
   isAttachmentIngestPending,
-  useComposerPaste,
+  useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -44,6 +44,12 @@ import {
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
+import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
+import { composerRateLimitAdvisory } from "@/components/chat/fallback/fallback-return-low-usage";
+import {
+  fallbackComposerCardVisible,
+  type ChatProviderFallbackState,
+} from "@/components/chat/fallback/fallback-state";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
@@ -52,7 +58,8 @@ import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { redactEmail } from "@/lib/providers/redact-email";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
+import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "./chat-composer-attachments-strip";
@@ -68,6 +75,7 @@ import {
 } from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
+import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
   useChatComposerSubmit,
   type ChatComposerSideChatInput,
@@ -82,16 +90,15 @@ import {
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
-import {
-  useAmbientDriftGate,
-  type AmbientDriftSendNotice,
-} from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import {
@@ -117,6 +124,19 @@ interface ChatComposerProps {
    * view) should pass `true`.
    */
   readonly isActive: boolean;
+  /**
+   * The caller's "this surface may not dispatch against this chat" flag, and
+   * therefore the chat's ACT CAPABILITY as this composer sees it: the only
+   * mount (`chat-tile-lower-surfaces.tsx`) passes `!access.canAct`, which folds
+   * role, chat-stream connection and sign-in exactly as the session store's
+   * `canSendAction` does for the stream-side hold/release lease.
+   *
+   * It is read as that capability, not only as a button state — the
+   * provider-fallback controls below gate on it (`fallbackControlsCanAct`). A
+   * caller that sets this for a reason OTHER than the chat's act capability
+   * would silence those controls too; block send from inside the composer
+   * instead, the way the profile/reauth/pack gates do.
+   */
   readonly sendDisabled: boolean | undefined;
   /**
    * Why `sendDisabled` is true, shown as the send button's hover/focus
@@ -139,6 +159,13 @@ interface ChatComposerProps {
   readonly viewTabId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
+  /**
+   * This chat's provider-fallback surfaces (the grace card and the switch-back
+   * offer). Unrelated to `fallbackSettingsSeed` above, which is "the settings to
+   * use when there is no seed" - see `ChatProviderFallbackState` for why the
+   * longer name is used everywhere this is threaded.
+   */
+  readonly providerFallback: ChatProviderFallbackState;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
@@ -167,6 +194,20 @@ interface ChatComposerProps {
    * that predates same-turn steering.
    */
   readonly steerProtocolSupported: boolean;
+  /**
+   * Whether this chat's negotiated `chat.subscribe` line can carry
+   * `permissionMode: "auto"` (`@1.13`), or `null` while the session cannot
+   * say. Threaded to the toolbar exactly as `steerProtocolSupported` is: both
+   * are facts about THIS session's line that no host-wide read can answer.
+   */
+  readonly autoPermissionModeProtocolSupported: boolean | null;
+  /**
+   * Whether this chat's OWN live stream can materialize a hash-only draft image
+   * at send (T1's `chat.subscribe` 1.12 capability). Gates the hash-only send:
+   * a bare hash on a stream that cannot resolve it is a refusal the user has to
+   * read, so the flag is the chat's own, never an app-wide one.
+   */
+  readonly getDraftBlobBridgeSupported: () => boolean;
   /**
    * Reads the live active turn at submit time (not a reactive prop) so the
    * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
@@ -269,12 +310,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     viewTabId,
     settingsSeed,
     fallbackSettingsSeed,
+    providerFallback,
     onSubmitMessage,
     onSideChat,
     onSettingsChange,
     activeTurnStatus,
     steerCapable,
     steerProtocolSupported,
+    autoPermissionModeProtocolSupported,
     getActiveTurnForSteer,
     editingQueueItemId,
     onCancelQueueEdit,
@@ -285,6 +328,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     workspaceAvailability,
     topSpacing,
     topSlot,
+    getDraftBlobBridgeSupported,
   } = props;
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
@@ -307,7 +351,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const epicImagePresence = useEpicAttachmentBytesPresence();
+  const hasPastedImageBytes = useCallback(
+    (hash: string) => {
+      if (hasLandingImageBytes(hash)) return true;
+      if (epicImagePresence === null) return true;
+      return epicImagePresence(hash);
+    },
+    [epicImagePresence],
+  );
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
   // handle-ready catch-up on this - a ref flip alone never re-renders us.
@@ -345,7 +397,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     handleDocumentChange,
     handleSelectionChange,
   } = useChatComposerDraft({
-    taskId,
+    chatId: taskId,
+    epicId: currentEpicId,
+    hostId: tabHostId,
     editorRef,
     editorReadyTick,
   });
@@ -378,7 +432,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused ? "chat-tile" : null,
     seedSource,
     onSettingsChange,
-    { hostClient, hostId: tabHostId, tuiOnly: false },
+    {
+      hostClient,
+      hostId: tabHostId,
+      tuiOnly: false,
+      // The one composer with a live chat session, so the one that can supply
+      // the second proof. This reaches the STICKY CLAMP, which decides the
+      // mode actually sent - the toolbar's own gate only decides what is
+      // offered, and a sticky `auto` would otherwise survive both.
+      chatLineCarriesAutoMode: autoPermissionModeProtocolSupported,
+    },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -490,7 +553,32 @@ function ChatComposerImpl(props: ChatComposerProps) {
     dragOverlayVariant,
     isIngestingImages,
     isResolvingFilePaths,
-  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+    runPendingImageJob,
+  } = useComposerHashPaste(
+    editorRef,
+    runnerHost.fileDrops,
+    resolvedMentionRoots,
+  );
+  // The rich-clipboard channel and the mount-time restart. A file paste is
+  // already hashed before insertion; these two cover the HTML paste (whose
+  // nodes must keep their positions, so they go in with bytes and flip in
+  // place) and every draft that still holds inline bytes - including ones
+  // written by a build that had no rewrite at all.
+  const { ingestPastedComposerImages, reingestPendingImages } =
+    useComposerPendingImageIngest({
+      editorRef,
+      runPendingImageJob,
+      draftId: null,
+    });
+  // Restarts the rewrite on editor readiness AND on every host-document
+  // replacement; see the hook for why readiness alone left a dead end. Called
+  // AFTER `useChatComposerDraft` so the reset bridge has already installed the
+  // replacement by the time it runs in the same commit.
+  useComposerReingestOnReplacement({
+    chatId: taskId,
+    editorReadyTick,
+    reingestPendingImages,
+  });
   const pastePending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
@@ -502,7 +590,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // the bound is what keeps a stash save from hanging on an unreachable image.
   // A capture deliberately survives composer unmount, so this read is not
   // coupled to component-lifecycle cancellation.
-  const readPromptStashImage = useChatAttachmentByteReader();
+  const readChatAttachmentBytes = useChatAttachmentByteReader();
+  // The chat reader above answers for a SENT image; a hash this composer is
+  // still holding is in neither the chat plane nor the epic doc, so the stash
+  // would refuse to capture exactly the drafts it exists to hold. Chat-first,
+  // because that leg fails fast and this one is purely additive behind it.
+  const readPromptStashImage = useCallback(
+    async (hash: string): Promise<ImageBytes | null> => {
+      const fromChat = await readChatAttachmentBytes(hash);
+      if (fromChat !== null) return fromChat;
+      return resolveDraftImageBytes(
+        hash,
+        draftImageByteTargetForHost(tabHostId),
+      );
+    },
+    [readChatAttachmentBytes, tabHostId],
+  );
   const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
   // Chat writes the draft store, but restore still requires the exact ready
   // editor generation that started the restore - a remount under the same
@@ -518,7 +621,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
     readHashImage: readPromptStashImage,
     source: promptStashSource,
     destination: promptStashDestination,
+    hostId: tabHostId,
   });
+  const authority = useChatComposerDraftAuthority({
+    chatId: taskId,
+    tabHostId,
+  });
+  // The first edit of a draft this host does not own forks it underneath
+  // (a fresh id, same content) before the keystroke lands; the editor is
+  // never held for it.
+  const handleDocumentChangeNotingEdit = useCallback(
+    (content: JsonContent, selection: { from: number; to: number }): void => {
+      authority.noteEdit();
+      handleDocumentChange(content, selection);
+    },
+    [authority, handleDocumentChange],
+  );
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
   const { submitDraft, steerConflict, annotationPreparationPending } =
@@ -537,27 +655,24 @@ function ChatComposerImpl(props: ChatComposerProps) {
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
+      getDraftBlobBridgeSupported,
       onSubmitMessage,
       onSideChat,
+      targetHostId: tabHostId,
+      // The queued prompt this composer is pointed at, which is also what the
+      // tile's `onSubmitMessage` chooses its destination from - so it is part
+      // of the submit intent a preparation has to re-check before delivering.
+      queueEditTargetId: editingQueueItemId,
     });
   const attachmentPending = composerAttachmentPending(
     pastePending,
     annotationPreparationPending,
   );
-  const ambientDrift = useAmbientDriftGate(
-    hostClient,
-    reauthGate.state,
-    profileId,
-  );
-  // Preserves the submit source (Enter vs Cmd+Enter) across the ambient-drift
-  // "Continue" resubmit, so acknowledging drift on a steer chord still steers.
-  const lastSubmitSourceRef = useRef<ChatComposerSubmitSource>("enter");
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
-      lastSubmitSourceRef.current = source;
-      ambientDrift.guardSubmit(() => submitDraft(source));
+      submitDraft(source);
     },
-    [ambientDrift, submitDraft],
+    [submitDraft],
   );
   const handleSubmitFromButton = useCallback((): void => {
     handleSubmitDraft("enter");
@@ -572,18 +687,19 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
+    // The UNION of the two card predicates, and only for the slot question -
+    // which banner wins. Which CARD renders is decided inside
+    // `ChatComposerFallbackBanners`, by each predicate on its own.
+    fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
-    ambientDriftVisible: ambientDrift.pendingNotice !== null,
+    // BY VALUE. The key is present on every live `1.12` frame with `undefined`
+    // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
+    // banner open for the life of the chat.
+    fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
     rateLimitVisible:
       !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
   });
-  const continueAfterAmbientDrift = (): void => {
-    ambientDrift.acknowledge(() => {
-      if (rateLimitPrompt.kind === "visible") return;
-      submitDraft(lastSubmitSourceRef.current);
-    });
-  };
 
   const removeImage = useCallback((id: string) => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
@@ -615,6 +731,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
+      <ChatComposerFallbackBanners
+        topBannerKind={topBannerKind}
+        fallback={providerFallback}
+        // The return banner OUTRANKS the advisory in the chain above, so it
+        // absorbs its sentence rather than silencing it (MF09, UX §2). Same
+        // suppression as `rateLimitVisible`, from one helper.
+        rateLimitAdvisory={composerRateLimitAdvisory(
+          rateLimitPrompt,
+          reauthGate.signedOut,
+        )}
+        client={hostClient}
+        chatId={taskId}
+        epicId={currentEpicId}
+        hostId={tabHostId}
+        canAct={fallbackControlsCanAct(sendDisabled)}
+      />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
           <div className="pointer-events-none px-4">
@@ -671,14 +803,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
               }
             />
           ) : null}
-          {topBannerKind === "ambient-drift" &&
-          ambientDrift.pendingNotice !== null ? (
-            <AmbientDriftSendBanner
-              notice={ambientDrift.pendingNotice}
-              onContinue={continueAfterAmbientDrift}
-              onDismiss={ambientDrift.dismiss}
-            />
-          ) : null}
           {topSlot}
           <div
             data-composer-utility-clearance={
@@ -725,9 +849,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     initialSelection={initialSelection}
                     slashProviderId={harnessId}
                     hasPastedImageBytes={hasPastedImageBytes}
-                    ingestPastedComposerImages={null}
+                    ingestPastedComposerImages={ingestPastedComposerImages}
                     isActive={focused}
-                    onDocumentChange={handleDocumentChange}
+                    disabled={false}
+                    onDocumentChange={handleDocumentChangeNotingEdit}
                     onSelectionChange={handleSelectionChange}
                     onSubmit={handleSubmitDraft}
                     steerHintActive={steerHintActive}
@@ -746,7 +871,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     attachmentPending={attachmentPending}
                     onSubmit={handleSubmitFromButton}
                     activeTurnStatus={activeTurnStatus}
-                    hasPendingApprovals={hasPendingApprovals}
                     stopDisabled={stopDisabled}
                     onStopTurn={onStopTurn}
                     composerDisabledHint={sendBlockedHint}
@@ -756,6 +880,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     createProfileHostId={tabHostId}
                     runTargetHostId={tabHostId}
                     terminalLoginSurface={terminalLoginSurface}
+                    autoPermissionModeProtocolSupported={
+                      autoPermissionModeProtocolSupported
+                    }
                   />
                 }
               />
@@ -825,51 +952,6 @@ function resolveReauthBannerProps(gate: ProviderReauthGate): {
     return null;
   }
   return { providerId: gate.providerId, reason: gate.reason };
-}
-
-function AmbientDriftSendBanner({
-  notice,
-  onContinue,
-  onDismiss,
-}: {
-  readonly notice: AmbientDriftSendNotice;
-  readonly onContinue: () => void;
-  readonly onDismiss: () => void;
-}): ReactNode {
-  return (
-    <div className="mb-2 flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-ui-sm text-amber-900 dark:text-amber-200">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        <div className="min-w-0">
-          <div className="font-medium">Terminal account changed</div>
-          <div className="text-ui-xs">
-            Terminal account is now {driftEmailCopy(notice.currentEmail)}; was{" "}
-            {driftEmailCopy(notice.previousEmail)}.
-          </div>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 pl-6">
-        <button
-          type="button"
-          className="rounded-md bg-foreground/90 px-2.5 py-1 text-ui-xs font-medium text-background transition-colors hover:bg-foreground"
-          onClick={onContinue}
-        >
-          Continue with Terminal account
-        </button>
-        <button
-          type="button"
-          className="rounded-md px-2.5 py-1 text-ui-xs text-current opacity-80 transition-opacity hover:opacity-100"
-          onClick={onDismiss}
-        >
-          Dismiss
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function driftEmailCopy(email: string | null): string {
-  return email === null ? "an unknown account" : redactEmail(email);
 }
 
 function imageAttachmentsUnsupported(
@@ -946,6 +1028,32 @@ function resolveSendBlockedHint(args: {
   if (args.packPreparingHint !== null) return args.packPreparingHint;
   if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
   return null;
+}
+
+/**
+ * Whether the provider-fallback controls (cancel a wait, choose a different
+ * destination, run a manual rung, switch back) may dispatch.
+ *
+ * The four verbs behind those controls are plain host RPCs
+ * (`components/chat/fallback/use-fallback-actions.ts`) — unlike the choice
+ * LEASE beside them, which goes through the session store and is refused by
+ * `canSendAction` when `access.canAct !== true`. Nothing refuses the unary
+ * verbs client-side, so this is the whole gate, and it has to be the real
+ * capability. It used to be `onSubmitMessage !== null`, which is a constant:
+ * the tile's `onSubmitMessage` is non-nullable and returns `false` on its own
+ * `canAct` check, so a viewer — or an owner on a dropped chat stream — got
+ * enabled buttons issuing actions the host cannot accept.
+ *
+ * `sendDisabled`, not `sendBlocked`. `sendBlocked` widens the caller's flag
+ * with reasons a fallback action is the ESCAPE from — the profile is disabled,
+ * the provider is signed out, a managed pack is preparing — and gating on it
+ * would strand a chat on a destination it is no longer allowed to leave.
+ *
+ * `!== true` rather than `!`: `undefined` is "the caller has no opinion", which
+ * is not a refusal.
+ */
+function fallbackControlsCanAct(sendDisabled: boolean | undefined): boolean {
+  return sendDisabled !== true;
 }
 
 function canSubmitDraft(args: CanSubmitDraftArgs): boolean {

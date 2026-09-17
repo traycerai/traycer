@@ -246,7 +246,7 @@ function newSession(): OpenedStoreForTest {
   if (captured.value === null) throw new Error("factory not invoked");
   // Transport must reach "open" BEFORE the root snapshot lands - see the
   // matching comment in `use-rename-canvas-tab.test.tsx`.
-  captured.value.onConnectionStatus("open", null);
+  captured.value.onConnectionStatus("open", null, false);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
 }
@@ -471,6 +471,10 @@ describe("useSwitcherRename", () => {
           revision: 1,
           docResident: false,
           origin: "registry",
+          // `@1.3`'s session facet; `null` is what a host that cannot say
+          // answers, and nothing here is about the facet.
+          sessionState: null,
+          lastExit: null,
         },
       ],
       null,

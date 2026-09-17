@@ -1,12 +1,13 @@
 import {
   cleanup,
-  render,
+  render as renderComponent,
   screen,
   type RenderResult,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createStore } from "zustand/vanilla";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import type {
@@ -312,6 +313,21 @@ function renderLandingComposer(): RenderResult {
       workspaceControls={() => null}
     />,
   );
+}
+
+// `useDraftAuthorityControl` no longer claims anything (the fork rule is a
+// synchronous local re-key, no host RPC) - the Query client here is kept
+// for the other host-RPC hooks `LandingComposer` still uses. Shadows RTL's
+// `render` so each case below keeps reading as a plain render.
+function render(ui: ReactElement): RenderResult {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return renderComponent(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
 }
 
 afterEach(() => {

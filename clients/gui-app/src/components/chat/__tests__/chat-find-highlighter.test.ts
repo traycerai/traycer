@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { queryMountedChatFindUnit } from "@/components/chat/chat-find";
+import {
+  queryMountedChatBlock,
+  queryMountedChatFindUnit,
+  queryMountedChatMessageRoot,
+} from "@/components/chat/chat-find";
 
 describe("queryMountedChatFindUnit", () => {
   it("resolves a unit id containing selector-significant characters", () => {
@@ -20,5 +24,41 @@ describe("queryMountedChatFindUnit", () => {
     expect(queryMountedChatFindUnit(messageRoot, trickyUnitId)).toBe(target);
     expect(queryMountedChatFindUnit(messageRoot, "segment:other")).toBe(decoy);
     expect(queryMountedChatFindUnit(messageRoot, "segment:missing")).toBeNull();
+  });
+});
+
+describe("queryMountedChatMessageRoot", () => {
+  it("resolves a message id containing selector-significant characters", () => {
+    const scroller = document.createElement("div");
+    const trickyId = 'assistant:weird"]\\:id';
+    const decoy = document.createElement("div");
+    decoy.dataset.messageId = "assistant:other";
+    const target = document.createElement("div");
+    target.dataset.messageId = trickyId;
+    scroller.append(decoy);
+    scroller.append(target);
+
+    expect(queryMountedChatMessageRoot(scroller, trickyId)).toBe(target);
+    expect(queryMountedChatMessageRoot(scroller, "assistant:other")).toBe(
+      decoy,
+    );
+    expect(queryMountedChatMessageRoot(scroller, "missing")).toBeNull();
+  });
+});
+
+describe("queryMountedChatBlock", () => {
+  it("resolves a block id containing selector-significant characters", () => {
+    const messageRoot = document.createElement("div");
+    const trickyId = 'tool:weird"]\\:id';
+    const decoy = document.createElement("div");
+    decoy.dataset.blockId = "tool:other";
+    const target = document.createElement("div");
+    target.dataset.blockId = trickyId;
+    messageRoot.append(decoy);
+    messageRoot.append(target);
+
+    expect(queryMountedChatBlock(messageRoot, trickyId)).toBe(target);
+    expect(queryMountedChatBlock(messageRoot, "tool:other")).toBe(decoy);
+    expect(queryMountedChatBlock(messageRoot, "missing")).toBeNull();
   });
 });

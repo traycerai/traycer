@@ -68,6 +68,7 @@ try {
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-quit-cancel-",
+    [],
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;

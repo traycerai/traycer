@@ -5,6 +5,7 @@ import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browse
 import { Toaster } from "@/components/ui/sonner";
 import type { TileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
 import { registerTileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
+import { setMobileApp } from "@/lib/mobile-app";
 
 // Ticket 06: the toaster picks the least-overlapping of sonner's six fixed
 // anchors against live registered tile rects, and freezes that choice while
@@ -167,6 +168,7 @@ describe("<Toaster /> toast placement", () => {
   afterEach(() => {
     pendingDeregisters.forEach((deregister) => deregister());
     pendingDeregisters = [];
+    setMobileApp(false);
     cleanup();
   });
 
@@ -174,6 +176,48 @@ describe("<Toaster /> toast placement", () => {
     render(<Toaster />);
 
     expect(lastSonnerToasterProps().position).toBe("bottom-right");
+  });
+
+  it("leaves sonner's offsets alone outside the installed mobile app", () => {
+    render(<Toaster />);
+
+    expect(lastSonnerToasterProps().offset).toBeUndefined();
+    expect(lastSonnerToasterProps().mobileOffset).toBeUndefined();
+  });
+
+  it("anchors top-center below the header in the installed mobile app", () => {
+    setMobileApp(true);
+
+    render(<Toaster />);
+
+    const props = lastSonnerToasterProps();
+    expect(props.position).toBe("top-center");
+    const expectedOffset = {
+      top: "calc(var(--safe-area-inset-top) + 2.5rem + 1.5rem)",
+    };
+    expect(props.offset).toEqual(expectedOffset);
+    expect(props.mobileOffset).toEqual(expectedOffset);
+  });
+
+  it("keeps the mobile app's anchor when a tile covers the desktop default", async () => {
+    setMobileApp(true);
+    const { rerender } = render(<Toaster />);
+    await primeMeasurement(rerender);
+
+    await act(async () => {
+      registerTile("covers-default", BOTTOM_RIGHT_RECT);
+      await flush();
+    });
+
+    expect(lastSonnerToasterProps().position).toBe("top-center");
+  });
+
+  it("lets a caller's position win in the installed mobile app", () => {
+    setMobileApp(true);
+
+    render(<Toaster position="bottom-left" />);
+
+    expect(lastSonnerToasterProps().position).toBe("bottom-left");
   });
 
   it("moves off the default anchor when a tile covers it", async () => {

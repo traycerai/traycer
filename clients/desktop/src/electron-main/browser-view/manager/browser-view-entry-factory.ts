@@ -16,7 +16,16 @@ import {
 } from "./browser-view-entry-registry";
 import type { BrowserViewFind } from "./browser-view-find";
 import type { BrowserViewPopups } from "./browser-view-popups";
-import type { BrowserViewDebugSessions } from "./debug-session-for";
+
+/** Chromium's `net::ERR_ABORTED`: the navigation was cancelled, not refused. */
+const ERR_ABORTED = -3;
+
+/** Bounded, single-line copy for a load failure the tile shows the user. */
+function failedLoadReason(errorDescription: string): string {
+  const description = errorDescription.trim();
+  if (description === "") return "This page did not load";
+  return `This page did not load (${description.slice(0, 80)})`;
+}
 
 interface BrowserViewEntryFactoryOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
@@ -24,7 +33,6 @@ interface BrowserViewEntryFactoryOptions {
   readonly find: BrowserViewFind;
   readonly popups: BrowserViewPopups;
   readonly chords: BrowserViewChords;
-  readonly debugSessions: BrowserViewDebugSessions;
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: BrowserViewWebContents,
@@ -36,6 +44,8 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
+  readonly requestZoom: (entry: BrowserViewEntry, factor: number) => void;
+  readonly refreshViewport: (entry: BrowserViewEntry) => void;
   readonly emitFocus: (entry: BrowserViewEntry) => void;
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
@@ -52,7 +62,6 @@ export class BrowserViewEntryFactory {
   private readonly find: BrowserViewFind;
   private readonly popups: BrowserViewPopups;
   private readonly chords: BrowserViewChords;
-  private readonly debugSessions: BrowserViewDebugSessions;
   private readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: BrowserViewWebContents,
@@ -64,6 +73,11 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  private readonly requestZoom: (
+    entry: BrowserViewEntry,
+    factor: number,
+  ) => void;
+  private readonly refreshViewport: (entry: BrowserViewEntry) => void;
   private readonly emitFocus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
@@ -73,10 +87,11 @@ export class BrowserViewEntryFactory {
     this.find = options.find;
     this.popups = options.popups;
     this.chords = options.chords;
-    this.debugSessions = options.debugSessions;
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
+    this.requestZoom = options.requestZoom;
+    this.refreshViewport = options.refreshViewport;
     this.emitFocus = options.emitFocus;
     this.closeEntry = options.closeEntry;
   }
@@ -116,6 +131,22 @@ export class BrowserViewEntryFactory {
         ): void => {
           this.handleViewStartNavigation(entry, isInPlace, isMainFrame);
         },
+        // Deliberately NOT `did-fail-load` - see `handleFailedLoad`.
+        "did-fail-provisional-load": (
+          _event: Event,
+          errorCode: number,
+          errorDescription: string,
+          validatedUrl: string,
+          isMainFrame: boolean,
+        ): void => {
+          this.handleFailedLoad(
+            entry,
+            errorCode,
+            errorDescription,
+            validatedUrl,
+            isMainFrame,
+          );
+        },
         "did-navigate-in-page": (
           _event: Event,
           url: string,
@@ -150,6 +181,7 @@ export class BrowserViewEntryFactory {
       currentTitle: "",
       status: "loading",
       statusReason: null,
+      navigationAttempt: 0,
       findState: {
         appRequestId: 0,
         query: "",
@@ -158,11 +190,14 @@ export class BrowserViewEntryFactory {
       },
       certificateError: null,
       debugSession: null,
+      seedLease: null,
+      agentCdpLease: null,
       annotationSession: null,
       devToolsWindow: null,
       rendererResetPending: false,
       closePromise: null,
       internalNavigation: false,
+      succeededByReplacement: false,
     };
     this.popups.installGuestGesture(webContents);
     // The tile's opener context is a live view of the entry: read at open time,
@@ -195,6 +230,57 @@ export class BrowserViewEntryFactory {
     this.annotations.end(entry, "navigation");
   }
 
+  /**
+   * A main-frame navigation that ended on an error page. Without this, a
+   * reload or a history move whose page fails (offline, DNS, a refused
+   * connection) left the entry at `loading` for good - the `did-navigate`
+   * settle only fires for a successful commit.
+   *
+   * Only `did-fail-provisional-load` is a settle, and it is treated exactly
+   * like `did-navigate` - unconditionally for the current navigation. That
+   * follows from the emitter, not the event's name or its docs. In Electron
+   * 42.11.1 (`shell/browser/api/electron_api_web_contents.cc`,
+   * `WebContents::DidFinishNavigation`): a navigation that never committed
+   * - cancelled by a stop, a download, or a newer navigation superseding it
+   * - returns before emitting ANYTHING, so a superseded navigation cannot
+   * be mistaken for the current one; a navigation that committed an ERROR
+   * PAGE emits `did-fail-provisional-load` and then, unless the code is
+   * `ERR_ABORTED`, `did-fail-load` too. So the provisional event fires
+   * exactly once per failed navigation, and Chromium only ever commits the
+   * newest one.
+   *
+   * `did-fail-load` is deliberately not listened to: it doubles the
+   * provisional event for the same navigation, and `WebContents::DidFailLoad`
+   * also emits it for a COMMITTED document whose load was interrupted (the
+   * page being left while still loading resources) - a false settle for the
+   * navigation that interrupted it.
+   *
+   * `ERR_ABORTED` is ignored rather than settled. Today it never reaches
+   * this event (an abort never commits); if a later Electron emits it here
+   * for a cancelled navigation, ignoring it degrades to the stall surface
+   * instead of reporting `ready` under a superseder still in flight.
+   */
+  private handleFailedLoad(
+    entry: BrowserViewEntry,
+    errorCode: number,
+    errorDescription: string,
+    validatedUrl: string,
+    isMainFrame: boolean,
+  ): void {
+    if (entry.internalNavigation) return;
+    if (!isMainFrame) return;
+    if (!entry.identity.lifecycle.accepted) return;
+    if (entry.status !== "loading") return;
+    if (errorCode === ERR_ABORTED) return;
+    // The guest is now showing Chromium's error page FOR this url, so the
+    // entry follows it exactly as a successful commit would - otherwise the
+    // toolbar and the host's tab state keep naming the page that was left.
+    entry.currentUrl = validatedUrl;
+    entry.requestedUrl = validatedUrl;
+    entry.currentTitle = entry.webContents.getTitle();
+    this.setStatus(entry, "ready", failedLoadReason(errorDescription));
+  }
+
   private handleCommittedNavigation(
     entry: BrowserViewEntry,
     url: string,
@@ -214,10 +300,9 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
     this.setStatus(entry, "ready", null);
-    void this.debugSessions
-      .ensure(entry)
-      .enableAfterCommit()
-      .catch(() => undefined);
+    this.refreshViewport(entry);
+    // Recovery for a tab something is driving - never an attach of its own.
+    void entry.debugSession?.enableWhileLeased().catch(() => undefined);
   }
 
   private handleInPageNavigation(
@@ -235,6 +320,18 @@ export class BrowserViewEntryFactory {
     entry.currentTitle = entry.webContents.getTitle();
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     this.annotations.end(entry, "navigation");
+    // A same-document navigation is a settle too. Back/forward between two
+    // pushState history entries (any Turbo-style app: GitHub, for one) fires
+    // `did-start-navigation` + `did-navigate-in-page` and never
+    // `did-navigate`, so a history move that set `loading` would otherwise
+    // never return to `ready` and the tile's loader would sit over a live
+    // page for good. `setStatus` dedupes on an unchanged status, so the
+    // already-ready case (an ordinary pushState / hash change) still has to
+    // publish the new url/title/history readings through a bare emit.
+    if (entry.status !== "ready" || entry.statusReason !== null) {
+      this.setStatus(entry, "ready", null);
+      return;
+    }
     this.emitStatus(entry);
   }
 
@@ -261,7 +358,10 @@ export class BrowserViewEntryFactory {
     // only place in the chain that knows a browser tile has focus, so the
     // whole focus-scoped input policy is decided here. `preventDefault` is
     // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
-    const reserved = this.chords.match(input);
+    // The guest's OWN window decides the policy: each renderer registers a
+    // table derived from its own surface state, and this seam is the only
+    // place that knows which window's guest has focus.
+    const reserved = this.chords.match(entry.surface?.windowId ?? null, input);
     if (reserved !== null) {
       event.preventDefault();
       // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open
@@ -276,7 +376,7 @@ export class BrowserViewEntryFactory {
     if (step === null) return;
     event.preventDefault();
     const factor = step === 0 ? 1 : steppedEntryZoom(entry, step);
-    if (applyEntryZoom(entry, factor)) this.emitStatus(entry);
+    this.requestZoom(entry, factor);
   }
 }
 

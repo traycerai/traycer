@@ -230,7 +230,10 @@ function FolderLocationMenu(props: {
                 <Check className="size-4 text-primary" aria-hidden />
               ) : null}
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-[min(90vw,22rem)]">
+            <DropdownMenuSubContent
+              container={props.boundaryEl ?? undefined}
+              className="w-[min(90vw,22rem)]"
+            >
               <ExistingWorktreeList
                 rows={importRows}
                 promoteRowId={
@@ -345,13 +348,12 @@ function ExistingWorktreeList(props: {
     <FilePathRevealProvider>
       {showSearch ? (
         <div className="pb-1">
-          <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+          <InputGroup className="h-8!" variant="search">
             <InputGroupInput
               ref={inputRef}
               value={query}
               placeholder="Search worktrees"
               aria-label="Search worktrees"
-              className="text-ui-sm"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {

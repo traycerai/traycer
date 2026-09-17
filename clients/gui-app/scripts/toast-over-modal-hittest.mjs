@@ -62,6 +62,7 @@ try {
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-hittest-",
+    [],
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;

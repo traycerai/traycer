@@ -6,10 +6,13 @@ import {
   captureReportIssueError,
   type ReportIssueErrorCapture,
 } from "@/lib/report-issue-error-capture";
+import { getClientAppVersion, getClientBuildRevision } from "@/lib/app-version";
+import type { IRendererCrashTelemetryHost } from "@traycer-clients/shared/platform/runner-host";
 
 interface RootErrorBoundaryProps {
   /** Router instance used to navigate home from outside `RouterProvider`. */
   readonly router: AppRouter;
+  readonly crashTelemetry?: IRendererCrashTelemetryHost | undefined;
   readonly children: ReactNode;
 }
 
@@ -51,6 +54,23 @@ export class RootErrorBoundary extends Component<
       sourceAction: "App crash",
     });
     this.setState({ capture });
+    void this.props.crashTelemetry
+      ?.persist({
+        appVersion: getClientAppVersion(),
+        buildRevision: getClientBuildRevision(),
+        componentStack: capture.cause.componentStack,
+        correlationId: capture.correlationId,
+        fingerprint: capture.fingerprint,
+        timestamp: capture.cause.timestamp,
+      })
+      .catch((persistError: unknown) => {
+        appLogger.warn("[renderer] failed to persist crash telemetry", {
+          errorType:
+            persistError instanceof Error
+              ? persistError.name
+              : typeof persistError,
+        });
+      });
     appLogger.errorSummary(
       "[renderer] uncaught error reached RootErrorBoundary",
       { componentStack: capture.cause.componentStack },

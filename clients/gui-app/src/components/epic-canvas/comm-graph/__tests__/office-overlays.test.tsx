@@ -23,7 +23,13 @@ afterEach(() => {
  */
 describe("OfficeHoverSupplement", () => {
   it("names the posture and the model size the desk was drawn at", () => {
-    render(<OfficeHoverSupplement status="working" modelTier="large" />);
+    render(
+      <OfficeHoverSupplement
+        status="working"
+        modelTier="large"
+        whereabouts={null}
+      />,
+    );
 
     expect(
       screen.getByTestId("comm-graph-office-hover-supplement").textContent,
@@ -40,7 +46,13 @@ describe("OfficeHoverSupplement", () => {
       ["archived", "Archived"],
     ] as const) {
       cleanup();
-      render(<OfficeHoverSupplement status={status} modelTier="medium" />);
+      render(
+        <OfficeHoverSupplement
+          status={status}
+          modelTier="medium"
+          whereabouts={null}
+        />,
+      );
       expect(
         screen.getByTestId("comm-graph-office-hover-supplement").textContent,
       ).toContain(word);
@@ -48,7 +60,13 @@ describe("OfficeHoverSupplement", () => {
   });
 
   it("does not repeat the harness or the model the shared card resolves", () => {
-    render(<OfficeHoverSupplement status="idle" modelTier="small" />);
+    render(
+      <OfficeHoverSupplement
+        status="idle"
+        modelTier="small"
+        whereabouts={null}
+      />,
+    );
 
     const text = screen.getByTestId(
       "comm-graph-office-hover-supplement",

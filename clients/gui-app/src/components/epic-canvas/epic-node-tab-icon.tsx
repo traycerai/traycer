@@ -16,13 +16,15 @@ import {
   useRegisteredEpicActiveAgentIds,
   useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { AgentActivityCoverage } from "@/lib/agent-activity";
+import { useAgentActivityCoverage } from "@/stores/agent-activity-store";
 import {
   WORKSPACE_FILE_TAB_KIND,
   type EpicArtifactRef,
   type EpicNodeRef,
 } from "@/stores/epics/canvas/types";
 import { WorkspaceFileIcon } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
+import { useEpicNodeIconTone } from "@/components/epic-canvas/use-epic-node-icon-tone";
 
 /**
  * Single source of truth for rendering the icon of a tab/node anywhere in
@@ -117,6 +119,9 @@ function EpicNodeTabIconContent(props: {
         epicId={props.epicId}
         originHostId={props.node.hostId}
         running={false}
+        // A plain shell tab has no agent, so there is no activity claim for the
+        // plane to be missing - the hook-free path stays hook-free.
+        activityCoverage="indeterminate"
         runningTitle=""
         defaultIcon={
           <StaticEpicNodeIcon type="terminal" className={props.className} />
@@ -154,6 +159,12 @@ function TerminalNodeTabIcon(props: {
   readonly epicId: string;
   readonly originHostId: string;
   readonly running: IndicatorRunningKind;
+  /**
+   * Taken as a PROP rather than read here, because the two callers ask
+   * different questions: a plain shell tab has no agent to be uncertain about,
+   * while a TUI agent's only run authority is the activity plane.
+   */
+  readonly activityCoverage: AgentActivityCoverage;
   readonly runningTitle: string;
   readonly defaultIcon: ReactNode;
 }) {
@@ -168,6 +179,7 @@ function TerminalNodeTabIcon(props: {
     <NotificationIndicatorIcon
       state={indicatorState}
       running={props.running}
+      activityCoverage={props.activityCoverage}
       subjectId={props.nodeId}
       testIdPrefix="terminal-tab"
       className={undefined}
@@ -204,12 +216,14 @@ function TuiAgentLiveTabIcon(props: {
   const isActive = useRegisteredEpicActiveAgentIds(props.epicId).has(
     props.nodeId,
   );
+  const activityCoverage = useAgentActivityCoverage(props.originHostId);
   return (
     <TerminalNodeTabIcon
       nodeId={props.nodeId}
       epicId={props.epicId}
       originHostId={props.originHostId}
       running={isActive ? "turn" : false}
+      activityCoverage={activityCoverage}
       runningTitle="Agent in progress"
       defaultIcon={
         <TuiAgentTabIcon
@@ -250,16 +264,8 @@ export function StaticEpicNodeIcon(props: {
   readonly className: string;
 }) {
   const Icon = EPIC_NODE_ICONS[props.type];
-  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
-  const color = useSettingsStore((s) => s.artifactIconColors[props.type]);
-  const style = colorMode === "byType" ? { color } : undefined;
+  const tone = useEpicNodeIconTone(props.type);
   return (
-    <Icon
-      className={cn(
-        props.className,
-        colorMode === "none" && "text-muted-foreground",
-      )}
-      style={style}
-    />
+    <Icon className={cn(props.className, tone.className)} style={tone.style} />
   );
 }

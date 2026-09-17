@@ -8,14 +8,16 @@ import {
   type BrowserPrimaryProfileCaptureDependencies,
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserStorageCaptureWebContents,
+  type BrowserStorageSession,
 } from "../browser-storage-state";
 
 /**
- * `setStorageCookie` is what every host->jar write goes through, and it is the
- * normalisation the whole ownership model rests on: the shell decides the
- * `url`, the scope and the expiry, so the sender's attributes are re-derived
- * rather than trusted. `mergeObservedProfileCookies` is its one exported
- * caller since H05 collapsed the seed onto it, so the case lives here.
+ * `mergeObservedProfileCookies` is what every host->jar write goes through,
+ * and its `cookies.set` conversion is the normalisation the whole ownership
+ * model rests on: the shell decides the `url`, the scope and the expiry, so
+ * the sender's attributes are re-derived rather than trusted. It is the one
+ * caller of that conversion since H05 collapsed the seed onto it, so the case
+ * lives here.
  */
 describe("host-contributed cookie normalisation", () => {
   it("derives the url and scope from the cookie rather than the sender", async () => {
@@ -57,6 +59,8 @@ describe("host-contributed cookie normalisation", () => {
           flushStore,
         },
       },
+      [],
+      (_key) => undefined,
     );
 
     expect(result).toEqual({ applied: 2, refused: [] });
@@ -123,6 +127,8 @@ describe("host-contributed cookie normalisation", () => {
             flushStore: () => Promise.resolve(),
           },
         },
+        [],
+        (_key) => undefined,
       );
 
       // Counted, not thrown: this is untrusted remote input, and one
@@ -183,6 +189,8 @@ describe("host-contributed cookie normalisation", () => {
             flushStore: () => Promise.resolve(),
           },
         },
+        [],
+        (_key) => undefined,
       );
 
       expect(result).toEqual({ applied: 1, refused: [] });
@@ -235,6 +243,8 @@ describe("host-contributed cookie normalisation", () => {
           flushStore: () => Promise.resolve(),
         },
       },
+      [],
+      (_key) => undefined,
     );
 
     expect(result.applied).toBe(1);
@@ -243,6 +253,170 @@ describe("host-contributed cookie normalisation", () => {
     ]);
     expect(written).toHaveLength(1);
     expect(written[0]?.name).toBe("unpartitioned");
+  });
+});
+
+/**
+ * Ticket 03: applying an observed slice identical to what the jar already
+ * holds must not fire `cookies.set` at all - every set fires `cookie-changed`,
+ * which opens a delta window and echoes the slice straight back to the host.
+ * The comparison runs on the survivors AFTER validation and partition
+ * rejection, never before.
+ */
+describe("compare-before-set (ticket 03)", () => {
+  const BASE_COOKIE = {
+    name: "sid",
+    value: "abc",
+    domain: "example.test",
+    path: "/",
+    expires: 4_102_444_800,
+    httpOnly: false,
+    secure: false,
+    sameSite: "Lax",
+    partitionKey: null,
+  } as const;
+
+  function harness(): {
+    readonly set: (details: CookiesSetDetails) => Promise<void>;
+    readonly session: BrowserStorageSession;
+  } {
+    const set = vi.fn((_details: CookiesSetDetails) => Promise.resolve());
+    return {
+      set,
+      session: {
+        cookies: {
+          get: () => Promise.resolve([]),
+          set,
+          flushStore: () => Promise.resolve(),
+        },
+      },
+    };
+  }
+
+  it("skips cookies.set for a survivor identical to its jar counterpart, and counts it as applied", async () => {
+    const { set, session } = harness();
+
+    const result = await mergeObservedProfileCookies(
+      [BASE_COOKIE],
+      session,
+      [BASE_COOKIE],
+      (_key) => undefined,
+    );
+
+    expect(result).toEqual({ applied: 1, refused: [] });
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["value", { value: "changed" }],
+    ["httpOnly", { httpOnly: true }],
+    ["secure", { secure: true }],
+    ["sameSite", { sameSite: "Strict" as const }],
+    ["path", { path: "/app" }],
+    ["expiry (session vs timestamp)", { expires: -1 }],
+  ])(
+    "sets a survivor differing from its jar counterpart only in %s",
+    async (_label, override) => {
+      const { set, session } = harness();
+      const observed = { ...BASE_COOKIE, ...override };
+
+      const result = await mergeObservedProfileCookies(
+        [observed],
+        session,
+        [BASE_COOKIE],
+        (_key) => undefined,
+      );
+
+      expect(result).toEqual({ applied: 1, refused: [] });
+      expect(set).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("compares a repeated key's later occurrence against the write its earlier occurrence just made, within one merge call", async () => {
+    // A naive comparison built once from the `jarCookies` snapshot and never
+    // updated would compare BOTH occurrences against the ORIGINAL value: the
+    // first (rotated) correctly writes, but the second - spelled identically
+    // to that stale snapshot - would then look "already satisfied" and be
+    // skipped, silently leaving the jar on "rotated" instead of the frame's
+    // actual last value. The comparison has to track each write it makes as
+    // it makes it.
+    const { set, session } = harness();
+    const rotated = { ...BASE_COOKIE, value: "rotated" };
+
+    const result = await mergeObservedProfileCookies(
+      [rotated, BASE_COOKIE],
+      session,
+      [BASE_COOKIE],
+      (_key) => undefined,
+    );
+
+    expect(result).toEqual({ applied: 2, refused: [] });
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ value: "rotated" }),
+    );
+    expect(set).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ value: "abc" }),
+    );
+  });
+
+  it("treats a host-only jar cookie as distinct from a domain-cookie form of the same name", async () => {
+    const { set, session } = harness();
+    const observed = { ...BASE_COOKIE, domain: ".example.test" };
+
+    const result = await mergeObservedProfileCookies(
+      [observed],
+      session,
+      [BASE_COOKIE],
+      (_key) => undefined,
+    );
+
+    expect(result).toEqual({ applied: 1, refused: [] });
+    expect(set).toHaveBeenCalledOnce();
+  });
+
+  it("sets exactly the differing survivor among several, leaving the matching ones untouched", async () => {
+    const { set, session } = harness();
+    const csrf = { ...BASE_COOKIE, name: "csrf", value: "csrf-value" };
+    const prefs = { ...BASE_COOKIE, name: "prefs", value: "prefs-value" };
+    const sidChanged = { ...BASE_COOKIE, value: "rotated" };
+
+    const result = await mergeObservedProfileCookies(
+      [csrf, sidChanged, prefs],
+      session,
+      [csrf, BASE_COOKIE, prefs],
+      (_key) => undefined,
+    );
+
+    expect(result).toEqual({ applied: 3, refused: [] });
+    expect(set).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "sid", value: "rotated" }),
+    );
+  });
+
+  it("still refuses a partitioned cookie even when it matches a jar counterpart exactly", async () => {
+    // The jar read never carries a partition key - Electron's cookies API
+    // exposes none - so a partitioned observation always meets an
+    // otherwise-identical unpartitioned counterpart in the comparison set.
+    // The refusal below must still fire; a match is not licence to skip it.
+    const { set, session } = harness();
+    const partitioned = { ...BASE_COOKIE, partitionKey: "https://top.test" };
+
+    const result = await mergeObservedProfileCookies(
+      [partitioned],
+      session,
+      [BASE_COOKIE],
+      (_key) => undefined,
+    );
+
+    expect(result.applied).toBe(0);
+    expect(result.refused).toEqual([
+      { domain: "example.test", name: "sid", path: "/" },
+    ]);
+    expect(set).not.toHaveBeenCalled();
   });
 });
 

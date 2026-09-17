@@ -183,20 +183,29 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   const actual = await vi.importActual<
     typeof import("@/hooks/composer/use-composer-paste")
   >("@/hooks/composer/use-composer-paste");
+  // A function, not a hoisted object literal: it must re-read `testState`
+  // fresh on every call, since each test toggles `ingesting`/`resolvingPaths`
+  // AFTER the module (and this factory) already evaluated.
+  const stubPasteResult = () => ({
+    onPaste: vi.fn(),
+    onDrop: vi.fn(),
+    onDragOver: vi.fn(),
+    onDragEnter: vi.fn(),
+    onDragLeave: vi.fn(),
+    attachImageFiles: vi.fn(),
+    runPendingImageJob: vi.fn(),
+    isDraggingFiles: false,
+    dragOverlayVariant: null,
+    isIngestingImages: testState.ingesting,
+    isResolvingFilePaths: testState.resolvingPaths,
+  });
   return {
     ...actual,
-    useComposerPaste: () => ({
-      onPaste: vi.fn(),
-      onDrop: vi.fn(),
-      onDragOver: vi.fn(),
-      onDragEnter: vi.fn(),
-      onDragLeave: vi.fn(),
-      attachImageFiles: vi.fn(),
-      isDraggingFiles: false,
-      dragOverlayVariant: null,
-      isIngestingImages: testState.ingesting,
-      isResolvingFilePaths: testState.resolvingPaths,
-    }),
+    useComposerPaste: stubPasteResult,
+    // The modal actually calls this one (T4's hash-only paste adapter), not
+    // `useComposerPaste` above - the real hook running underneath left
+    // `testState.ingesting`/`resolvingPaths` toggling nothing.
+    useComposerHashPaste: stubPasteResult,
   };
 });
 

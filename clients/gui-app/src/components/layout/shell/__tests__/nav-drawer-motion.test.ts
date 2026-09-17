@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   NAV_DRAWER_COMMIT_TRAVEL_FRACTION,
+  navDrawerSettleTransition,
   resolvesToOpen,
   type NavDrawerRelease,
 } from "@/components/layout/shell/nav-drawer-motion";
@@ -184,5 +185,19 @@ describe("resolvesToOpen - a cancelled gesture decides nothing", () => {
     const interrupted = { positionPx: 150, velocityPxPerS: 0, cancelled: true };
     expect(resolvesToOpen({ ...FROM_OPEN, ...interrupted })).toBe(true);
     expect(resolvesToOpen({ ...FROM_CLOSED, ...interrupted })).toBe(false);
+  });
+});
+
+describe("navDrawerSettleTransition", () => {
+  it("settles instantly when panel motion is disabled", () => {
+    expect(navDrawerSettleTransition(0)).toEqual({ duration: 0 });
+  });
+
+  it("uses the configured visual duration for the spring settle", () => {
+    expect(navDrawerSettleTransition(350)).toEqual({
+      type: "spring",
+      visualDuration: 0.35,
+      bounce: 0.05,
+    });
   });
 });

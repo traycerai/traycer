@@ -4,33 +4,42 @@ import {
   Bell,
   Bot,
   Boxes,
+  Gavel,
   GitBranch,
   Keyboard,
   LineChart,
   Palette,
+  PanelBottom,
   PanelsTopLeft,
   QrCode,
   Server,
   ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
+  UserX,
+  Volume2,
+  Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
   | "appearance"
+  | "layout"
   | "opening-behavior"
   | "app-notifications"
   | "providers"
   | "notifications"
+  | "permissions"
   | "agents"
+  | "fallback"
   | "keybindings"
   | "shell"
   | "worktrees"
   | "host"
   | "devices"
   | "link-phone"
+  | "delete-account"
   // Two sections, both labelled "Diagnostics", and the group they sit in is
   // what distinguishes them — `app-diagnostics` is this window's own logging
   // and heap, `diagnostics` is the selected host's. The host one keeps the
@@ -39,6 +48,24 @@ export type SettingsSectionId =
   | "app-diagnostics"
   | "diagnostics"
   | "usage";
+
+/**
+ * The Fallback section's id, as a value.
+ *
+ * Exported because the chat surfaces link INTO this section from six places -
+ * the grace card, the waiting card, the destination menu's empty state, the
+ * attribution details, the error card and the return banner - each doing
+ * `openSettings({ section: FALLBACK_SETTINGS_SECTION_ID })`. A bare `"fallback"`
+ * at each of those sites would make a rename a set of silently dead links
+ * rather than a compile error, and they are on the failure path, where nobody
+ * would find them.
+ *
+ * `as const satisfies` rather than a `SettingsSectionId` annotation: the
+ * annotation would widen the value to the whole union, and `openSettings` and
+ * `settingsRouteOptions` both build a literal route path from it.
+ */
+export const FALLBACK_SETTINGS_SECTION_ID =
+  "fallback" as const satisfies SettingsSectionId;
 
 /**
  * What a section BELONGS to — the organising idea of the whole surface.
@@ -100,12 +127,16 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now sixteen. Providers,
- * Worktrees, the host's Notifications, Agent selection, Shell and Diagnostics
- * are the eleventh through sixteenth and go without. Providers is the newest
- * to lose one, to Opening behavior taking the third Application slot.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now nineteen. The whole
+ * host group - Overview, Providers, Worktrees, the host's Notifications,
+ * Permissions, Agent selection, Fallback, Shell and Diagnostics - is the
+ * eleventh through nineteenth and goes without. Overview is the newest to lose
+ * one, to Layout taking the seventh Application slot. Permissions and Fallback
+ * were both added into the digit-less tail and so moved no existing shortcut -
+ * Permissions sits between Notifications and Agent selection, Fallback between
+ * Agent selection and Shell, all already there.
  *
- * Worktrees is the one that lost a digit to the app-scoped Notifications
+ * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
  * start: giving Worktrees its digit back would require shortcut order to
  * diverge from both sidebar reading order and command-palette row order.
@@ -113,6 +144,16 @@ export interface SettingsSection {
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal panel table, the command palette and remembered tab paths key
  * off them — so ids never change even when labels do.
+ *
+ * The rail label names WHAT the page controls; the group heading names WHOSE
+ * it is. Two pages that control the same thing at two scopes share word and
+ * icon (Diagnostics). Two pages that control different things get different
+ * words and icons (Sounds vs Notifications). Surfaces with no scope carrier
+ * qualify the label themselves — report-issue route labels already do
+ * ("App diagnostics" / "Host diagnostics"). The mobile header still shows
+ * the bare section label; that case is unresolved, not an example of the rule.
+ * Putting the group word into a row the heading already scopes is the
+ * inconsistent move, not the consistent one.
  */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   {
@@ -136,13 +177,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: PanelsTopLeft,
     group: "app",
   },
-  // Application and Host intentionally both have a Notifications page. The
-  // group heading states the scope: this one owns renderer sound and the
-  // phone's OS permission; the host one owns filtering and automation.
+  // Different controls than Host → Notifications, so a different word and
+  // icon (see the rail-table rule above). The section `id` stays
+  // `app-notifications`.
   {
     id: "app-notifications",
-    label: "Notifications",
-    icon: Bell,
+    label: "Sounds",
+    icon: Volume2,
     group: "app",
   },
   {
@@ -151,16 +192,25 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Keyboard,
     group: "app",
   },
-  // Application, not Host, and it is the same word as the host section on
-  // purpose: both pages ARE diagnostics, and the group heading above each is
-  // what says whose. The split exists because this half never varied by host —
-  // the app's log verbosity, its log file and its heap describe one window —
-  // so under the picker it was drawn once per host in the account, offering the
-  // same single setting from N places.
+  // Same kind of page as Host → Diagnostics, partitioned by scope, so the
+  // same word and icon. The split exists because this half never varied by
+  // host — the app's log verbosity, its log file and its heap describe one
+  // window — so under the picker it was drawn once per host in the account.
   {
     id: "app-diagnostics",
     label: "Diagnostics",
     icon: Activity,
+    group: "app",
+  },
+  // Where the app's own chrome SITS and how much of it shows - the status bar
+  // first, the composer and the sidebar's own layout beside it later. It is a
+  // page rather than a group inside Appearance because the controls answer
+  // "where does this live", not "what does it look like", and because a
+  // per-window rate-limit list needs room Appearance does not have.
+  {
+    id: "layout",
+    label: "Layout",
+    icon: PanelBottom,
     group: "app",
   },
   {
@@ -196,6 +246,17 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: LineChart,
     group: "account",
   },
+  // Offered ONLY by the installed mobile app (`MOBILE_APP_ONLY_SECTION_IDS`
+  // below). Last in its group because it is the group's one irreversible
+  // action, and because appending it keeps Account contiguous without moving
+  // a single desktop row: the desktop list does not contain it at all, so no
+  // existing leader digit shifts there.
+  {
+    id: "delete-account",
+    label: "Delete account",
+    icon: UserX,
+    group: "account",
+  },
   // The host group. Everything here is scoped by the picker that heads it.
   {
     id: "host",
@@ -215,10 +276,25 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: GitBranch,
     group: "host",
   },
+  // Event policy and automation for the selected host. Different controls
+  // than Application → Sounds, so it keeps the generic word and the bell.
   {
     id: "notifications",
     label: "Notifications",
     icon: Bell,
+    group: "host",
+  },
+  // What an agent may do on this machine without asking: the judge that
+  // reviews actions under the `auto` permission mode, the policy it follows
+  // and the rules that always apply. Its own page rather than rows on Agent
+  // selection - that page is about which agent gets CHOSEN for a task, and
+  // permissions are a different question. The app-wide DEFAULT permission
+  // mode stays on General: it is one preference for this app, not per machine
+  // (SETTINGS.md, "Scope: the organising idea").
+  {
+    id: "permissions",
+    label: "Permissions",
+    icon: Gavel,
     group: "host",
   },
   // "Agent selection", not "Agents": this section configures HOW a coding agent
@@ -232,15 +308,27 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Bot,
     group: "host",
   },
+  // Beside Agent selection, and for the same reason it sits under the picker at
+  // all: both configure how a chat agent gets ROUTED, and both answer per host,
+  // because the providers and accounts a fallback can reach are that machine's.
+  // "Fallback" and not "Automatic fallback" - the section is the whole subject,
+  // and "Automatic fallback" is the master toggle INSIDE it, so using the same
+  // words for both would make the rail row read as a switch.
+  {
+    id: "fallback",
+    label: "Fallback",
+    icon: Waypoints,
+    group: "host",
+  },
   {
     id: "shell",
     label: "Shell",
     icon: TerminalSquare,
     group: "host",
   },
-  // The host half: `cli`/`host` log verbosity and that machine's own log
-  // files. Everything left here answers differently per host, which is what
-  // earns it a place under the picker.
+  // Same kind of page as Application → Diagnostics, partitioned by scope, so
+  // the same word and icon. Everything left here answers differently per host,
+  // which is what earns it a place under the picker.
   {
     id: "diagnostics",
     label: "Diagnostics",
@@ -273,6 +361,48 @@ const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
 ]);
 
 /**
+ * The mirror image: sections ONLY the installed mobile app offers.
+ *
+ * - **Delete account — the requirement is the App Store's.** Guideline
+ *   5.1.1(v) obliges an app that creates accounts to offer deletion from
+ *   inside the app, and this section is how Traycer's iOS build satisfies it.
+ *   Desktop and the web GUI are not under that rule and already reach account
+ *   management on the web, so a second, slower route there would be a worse
+ *   answer to a question they can already answer. It is a scope decision, not
+ *   an inability: nothing in the panel needs a phone.
+ *
+ * Kept a separate set from `MOBILE_APP_OMITTED_SECTION_IDS` rather than a
+ * per-entry flag on the table, because the two lists answer different
+ * questions and a single `availableOn` column would have to be read in both
+ * directions at every call site.
+ */
+const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
+  "delete-account",
+]);
+
+/**
+ * Both offered lists, resolved once at module load.
+ *
+ * Precomputed rather than filtered per call so each build's list keeps ONE
+ * identity for the process's life - consumers memoize on it and compare it by
+ * reference. (This used to be `SETTINGS_SECTIONS` itself on every non-mobile
+ * build, which gave the same guarantee for free; now that both builds drop
+ * something, both need a constant of their own.) The `isMobileApp()` read
+ * stays inside the function below: the flag is written by the Capacitor entry
+ * before the first render, which is not necessarily before this module is
+ * evaluated.
+ */
+const DESKTOP_SECTIONS: ReadonlyArray<SettingsSection> =
+  SETTINGS_SECTIONS.filter(
+    (section) => !MOBILE_APP_ONLY_SECTION_IDS.has(section.id),
+  );
+
+const MOBILE_APP_SECTIONS: ReadonlyArray<SettingsSection> =
+  SETTINGS_SECTIONS.filter(
+    (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
+  );
+
+/**
  * The sections a build OFFERS, as opposed to the ones it can resolve.
  *
  * `SETTINGS_SECTIONS` stays whole because it is the compatibility table:
@@ -281,15 +411,9 @@ const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
  * is the list anything that PRESENTS a choice reads instead — the sidebar, the
  * command palette's settings sub-page, and the leader digits, which index
  * positionally and so must walk the same list the sidebar badges do.
- *
- * Returns `SETTINGS_SECTIONS` itself where nothing is omitted, so a consumer's
- * identity comparisons and memo dependencies are unaffected.
  */
 export function visibleSettingsSections(): ReadonlyArray<SettingsSection> {
-  if (!isMobileApp()) return SETTINGS_SECTIONS;
-  return SETTINGS_SECTIONS.filter(
-    (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
-  );
+  return isMobileApp() ? MOBILE_APP_SECTIONS : DESKTOP_SECTIONS;
 }
 
 /**

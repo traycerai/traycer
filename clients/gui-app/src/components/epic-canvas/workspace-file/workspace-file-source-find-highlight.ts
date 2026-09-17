@@ -16,77 +16,17 @@
  * building the same raw-file offset map.
  */
 
-const FIND_HIGHLIGHT_NAME_PREFIX = "traycer-source-find-match";
-const FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX = "traycer-source-find-match-active";
-
-let nextHighlightId = 1;
+import {
+  getHighlights,
+  RangeHighlighter,
+} from "@/lib/find-engine/range-highlighter";
 
 export interface SourceFindRange {
   readonly offset: number;
   readonly length: number;
 }
 
-interface SupportedHighlightsAPI {
-  set(name: string, highlight: Highlight): void;
-  delete(name: string): void;
-}
-
-interface SourceHighlightEntry {
-  readonly matchName: string;
-  readonly activeName: string;
-  readonly styleElement: HTMLStyleElement;
-}
-
-const sourceHighlightEntries = new WeakMap<HTMLElement, SourceHighlightEntry>();
-
-function getHighlights(): SupportedHighlightsAPI | null {
-  if (typeof CSS === "undefined") return null;
-  if (typeof Highlight === "undefined") return null;
-  const reg = (CSS as { highlights: SupportedHighlightsAPI | undefined })
-    .highlights;
-  return reg ?? null;
-}
-
-function getOrCreateHighlightEntry(root: HTMLElement): SourceHighlightEntry {
-  const existing = sourceHighlightEntries.get(root);
-  if (existing !== undefined) return existing;
-  const id = nextHighlightId;
-  nextHighlightId += 1;
-  const entry: SourceHighlightEntry = {
-    matchName: `${FIND_HIGHLIGHT_NAME_PREFIX}-${id}`,
-    activeName: `${FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX}-${id}`,
-    styleElement: createHighlightStyleElement(root, id),
-  };
-  sourceHighlightEntries.set(root, entry);
-  return entry;
-}
-
-function createHighlightStyleElement(
-  root: HTMLElement,
-  id: number,
-): HTMLStyleElement {
-  const matchName = `${FIND_HIGHLIGHT_NAME_PREFIX}-${id}`;
-  const activeName = `${FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX}-${id}`;
-  const style = root.ownerDocument.createElement("style");
-  style.dataset.traycerSourceFindHighlight = matchName;
-  style.textContent = [
-    `::highlight(${matchName}) {`,
-    "background-color: color-mix(in srgb, var(--primary) 35%, transparent);",
-    "color: inherit;",
-    "}",
-    `::highlight(${activeName}) {`,
-    "background-color: color-mix(in srgb, var(--primary) 75%, transparent);",
-    "color: var(--primary-foreground);",
-    "}",
-  ].join("\n");
-  const styleRoot = root.getRootNode();
-  if (typeof ShadowRoot !== "undefined" && styleRoot instanceof ShadowRoot) {
-    styleRoot.append(style);
-  } else {
-    root.ownerDocument.head.append(style);
-  }
-  return style;
-}
+const sourceHighlighters = new WeakMap<HTMLElement, RangeHighlighter>();
 
 interface TextNodeSpan {
   readonly node: Text;
@@ -183,53 +123,32 @@ function buildRange(
 }
 
 export function clearSourceFindHighlights(root: HTMLElement): void {
-  const entry = sourceHighlightEntries.get(root);
-  if (entry === undefined) return;
-  const reg = getHighlights();
-  if (reg !== null) {
-    reg.delete(entry.matchName);
-    reg.delete(entry.activeName);
-  }
-  entry.styleElement.remove();
-  sourceHighlightEntries.delete(root);
+  sourceHighlighters.get(root)?.dispose();
+  sourceHighlighters.delete(root);
 }
 
-/**
- * Paints every match span under the code container, with the active span in
- * the stronger `*-active` highlight so navigation between same-line matches is
- * visible. No-ops (clearing any prior paint) when the Custom Highlight API is
- * unavailable so unsupported browsers fall back to the gutter line marker.
- */
+/** Paint token-spanning matches, preserving the source adapter's offsets. */
 export function paintSourceFindHighlights(args: {
   readonly root: HTMLElement;
   readonly matches: readonly SourceFindRange[];
   readonly activeOffset: number;
 }): void {
-  const reg = getHighlights();
-  if (reg === null) return;
-  const entry = getOrCreateHighlightEntry(args.root);
-
+  if (getHighlights() === null) return;
+  let highlighter = sourceHighlighters.get(args.root);
+  if (highlighter === undefined) {
+    highlighter = new RangeHighlighter();
+    sourceHighlighters.set(args.root, highlighter);
+  }
   const spans = collectTextSpans(args.root);
-  const inactive: Range[] = [];
-  let active: Range | null = null;
+  const ranges: Range[] = [];
+  let activeIndex = -1;
   for (const match of args.matches) {
-    const domRange = buildRange(spans, match);
-    if (domRange === null) continue;
-    if (match.offset === args.activeOffset && active === null) {
-      active = domRange;
-    } else {
-      inactive.push(domRange);
+    const range = buildRange(spans, match);
+    if (range === null) continue;
+    if (match.offset === args.activeOffset && activeIndex === -1) {
+      activeIndex = ranges.length;
     }
+    ranges.push(range);
   }
-
-  if (inactive.length > 0) {
-    reg.set(entry.matchName, new Highlight(...inactive));
-  } else {
-    reg.delete(entry.matchName);
-  }
-  if (active !== null) {
-    reg.set(entry.activeName, new Highlight(active));
-  } else {
-    reg.delete(entry.activeName);
-  }
+  highlighter.paint(args.root, ranges, activeIndex);
 }

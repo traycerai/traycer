@@ -98,10 +98,12 @@ function registerChatSession(
         userId: null,
         onAuthError: null,
         onProviderAuthError: null,
+        wakeTransport: null,
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => true,
           requestTranscriptRange: () => undefined,
           requestResnapshot: () => undefined,
           close: () => undefined,

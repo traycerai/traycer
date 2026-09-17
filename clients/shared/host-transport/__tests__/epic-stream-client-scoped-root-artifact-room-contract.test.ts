@@ -98,6 +98,7 @@ function makeRequestContext(bearer: string): RequestContext {
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,
+    cloudAuthorized: true,
   });
 }
 
@@ -331,10 +332,10 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     });
     completeHandshake(sockets[0]);
 
-    // T5 (artifactRoomDirty) bumped the registry's latestMinor to 1, @1.2
-    // (roomId on the snapshot frame's meta) bumped it to 2, and @1.3
-    // (delta-seed reattach) bumped it to 3 - the client now opens at
-    // {major:1, minor:3}.
+    // @1.2 added roomId on the snapshot frame's meta, @1.3 the delta-seed
+    // reattach, durability routing extends the cloudSyncStatus frame at @1.4,
+    // and the s5 status pass extends it again at @1.6, while an older peer
+    // still negotiates and receives its frozen frame set.
     //
     // `params` stays `{epicId}` here because this client offers no seed
     // (`seedOfferProvider: () => null`), and a null offer omits the key
@@ -343,7 +344,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 3, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
       params: { epicId: "epic-1" },
     });
     client.close();

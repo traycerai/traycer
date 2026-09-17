@@ -16,6 +16,15 @@ export const hostQueryKeys = {
       : ([...hostQueryKeys.base(), hostId] as const),
   methodScope: <Method extends string>(hostId: string | null, method: Method) =>
     [...hostQueryKeys.scope(hostId), method] as const,
+  /**
+   * Whether `queryKey` is a `method` key under ANY host scope - the
+   * `predicate` form of `methodScope` for a fact that is not one host's. A
+   * key built with a null host has the method at index 1, a host-bound key at
+   * index 2; a host id is never a method name, so both slots are tested.
+   */
+  matchesMethodOnAnyHost: (queryKey: readonly unknown[], method: string) =>
+    queryKey[0] === "host" &&
+    (queryKey[1] === method || queryKey[2] === method),
   method: <
     Registry extends VersionedRpcRegistry,
     Method extends keyof Registry & string,
@@ -118,6 +127,33 @@ export const hostQueryKeys = {
       "host.usage.summary",
       params,
     ),
+  /**
+   * The account auto-mode policy read, for ONE viewer.
+   *
+   * `useAutoPolicyQuery` passes `cacheKeyIdentity: [viewerUserId]` because the
+   * record is ACCOUNT-owned while the key is host-shaped, and without the
+   * viewer segment a signed-out user's policy is served synchronously to
+   * whoever signs in next. This builder is the write side of that partition:
+   * `autoPolicy.set` folds its response into the read cache, and a
+   * `setQueriesData` on the bare method scope is a PREFIX match, so it would
+   * write the new body into every viewer's entry under this host - re-opening
+   * the same leak through the other door, with the saver's prose landing in the
+   * previous account's cached policy.
+   *
+   * Shape mirrors what `useHostQuery` produces (`epicTaskContexts` above is the
+   * same arrangement): `["host", hostId, method, params, userId]`, with the
+   * `{}` params `AUTO_POLICY_GET_PARAMS` sends. Keep the two in step - nothing
+   * type-checks a key against the hook that builds it.
+   */
+  autoPolicyForViewer: (hostId: string | null, userId: string) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "autoPolicy.get">(
+        hostId,
+        "autoPolicy.get",
+        {},
+      ),
+      userId,
+    ] as const,
   /**
    * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
    * what `useHostQuery` / `useHostQueries` produce for that method with

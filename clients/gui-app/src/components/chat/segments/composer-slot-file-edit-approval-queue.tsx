@@ -1,7 +1,12 @@
+import { useRef } from "react";
 import { Check, FilePenLine, X } from "lucide-react";
 import type { ChatFileEditApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  useRestartHighlightPulse,
+} from "@/components/chat/chat-navigation-highlight";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -9,6 +14,8 @@ interface ComposerSlotFileEditApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
+  readonly highlightedApprovalId: string | null;
+  readonly highlightedGeneration?: number;
 }
 
 export function ComposerSlotFileEditApprovalQueue(
@@ -19,15 +26,15 @@ export function ComposerSlotFileEditApprovalQueue(
   const showBulk = count >= 2;
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-ui-sm"
+      className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 text-ui-sm"
       data-testid="file-edit-approval-prompt"
     >
       <div className="flex flex-wrap items-center gap-2">
         <FilePenLine
-          className="size-3.5 shrink-0 text-amber-700 dark:text-amber-300"
+          className="size-3.5 shrink-0 text-warning-foreground"
           aria-hidden
         />
-        <span className="select-none font-medium uppercase text-amber-800 text-overline dark:text-amber-200">
+        <span className="select-none font-medium uppercase text-warning-foreground text-overline">
           File edit approval
         </span>
         {showBulk ? (
@@ -78,6 +85,10 @@ export function ComposerSlotFileEditApprovalQueue(
             approval={approval}
             canAct={props.canAct}
             onDecision={props.onDecision}
+            navigationHighlighted={
+              props.highlightedApprovalId === approval.approvalId
+            }
+            highlightGeneration={props.highlightedGeneration ?? 0}
           />
         ))}
       </div>
@@ -89,15 +100,38 @@ interface FileEditApprovalRowProps {
   readonly approval: ChatFileEditApprovalState;
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
+  readonly navigationHighlighted: boolean;
+  readonly highlightGeneration: number;
 }
 
 function FileEditApprovalRow(props: FileEditApprovalRowProps) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  useRestartHighlightPulse(
+    props.navigationHighlighted,
+    props.highlightGeneration,
+    rowRef,
+  );
   const headline =
     props.approval.description.length > 0
       ? props.approval.description
       : props.approval.toolName;
   return (
-    <div className="flex min-w-0 flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
+    <div
+      ref={rowRef}
+      data-approval-id={props.approval.approvalId}
+      data-navigation-highlighted={
+        props.navigationHighlighted ? "true" : undefined
+      }
+      data-navigation-highlight-generation={
+        props.navigationHighlighted
+          ? String(props.highlightGeneration)
+          : undefined
+      }
+      className={cn(
+        "flex min-w-0 flex-col gap-1.5 rounded-md py-2 first:pt-0 last:pb-0 transition-[background-color,box-shadow] duration-300",
+        props.navigationHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-code-sm text-foreground/80">
           {props.approval.toolName}
@@ -105,9 +139,10 @@ function FileEditApprovalRow(props: FileEditApprovalRowProps) {
         <Badge
           variant="outline"
           className={cn(
-            "h-4 px-1 text-overline",
+            "h-4",
             operationBadgeClassName(props.approval.operation),
           )}
+          size="sm"
         >
           {operationLabel(props.approval.operation)}
         </Badge>

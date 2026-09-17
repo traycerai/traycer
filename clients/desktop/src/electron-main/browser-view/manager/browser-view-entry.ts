@@ -6,7 +6,10 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
 import type { BrowserSessionProfile } from "../browser-session";
-import type { BrowserDebugSession } from "../debug/browser-debug-session";
+import type {
+  BrowserDebugLease,
+  BrowserDebugSession,
+} from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
   BrowserViewDevToolsWindow,
@@ -54,9 +57,30 @@ export interface BrowserViewEntry {
   currentTitle: string;
   status: BrowserViewStatus;
   statusReason: string | null;
+  /**
+   * Identity of the host-initiated navigation the current `loading` belongs
+   * to. Bumped by navigate / reload / back / forward, reported on every status
+   * change so the renderer can tell a new episode from a refresh of one.
+   */
+  navigationAttempt: number;
   findState: BrowserViewEntryFindState;
   certificateError: BrowserViewCertificateErrorChange | null;
   debugSession: BrowserDebugSession | null;
+  /**
+   * Held while the storage seed script is installed - from provisioning until
+   * `navigateAccepted` removes it. A tab with nothing to seed never takes one,
+   * and so never attaches a debugger at birth. A tab that was provisioned but
+   * never accepted a navigation keeps this lease, and with it the attached
+   * debugger, until the entry closes - bounded by the entry's lifetime, since
+   * `destroyEntry` disposes the session and every lease with it.
+   */
+  seedLease: BrowserDebugLease | null;
+  /**
+   * Taken by the first agent CDP dispatch and held for the rest of this tab
+   * incarnation. Nothing on the wire says when an agent is done with a tab, and
+   * the frame routes a command sequence resolves must stay valid across it.
+   */
+  agentCdpLease: BrowserDebugLease | null;
   annotationSession: BrowserAnnotationSession | null;
   devToolsWindow: BrowserViewDevToolsWindow | null;
   /**
@@ -66,12 +90,29 @@ export interface BrowserViewEntry {
    */
   rendererResetPending: boolean;
   internalNavigation: boolean;
+  /**
+   * Set when this guest is being closed only to be re-born in another window
+   * at the same tab identity ("Show here"). Its close must then leave the
+   * session's storage alone: an isolated partition is released with the
+   * session's last guest, and at that moment the successor does not exist
+   * yet, so without this the replacement would be born into a partition the
+   * close had just cleared. Cleared again if the successor's birth fails, at
+   * which point the close's release runs after all.
+   */
+  succeededByReplacement: boolean;
   /** One teardown shared by every close trigger for this guest. */
   closePromise: Promise<void> | null;
 }
 
 export interface BrowserViewNativeIdentity {
   readonly key: BrowserViewNativeTabKey;
+  /**
+   * The incarnation every host-side capability quotes. Fixed for the entry's
+   * life: a cross-window move REPLACES the entry (see
+   * `BrowserViewProvisioning.replaceNativeGuestForWindow`), so the new window's
+   * guest carries a freshly minted id and every call still quoting the old one
+   * finds no entry (`findExactNativeEntry` and `releaseTab`'s own check).
+   */
   readonly registrationId: string;
   /** Current renderer connection that owns this guest's lifecycle stream. */
   lifecycleWindowId: string;

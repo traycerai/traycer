@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserStorageCookie } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserPrimaryProfileCaptureResult } from "../../browser-view/storage/browser-storage-state";
 
@@ -79,11 +79,11 @@ const fixture = vi.hoisted(() => ({
   /** Resolves the site clear currently held open, when there is one. */
   releaseSiteClear: null as (() => void) | null,
   /**
-   * A fresh userData directory per test. The forget ledger is the REAL module
-   * here, and it persists: a test that leaves a clear pending (the ones that
-   * make a jar fail) would otherwise have the NEXT test's registration re-run
-   * that forget as its boot reconciliation, and every count below would be
-   * measuring the previous test.
+   * A userData path for `app.getPath`, which `createLoginImportService`
+   * needs at registration. The forget ledger never calls
+   * `initBrowserForgetLedger` here, so its module-level `store` stays
+   * `null` and nothing is written to this directory; `vi.resetModules()`
+   * alone is what clears the ledger's in-memory state between tests.
    */
   userDataDir: "/tmp/traycer-desktop-test-0",
 }));
@@ -276,6 +276,18 @@ vi.mock("../../browser-sessions/browser-sessions-owner", () => ({
 
     dispose(): void {}
   },
+}));
+
+// The registry above never uses a transport. Importing the real one rebuilds
+// the entire host RPC schema graph on every `vi.resetModules()`, consuming
+// gigabytes across this suite and timing out on the macOS CI runner.
+vi.mock("../../browser-sessions/browser-sessions-transport", () => ({
+  createBrowserSessionsHostDirectory: () => ({}),
+  openBrowserSessionsTransport: vi.fn(() => {
+    throw new Error(
+      "openBrowserSessionsTransport is not mocked for real use in this suite",
+    );
+  }),
 }));
 
 vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
@@ -511,9 +523,21 @@ describe("clear-site IPC jar targeting", () => {
     fixture.releaseSiteClear = null;
     fixture.userDataDir = `/tmp/traycer-desktop-test-${ledgerRun}`;
     ledgerRun += 1;
-    // With the directory, the ledger module's own in-memory state has to go
-    // too - it is loaded once per module registry, not once per directory.
+    // Reset the real ledger's in-memory state between cases.
     vi.resetModules();
+  });
+
+  // The reset above only drops the module registry's references. Every
+  // `vi.fn()` on the bridge keeps its recorded calls, and each recorded
+  // `handleInvoke` call holds the handler closure, which holds the whole
+  // freshly imported IPC graph - registry, transports and all. Nineteen
+  // tests times one retained graph is ~2.3 GB, which is over the darwin
+  // runner's default heap (main sat 36 MB under it; the first protocol
+  // growth tipped the file into "Ineffective mark-compacts near heap
+  // limit"). Clearing the recorded calls releases each graph as the test
+  // that imported it ends; measured peak drops from 2357 MB to 949 MB.
+  afterEach(() => {
+    vi.clearAllMocks();
   });
 
   it("clears the durable jar as well as the live one when saving is off (tile menu)", async () => {

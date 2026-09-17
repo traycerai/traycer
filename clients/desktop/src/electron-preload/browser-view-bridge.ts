@@ -8,7 +8,6 @@ import type {
   BrowserViewBridge,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewDebugSnapshot,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewOpenTileRequest,
@@ -19,6 +18,7 @@ import type {
   BrowserViewNativeTabStatusChange,
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
+  BrowserViewGuestViewportRequested,
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
@@ -100,11 +100,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewCapturePage,
           input,
         ) as Promise<BrowserViewCapturePageResult>,
-      getDebugSnapshot: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewGetDebugSnapshot,
-          input,
-        ) as Promise<BrowserViewDebugSnapshot>,
       startAnnotation: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewStartAnnotation,
@@ -247,6 +242,16 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewGuestReleaseRequested,
           handler,
         ),
+      onGuestViewportRequested: (handler) =>
+        subscribe<BrowserViewGuestViewportRequested>(
+          RunnerHostEvent.browserViewGuestViewportRequested,
+          handler,
+        ),
+      reportGuestViewportResult: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewGuestViewportResult,
+          input,
+        ) as Promise<void>,
     },
   };
 }

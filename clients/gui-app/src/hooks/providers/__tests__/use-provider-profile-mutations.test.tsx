@@ -7,7 +7,6 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { RenameProviderProfileRequest } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import type { RecolorProviderProfileRequest } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import type { RemoveProviderProfileRequest } from "@/hooks/providers/use-remove-provider-profile-mutation";
-import type { AcknowledgeAmbientDriftRequest } from "@/hooks/providers/use-acknowledge-ambient-drift-mutation";
 
 type SetEnabledRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -32,12 +31,6 @@ interface CapturedRecolorMutation {
   ) => SetEnabledRequest;
 }
 
-interface CapturedAcknowledgeAmbientDriftMutation {
-  readonly mapVariables: (
-    variables: AcknowledgeAmbientDriftRequest,
-  ) => SetEnabledRequest;
-}
-
 const mocks = vi.hoisted(() => ({
   client: {
     getActiveHostId: vi.fn(() => "host-1"),
@@ -59,7 +52,6 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
-import { useAcknowledgeAmbientDrift } from "@/hooks/providers/use-acknowledge-ambient-drift-mutation";
 
 function wrapper({ children }: { readonly children: ReactNode }) {
   return (
@@ -157,28 +149,6 @@ describe("provider profile mutation wrappers", () => {
         profileId: "profile-1",
         accentColor: "#14b8a6",
       },
-    });
-  });
-
-  it("maps acknowledgeAmbientDrift to providers.setEnabled profileAction, with no profileId", () => {
-    let captured: CapturedAcknowledgeAmbientDriftMutation | null = null;
-    const getCaptured = (): CapturedAcknowledgeAmbientDriftMutation => {
-      if (captured === null) throw new Error("Mutation was not captured.");
-      return captured;
-    };
-    mocks.useHostMutation.mockImplementation(
-      (args: CapturedAcknowledgeAmbientDriftMutation) => {
-        captured = args;
-        return { mutate: vi.fn(), isPending: false, error: null };
-      },
-    );
-
-    renderHook(() => useAcknowledgeAmbientDrift(), { wrapper });
-
-    expect(getCaptured().mapVariables({ providerId: "codex" })).toEqual({
-      providerId: "codex",
-      enabled: true,
-      profileAction: { type: "acknowledgeAmbientDrift" },
     });
   });
 });

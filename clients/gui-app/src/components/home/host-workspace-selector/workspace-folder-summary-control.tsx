@@ -13,6 +13,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useActivePaneEffect } from "@/components/epic-tabs/pane-visibility-context";
+import { useIsComposerNarrow } from "@/components/home/composer/composer-narrow-hooks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
@@ -27,6 +28,7 @@ import { useCompactRelativeTime } from "@/lib/relative-time";
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import {
+  ADD_FOLDER_LABEL,
   AddFolderButton,
   type AddFolderHandler,
   WorkspaceFolderRows,
@@ -169,6 +171,10 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly moveToRecent: boolean;
 }) {
   const itemCount = props.items.length;
+  // The word folds away on a narrow composer, where the row this control
+  // shares with its siblings has the least width to give. Outside a composer
+  // the context reads wide, so the word stays.
+  const iconOnly = useIsComposerNarrow();
   const [overlayState, setOverlayState] = useState<SummaryOverlayState>({
     workspacePopoverOpen: false,
     summaryHoverOpen: false,
@@ -285,6 +291,7 @@ export function WorkspaceFolderSummaryControl(props: {
         pending={props.addFolderPending}
         disabled={props.addFolderDisabled}
         disabledReason={props.addFolderDisabledReason}
+        iconOnly={iconOnly}
       />
     );
   }
@@ -295,19 +302,14 @@ export function WorkspaceFolderSummaryControl(props: {
     <button
       type="button"
       data-testid="folder-add"
+      aria-label={iconOnly ? ADD_FOLDER_LABEL : undefined}
       disabled={emptyRecentDisabled}
       className="inline-flex w-fit items-center gap-2 rounded-md px-1.5 py-1 text-ui-sm text-muted-foreground outline-none transition-[background-color,color] hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
     >
-      {props.addFolderPending ? (
-        <AgentSpinningDots
-          className="text-current"
-          testId={undefined}
-          variant="dots"
-        />
-      ) : (
-        <FolderPlus className="size-4" aria-hidden />
-      )}
-      <span>Add folder</span>
+      <EmptyRecentAddFolderContent
+        pending={props.addFolderPending}
+        iconOnly={iconOnly}
+      />
     </button>
   ) : (
     <WorkspaceSummaryTrigger
@@ -328,6 +330,7 @@ export function WorkspaceFolderSummaryControl(props: {
       disabledReason={
         props.addFolderDisabled ? props.addFolderDisabledReason : null
       }
+      iconOnly={iconOnly}
     />
   ) : (
     <HoverPreviewCard
@@ -383,12 +386,13 @@ export function WorkspaceFolderSummaryControl(props: {
     >
       {popoverTrigger}
       <PopoverContent
+        layout="bare"
         ref={contentRef}
         side={props.popoverSide}
         align="start"
         collisionPadding={12}
         container={dialogBoundaryEl ?? undefined}
-        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-hidden p-0"
+        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] overflow-hidden"
         data-testid={props.popoverTestId}
         onOpenAutoFocus={(event) => event.preventDefault()}
         onInteractOutside={(event) =>
@@ -418,7 +422,6 @@ export function WorkspaceFolderSummaryControl(props: {
             draftPending={props.draftPending === true}
             onEditEnvironment={props.onEditEnvironment}
             readOnly={false}
-            nestedInPopover={dialogBoundaryEl !== null}
             bindingResolved={props.bindingResolved}
             recentWorkspaces={props.recentWorkspaces}
             moveToRecent={props.moveToRecent}
@@ -449,13 +452,44 @@ export function WorkspaceFolderSummaryControl(props: {
   );
 }
 
+function EmptyRecentAddFolderContent(props: {
+  readonly pending: boolean;
+  readonly iconOnly: boolean;
+}): ReactNode {
+  return (
+    <>
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant="dots"
+        />
+      ) : (
+        <FolderPlus className="size-4" aria-hidden />
+      )}
+      {props.iconOnly ? null : <span>{ADD_FOLDER_LABEL}</span>}
+    </>
+  );
+}
+
 function EmptyRecentFolderTrigger(props: {
   readonly trigger: ReactNode;
   readonly disabled: boolean;
   readonly disabledReason: string | null;
+  readonly iconOnly: boolean;
 }): ReactNode {
   if (!props.disabled) {
-    return <PopoverTrigger asChild>{props.trigger}</PopoverTrigger>;
+    // An icon-only trigger names itself on hover; `null` renders no tooltip.
+    return (
+      <TooltipWrapper
+        label={props.iconOnly ? ADD_FOLDER_LABEL : null}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <PopoverTrigger asChild>{props.trigger}</PopoverTrigger>
+      </TooltipWrapper>
+    );
   }
   if (props.disabledReason === null) return props.trigger;
   return (
@@ -538,14 +572,17 @@ function WorkspaceRefreshFooter(props: {
         >
           {props.refreshing ? (
             <AgentSpinningDots
-              className="text-muted-foreground"
+              className={undefined}
               testId="workspace-folders-refresh-spinner"
               variant={undefined}
+              tone="muted"
             />
           ) : null}
           Refresh
           <ShortcutHint>
-            <Kbd className="ml-0.5 font-mono">R</Kbd>
+            <Kbd className="ml-0.5" variant="mono">
+              R
+            </Kbd>
           </ShortcutHint>
         </Button>
       </div>

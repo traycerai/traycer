@@ -660,6 +660,44 @@ describe("useNotificationActivation", () => {
     ).toEqual({ kind: "block", blockId: "interview-block-1" });
   });
 
+  it("parks an approval jump at its approval id", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-approval", "Approval task");
+    store.openTileInTab(tabId, {
+      id: "chat-approval",
+      instanceId: "chat-approval-instance",
+      type: "chat",
+      name: "Approval agent",
+      hostId: "stub-host",
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "approval",
+          epicId: "epic-approval",
+          chatId: "chat-approval",
+          approvalId: "approval-1",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
+        originHostId: "stub-host",
+        receivedAt: 906,
+        feedId: "host:approval",
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-approval")
+      ]?.target,
+    ).toEqual({ kind: "approval", approvalId: "approval-1" });
+  });
+
   it("parks an anchored jump while opening a fresh chat", () => {
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),

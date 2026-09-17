@@ -5,7 +5,10 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
-import { providerSupportsTerminalLogin } from "@/components/providers/provider-signin-availability";
+import {
+  providerLoginIsRemoteSafe,
+  providerSupportsTerminalLogin,
+} from "@/components/providers/provider-signin-availability";
 
 const EMPTY_HOST_DIRECTORY: ReadonlyArray<HostDirectoryEntry> = [];
 
@@ -86,7 +89,8 @@ export function resolveCreateProfileGate(
   // so `[]` is capability, not absence. See `providerSignInUnavailableHint`
   // for the full reasoning - these two gates must not disagree about whether a
   // provider can browser-sign-in.
-  const disabled = !hostIsLocal || oauthArgs === null;
+  const remoteSafe = providerLoginIsRemoteSafe(loginCapability);
+  const disabled = oauthArgs === null || (!hostIsLocal && !remoteSafe);
   return {
     disabled,
     reason: disabled

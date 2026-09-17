@@ -231,7 +231,7 @@ function ArtifactOperationBadge(props: {
         <span
           className={cn(
             base,
-            "border-emerald-500 bg-emerald-50 text-emerald-600 dark:border-emerald-400 dark:bg-emerald-950/60 dark:text-emerald-300",
+            "border-success bg-success/10 text-success-foreground",
           )}
         >
           <span className="sr-only">{label}</span>
@@ -249,16 +249,10 @@ function ArtifactOperationBadge(props: {
         align={undefined}
       >
         <span
-          className={cn(
-            base,
-            "border-amber-500 bg-amber-50 shadow-amber-950/5 dark:border-amber-400 dark:bg-amber-950/60",
-          )}
+          className={cn(base, "border-warning bg-warning/10 shadow-warning/5")}
         >
           <span className="sr-only">{label}</span>
-          <span
-            className="size-1.5 rounded-sm bg-amber-500 dark:bg-amber-300"
-            aria-hidden
-          />
+          <span className="size-1.5 rounded-sm bg-warning" aria-hidden />
         </span>
       </TooltipWrapper>
     );
@@ -273,7 +267,7 @@ function ArtifactOperationBadge(props: {
       <span
         className={cn(
           base,
-          "border-red-500 bg-red-50 text-red-600 dark:border-red-500 dark:bg-red-950/60 dark:text-red-300",
+          "border-destructive bg-destructive/10 text-destructive",
         )}
       >
         <span className="sr-only">{label}</span>

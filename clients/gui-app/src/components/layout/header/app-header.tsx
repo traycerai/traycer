@@ -5,7 +5,8 @@ import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
-import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
+import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
+import { DesktopMenuBar } from "@/components/layout/header/desktop-menu-bar";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
@@ -13,7 +14,8 @@ import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-h
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
@@ -50,13 +52,15 @@ export interface AppHeaderProps {
 }
 
 /**
- * App navigation chrome. On phones this delegates to the hamburger
- * `MobileAppHeader`; at >=768px it renders the desktop tab-strip header
- * (`DesktopAppHeader`) exactly as before.
+ * App navigation chrome. Browser/mobile viewports below 768px use the
+ * hamburger header. Installed Windows/Linux shells keep the desktop menu
+ * and tab row at every zoom level.
  */
 export function AppHeader(props: AppHeaderProps): ReactNode {
   const isMobile = useIsMobileViewport();
-  if (props.variant === "app" && isMobile) {
+  const desktopMenus = useDesktopMenuBarActive();
+  // A zoomed desktop window still needs its menu row and native control insets.
+  if (props.variant === "app" && isMobile && !desktopMenus) {
     return <MobileAppHeader />;
   }
   return <DesktopAppHeader variant={props.variant} />;
@@ -76,9 +80,6 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const navDisabled = variant === "host-loading";
   const showBell = variant !== "host-loading";
   const framelessDesktop = isFramelessDesktop();
-  const showGlobalResourceMonitor = useSettingsStore(
-    (state) => state.showGlobalResourceMonitor,
-  );
   // A header-anchored overlay (e.g. the resource monitor) needs the title bar to
   // stop swallowing clicks so a click there dismisses it. Drop drag while any
   // such overlay is open; restore it once they all close.
@@ -94,7 +95,8 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         // The height is a shared token: the boot surfaces reserve this exact
         // slot so their card does not move when the header appears under it.
         APP_HEADER_HEIGHT_CLASS,
-        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
+        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-[1.5px] after:bg-border/90 after:content-['']",
+        { "after:inset-x-[var(--radius-xl)]": showTabStrip },
         framelessDesktop
           ? cn(
               "pl-3 pr-3",
@@ -104,7 +106,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
-      <WindowsMenuBar />
+      <DesktopMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
@@ -127,7 +129,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       ) : null}
       <div
         className={cn(
-          "relative z-10 flex min-w-0 flex-1 items-center",
+          "relative z-10 flex min-w-0 flex-1 items-center self-end",
           draggable && "[-webkit-app-region:drag]",
         )}
       >
@@ -148,10 +150,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
         {!navDisabled ? <AppUpdateHeaderButton /> : null}
-        {!navDisabled ? <RateLimitIconButton /> : null}
-        {!navDisabled && showGlobalResourceMonitor ? (
-          <ResourceMonitorPopover className={undefined} />
-        ) : null}
+        {!navDisabled ? <HeaderUsageControls /> : null}
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
@@ -160,11 +159,61 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   );
 }
 
+/**
+ * The header's half of "exactly one surface owns the usage gauge and the
+ * resource monitor". Under the `status-bar` placement both move to the strip
+ * and this renders nothing.
+ *
+ * The DESKTOP header's half only: `MobileAppHeader` keeps both controls
+ * unconditionally, because a mobile viewport does not answer this question
+ * with `placement` at all - the footer there is its own opt-in switch, and a
+ * header that respected `status-bar` would leave a phone with neither control
+ * until someone found that switch.
+ *
+ * `showGlobalResourceMonitor` still gates the resource button on top of this —
+ * the two settings answer different questions ("do I want a resource monitor
+ * at all" vs "where do the usage controls live"), so under the footer the
+ * segment is governed by the status bar's own `resources.enabled` instead.
+ */
+function HeaderUsageControls(): ReactNode {
+  const showGlobalResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
+  const inHeader = useLayoutStore(
+    (state) => state.statusBar.placement === "header",
+  );
+  if (!inHeader) return null;
+  return (
+    <>
+      <RateLimitIconButton />
+      {showGlobalResourceMonitor ? (
+        // Unconditionally the owner of `app.resources.open`: this whole
+        // component is behind `inHeader`, so the strip's own popover is not
+        // mounted while this one is.
+        <ResourceMonitorPopover
+          trigger="header-button"
+          className={undefined}
+          claimsOpenAction
+        />
+      ) : null}
+    </>
+  );
+}
+
 // Hiding the bell when signed-out keeps the notifications-store +
 // runner-host subscriptions from mounting for a signed-out session.
+//
+// `admitsLocalPlane`, not `status === "signed-in"`: the notification centre
+// is a LOCAL-plane surface with cloud lanes inside it. For an `unverified`
+// session the session provider deliberately keeps the host-notification and
+// agent-activity lanes running and withholds only the cloud-backed ones
+// behind its own verdict gate - and on a desktop-width header this bell is
+// the ONLY entry point to those lanes, so gating it on the cloud verdict left
+// locally served failures, approvals and agent activity accumulating with no
+// way to see or act on them. Found in review.
 export function HeaderNotificationsBell() {
-  const isSignedIn = useAuthStore((state) => state.status === "signed-in");
-  if (!isSignedIn) {
+  const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
+  if (!admitted) {
     return null;
   }
   return <NotificationsBell />;

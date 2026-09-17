@@ -30,6 +30,7 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
+import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { makeMessage } from "./chat-message-fixtures";
@@ -46,6 +47,9 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 }));
 vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
   useAgentStop: () => ({ mutate: () => undefined }),
+}));
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
 }));
 // The background panel reaches for the managed half's RPCs whether or not any
 // managed command is on screen; this suite is about paint and pointer regions,
@@ -193,6 +197,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
+              folded={new Set()}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -262,6 +267,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
               viewTabId="tab-1"
               selfAgent={null}
               activeAgents={[]}
+              folded={new Set()}
               todo={null}
               restore={emptyRestore()}
               queue={emptyQueue()}
@@ -316,9 +322,11 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       // ComposerSlotShell is module-private. Viewer mode mounts it with
       // bottomSpacing="normal" without the real ChatComposer / host stack.
       render(
-        <TooltipProvider delayDuration={0}>
-          <ChatLowerInteractionSurfaces {...viewerSurfacesProps()} />
-        </TooltipProvider>,
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider delayDuration={0}>
+            <ChatLowerInteractionSurfaces {...viewerSurfacesProps()} />
+          </TooltipProvider>
+        </TabHostProvider>,
       );
 
       const notice = screen.getByText(
@@ -509,6 +517,8 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onStopTurn: () => null,
     steerCapable: false,
     steerProtocolSupported: true,
+    autoPermissionModeProtocolSupported: null,
+    getDraftBlobBridgeSupported: () => false,
     getActiveTurnForSteer: () => null,
   };
   const interview: ChatLowerInterviewState = {
@@ -519,12 +529,14 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onAnswer: () => null,
     onSkip: () => null,
     onFork: null,
+    highlightedBlockId: null,
   };
   const approvals: ChatLowerApprovalsState = {
     pendingFileEditApprovals: [],
     pendingApprovals: [],
     onFileEditDecision: () => undefined,
     onApprovalDecision: () => undefined,
+    highlightedApprovalId: null,
   };
   const queue: ChatLowerQueueState = {
     editingItem: null,
@@ -573,6 +585,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     composer,
     todo: null,
     restoreContext: emptyRestore(),
+    providerFallback: NO_PROVIDER_FALLBACK,
     backgroundItems: undefined,
     backgroundStopPendingTaskIds: new Set(),
     backgroundStopAllPending: false,

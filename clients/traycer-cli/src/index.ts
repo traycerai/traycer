@@ -1148,7 +1148,8 @@ function registerHostCommands(program: Command): void {
       // that cannot outlive the stop should get.
       const admission =
         opts.admission === "desktop-activation-maintenance" ||
-        opts.admission === "uninstall-maintenance"
+        opts.admission === "desktop-install-maintenance" ||
+        opts.admission === "host-uninstall-maintenance"
           ? (opts.admission as HostMaintenanceLeaseAdmission)
           : null;
       if (admission === null) {
@@ -2872,7 +2873,7 @@ function registerAgentCommands(
     agent
       .command("selection-guide", readonlyHidden)
       .description(
-        "Get the instructions for the agent selection guide. Instructs which child agents to create for different kinds of tasks.",
+        "Get instructions for choosing Traycer agents’ harnesses, models, and reasoning effort. Does not configure provider-native subagents.",
       ),
     () =>
       buildAgentSelectionGuideCommand({
@@ -3029,7 +3030,7 @@ function registerAgentCommands(
       )
       .option(
         "--response-id <id>",
-        "Close an open thread - one reply answers every message received on it",
+        "Answer a request received from this recipient; omit on your own follow-ups",
       ),
     (opts) =>
       buildAgentSendCommand({

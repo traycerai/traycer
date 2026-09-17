@@ -20,7 +20,12 @@ import {
   type ImageBytesFetcher,
   type ImageBytesResult,
 } from "@/lib/attachments/image-blob-cache";
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import {
+  DOCUMENT_ASSET_LABELS,
+  documentAssetKindOf,
+  type DocumentAssetKind,
+} from "@/lib/assets/image-extension-allowlist";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -107,17 +112,18 @@ const LOADING_STATE: FileAssetState = {
 
 /**
  * What the asset renders AS on the client - decides failure copy (and the
- * PdfPreview vs ImagePreview routing at the surfaces). Derived from the
- * request's extension, mirroring the same extension gate the surfaces use.
+ * document-viewer vs ImagePreview routing at the surfaces). Derived from the
+ * request's extension, mirroring the same extension gate the surfaces use:
+ * an image, or one of the document formats with its own viewer.
  */
-export type FileAssetRenderKind = "image" | "document";
+export type FileAssetRenderKind = "image" | DocumentAssetKind;
 
 /**
  * Every `AssetStreamFailureReason` maps to the SAME uniform fallback UI
  * (image-preview decision log, decision #14) - this is only the one-line
- * message shown alongside it, per render kind so a PDF failure never reads
- * as an image bug ("not one of the supported image formats" next to a PDF
- * that the app usually previews would read as broken, not as a limit).
+ * message shown alongside it, per render kind so a document failure never
+ * reads as an image bug ("not one of the supported image formats" next to a
+ * PDF that the app usually previews would read as broken, not as a limit).
  */
 const IMAGE_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
   "unsupported-method": "This host does not support image previews yet.",
@@ -132,37 +138,60 @@ const IMAGE_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
   "read-failed": "This image could not be read.",
 };
 
-const DOCUMENT_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
-  "unsupported-method": "This host does not support PDF previews yet.",
-  fatal: "This PDF could not be loaded.",
-  interrupted: "The file transfer was interrupted.",
-  "length-mismatch": "The file transfer did not complete.",
-  "not-found": "This file could not be found.",
-  // The wire literal is historical ("unsupported asset type") - for a PDF
-  // request it means the host refused admission, i.e. it negotiated below
-  // 1.1. The client-side version gate should prevent this ever rendering;
-  // honest copy in case a gap lets it through.
-  "not-image": "This host does not support PDF previews yet.",
-  mismatch: "This file's contents do not match its extension.",
-  "too-large": "This PDF is too large to preview.",
-  // Host never emits this for a PDF (raster-specific check) - generic copy.
-  "too-many-pixels": "This PDF could not be previewed.",
-  "read-failed": "This PDF could not be read.",
-};
+function documentFailureMessages(
+  kind: DocumentAssetKind,
+): Record<AssetStreamFailureReason, string> {
+  const label = DOCUMENT_ASSET_LABELS[kind];
+  return {
+    "unsupported-method": `This host does not support ${label} previews yet.`,
+    fatal: `This ${label} could not be loaded.`,
+    interrupted: "The file transfer was interrupted.",
+    "length-mismatch": "The file transfer did not complete.",
+    "not-found": "This file could not be found.",
+    // The wire literal is historical ("unsupported asset type") - for a
+    // document request it means the host refused admission, i.e. it
+    // negotiated below the minor that added the format. Honest copy: the
+    // stream's own negotiation is the only gate, so this IS the old-host
+    // path.
+    "not-image": `This host does not support ${label} previews yet.`,
+    mismatch: "This file's contents do not match its extension.",
+    "too-large": `This ${label} is too large to preview.`,
+    // Host never emits this for a document (raster-specific check) -
+    // generic copy.
+    "too-many-pixels": `This ${label} could not be previewed.`,
+    "read-failed": `This ${label} could not be read.`,
+  };
+}
 
 function describeFailure(
   failure: AssetStreamFailure,
   renderKind: FileAssetRenderKind,
 ): string {
-  return renderKind === "document"
-    ? DOCUMENT_FAILURE_MESSAGES[failure.reason]
-    : IMAGE_FAILURE_MESSAGES[failure.reason];
+  return renderKind === "image"
+    ? IMAGE_FAILURE_MESSAGES[failure.reason]
+    : documentFailureMessages(renderKind)[failure.reason];
 }
 
-const DECODE_FAILURE_REASONS: Record<FileAssetRenderKind, string> = {
-  image: "This image could not be decoded.",
-  document: "This PDF could not be rendered.",
+function decodeFailureReason(renderKind: FileAssetRenderKind): string {
+  return renderKind === "image"
+    ? "This image could not be decoded."
+    : `This ${DOCUMENT_ASSET_LABELS[renderKind]} could not be rendered.`;
+}
+
+/**
+ * Over-cap telemetry per document format (PDF product decision, Q6): the
+ * 20 MiB cap is accepted for v1 on the strength of "Open Externally covers
+ * it" - these events are the evidence stream for revisiting that (range
+ * streaming / a per-type cap) if real users hit the wall.
+ */
+const TOO_LARGE_EVENT_BY_KIND: Record<DocumentAssetKind, AnalyticsEvent> = {
+  pdf: AnalyticsEvent.PdfPreviewTooLarge,
+  docx: AnalyticsEvent.DocxPreviewTooLarge,
 };
+
+function renderKindFor(request: FileAssetRequest): FileAssetRenderKind {
+  return documentAssetKindOf(renderPathFor(request)) ?? "image";
+}
 
 function assetSourceFor(request: FileAssetRequest): FileAssetSource {
   if (request.method === "workspace") return "workspace";
@@ -190,7 +219,7 @@ function locationFor(request: FileAssetRequest): string {
 }
 
 /**
- * Composite key for `imageBlobCache`: `hostId`/`source`/location/`filePath`/
+ * Composite key for `imageBlobCache`: `hostScopeKey`/`source`/location/`filePath`/
  * `contentIdentity` (image-preview decision log, decision #11), as a JSON
  * array - not delimiter-joined, since any of those fields can legally
  * contain the delimiter and alias two different files onto the same key.
@@ -208,14 +237,16 @@ function locationFor(request: FileAssetRequest): string {
 const FILE_ASSET_SCOPE_KEY = "file-asset";
 
 function buildFileAssetCacheKey(parts: {
-  readonly hostId: string;
+  // Account-scoped (see `assetHostScope`), not a bare host id: a caller that
+  // ever passed one would collide across accounts.
+  readonly hostScopeKey: string;
   readonly source: FileAssetSource;
   readonly location: string;
   readonly filePath: string;
   readonly contentIdentity: string;
 }): string {
   return JSON.stringify([
-    parts.hostId,
+    parts.hostScopeKey,
     parts.source,
     parts.location,
     parts.filePath,
@@ -248,7 +279,7 @@ function requestKeyFor(request: FileAssetRequest): string {
 
 /**
  * The pre-header shared-subscription coalescing map's key (sol re-review) -
- * `hostId` + `requestKeyFor` + a git request's `coalesceRevision` (absent
+ * `hostScopeKey` + `requestKeyFor` + a git request's `coalesceRevision` (absent
  * for a workspace request, which has no revision concept) + this hook's
  * current `focusRefreshGeneration`. Deliberately WIDER than `requestKeyFor`
  * alone: two requests that are otherwise identical but at different git
@@ -284,12 +315,12 @@ function requestKeyFor(request: FileAssetRequest): string {
  * concurrent-first-mount coalescing for every non-worktree request.
  */
 function sharedSubscriptionKeyFor(
-  hostId: string,
+  hostScopeKey: string,
   request: FileAssetRequest,
   focusRefreshGeneration: number,
 ): string {
   return JSON.stringify([
-    hostId,
+    hostScopeKey,
     requestKeyFor(request),
     request.method === "git" ? request.coalesceRevision : null,
     isWorktreeBackedRequest(request) ? focusRefreshGeneration : 0,
@@ -461,17 +492,12 @@ function acquireSharedAssetSubscription(
       onFailure: (failure) => {
         sharedAssetSubscriptions.delete(sharedKey);
         unpin();
-        // Over-cap telemetry (PDF product decision, Q6): the 20 MiB cap is
-        // accepted for v1 on the strength of "Open Externally covers it" -
-        // this event is the evidence stream for revisiting that (range
-        // streaming / a per-type cap) if real users hit the wall. Recorded
-        // HERE, the stream's single failure path, so N coalesced consumers
-        // of one shared stream record one event, not one each.
-        if (
-          isPdfAssetPath(renderPathFor(request)) &&
-          failure.reason === "too-large"
-        ) {
-          Analytics.getInstance().track(AnalyticsEvent.PdfPreviewTooLarge, {
+        // Over-cap telemetry (`TOO_LARGE_EVENT_BY_KIND`) is recorded HERE,
+        // the stream's single failure path, so N coalesced consumers of one
+        // shared stream record one event, not one each.
+        const documentKind = documentAssetKindOf(renderPathFor(request));
+        if (documentKind !== null && failure.reason === "too-large") {
+          Analytics.getInstance().track(TOO_LARGE_EVENT_BY_KIND[documentKind], {
             surface: assetSourceFor(request),
           });
         }
@@ -551,24 +577,40 @@ export function useFileAsset(
   request: FileAssetRequest | null,
 ): UseFileAssetResult {
   const hostId = useTabHostId();
+  const focused = usePaneFocused();
+  return useHostFileAsset({ hostId, request, focused, refreshKey: 0 });
+}
+
+export function useHostFileAsset(args: {
+  readonly hostId: string | null;
+  readonly request: FileAssetRequest | null;
+  readonly focused: boolean;
+  readonly refreshKey: number;
+}): UseFileAssetResult {
+  const { hostId, request, focused: paneFocused } = args;
+  const refreshKey = args.refreshKey;
+  const accountId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
+  const assetHostScope = JSON.stringify([accountId, hostId]);
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   // The full binding, not just its `.client` (Codex re-review) - the shared
   // subscription coalescing layer needs `pin`/`unpin` too, see
   // `acquireSharedAssetSubscription`'s call site below.
   const streamBinding = useHostStreamClientBindingFor(target, auth);
-  const paneFocused = usePaneFocused();
 
-  const requestKey = request === null ? null : requestKeyFor(request);
+  const requestKey =
+    request === null
+      ? null
+      : JSON.stringify([assetHostScope, requestKeyFor(request), refreshKey]);
   const latestRequestRef = useRef(request);
   useEffect(() => {
     latestRequestRef.current = request;
   });
   const isWorktreeBacked = request !== null && isWorktreeBackedRequest(request);
   const renderKind: FileAssetRenderKind =
-    request !== null && isPdfAssetPath(renderPathFor(request))
-      ? "document"
-      : "image";
+    request === null ? "image" : renderKindFor(request);
 
   // Re-stat on refocus (decision #11): only a worktree-backed request bumps
   // this on the pane's blurred->focused transition, so a still-mounted tile
@@ -662,7 +704,7 @@ export function useFileAsset(
         status: "fallback",
         url: null,
         meta: null,
-        reason: DECODE_FAILURE_REASONS[renderKind],
+        reason: decodeFailureReason(renderKind),
         totalBytes: null,
         servedFromCache: false,
       },
@@ -677,15 +719,15 @@ export function useFileAsset(
       requestKeyRef.current = null;
       return;
     }
-    const requestKey = requestKeyFor(normalizedRequest);
+    const requestKey = JSON.stringify([
+      assetHostScope,
+      requestKeyFor(normalizedRequest),
+      refreshKey,
+    ]);
     // Derived inside the effect from ITS request (not the component-scope
     // `renderKind`) so the closure can never pair a stale kind with a new
     // request's callbacks.
-    const streamRenderKind: FileAssetRenderKind = isPdfAssetPath(
-      renderPathFor(normalizedRequest),
-    )
-      ? "document"
-      : "image";
+    const streamRenderKind = renderKindFor(normalizedRequest);
     isMountedRef.current = true;
     cacheKeyRef.current = null;
     requestKeyRef.current = requestKey;
@@ -728,7 +770,7 @@ export function useFileAsset(
         });
 
         const key = buildFileAssetCacheKey({
-          hostId,
+          hostScopeKey: assetHostScope,
           source: assetSourceFor(normalizedRequest),
           location: locationFor(normalizedRequest),
           filePath: normalizedRequest.filePath,
@@ -770,7 +812,7 @@ export function useFileAsset(
           key,
           header.mediaType,
           // `key` is already the fully-scoped identity for this asset - it
-          // encodes hostId, source, location and path - so the namespace is
+          // encodes hostScopeKey, source, location and path - so the namespace is
           // all this adds, keeping asset entries disjoint from attachment
           // ones. The fetcher ignores its subject argument entirely: it reads
           // from the subscription opened above, not from a hash.
@@ -864,7 +906,7 @@ export function useFileAsset(
 
     const acquired = acquireSharedAssetSubscription(
       sharedSubscriptionKeyFor(
-        hostId,
+        JSON.stringify([assetHostScope, refreshKey]),
         normalizedRequest,
         focusRefreshGeneration,
       ),
@@ -904,7 +946,13 @@ export function useFileAsset(
       if (!usedForFetch) sharedSubscription.release();
       releaseLease?.();
     };
-  }, [requestKey, streamBinding, hostId, focusRefreshGeneration]);
+  }, [
+    requestKey,
+    streamBinding,
+    assetHostScope,
+    focusRefreshGeneration,
+    refreshKey,
+  ]);
 
   const state =
     resolved !== null && resolved.key === requestKey

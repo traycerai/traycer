@@ -455,6 +455,18 @@ export function displayCloudSnapshotArrivals(
 ): void {
   const focused = readFocusedHostNotificationPresence();
   for (const entry of entries) {
+    // Read at birth on the origin host - the writer already decided this row
+    // needs no interruption (presence was fresh there, or it is a recovery
+    // row reconstructed after the fact). The local plane never sees one: the
+    // host emission service drops read rows before the channel. The cloud
+    // plane has no such filter, so without this gate every born-read row
+    // toasts on every OTHER device the moment it lands in a snapshot diff.
+    // The check precedes the focus gate because it is a property of the row
+    // itself, independent of what this window is looking at. Display only -
+    // the row still reaches the merged projection and Recent Activity. Not
+    // the badge: attention is read-based, so a born-read row was never going
+    // to light it.
+    if (entry.entry.readAt !== null) continue;
     const entity = notificationEntityFromHostEntry(entry.entry);
     if (
       focused !== null &&

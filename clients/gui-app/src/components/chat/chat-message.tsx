@@ -1,14 +1,17 @@
 import { memo, type ReactElement } from "react";
+import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
+import { ChatMessageTimestamp } from "./chat-message-timestamp";
 import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
+import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattended-denial-segment";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
@@ -148,6 +151,16 @@ function renderSingleSpecialSegment(
       </div>
     );
   }
+  if (segment.kind === "auto-judge-unattended-denial") {
+    return (
+      <div data-chat-find-unit={chatFindSegmentUnitId(segment.id)}>
+        <AutoJudgeUnattendedDenialSegment
+          rule={segment.rule}
+          reason={segment.reason}
+        />
+      </div>
+    );
+  }
   return null;
 }
 
@@ -178,6 +191,16 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         completedAt={message.completedAt}
         stopped={message.stopped}
         meta={message.assistantMeta}
+        // The host turn this row is, for the error segment's manual-rung
+        // affordances: they attach to the ONE attempt the host names and to no
+        // other row. Absent on a legacy record with no turn identity, which
+        // then correctly matches nothing.
+        turnId={message.turnId ?? null}
+        // And WHICH segment of this row they hang off. Resolved once per turn
+        // at projection time over the pre-split block list, so a steered turn
+        // rendered as several rows carries it on exactly one of them; absent
+        // on all the others, and on every row with no failure at all.
+        manualRungAnchorId={message.manualRungAnchorId ?? null}
         nextStepActions={nextStepActions}
         forkAction={assistantActions?.fork ?? null}
         interviewDeliveryRetry={
@@ -203,9 +226,25 @@ function ChatMessageImpl(props: ChatMessageProps) {
     message.statusLabel === null
       ? senderLabel
       : `${senderLabel} - ${message.statusLabel}`;
+  // A queued row leads with its status instead of a time: it has not been sent
+  // yet, so stamping it would read as a send time it does not have. A non-null
+  // `statusLabel` means exactly that here - the other two labels ("Streaming",
+  // "Completed") are applied under a `role === "assistant"` guard, and an
+  // assistant row returns above without ever reaching this overline.
+  // The separator is drawn here but the stamp decides whether it renders, so
+  // both hang off the same predicate: a persisted row can carry an instant a
+  // `Date` cannot represent, and a lone " · " after the label is worse than no
+  // stamp at all.
+  const sentAt = message.sentAt ?? message.createdAt;
   const sender = (
     <span className="text-overline font-medium text-muted-foreground/60">
       <span className="uppercase">{label}</span>
+      {message.statusLabel === null && hasRenderableMessageTime(sentAt) ? (
+        <>
+          <span aria-hidden> · </span>
+          <ChatMessageTimestamp timestamp={sentAt} />
+        </>
+      ) : null}
     </span>
   );
 

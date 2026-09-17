@@ -14,11 +14,16 @@ import {
   notifyLeaderScopesChanged,
   registerLeaderScope,
 } from "@/lib/keybindings/leader-scope";
-import type { ReasoningFooterConfig } from "@/components/home/pickers/harness-model-picker-footers";
+import type {
+  ReasoningFooterConfig,
+  ServiceTierFooterConfig,
+} from "@/components/home/pickers/harness-model-picker-footers";
+import { toggleServiceTier } from "@/components/home/pickers/model-service-tier";
+import { PICKER_REASONING_LEADER_INDEX_LIMIT } from "@/providers/keybinding-context";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 interface PickerLeaderScopeInput {
-  /** While true, the picker owns ⌘ (rail), ⌥ (reasoning, when actionable), and
+  /** While true, the picker owns ⌘ (rail), ⌥ (model settings), and
    *  ⌘⇧ (profile dropdown, when the active provider has 2+ profiles). */
   readonly open: boolean;
   /** Ordered visible rail entries, mirroring what the rail renders. */
@@ -26,6 +31,7 @@ interface PickerLeaderScopeInput {
   readonly onEntryChange: (providerId: ProviderId) => void;
   readonly reasoning: ReasoningFooterConfig | null;
   readonly reasoningActionable: boolean;
+  readonly serviceTier: ServiceTierFooterConfig | null;
   /** The provider the profile dropdown is scoped to - always the locked
    *  provider while a fork lock is active (the rail can't browse away from it). */
   readonly activeProviderId: ProviderId;
@@ -52,7 +58,7 @@ interface PickerLeaderScopeInput {
 
 /**
  * Registers the model picker's leader-key scope while it's open: ⌘+digit
- * switches the browsed provider rail, ⌥+digit sets the thinking level, and
+ * switches the browsed provider rail, ⌥+1–9 sets thinking, ⌥+0 toggles Fast, and
  * ⌘⇧+digit switches the active provider's profile dropdown. All three
  * dispatches are pure state writes through the supplied callbacks (no DOM
  * focus move), so the search box keeps focus. A latest-value ref lets the
@@ -66,6 +72,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     onEntryChange,
     reasoning,
     reasoningActionable,
+    serviceTier,
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
@@ -81,6 +88,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     onEntryChange,
     reasoning,
     reasoningActionable,
+    serviceTier,
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
@@ -93,6 +101,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
       onEntryChange,
       reasoning,
       reasoningActionable,
+      serviceTier,
       activeProviderId,
       activeProviderProfiles,
       activeProviderProfileAdmission,
@@ -104,6 +113,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     onEntryChange,
     reasoning,
     reasoningActionable,
+    serviceTier,
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
@@ -144,14 +154,27 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
         },
         {
           actionId: "model.reasoning.byDigit",
-          isActive: () => stateRef.current.reasoningActionable,
+          // Own the modifier even without model settings so an unavailable
+          // digit cannot switch a tab behind the picker. Zero is always Fast.
+          isActive: () => true,
           dispatch: (digit) => {
+            if (digit === 0) {
+              return toggleServiceTier(stateRef.current.serviceTier);
+            }
             const reasoningConfig = stateRef.current.reasoning;
-            if (reasoningConfig === null || reasoningConfig.disabled) {
+            if (
+              !stateRef.current.reasoningActionable ||
+              reasoningConfig === null ||
+              reasoningConfig.disabled
+            ) {
               return false;
             }
-            const index = digit === 0 ? 9 : digit - 1;
-            if (index < 0 || index >= reasoningConfig.options.length) {
+            const index = digit - 1;
+            if (
+              index < 0 ||
+              index >= PICKER_REASONING_LEADER_INDEX_LIMIT ||
+              index >= reasoningConfig.options.length
+            ) {
               return false;
             }
             reasoningConfig.onChange(reasoningConfig.options[index].id);

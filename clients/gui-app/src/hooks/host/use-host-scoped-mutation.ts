@@ -202,7 +202,6 @@ const PROVIDER_MUTATION_OPERATIONS: Readonly<
   [providersMutationKeys.renameProfile()[0]]: "profile",
   [providersMutationKeys.recolorProfile()[0]]: "profile",
   [providersMutationKeys.removeProfile()[0]]: "profile",
-  [providersMutationKeys.acknowledgeAmbientDrift()[0]]: "ambient_drift",
 };
 
 function trackScopedMutationSuccess(

@@ -4,6 +4,7 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
@@ -122,7 +123,7 @@ function DropdownMenuItem({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
   inset?: boolean;
-  variant?: "default" | "destructive";
+  variant?: "default" | "destructive" | "muted";
 }) {
   return (
     <DropdownMenuPrimitive.Item
@@ -130,7 +131,7 @@ function DropdownMenuItem({
       data-inset={inset}
       data-variant={variant}
       className={cn(
-        "group/dropdown-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
+        "group/dropdown-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=muted]:text-muted-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
         className,
       )}
       {...props}
@@ -152,7 +153,7 @@ function DropdownMenuCheckboxItem({
       data-slot="dropdown-menu-checkbox-item"
       data-inset={inset}
       className={cn(
-        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-[state=checked]:bg-foreground/5 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       checked={checked}
@@ -195,7 +196,7 @@ function DropdownMenuRadioItem({
       data-slot="dropdown-menu-radio-item"
       data-inset={inset}
       className={cn(
-        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-[state=checked]:bg-foreground/5 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}
@@ -213,6 +214,17 @@ function DropdownMenuRadioItem({
   );
 }
 
+/**
+ * A menu label is a SECTION HEADING, and it is drawn as one: the overline rank,
+ * uppercase, with the tracking that rank needs to stay readable.
+ *
+ * That treatment used to live at the call sites - fourteen of the twenty-four
+ * labels in the app wrote some spelling of `text-overline uppercase
+ * tracking-wide`, and they disagreed (three reached for `text-ui-xs
+ * font-medium`, three dropped the tracking, six dimmed to
+ * `text-muted-foreground/70`). It is one heading style, so it is stated once
+ * here and nowhere else.
+ */
 function DropdownMenuLabel({
   className,
   inset,
@@ -225,7 +237,7 @@ function DropdownMenuLabel({
       data-slot="dropdown-menu-label"
       data-inset={inset}
       className={cn(
-        "px-1.5 py-1 text-ui-xs font-medium text-muted-foreground data-inset:pl-7",
+        "px-1.5 py-1 text-overline tracking-wide uppercase text-muted-foreground data-inset:pl-7",
         className,
       )}
       {...props}
@@ -292,26 +304,53 @@ function DropdownMenuSubTrigger({
   );
 }
 
+type DropdownMenuSubContentProps = React.ComponentProps<
+  typeof DropdownMenuPrimitive.SubContent
+> & {
+  readonly container?: React.ComponentProps<
+    typeof DropdownMenuPrimitive.Portal
+  >["container"];
+  /**
+   * `menu` is a list of rows and gets the row gutter. `panel` is a submenu
+   * holding a small FORM or a paragraph rather than rows - the add-node
+   * launcher, the browser's site-information card - which needs a reading
+   * margin and body type instead. Both sites built it by hand and disagreed
+   * (`p-2` against `p-3`); this is that composition with one name. The rhythm
+   * BETWEEN the panel's children stays the caller's, because only the caller
+   * knows how many there are.
+   */
+  readonly layout?: "menu" | "panel";
+};
+
 function DropdownMenuSubContent({
   ref,
   className,
   collisionPadding,
+  container,
+  layout = "menu",
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+}: DropdownMenuSubContentProps) {
+  const dialogBoundary = useDialogOverlayBoundaryEl();
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
   return (
-    <DropdownMenuPrimitive.SubContent
-      ref={ref}
-      data-slot="dropdown-menu-sub-content"
-      collisionPadding={collisionPadding ?? safeAreaInsets}
-      className={cn(
-        "z-50 max-w-safe-dvw min-w-[96px] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-        className,
-      )}
-      {...props}
-    />
+    <DropdownMenuPrimitive.Portal
+      container={container ?? dialogBoundary ?? undefined}
+    >
+      <DropdownMenuPrimitive.SubContent
+        ref={ref}
+        data-slot="dropdown-menu-sub-content"
+        data-layout={layout}
+        collisionPadding={collisionPadding ?? safeAreaInsets}
+        className={cn(
+          "z-50 max-w-safe-dvw min-w-24 origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          layout === "panel" ? "p-3 text-ui-sm" : "p-1",
+          className,
+        )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
   );
 }
 

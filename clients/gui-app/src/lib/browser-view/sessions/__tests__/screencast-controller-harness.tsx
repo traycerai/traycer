@@ -38,6 +38,17 @@ export interface MountedController {
    * plane and the whole loader window.
    */
   readonly setVideoPainting: (value: boolean) => void;
+  /**
+   * What `readRequestNewTab` answers: the hosting surface's `mod+t` action, or
+   * `null` (the default) for a surface with none, where the chord belongs to
+   * the remote page.
+   */
+  readonly setRequestNewTab: (value: (() => void) | null) => void;
+  /**
+   * What `readRequestCloseTab` answers: the hosting surface's `mod+w` action,
+   * or `null` (the default) for a viewer that owns no row close.
+   */
+  readonly setRequestCloseTab: (value: (() => void) | null) => void;
 }
 
 /**
@@ -49,6 +60,8 @@ export interface MountedController {
 export function mountController(): MountedController {
   const sent: BrowserScreencastClientFrame[] = [];
   let videoPainting = false;
+  let requestNewTab: (() => void) | null = null;
+  let requestCloseTab: (() => void) | null = null;
   const engaged: number[] = [];
   const captured: { current: ScreencastController | null } = { current: null };
 
@@ -62,6 +75,8 @@ export function mountController(): MountedController {
     const controllerRef = useRef<ScreencastController | null>(null);
     controllerRef.current ??= createScreencastController({
       readControlPlaneRttMs: () => null,
+      readRequestNewTab: () => requestNewTab,
+      readRequestCloseTab: () => requestCloseTab,
       readVideoPainting: () => videoPainting,
       refs: {
         tileRef,
@@ -123,6 +138,12 @@ export function mountController(): MountedController {
     imeInput,
     setVideoPainting: (value) => {
       videoPainting = value;
+    },
+    setRequestNewTab: (value) => {
+      requestNewTab = value;
+    },
+    setRequestCloseTab: (value) => {
+      requestCloseTab = value;
     },
   };
 }

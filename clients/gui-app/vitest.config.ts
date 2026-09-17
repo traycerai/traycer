@@ -19,8 +19,30 @@ const MAX_TEST_WORKERS = Math.min(
 // spinner). Only the compiled hook can regress that way, so only the compiled
 // hook can prove the fix. The `pr.*` shared-subscription trio had the same
 // shape (`registry.get(key)` and `entry.lastEvent` read at render).
+// `auth-brand-splash` / `auth-landing-page` join them after the same failure in
+// its sharpest form: the launch splash derived its phase from a boolean, the
+// compiler memoized that derivation on inputs the animation timer did not
+// touch, and the cached value outlived the timer - a sign-in screen that never
+// went away, on a real device. The suite was green throughout, because it ran
+// the UNCOMPILED hook while production mobile compiles everything. A test that
+// does not run the compiled component cannot see this class of bug at all.
+// `relative-time` / `fallback-grace-card` are the desktop repeat of the exact
+// same shape, caught live rather than in review: the fallback grace card's
+// countdown froze at "in 3m 27s" for a 15s window and never moved until the
+// host switched. `useGraceCountdown` used to discard
+// `useSyncExternalStore`'s return and read the mutable
+// `secondClock.sampledNow()` at render time; the compiler memoized
+// `formatGraceCountdown(deadline, secondClock.sampledNow())` on `deadline`
+// alone, so every tick re-rendered the leaf and got back the FIRST render's
+// string. It now renders from the store's return value instead. The
+// minute-clock hooks in the same file
+// (`useCompactRelativeTime`, `useRelativeTimestamp`, `useSampledNow`,
+// `useResetCountdown`, `useIsFarReset`, `useMessageTime`) share the shape and
+// were invisible for the same reason: the suite ran them uncompiled while the
+// desktop renderer compiles the whole tree, its dev server included (where
+// the freeze was seen).
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-pr-(?:list|detail)-subscription)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|fallback-grace-card)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop

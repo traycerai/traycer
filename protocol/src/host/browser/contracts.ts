@@ -1,11 +1,15 @@
 /**
- * `browser.sessions@1.0` and `browser.screencast@1.0` - browser V1 stream
+ * `browser.sessions@2.1` and `browser.screencast@2.1` - browser stream
  * contracts between the GUI and host-owned headless browser sessions.
  *
- * These are intentionally stream-only additions. Until their first release,
- * the browser contracts extend the 1.0 baseline in place. After release,
- * additive changes use negotiated minors with version-gated emission;
- * breaking semantics require a separately served major.
+ * These are intentionally stream-only additions. `@1.0` shipped in the
+ * v1.3.0 release and is frozen in `contracts-v1.ts`; this file is the live
+ * `@2.0` line, opened because the Start Page addresses the device's epic-less
+ * `independent` inventory - a breaking change to every open request - and
+ * carrying the placement handoff token, window-bound tabs and the `attachTab`
+ * / `moveTab` frames with it. From here, additive changes use negotiated
+ * minors with version-gated emission; breaking semantics require another
+ * separately served major.
  */
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
@@ -15,11 +19,18 @@ import {
   browserCdpResultSchema,
   browserCdpTargetSchema,
 } from "@traycer/protocol/host/browser/cdp-contracts";
+import {
+  browserViewportGeometrySchema,
+  browserViewportIntentSchema,
+  browserViewportStateSchema,
+} from "@traycer/protocol/host/browser/viewport";
+import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
 
 // The curated CDP vocabulary lives in its own module (it is addressed
 // independently of either stream contract) but stays part of this module's
 // public surface, so every consumer keeps one import path.
 export * from "@traycer/protocol/host/browser/cdp-contracts";
+export * from "@traycer/protocol/host/browser/viewport";
 
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
@@ -91,15 +102,33 @@ const browserTabInfoSchema = z
     // active headless screencast peek. It grants no control capability.
     viewed: z.boolean(),
     drivenBy: z.array(browserTabDriverSchema),
+    /**
+     * Which desktop window's native route currently holds this tab's binding,
+     * or `null` for a tab no route holds (headless, dormant, or bound nowhere
+     * yet). Native routes are elected per scope AND window, so a tab of a
+     * shared session can be live in one window while another window shows it
+     * as elsewhere - which is a fact the client must be TOLD, not one it can
+     * infer from how long a binding has taken to arrive.
+     *
+     * `.default(null)` rather than required, and the reason is mechanical: the
+     * schema is `.strict()` and the GUI's stream client DROPS any frame that
+     * fails to parse, so a host that does not emit this field yet would blank
+     * every tile in the panel rather than degrade one branch of one tile.
+     */
+    boundWindowId: z.string().nullable().default(null),
   })
   .strict();
 export type BrowserTabInfo = z.infer<typeof browserTabInfoSchema>;
 
-/** An epic-scoped group of tabs sharing one browser profile. */
+/**
+ * A group of tabs sharing one browser profile, addressed under the owner's
+ * scope: one epic's tabs, or the epic-less `independent` inventory a device's
+ * Start Page owns.
+ */
 const browserSessionInfoSchema = z
   .object({
     sessionId: z.string(),
-    epicId: z.string(),
+    scope: hostResourceScopeSchema,
     hostId: z.string(),
     profile: browserSessionProfileKindSchema,
     lastActivityAt: z.number(),
@@ -123,10 +152,40 @@ export const browserTabIdentitySchema = z
   .strict();
 export type BrowserTabIdentity = z.infer<typeof browserTabIdentitySchema>;
 
-/** `epicId` is the stream's sole authorization and routing scope. */
+/**
+ * What a successful `openTab` answers with: the tab, and - when serving the
+ * open took a shared session off the desktop's native runtime so that THIS
+ * client could see it - a token naming the open to the host.
+ *
+ * The host keeps that session where the opener can receive pixels until a
+ * `browser.screencast` presenting the token is served. Session updates are
+ * broadcast to every subscriber in the scope, so another client can start
+ * watching the new tab before its opener does; without the token its pixels
+ * say nothing about whether the opener has seen any, and only a viewer
+ * presenting it counts. `null` when the open owed nobody a placement - a
+ * client on the host's own machine watches the native runtime directly - so
+ * there is nothing to hand off.
+ */
+export const browserOpenedTabSchema = z
+  .object({
+    ...browserTabIdentitySchema.shape,
+    handoffToken: z.string().nullable(),
+  })
+  .strict();
+export type BrowserOpenedTab = z.infer<typeof browserOpenedTabSchema>;
+
+/**
+ * `scope` is the stream's sole authorization and routing scope: one
+ * subscription speaks for one epic's browser inventory, or for the device's
+ * epic-less `independent` one, and never for both.
+ *
+ * The client supplies only the discriminant (and an epic id when there is
+ * one). The authenticated user is re-derived host-side on every access check,
+ * so nothing about ownership travels on this request.
+ */
 export const browserSessionsOpenRequestSchema = z
   .object({
-    epicId: z.string(),
+    scope: hostResourceScopeSchema,
   })
   .strict();
 export type BrowserSessionsOpenRequest = z.infer<
@@ -406,10 +465,13 @@ export type BrowserForgetLedgerDomain = z.infer<
  * `forgetAllAt` is null both when the user has never forgotten everything AND
  * when this host has already acked the revision that carried it - the two are
  * the same instruction-set fact, "no forget-all for you in this digest". It is
- * required and explicitly nullable rather than defaulted: the frame is new on
- * an unreleased contract, so no peer can omit it, and a default would quietly
- * absorb a producer bug into "nothing was ever forgotten" - the one wrong
- * direction for this field. `domains` is bounded by
+ * required and explicitly nullable rather than defaulted: the frame carried it
+ * as required from its first released version, so every peer on this line
+ * sends it, and a default would quietly absorb a producer bug into "nothing
+ * was ever forgotten" - the one wrong direction for this field. The original
+ * note here rested the same conclusion on the contract being UNRELEASED,
+ * which stopped being true; the field stays required because the line shipped
+ * that way, not because nothing had shipped yet. `domains` is bounded by
  * {@link BROWSER_FORGET_LEDGER_MAX_DOMAINS}.
  */
 export const browserForgetLedgerSchema = z
@@ -462,6 +524,12 @@ const electronTabCreateReasonSchema = z.enum([
   "session-bootstrap",
   "agent-open",
   "restore",
+  // A `moveTab`: the guest already exists under ANOTHER window of the same
+  // desktop, and this create asks main to transfer it to the sender's window
+  // without touching its WebContents. Like `restore`, it may replace a birth
+  // the window already holds for the tab - a window that moved a tab away
+  // still remembers it, and the move back must not be refused for that.
+  "move",
 ]);
 export type ElectronTabCreateReason = z.infer<
   typeof electronTabCreateReasonSchema
@@ -507,258 +575,290 @@ export type BrowserTabOpenedSource = z.infer<
   typeof browserTabOpenedSourceSchema
 >;
 
+export const browserSessionsServerFrameV20Schema = z.discriminatedUnion(
+  "kind",
+  [
+    z
+      .object({
+        kind: z.literal("snapshot"),
+        ...textFrameFields,
+        sessions: z.array(browserSessionInfoSchema),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sessionCreated"),
+        ...textFrameFields,
+        session: browserSessionInfoSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sessionUpdated"),
+        ...textFrameFields,
+        session: browserSessionInfoSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sessionClosed"),
+        ...textFrameFields,
+        ...browserSessionReferenceFields,
+        reason: browserSessionClosedReasonSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("tabOpened"),
+        ...textFrameFields,
+        ...browserSessionReferenceFields,
+        tabId: z.string(),
+        source: browserTabOpenedSourceSchema,
+        /**
+         * The tab whose page opened this one, when the runtime can name it;
+         * `null` for an agent open, a `noopener` popup, or an opener already
+         * gone. A `page` open is a gesture the reader made IN the opener, so a
+         * surface deciding whether to follow the new tab asks where the opener
+         * is on screen - which matters once the same device is watched from
+         * more than one window, since this frame reaches all of them.
+         */
+        openerTabId: z.string().nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("actionAck"),
+        ...requestFrameFields,
+        ok: z.boolean(),
+        reason: z.string().nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("openTabResult"),
+        ...requestFrameFields,
+        result: z.discriminatedUnion("ok", [
+          z
+            .object({
+              ok: z.literal(true),
+              ...browserOpenedTabSchema.shape,
+            })
+            .strict(),
+          z
+            .object({
+              ok: z.literal(false),
+              reason: z.string(),
+            })
+            .strict(),
+        ]),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("tabPreviewResult"),
+        ...requestFrameFields,
+        ...browserTabPreviewSchema.shape,
+      })
+      .strict(),
+    z
+      .object({
+        // Answers one `primaryProfileCaptured`: the host has DURABLY stored (or
+        // rejected) that jar. The desktop's quit flush waits on this rather than
+        // on a socket write completing.
+        kind: z.literal("primaryProfileCaptureAck"),
+        ...requestFrameFields,
+      })
+      .strict(),
+    browserCdpRequestFrameSchema,
+    z
+      .object({
+        kind: z.literal("createElectronTab"),
+        ...requestFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        // Navigation intent, not part of native provisioning readiness. Desktop
+        // starts it only after the host accepts the provisioned incarnation.
+        requestedUrl: z.string(),
+        reason: electronTabCreateReasonSchema,
+        // Which jar the guest gets. `isolated` picks a per-session in-memory
+        // partition on the desktop and is never seeded, so the desktop cannot
+        // infer it from `seedStorageState` being null.
+        profile: browserSessionProfileKindSchema,
+        seedStorageState: browserStorageStateSchema.nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("electronTabAccepted"),
+        ...requestFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        registrationId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("releaseElectronTab"),
+        ...textFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        registrationId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        // Refreshes the host's durable primary-profile snapshot after a committed
+        // Electron navigation. Headless activation reads that snapshot; it never
+        // opens a second, opportunistic renderer request path during placement.
+        kind: z.literal("capturePrimaryProfile"),
+        ...requestFrameFields,
+        // A STANDING request: capture nothing now, keep this `requestId`, and
+        // use it on the one capture the host
+        // cannot ask for - the flush the desktop pushes as it quits. Every
+        // `primaryProfileCaptured` the host stores is thereby solicited: the
+        // ordinary answer matches the outstanding request, the quit flush matches
+        // the standing one, and anything else is acked and dropped. Issued once
+        // per connection, at the point the host both knows the desktop holds the
+        // master jar and can read the slice it speaks for.
+        standing: z.boolean().default(false),
+      })
+      .strict(),
+    z
+      .object({
+        // Store-key handshake. The host mints the per-user store key and asks
+        // a JAR-AUTHORIZED desktop (one whose
+        // `desktopIdentityAttest` this host enrolled) to wrap it with that
+        // machine's OS keystore; the host keeps the raw bytes in memory only.
+        kind: z.literal("storeKeyWrapRequest"),
+        ...requestFrameFields,
+        // A store key is 32 bytes and a wrapped blob a few hundred; the cap is
+        // slack, not a size contract, and it exists so neither side can be made
+        // to buffer or `safeStorage`-process an unbounded string.
+        rawKey: z.base64().max(4096),
+      })
+      .strict(),
+    z
+      .object({
+        // The blob some desktop wrapped earlier, handed back for `decryptString`.
+        kind: z.literal("storeKeyUnwrapRequest"),
+        ...requestFrameFields,
+        wrappedKey: z.base64().max(4096),
+      })
+      .strict(),
+    z
+      .object({
+        // "Prove you are a desktop this host hands the cookie jar to". Issued
+        // once per connection, on receipt of `electronTabLifecycleReady`. The
+        // nonce is 32 random bytes the host
+        // holds on the challenged subscriber and deletes on the first answer, so
+        // a captured signature replays onto nothing and a second connection's
+        // answer never settles this one.
+        kind: z.literal("desktopIdentityChallenge"),
+        ...requestFrameFields,
+        nonce: z.base64().max(64),
+      })
+      .strict(),
+    z
+      .object({
+        // A sign-in this host witnessed inside a headless session, offered to
+        // the desktops that hold the master jar. Emitted from headless capture
+        // events only - never echoed back
+        // from a desktop's own `primaryProfileDelta`, which is what terminates
+        // the loop - and from primary-profile-backed sessions only, so ephemeral
+        // ones stay isolated. Replayed for the host's headless-contributed
+        // domains on every jar-authorized desktop attach, which is what lets the
+        // path carry no watermark and no ack: the merge is idempotent, so
+        // redundancy is free and a crash costs nothing. Sent to every
+        // jar-authorized desktop of the user. No `userId`: the identity is the
+        // stream's authenticated user.
+        kind: z.literal("primaryProfileObserved"),
+        ...textFrameFields,
+        ...browserPrimaryProfileObservedSchema.shape,
+      })
+      .strict(),
+    z
+      .object({
+        // This host has finished pruning everything the desktop's ledger named
+        // through `revision` - the stored slice, the headless-contributed
+        // markers, and the live headless contexts. Sent only to the desktop
+        // whose digest it answers.
+        //
+        // It is the HAPPENS-BEFORE the carry-over path has no clock for. A host
+        // that has acked revision N pruned everything through N before it sent
+        // this, so every `primaryProfileObserved` it emits afterwards is a
+        // post-prune capture; one emitted before the prune is exactly the frame
+        // whose connection has not acked yet, and the desktop drops it on that
+        // fact rather than on an estimate of flight time. Until a connection's
+        // first ack, every observation for a ledger-covered domain drops.
+        //
+        // `revision` is the desktop's own counter, echoed back verbatim. This
+        // host neither mints nor compares it - it is an opaque token here, which
+        // is what keeps two machines' clocks out of the ordering.
+        //
+        // Shaped like the ledger's own `revision` (integer, non-negative) so a
+        // malformed one is refused at the parse rather than stored. The desktop
+        // additionally CLAMPS what it accepts to its own current revision: an
+        // ack is an echo, so a host cannot advance a watermark past what it was
+        // told, and an inflated one would otherwise disable the desktop's
+        // no-resurrection gate permanently.
+        //
+        // This arm replaced `primaryProfileForgotten`, whose one-shot fan-out the
+        // ledger absorbed. Do not reintroduce a second forget channel.
+        kind: z.literal("primaryProfileForgetLedgerAck"),
+        ...textFrameFields,
+        revision: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        // Stream-only action burst; never persisted or replayed.
+        kind: z.literal("burstStarted"),
+        ...textFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        burstId: z.string(),
+        chatId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("burstEnded"),
+        ...textFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        burstId: z.string(),
+        outcome: browserBurstOutcomeSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("caption"),
+        ...textFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        burstId: z.string(),
+        cellTitle: z.string(),
+      })
+      .strict(),
+  ],
+);
+/** Additive 2.1 frames are emitted only to a negotiated 2.1 peer. */
 export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
+  ...browserSessionsServerFrameV20Schema.options,
+  browserViewportStateSchema.extend({
+    kind: z.literal("viewportState"),
+    ...textFrameFields,
+  }),
   z
     .object({
-      kind: z.literal("snapshot"),
-      ...textFrameFields,
-      sessions: z.array(browserSessionInfoSchema),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("sessionCreated"),
-      ...textFrameFields,
-      session: browserSessionInfoSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("sessionUpdated"),
-      ...textFrameFields,
-      session: browserSessionInfoSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("sessionClosed"),
-      ...textFrameFields,
-      ...browserSessionReferenceFields,
-      reason: browserSessionClosedReasonSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("tabOpened"),
-      ...textFrameFields,
-      ...browserSessionReferenceFields,
-      tabId: z.string(),
-      source: browserTabOpenedSourceSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("actionAck"),
-      ...requestFrameFields,
-      ok: z.boolean(),
-      reason: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("openTabResult"),
-      ...requestFrameFields,
-      result: z.discriminatedUnion("ok", [
-        z
-          .object({
-            ok: z.literal(true),
-            ...browserTabIdentitySchema.shape,
-          })
-          .strict(),
-        z
-          .object({
-            ok: z.literal(false),
-            reason: z.string(),
-          })
-          .strict(),
-      ]),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("tabPreviewResult"),
-      ...requestFrameFields,
-      ...browserTabPreviewSchema.shape,
-    })
-    .strict(),
-  z
-    .object({
-      // Answers one `primaryProfileCaptured`: the host has DURABLY stored (or
-      // rejected) that jar. The desktop's quit flush waits on this rather than
-      // on a socket write completing.
-      kind: z.literal("primaryProfileCaptureAck"),
-      ...requestFrameFields,
-    })
-    .strict(),
-  browserCdpRequestFrameSchema,
-  z
-    .object({
-      kind: z.literal("createElectronTab"),
-      ...requestFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      // Navigation intent, not part of native provisioning readiness. Desktop
-      // starts it only after the host accepts the provisioned incarnation.
-      requestedUrl: z.string(),
-      reason: electronTabCreateReasonSchema,
-      // Which jar the guest gets. `isolated` picks a per-session in-memory
-      // partition on the desktop and is never seeded, so the desktop cannot
-      // infer it from `seedStorageState` being null.
-      profile: browserSessionProfileKindSchema,
-      seedStorageState: browserStorageStateSchema.nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("electronTabAccepted"),
+      kind: z.literal("electronViewportRequest"),
       ...requestFrameFields,
       sessionId: z.string(),
       tabId: z.string(),
       registrationId: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("releaseElectronTab"),
-      ...textFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      registrationId: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      // Refreshes the host's durable primary-profile snapshot after a committed
-      // Electron navigation. Headless activation reads that snapshot; it never
-      // opens a second, opportunistic renderer request path during placement.
-      kind: z.literal("capturePrimaryProfile"),
-      ...requestFrameFields,
-      // A STANDING request: capture nothing now, keep this `requestId`, and
-      // use it on the one capture the host
-      // cannot ask for - the flush the desktop pushes as it quits. Every
-      // `primaryProfileCaptured` the host stores is thereby solicited: the
-      // ordinary answer matches the outstanding request, the quit flush matches
-      // the standing one, and anything else is acked and dropped. Issued once
-      // per connection, at the point the host both knows the desktop holds the
-      // master jar and can read the slice it speaks for.
-      standing: z.boolean().default(false),
-    })
-    .strict(),
-  z
-    .object({
-      // Store-key handshake. The host mints the per-user store key and asks
-      // a JAR-AUTHORIZED desktop (one whose
-      // `desktopIdentityAttest` this host enrolled) to wrap it with that
-      // machine's OS keystore; the host keeps the raw bytes in memory only.
-      kind: z.literal("storeKeyWrapRequest"),
-      ...requestFrameFields,
-      // A store key is 32 bytes and a wrapped blob a few hundred; the cap is
-      // slack, not a size contract, and it exists so neither side can be made
-      // to buffer or `safeStorage`-process an unbounded string.
-      rawKey: z.base64().max(4096),
-    })
-    .strict(),
-  z
-    .object({
-      // The blob some desktop wrapped earlier, handed back for `decryptString`.
-      kind: z.literal("storeKeyUnwrapRequest"),
-      ...requestFrameFields,
-      wrappedKey: z.base64().max(4096),
-    })
-    .strict(),
-  z
-    .object({
-      // "Prove you are a desktop this host hands the cookie jar to". Issued
-      // once per connection, on receipt of `electronTabLifecycleReady`. The
-      // nonce is 32 random bytes the host
-      // holds on the challenged subscriber and deletes on the first answer, so
-      // a captured signature replays onto nothing and a second connection's
-      // answer never settles this one.
-      kind: z.literal("desktopIdentityChallenge"),
-      ...requestFrameFields,
-      nonce: z.base64().max(64),
-    })
-    .strict(),
-  z
-    .object({
-      // A sign-in this host witnessed inside a headless session, offered to
-      // the desktops that hold the master jar. Emitted from headless capture
-      // events only - never echoed back
-      // from a desktop's own `primaryProfileDelta`, which is what terminates
-      // the loop - and from primary-profile-backed sessions only, so ephemeral
-      // ones stay isolated. Replayed for the host's headless-contributed
-      // domains on every jar-authorized desktop attach, which is what lets the
-      // path carry no watermark and no ack: the merge is idempotent, so
-      // redundancy is free and a crash costs nothing. Sent to every
-      // jar-authorized desktop of the user. No `userId`: the identity is the
-      // stream's authenticated user.
-      kind: z.literal("primaryProfileObserved"),
-      ...textFrameFields,
-      ...browserPrimaryProfileObservedSchema.shape,
-    })
-    .strict(),
-  z
-    .object({
-      // This host has finished pruning everything the desktop's ledger named
-      // through `revision` - the stored slice, the headless-contributed
-      // markers, and the live headless contexts. Sent only to the desktop
-      // whose digest it answers.
-      //
-      // It is the HAPPENS-BEFORE the carry-over path has no clock for. A host
-      // that has acked revision N pruned everything through N before it sent
-      // this, so every `primaryProfileObserved` it emits afterwards is a
-      // post-prune capture; one emitted before the prune is exactly the frame
-      // whose connection has not acked yet, and the desktop drops it on that
-      // fact rather than on an estimate of flight time. Until a connection's
-      // first ack, every observation for a ledger-covered domain drops.
-      //
-      // `revision` is the desktop's own counter, echoed back verbatim. This
-      // host neither mints nor compares it - it is an opaque token here, which
-      // is what keeps two machines' clocks out of the ordering.
-      //
-      // Shaped like the ledger's own `revision` (integer, non-negative) so a
-      // malformed one is refused at the parse rather than stored. The desktop
-      // additionally CLAMPS what it accepts to its own current revision: an
-      // ack is an echo, so a host cannot advance a watermark past what it was
-      // told, and an inflated one would otherwise disable the desktop's
-      // no-resurrection gate permanently.
-      //
-      // This arm replaced `primaryProfileForgotten`, whose one-shot fan-out the
-      // ledger absorbed. Do not reintroduce a second forget channel.
-      kind: z.literal("primaryProfileForgetLedgerAck"),
-      ...textFrameFields,
       revision: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      // Stream-only action burst; never persisted or replayed.
-      kind: z.literal("burstStarted"),
-      ...textFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      burstId: z.string(),
-      chatId: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("burstEnded"),
-      ...textFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      burstId: z.string(),
-      outcome: browserBurstOutcomeSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("caption"),
-      ...textFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      burstId: z.string(),
-      cellTitle: z.string(),
+      intent: browserViewportIntentSchema,
+      geometry: browserViewportGeometrySchema,
     })
     .strict(),
 ]);
@@ -805,225 +905,321 @@ export function canonicalDesktopIdentityAttestBytes(input: {
   );
 }
 
+export const browserSessionsClientFrameV20Schema = z.discriminatedUnion(
+  "kind",
+  [
+    z
+      .object({
+        kind: z.literal("openTab"),
+        ...requestFrameFields,
+        sessionId: z.string().nullable(),
+        url: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        // Tab-scoped close for the browser sidebar; closing the final tab also
+        // closes its session.
+        kind: z.literal("closeTab"),
+        ...requestFrameFields,
+        ...browserSessionReferenceFields,
+        tabId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        // Snapshot-only preview of one tab, for a chat pinned to ANOTHER host
+        // that can never drive it. No `sessionId`: the tab
+        // is resolved by the owning host inside this stream's scope, which is
+        // the only authorization there is.
+        kind: z.literal("captureTabPreview"),
+        ...requestFrameFields,
+        tabId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        // "Attach this tab on MY route": the electron-capable tile asking that a
+        // dormant or unbound tab be woken into the window that asked, rather
+        // than into whichever window the scope's default route happens to be.
+        //
+        // No `sessionId` - the tab is resolved inside this stream's scope, the
+        // same way `captureTabPreview` is. Answered with the existing
+        // `actionAck`; a rejection (the tab is bound in another window, the
+        // session is closing) is an ordinary answer with a reason, not an
+        // error, because the sender's fallback is to render what it renders
+        // today and the screencast path is what actually wakes the tab.
+        kind: z.literal("attachTab"),
+        ...requestFrameFields,
+        tabId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        // "Show this tab HERE": the electron-capable tile asking that a tab
+        // currently bound in another window of the same desktop be moved into
+        // the window that asked, page state intact. A distinct kind rather than
+        // a flag on `attachTab`, because the tile sends `attachTab` on every
+        // activation and that frame must stay reject-never-relocate by
+        // construction; only this one may displace a live guest.
+        //
+        // Resolved inside this stream's scope like `attachTab`, answered with
+        // the same `actionAck`. Every rejection (an agent is driving the tab,
+        // a birth is in flight, the session is closing) is an ordinary answer
+        // whose reason the sender shows and then puts its button back.
+        kind: z.literal("moveTab"),
+        ...requestFrameFields,
+        tabId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("cdpResult"),
+        ...requestFrameFields,
+        result: browserCdpResultSchema,
+      })
+      .strict(),
+    z
+      .object({
+        // One settlement for one host-minted birth. Receipt means only that the
+        // native guest exists, its durable identity is installed, and CDP can be
+        // routed through this subscriber. Navigation and presentation begin only
+        // after `electronTabAccepted` commits ownership.
+        kind: z.literal("electronTabProvisioned"),
+        ...requestFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        registrationId: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("electronTabCreateFailed"),
+        ...requestFrameFields,
+        sessionId: z.string(),
+        tabId: z.string(),
+        code: electronTabCreateFailureCodeSchema,
+        message: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        // The subscriber has the complete native tab lifecycle, CDP, and profile
+        // capture seam. The desktop preload exposes this as one capability.
+        kind: z.literal("electronTabLifecycleReady"),
+        ...textFrameFields,
+        // The GUI's declared co-located hostId. Null means "I have a native
+        // browserView but I am not co-located with any host I can name". The
+        // host compares this against its own id and must never elect a
+        // subscriber whose declared id differs as Electron lifecycle owner:
+        // Electron placement is a same-machine optimization, and this field is
+        // the sole locality signal it is gated on.
+        coLocatedHostId: z.string().nullable(),
+        // The desktop window this stream belongs to, or null off Electron.
+        //
+        // Native routes are elected per scope AND window: a scope holds one
+        // route per window rather than a single route with the other windows
+        // standing by, so a user-initiated open or `attachTab` lands in the
+        // window that asked. This is the window the host names a route by, and
+        // it is what comes back on `BrowserTabInfo.boundWindowId` as the route
+        // holding a tab's binding - which is how a tile in the other window
+        // renders "open in your other window" from a fact instead of from how
+        // long a binding has taken to arrive.
+        //
+        // `.default(null)` for an older GUI, and null is not a missing value
+        // here: every null-window subscriber shares ONE route bucket, which is
+        // exactly the single-route behavior that predates per-window election.
+        //
+        // This field existed before, and was removed in #1667 once its last
+        // reader (the same-window lifecycle hand-over, now done through
+        // `detachBrowserSessionsSubscriber`) was retired. Per-window route
+        // election is a NEW reader, decided after that removal, and the window
+        // a stream belongs to has to travel again for it: main holds that fact
+        // for its own bookkeeping, but the host is the one electing routes.
+        desktopWindowId: z.string().nullable().default(null),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("electronTabState"),
+        ...textFrameFields,
+        registrationId: z.string(),
+        sessionId: z.string(),
+        tabId: z.string(),
+        url: z.string(),
+        title: z.string().nullable(),
+        status: browserSessionStatusSchema,
+        viewed: z.boolean(),
+      })
+      .strict(),
+    z
+      .object({
+        // The answer to a `capturePrimaryProfile` this host issued. No `userId`
+        // - the identity is the stream's authenticated user; the frame is
+        // matched to an in-flight (or standing) request BY `requestId` AND
+        // subscriber id, so it is heard only from the connection that was
+        // asked. Lifecycle election gates nothing here.
+        kind: z.literal("primaryProfileCaptured"),
+        ...requestFrameFields,
+        storageState: browserStorageStateSchema.nullable(),
+        status: z.enum(["captured", "unavailable", "failed"]),
+        reason: z.string().nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        // Unsolicited: the client's persistent `primary` jar reported cookie
+        // changes for one registrable domain and coalesced them into a window
+        // (keychain refactor ticket 06). There is no request to answer and no
+        // `userId` - the identity is the stream's authenticated user, and the
+        // host hears the frame only from a JAR-AUTHORIZED subscriber: one that
+        // answered `desktopIdentityChallenge` with a signature this host has
+        // enrolled (browser-security-hardening H09). Lifecycle election is a
+        // different question and gates nothing here.
+        kind: z.literal("primaryProfileDelta"),
+        ...textFrameFields,
+        ...browserPrimaryProfileDeltaSchema.shape,
+      })
+      .strict(),
+    z
+      .object({
+        // The desktop's answer to `desktopIdentityChallenge`
+        // (browser-security-hardening H09): an Ed25519 signature over
+        // {@link canonicalDesktopIdentityAttestBytes}, made in the desktop's
+        // MAIN process with a key `safeStorage` holds. It is the whole basis of
+        // jar authorization - it replaced the `storeKeyOffer` frame, which was a
+        // declaration with nothing behind it. No `userId`: the identity is the
+        // stream's authenticated user, and the signed bytes commit to the hostId
+        // instead, so a signature cannot be relayed into another host's
+        // challenge.
+        kind: z.literal("desktopIdentityAttest"),
+        // Echoes the challenge's `requestId`.
+        ...requestFrameFields,
+        // Ed25519 SPKI DER.
+        publicKey: z.base64().max(128),
+        // Which keystore on this machine holds the private half. A slot label
+        // only - it is deliberately OUTSIDE the signature, because it is used
+        // only to replace an entry during a `local-ws` enrollment, and that lane
+        // already requires a socket on the host's own machine.
+        keystoreId: z.string().max(64),
+        signature: z.base64().max(128),
+        // Whether this desktop's keystore can actually hold the host's store
+        // key. A machine whose OS keystore cannot encrypt (Linux with no secret
+        // service) still mints a durable keypair and attests, so it keeps native
+        // tab placement, and declares `false` so the host never hands it a jar it
+        // could not protect. Client-declared, and safe as one: it can only
+        // downgrade the declarer. REQUIRED rather than defaulted - a desktop
+        // that does not answer it is one whose keystore story this host has no
+        // reason to guess at.
+        jarEligible: z.boolean(),
+      })
+      .strict(),
+    z
+      .object({
+        // `safeStorage.encryptString(rawKey)` for the `requestId` the host sent.
+        kind: z.literal("storeKeyWrapped"),
+        ...requestFrameFields,
+        wrappedKey: z.base64().max(4096),
+      })
+      .strict(),
+    z
+      .object({
+        // `safeStorage.decryptString(wrappedKey)`. `null` means this desktop
+        // cannot open the blob (keystore item ACL changed, different machine);
+        // the host then stays sealed and never re-mints over a live blob.
+        kind: z.literal("storeKeyUnwrapped"),
+        ...requestFrameFields,
+        rawKey: z.base64().max(4096).nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        // "Clear" on one row of Settings > Browser > Sites with saved logins.
+        // Unsolicited and unacknowledged: the host tombstones that registrable
+        // domain in the user's slice and evicts it from its own live headless
+        // contexts. It fans NOTHING back: the host->desktop removal frame was
+        // retired, which left the desktop's write channel add-only. No
+        // `userId` - the identity is the stream's authenticated
+        // user, and the host hears the frame only from a JAR-AUTHORIZED
+        // subscriber - see `primaryProfileDelta`. Lifecycle election gates
+        // nothing here.
+        kind: z.literal("clearSite"),
+        ...textFrameFields,
+        domain: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        // "Forget all browser logins". Unsolicited and unacknowledged: the host
+        // answers by shredding this user's key and slice. It fans NOTHING back
+        // - the desktop that asked clears its own partition itself and records
+        // the forget in its ledger, and the hosts that were not connected to
+        // hear this frame learn it from that ledger instead. No `userId`
+        // - the identity is the stream's authenticated user, and the host hears
+        // the frame only from a JAR-AUTHORIZED subscriber - see
+        // `primaryProfileDelta`. Lifecycle election gates nothing here.
+        kind: z.literal("forgetLogins"),
+        ...textFrameFields,
+      })
+      .strict(),
+    z
+      .object({
+        // The desktop's forget ledger, pushed on every forget action and once
+        // at attach BEFORE any observed replay - so
+        // a host can never re-offer, in the replay, a login the user forgot while
+        // that host was disconnected. Answered with
+        // `primaryProfileForgetLedgerAck` once the prune has finished, which is
+        // what orders the desktop's applier against this host's observations;
+        // re-sending it is always safe, because the prune is idempotent.
+        // Supersedes the `primaryProfileForgotten` fan-out, which is gone. No
+        // `userId` - the identity is the stream's authenticated user, and the
+        // host hears the frame only from a JAR-AUTHORIZED subscriber - see
+        // `primaryProfileDelta`. Lifecycle election gates nothing here.
+        kind: z.literal("primaryProfileForgetLedger"),
+        ...textFrameFields,
+        ...browserForgetLedgerSchema.shape,
+      })
+      .strict(),
+  ],
+);
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
+  ...browserSessionsClientFrameV20Schema.options,
   z
     .object({
-      kind: z.literal("openTab"),
+      kind: z.literal("setViewport"),
       ...requestFrameFields,
-      sessionId: z.string().nullable(),
-      url: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      // Tab-scoped close for the browser sidebar; closing the final tab also
-      // closes its session.
-      kind: z.literal("closeTab"),
-      ...requestFrameFields,
-      ...browserSessionReferenceFields,
+      sessionId: z.string(),
       tabId: z.string(),
+      intent: browserViewportIntentSchema,
     })
     .strict(),
+  browserViewportGeometrySchema.extend({
+    kind: z.literal("reportViewport"),
+    ...textFrameFields,
+    sessionId: z.string(),
+    tabId: z.string(),
+    viewerId: z.string().min(1).max(128),
+    claim: z.boolean(),
+  }),
   z
     .object({
-      // Snapshot-only preview of one tab, for a chat pinned to ANOTHER host
-      // that can never drive it. No `sessionId`: the tab
-      // is resolved by the owning host inside this stream's epic scope, which
-      // is the only authorization there is.
-      kind: z.literal("captureTabPreview"),
-      ...requestFrameFields,
-      tabId: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("cdpResult"),
-      ...requestFrameFields,
-      result: browserCdpResultSchema,
-    })
-    .strict(),
-  z
-    .object({
-      // One settlement for one host-minted birth. Receipt means only that the
-      // native guest exists, its durable identity is installed, and CDP can be
-      // routed through this subscriber. Navigation and presentation begin only
-      // after `electronTabAccepted` commits ownership.
-      kind: z.literal("electronTabProvisioned"),
+      kind: z.literal("electronViewportResult"),
       ...requestFrameFields,
       sessionId: z.string(),
       tabId: z.string(),
       registrationId: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("electronTabCreateFailed"),
-      ...requestFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      code: electronTabCreateFailureCodeSchema,
-      message: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      // The subscriber has the complete native tab lifecycle, CDP, and profile
-      // capture seam. The desktop preload exposes this as one capability.
-      kind: z.literal("electronTabLifecycleReady"),
-      ...textFrameFields,
-      // The GUI's declared co-located hostId. Null means "I have a native
-      // browserView but I am not co-located with any host I can name". The
-      // host compares this against its own id and must never elect a
-      // subscriber whose declared id differs as Electron lifecycle owner:
-      // Electron placement is a same-machine optimization, and this field is
-      // the sole locality signal it is gated on.
-      coLocatedHostId: z.string().nullable(),
-      // There was a `desktopWindowId` here. It is gone: the host's last
-      // reader was retired (lifecycle hand-over now happens only through
-      // `detachBrowserSessionsSubscriber`), and with the jar plane in the
-      // desktop's main process the window a stream belongs to is a fact that
-      // process already holds - it never needed to travel.
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("electronTabState"),
-      ...textFrameFields,
-      registrationId: z.string(),
-      sessionId: z.string(),
-      tabId: z.string(),
-      url: z.string(),
-      title: z.string().nullable(),
-      status: browserSessionStatusSchema,
-      viewed: z.boolean(),
-    })
-    .strict(),
-  z
-    .object({
-      // The answer to a `capturePrimaryProfile` this host issued. No `userId`
-      // - the identity is the stream's authenticated user; the frame is
-      // matched to an in-flight (or standing) request BY `requestId` AND
-      // subscriber id, so it is heard only from the connection that was
-      // asked. Lifecycle election gates nothing here.
-      kind: z.literal("primaryProfileCaptured"),
-      ...requestFrameFields,
-      storageState: browserStorageStateSchema.nullable(),
-      status: z.enum(["captured", "unavailable", "failed"]),
-      reason: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      // Unsolicited: the client's persistent `primary` jar reported cookie
-      // changes for one registrable domain and coalesced them into a window
-      // (keychain refactor ticket 06). There is no request to answer and no
-      // `userId` - the identity is the stream's authenticated user, and the
-      // host hears the frame only from a JAR-AUTHORIZED subscriber: one that
-      // answered `desktopIdentityChallenge` with a signature this host has
-      // enrolled (browser-security-hardening H09). Lifecycle election is a
-      // different question and gates nothing here.
-      kind: z.literal("primaryProfileDelta"),
-      ...textFrameFields,
-      ...browserPrimaryProfileDeltaSchema.shape,
-    })
-    .strict(),
-  z
-    .object({
-      // The desktop's answer to `desktopIdentityChallenge`
-      // (browser-security-hardening H09): an Ed25519 signature over
-      // {@link canonicalDesktopIdentityAttestBytes}, made in the desktop's
-      // MAIN process with a key `safeStorage` holds. It is the whole basis of
-      // jar authorization - it replaced the `storeKeyOffer` frame, which was a
-      // declaration with nothing behind it. No `userId`: the identity is the
-      // stream's authenticated user, and the signed bytes commit to the hostId
-      // instead, so a signature cannot be relayed into another host's
-      // challenge.
-      kind: z.literal("desktopIdentityAttest"),
-      // Echoes the challenge's `requestId`.
-      ...requestFrameFields,
-      // Ed25519 SPKI DER.
-      publicKey: z.base64().max(128),
-      // Which keystore on this machine holds the private half. A slot label
-      // only - it is deliberately OUTSIDE the signature, because it is used
-      // only to replace an entry during a `local-ws` enrollment, and that lane
-      // already requires a socket on the host's own machine.
-      keystoreId: z.string().max(64),
-      signature: z.base64().max(128),
-      // Whether this desktop's keystore can actually hold the host's store
-      // key. A machine whose OS keystore cannot encrypt (Linux with no secret
-      // service) still mints a durable keypair and attests, so it keeps native
-      // tab placement, and declares `false` so the host never hands it a jar it
-      // could not protect. Client-declared, and safe as one: it can only
-      // downgrade the declarer. REQUIRED rather than defaulted - a desktop
-      // that does not answer it is one whose keystore story this host has no
-      // reason to guess at.
-      jarEligible: z.boolean(),
-    })
-    .strict(),
-  z
-    .object({
-      // `safeStorage.encryptString(rawKey)` for the `requestId` the host sent.
-      kind: z.literal("storeKeyWrapped"),
-      ...requestFrameFields,
-      wrappedKey: z.base64().max(4096),
-    })
-    .strict(),
-  z
-    .object({
-      // `safeStorage.decryptString(wrappedKey)`. `null` means this desktop
-      // cannot open the blob (keystore item ACL changed, different machine);
-      // the host then stays sealed and never re-mints over a live blob.
-      kind: z.literal("storeKeyUnwrapped"),
-      ...requestFrameFields,
-      rawKey: z.base64().max(4096).nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      // "Clear" on one row of Settings > Browser > Sites with saved logins.
-      // Unsolicited and unacknowledged: the host tombstones that registrable
-      // domain in the user's slice and evicts it from its own live headless
-      // contexts. It fans NOTHING back: the host->desktop removal frame was
-      // retired, which left the desktop's write channel add-only. No
-      // `userId` - the identity is the stream's authenticated
-      // user, and the host hears the frame only from a JAR-AUTHORIZED
-      // subscriber - see `primaryProfileDelta`. Lifecycle election gates
-      // nothing here.
-      kind: z.literal("clearSite"),
-      ...textFrameFields,
-      domain: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      // "Forget all browser logins". Unsolicited and unacknowledged: the host
-      // answers by shredding this user's key and slice. It fans NOTHING back
-      // - the desktop that asked clears its own partition itself and records
-      // the forget in its ledger, and the hosts that were not connected to
-      // hear this frame learn it from that ledger instead. No `userId`
-      // - the identity is the stream's authenticated user, and the host hears
-      // the frame only from a JAR-AUTHORIZED subscriber - see
-      // `primaryProfileDelta`. Lifecycle election gates nothing here.
-      kind: z.literal("forgetLogins"),
-      ...textFrameFields,
-    })
-    .strict(),
-  z
-    .object({
-      // The desktop's forget ledger, pushed on every forget action and once
-      // at attach BEFORE any observed replay - so
-      // a host can never re-offer, in the replay, a login the user forgot while
-      // that host was disconnected. Answered with
-      // `primaryProfileForgetLedgerAck` once the prune has finished, which is
-      // what orders the desktop's applier against this host's observations;
-      // re-sending it is always safe, because the prune is idempotent.
-      // Supersedes the `primaryProfileForgotten` fan-out, which is gone. No
-      // `userId` - the identity is the stream's authenticated user, and the
-      // host hears the frame only from a JAR-AUTHORIZED subscriber - see
-      // `primaryProfileDelta`. Lifecycle election gates nothing here.
-      kind: z.literal("primaryProfileForgetLedger"),
-      ...textFrameFields,
-      ...browserForgetLedgerSchema.shape,
+      revision: z.number().int().nonnegative(),
+      result: z.discriminatedUnion("ok", [
+        z
+          .object({
+            ok: z.literal(true),
+            applied: browserViewportGeometrySchema,
+          })
+          .strict(),
+        z
+          .object({ ok: z.literal(false), message: z.string().max(2048) })
+          .strict(),
+      ]),
     })
     .strict(),
 ]);
@@ -1046,6 +1242,7 @@ export const BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS = [
   "electronTabAccepted",
   "releaseElectronTab",
   "cdpRequest",
+  "electronViewportRequest",
   "capturePrimaryProfile",
   "primaryProfileObserved",
   "storeKeyWrapRequest",
@@ -1113,7 +1310,7 @@ const noJarMaterialReachesARenderer: BrowserSessionsUxFrameCarryingJarMaterial e
 void noJarMaterialReachesARenderer;
 
 /**
- * The client frames a renderer may ASK for: the three user-initiated tab
+ * The client frames a renderer may ASK for: the four user-initiated tab
  * requests, and nothing else.
  *
  * `forgetLogins` and `clearSite` are deliberately NOT here even though a
@@ -1126,9 +1323,20 @@ void noJarMaterialReachesARenderer;
  * state the renderer does not hold.
  */
 export const BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS = [
+  "setViewport",
+  "reportViewport",
   "openTab",
   "closeTab",
   "captureTabPreview",
+  // A tile asking for a tab on its own window's route. It is a renderer frame
+  // by construction: which window a user activated a tile in is a fact only
+  // that renderer holds, and it carries no jar material and no capability -
+  // the host authorizes it against the stream's scope like every other one.
+  "attachTab",
+  // Its sibling for a tab bound in ANOTHER window of this desktop. Renderer
+  // frame for the same reason: the target window is the fact only the
+  // renderer holds, and the host authorizes it against the stream's scope.
+  "moveTab",
 ] as const;
 
 export type BrowserSessionsUxClientFrame = Extract<
@@ -1138,10 +1346,22 @@ export type BrowserSessionsUxClientFrame = Extract<
   }
 >;
 
-/** Unreleased browser stream baseline. */
-export const browserSessionsV1 = defineStreamRpcContract({
+/**
+ * The live browser sessions line. `@1.0` is frozen in `contracts-v1.ts` and
+ * served beside it; the host projects these frames down to that shape for a
+ * v1.3.0 peer, and the client lifts that peer's frames up to this one.
+ */
+export const browserSessionsV20 = defineStreamRpcContract({
   method: "browser.sessions",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
+  openRequestSchema: browserSessionsOpenRequestSchema,
+  serverFrameSchema: browserSessionsServerFrameV20Schema,
+  clientFrameSchema: browserSessionsClientFrameV20Schema,
+});
+
+export const browserSessionsV21 = defineStreamRpcContract({
+  method: "browser.sessions",
+  schemaVersion: { major: 2, minor: 1 } as const,
   openRequestSchema: browserSessionsOpenRequestSchema,
   serverFrameSchema: browserSessionsServerFrameSchema,
   clientFrameSchema: browserSessionsClientFrameSchema,
@@ -1242,10 +1462,10 @@ export type BrowserScreencastViewerRole = z.infer<
   typeof browserScreencastViewerRoleSchema
 >;
 
-/** Epic-authorized, tab-addressed screencast subscription. */
+/** Scope-authorized, tab-addressed screencast subscription. */
 export const browserScreencastOpenRequestSchema = z
   .object({
-    epicId: z.string(),
+    scope: hostResourceScopeSchema,
     sessionId: z.string(),
     tabId: z.string(),
     maxWidth: z.number().int().positive(),
@@ -1253,6 +1473,12 @@ export const browserScreencastOpenRequestSchema = z
     quality: z.number().int().min(0).max(100),
     format: browserScreencastFormatSchema,
     role: browserScreencastViewerRoleSchema,
+    // The `handoffToken` a successful `openTab` answered this client with, when
+    // this viewer is watching the tab that open produced; `null` for any other
+    // viewer. The host holds the tab's session where the opener can see it
+    // until pixels reach a viewer presenting the token, so a bystander that
+    // picked the tab up from a session update does not release it.
+    handoffToken: z.string().nullable(),
   })
   .strict();
 export type BrowserScreencastOpenRequest = z.infer<
@@ -1396,7 +1622,7 @@ export type BrowserVideoPlaneFailureReason = z.infer<
   typeof browserVideoPlaneFailureReasonSchema
 >;
 
-export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
+const browserScreencastSharedServerFrameSchemas = [
   z
     .object({
       kind: z.literal("started"),
@@ -1551,20 +1777,6 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // The video plane's hit-testing token. A JPEG-plane tile correlates
-      // input against the frame it painted (`castSequence`); a video-plane
-      // tile has no such frame, so the host mints a viewport epoch from
-      // `Page.getLayoutMetrics` and re-announces it whenever that geometry
-      // changes. Input carrying a stale (or no) epoch is rejected, exactly
-      // as input naming an unpresented frame is. Same counter as
-      // `agentCursor.epoch`.
-      kind: z.literal("viewportEpoch"),
-      ...textFrameFields,
-      epoch: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
       kind: z.literal("agentCursor"),
       ...textFrameFields,
       type: browserScreencastAgentCursorTypeSchema,
@@ -1590,6 +1802,32 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
       mode: browserScreencastCaptureModeSchema,
     })
     .strict(),
+] as const;
+
+const browserViewportEpochV20Schema = z
+  .object({
+    // The video plane's hit-testing token. A JPEG-plane tile correlates
+    // input against the frame it painted (`castSequence`); a video-plane
+    // tile has no such frame, so the host mints a viewport epoch from
+    // `Page.getLayoutMetrics` and re-announces it whenever that geometry
+    // changes. Input carrying a stale (or no) epoch is rejected, exactly
+    // as input naming an unpresented frame is. Same counter as
+    // `agentCursor.epoch`.
+    kind: z.literal("viewportEpoch"),
+    ...textFrameFields,
+    epoch: z.number().int().nonnegative(),
+  })
+  .strict();
+export const browserScreencastServerFrameV20Schema = z.discriminatedUnion(
+  "kind",
+  [...browserScreencastSharedServerFrameSchemas, browserViewportEpochV20Schema],
+);
+export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
+  ...browserScreencastSharedServerFrameSchemas,
+  browserViewportEpochV20Schema.extend({
+    // Absent on a 2.0 host; 2.1 hosts always supply logical capture geometry.
+    logicalViewport: browserViewportGeometrySchema.nullable().default(null),
+  }),
 ]);
 export type BrowserScreencastServerFrame = z.infer<
   typeof browserScreencastServerFrameSchema
@@ -1856,9 +2094,19 @@ export type BrowserScreencastClientFrame = z.infer<
   typeof browserScreencastClientFrameSchema
 >;
 
-export const browserScreencastV1 = defineStreamRpcContract({
+/** The live screencast line; `@1.0` is frozen in `contracts-v1.ts`. */
+export const browserScreencastV20 = defineStreamRpcContract({
   method: "browser.screencast",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
+  openRequestSchema: browserScreencastOpenRequestSchema,
+  serverFrameSchema: browserScreencastServerFrameV20Schema,
+  clientFrameSchema: browserScreencastClientFrameSchema,
+});
+
+/** Exact logical capture geometry, independent of physical video padding. */
+export const browserScreencastV21 = defineStreamRpcContract({
+  method: "browser.screencast",
+  schemaVersion: { major: 2, minor: 1 } as const,
   openRequestSchema: browserScreencastOpenRequestSchema,
   serverFrameSchema: browserScreencastServerFrameSchema,
   clientFrameSchema: browserScreencastClientFrameSchema,

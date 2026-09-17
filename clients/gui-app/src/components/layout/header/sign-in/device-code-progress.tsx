@@ -38,7 +38,7 @@ export function DeviceCodeProgress(props: {
       className={cn(
         "flex w-full flex-col overflow-hidden rounded-lg border text-card-foreground shadow-sm",
         props.isHero
-          ? "border-white/15 bg-white/[0.075] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)] backdrop-blur-xl"
+          ? "border-white/15 bg-white/[0.075] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)]"
           : "border-border bg-card",
       )}
       data-testid="signin-device-progress"
@@ -107,17 +107,15 @@ export function DeviceCodeProgress(props: {
 
         <Button
           type="button"
-          size={props.isHero ? "default" : "sm"}
+          size={props.isHero ? "inline" : "inline-xs"}
           variant="link"
           data-testid="signin-retry-link"
           onClick={() => {
             signInMutation.mutate();
           }}
           className={cn(
-            "h-auto self-center px-0 py-0",
-            props.isHero
-              ? "text-ui-sm text-white/[0.72] hover:text-white"
-              : "text-ui-xs",
+            "self-center",
+            props.isHero ? "text-white/[0.72] hover:text-white" : null,
           )}
         >
           Taking too long? Start over

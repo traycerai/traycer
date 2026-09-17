@@ -1,6 +1,6 @@
 import * as m from "motion/react-m";
 import { cn } from "@/lib/utils";
-import { leaderGlyph } from "@/lib/keybindings/platform";
+import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
 import { Kbd } from "@/components/ui/kbd";
 
 const LEADER_BADGE_TRANSITION = {
@@ -28,9 +28,13 @@ interface LeaderDigitBadgeProps {
  * the leader + digit shortcut. Shared by the epic tab strip and the
  * settings section sidebar.
  */
-export function LeaderDigitBadge(props: LeaderDigitBadgeProps) {
-  const { digit, modifier, ariaLabel, testId, className } = props;
-  const symbol = leaderGlyph(modifier);
+export function LeaderDigitBadge({
+  digit,
+  modifier,
+  ariaLabel,
+  testId,
+  className,
+}: LeaderDigitBadgeProps) {
   return (
     <m.span
       initial={false}
@@ -42,10 +46,10 @@ export function LeaderDigitBadge(props: LeaderDigitBadgeProps) {
       <Kbd
         aria-label={ariaLabel}
         data-testid={testId}
-        className={cn("text-overline font-semibold tabular-nums", className)}
+        size="xs"
+        className={cn("tabular-nums", className)}
       >
-        {symbol}
-        {digit}
+        {formatModifierChordForDisplay(modifier, digit)}
       </Kbd>
     </m.span>
   );

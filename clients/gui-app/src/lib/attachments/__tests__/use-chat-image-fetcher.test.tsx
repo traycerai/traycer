@@ -2,7 +2,15 @@ import type { ReactNode } from "react";
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   ReadChatAttachmentRequest,
   ReadChatAttachmentResponse,
@@ -15,10 +23,15 @@ import {
 } from "@/components/chat/chat-attachment-scope-context";
 import type { ImageBytesResult } from "@/lib/attachments/image-blob-cache";
 import {
+  READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR,
   resetChatAttachmentHostSupportForTests,
   useChatAttachmentByteReader,
   useChatImageFetcher,
 } from "@/lib/attachments/use-chat-image-fetcher";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 /**
  * The chat-plane byte chain: `epic.readChatAttachment` on the tile's host
@@ -39,6 +52,10 @@ const docMocks = vi.hoisted(() => ({
       Promise.resolve(null),
   ),
   present: true,
+  /** The session's durability status, read live by the verdict gate. */
+  durabilityStatus: null as "local" | "promoting" | "cloud" | null,
+  /** The statement retained across a reconnect, consulted when the cycle's own is silent. */
+  retainedDurabilityStatus: null as "local" | "promoting" | "cloud" | null,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -50,6 +67,8 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
             getState: () => ({
               hasAttachmentBytes: docMocks.hasAttachmentBytes,
               readAttachmentBytes: docMocks.readAttachmentBytes,
+              durabilityStatus: docMocks.durabilityStatus,
+              retainedDurabilityStatus: docMocks.retainedDurabilityStatus,
             }),
           },
         }
@@ -72,9 +91,51 @@ const request =
     ) => Promise<ReadChatAttachmentResponse>
   >();
 
-const stubClient: ChatAttachmentReadClient = {
+/**
+ * The floor-bearing leg. Kept as a SEPARATE mock from `request` (the plain
+ * `requestWithSignal` leg) rather than one spy dispatching on an extra
+ * argument: the two are different capabilities on the wire client, and a test
+ * asserting "the floor leg was not called" must be able to fail independently
+ * of whether the plain leg was.
+ */
+const requestFloor =
+  vi.fn<
+    (
+      method: "epic.readChatAttachment",
+      params: ReadChatAttachmentRequest,
+      signal: AbortSignal | undefined,
+      requirement: RequiredHostMethodVersion,
+    ) => Promise<ReadChatAttachmentResponse>
+  >();
+
+/**
+ * `ChatAttachmentReadClient` (production, `chat-attachment-scope-context.ts`)
+ * declares only `requestWithSignal`; the fetcher now also calls
+ * `requestWithSignalRequiringHostMethodVersion` on a selected plane, which
+ * that interface does not (yet) declare - see the report back to the lane
+ * owner. Widening the STUB's type here, rather than the production interface,
+ * is what a test-only file may do; `stubClient` still satisfies
+ * `ChatAttachmentReadClient` structurally, so every existing call site is
+ * unchanged.
+ */
+interface ChatAttachmentReadClientWithFloor extends ChatAttachmentReadClient {
+  requestWithSignalRequiringHostMethodVersion(
+    method: "epic.readChatAttachment",
+    params: ReadChatAttachmentRequest,
+    signal: AbortSignal | undefined,
+    requirement: RequiredHostMethodVersion,
+  ): Promise<ReadChatAttachmentResponse>;
+}
+
+const stubClient: ChatAttachmentReadClientWithFloor = {
   requestWithSignal: (method, params, signal) =>
     request(method, params, signal),
+  requestWithSignalRequiringHostMethodVersion: (
+    method,
+    params,
+    signal,
+    requirement,
+  ) => requestFloor(method, params, signal, requirement),
 };
 
 const HOST_VERSION = "1.4.0";
@@ -137,8 +198,16 @@ async function bytesOnce(
 }
 
 beforeEach(() => {
+  // The chat-plane leg is admitted for a session holding a cloud verdict (or
+  // a local-homed epic); every case models a verified session unless it says
+  // otherwise.
+  useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  docMocks.durabilityStatus = null;
+  docMocks.retainedDurabilityStatus = null;
   resetChatAttachmentHostSupportForTests();
   request.mockReset();
+  requestFloor.mockReset();
+  resetNegotiatedManifests();
   docMocks.present = true;
   docMocks.hasAttachmentBytes.mockReset();
   docMocks.hasAttachmentBytes.mockReturnValue(false);
@@ -147,6 +216,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useAuthStore.getState().setSignedOut();
+  resetNegotiatedManifests();
   vi.restoreAllMocks();
 });
 
@@ -366,6 +437,61 @@ describe("useChatImageFetcher", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("skips the chat-plane leg for a cloud-homed epic once the cloud verdict is withdrawn", async () => {
+    // The host's leg is a bearer pass-through to the cloud blob for an
+    // attachment another host published, and the request has no plane
+    // selector - so without a verdict the leg is not dispatched at all, and
+    // the doc replica is the only remaining source.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the chat-plane leg for a LOCAL-homed epic without a verdict", async () => {
+    // No cloud task exists for a local home, so the host has nothing to fall
+    // back to and its disk-served images keep rendering.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.durabilityStatus = "local";
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the chat-plane leg through a reconnect beat for a LOCAL-homed epic, from the retained statement", async () => {
+    // A reconnect clears the cycle's own durability status while the retained
+    // pair still stands; the gate reads current-then-retained like every
+    // other local-home gate, so the beat does not blank the epic's images.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.durabilityStatus = null;
+    docMocks.retainedDurabilityStatus = "local";
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("treats an undecodable body as a retryable failure, not a miss", async () => {
     request.mockResolvedValue({
       ok: true,
@@ -376,6 +502,104 @@ describe("useChatImageFetcher", () => {
     await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
       /undecodable/,
     );
+  });
+
+  it("pins the floor-bearing leg for a selected plane, carrying the exact requirement and the selector", async () => {
+    // Unverified (no cloud verdict) against a host that has negotiated
+    // `epic.readChatAttachment@1.1`: `chatPlaneReadSelector` picks
+    // `"local-only"`, and the request must carry BOTH the version floor and
+    // the selector it exists to protect - a pin that only checked the method
+    // name would survive someone dropping either half.
+    recordNegotiatedHostManifest("host-1", {
+      "epic.readChatAttachment": { major: 1, minor: 1 },
+    });
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    requestFloor.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+
+    expect(requestFloor).toHaveBeenCalledWith(
+      "epic.readChatAttachment",
+      { epicId: "epic-1", chatId: CHAT_ID, hash: HASH, plane: "local-only" },
+      expect.any(AbortSignal),
+      {
+        method: "epic.readChatAttachment",
+        version: { major: 1, minor: READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR },
+      },
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("claims no floor and sends no selector once the session holds its own cloud verdict - same host, only auth differs", async () => {
+    // Non-vacuity for the case above: the ONLY variable that moved is the
+    // session's verdict (still `host-1` negotiated at `@1.1`). A signed-in
+    // session never needs the disk-only leg, so the plain call is used and no
+    // floor is claimed - claiming one here would make every ordinary
+    // signed-in read refusable on a peer that later drops the minor.
+    recordNegotiatedHostManifest("host-1", {
+      "epic.readChatAttachment": { major: 1, minor: 1 },
+    });
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "epic.readChatAttachment",
+      { epicId: "epic-1", chatId: CHAT_ID, hash: HASH },
+      expect.any(AbortSignal),
+    );
+    expect(requestFloor).not.toHaveBeenCalled();
+  });
+
+  it("propagates a dispatch-time floor refusal instead of falling back to the doc replica", async () => {
+    // The capability read admitted the leg off a render-time / cached
+    // negotiation of `@1.1`; the process behind the connection carrying THIS
+    // frame has since dropped to `@1.0` and refuses the pinned request - the
+    // dispatch-time gap `requestWithSignalRequiringHostMethodVersion` exists
+    // to close. `HostMethodVersionUnsatisfiedError` is not
+    // `E_HOST_UNSUPPORTED` (`isHostUnsupported` only matches that code), so it
+    // must NOT be swallowed into the "this build predates the method"
+    // degrade, and it must not be treated as "missing" either - both would
+    // quietly serve a doc-replica image in place of a refused disk-only read.
+    recordNegotiatedHostManifest("host-1", {
+      "epic.readChatAttachment": { major: 1, minor: 1 },
+    });
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+    const refusal = new HostMethodVersionUnsatisfiedError({
+      requirement: {
+        method: "epic.readChatAttachment",
+        version: { major: 1, minor: READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR },
+      },
+      negotiated: { major: 1, minor: 0 },
+      requestId: "req-dispatch-floor",
+      method: "epic.readChatAttachment",
+      hostId: "host-1",
+    });
+    requestFloor.mockRejectedValue(refusal);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toBe(refusal);
+
+    // Not a quiet fallback: the doc replica is never consulted for this hash.
+    expect(docMocks.readAttachmentBytes).not.toHaveBeenCalled();
+    // Nor remembered as "this build lacks the method" - a floor refusal says
+    // nothing about whether the method exists, only that this connection
+    // will not serve it below the pinned minor.
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toBe(refusal);
+    expect(requestFloor).toHaveBeenCalledTimes(2);
   });
 });
 

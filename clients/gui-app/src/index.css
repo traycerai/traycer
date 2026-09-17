@@ -7,6 +7,7 @@
 @import "./styles/image-preview.css";
 @import "./styles/theme-fallback.css";
 @import "./styles/theme-surfaces.css";
+@import "./styles/window-chrome.css";
 
 @custom-variant dark (&:is(.dark *));
 /* Window Controls Overlay: active only when Chromium reports the
@@ -29,25 +30,79 @@
    `lib/animation/status-animation-clock.ts` instead. Do not add
    `animation:` back to these rules. */
 
-/* Indeterminate host-progress bar: a segment sweeping across the track, for a
-   stage that is RUNNING but reports no percentage (verify, extract, swap,
-   service-start). Plain CSS - no motion runtime, so it animates regardless of
-   the LazyMotion provider - and a short-lived surface (one install), unlike the
-   run indicator above.
+/* Indeterminate progress: a segment sweeping across the track, for work that is
+   RUNNING but reports no percentage. Plain CSS - no motion runtime, so it
+   animates regardless of the LazyMotion provider.
 
-   It must MOVE. A static full-width fill was the previous behaviour here and it
-   was a lie: the progress carry-forward used to leak a completed download's 100%
-   into the next stage, so the card sat at a full bar for minutes of real work. A
-   motionless indeterminate bar would be that same claim in a new costume.
+   ONE keyframe, two directions BY DECLARATION. The host-update bar
+   (`update-progress-bar`) runs it one-way; the
+   stream-syncing strip below runs the same travel with
+   `animation-direction: alternate`, so the segment returns instead of wrapping.
+   The declaration is where the two differ - do not add a second keyframe for a
+   direction a call site can ask for.
 
-   `transform` only, so it composites without laying out - this runs for the whole
-   multi-minute extract. */
+   It must MOVE. A static full-width fill was the previous behaviour on the
+   install bars and it was a lie: the progress carry-forward used to leak a
+   completed download's 100% into the next stage, so the card sat at a full bar
+   for minutes of real work. A motionless indeterminate bar would be that same
+   claim in a new costume. (Under reduced motion a full-width line IS what the
+   syncing strip falls back to - see `.stream-syncing-sweep` - but there it is
+   not a progress claim: it carries no percentage semantics and the word
+   "Syncing…" beside it is what the reader is actually reading.)
+
+   `transform` only, so it composites without laying out - on the host-update bar
+   this runs for minutes. */
 @keyframes host-progress-indeterminate {
   from {
     transform: translateX(-100%);
   }
   to {
-    transform: translateX(340%);
+    transform: translateX(var(--host-progress-sweep-end, 340%));
+  }
+}
+
+/* The stream-syncing strip's travelling segment. A CLASS, not the inline
+   `animation` style the host-update bar uses, for one reason: an inline style
+   cannot be reached by a `motion-reduce:` variant, so that bar does not honour
+   reduced motion at all. This one does, below.
+
+   The strip drops this class entirely once it escalates, falling back to plain
+   `w-full opacity-45` utilities - the same still form the media query produces,
+   reached by an unrelated question. So the animation is bounded twice over: by
+   the reader's motion preference, and by how long one resync may run. */
+.stream-syncing-sweep {
+  /* The segment is `w-2/5`, so it clears the right edge at 250% of its own
+     width. The shared default overshoots to 340%, which parks it fully outside
+     the track at BOTH ends of the alternating cycle: measured at 880ms of every
+     2.8s round trip with nothing on screen at all. On an install bar that runs
+     for minutes the gap reads as pacing; on an indicator that lives two to four
+     seconds it can be most of what the user sees, and it is what makes the
+     motion read as restarting rather than travelling. The host-update bar keeps
+     the old value through the fallback in the keyframe. */
+  --host-progress-sweep-end: 250%;
+  animation: host-progress-indeterminate 1.4s ease-in-out infinite alternate;
+  /* The one moving element on screen during a reconnect, and a bar this thin
+     shows compositor jitter plainly. Promoting it keeps the sweep off the main
+     thread's paint path; it is bounded by the escalation, so the layer is not
+     held indefinitely. */
+  will-change: transform;
+}
+
+/* The base layer's blanket reduced-motion rule collapses every animation to
+   0.01ms with one iteration, which would park this segment on its END frame -
+   translated clean off the track, so the bar would simply be missing. Travel is
+   therefore replaced by PRESENCE: a full-width line at low alpha. It reads as
+   "this strip is here", not as "finished", because the strip carries no
+   percentage and the "Syncing…" beside it is the actual claim.
+
+   `width` is restated here rather than left to the utility: the segment's
+   fractional width only means something while it is travelling. */
+@media (prefers-reduced-motion: reduce) {
+  .stream-syncing-sweep {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.45;
   }
 }
 
@@ -136,6 +191,177 @@
 
 .prompt-stash-count-flash {
   animation: prompt-stash-count-flash 700ms ease-out both;
+}
+
+/* A compact dock chip acknowledging the thing it stands for changing - the
+   first agent starting, the line counts moving. A ring radiating out of the
+   chip and nothing else: `box-shadow` alone, so the chip's own background
+   survives the animation (see the note on `prompt-stash-count-flash` above for
+   what a `both` background frame does to it), and the end frame is transparent
+   so a finished pulse leaves no residue.
+
+   Deliberately no reduced-motion override. The base layer already collapses
+   every animation to 0.01ms, which still fires `animationend` - and that event
+   is what takes `data-pulse` back off. `animation: none` would suppress it and
+   leave the attribute set for good, so the chip could never pulse again. */
+@keyframes chat-dock-chip-pulse {
+  from {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+[data-chat-dock-chip][data-pulse="true"] {
+  animation: chat-dock-chip-pulse 620ms ease-out forwards;
+}
+
+/* The thumb and fill share one response: quick eased follow while dragging,
+   then a softer arrival on release or direct selection. The drag target has
+   a small attraction to catalog stops; the brief follow gives it weight
+   without coasting past the chosen level. */
+.reasoning-effort-slider .reasoning-effort-range,
+.reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]) {
+  transition:
+    left 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    right 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-inline-end 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.reasoning-effort-slider[data-dragging="true"] .reasoning-effort-range,
+.reasoning-effort-slider[data-dragging="true"]
+  > span:has(> [data-slot="slider-thumb"]) {
+  transition-duration: 80ms;
+}
+
+/* Scale the disc, not Radix's positioning wrapper: pickup must not change
+   the measured track geometry or the location of the thumb's centre. */
+.reasoning-effort-slider [data-slot="slider-thumb"] {
+  scale: 1;
+  transition:
+    scale 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 180ms ease-out,
+    border-color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.reasoning-effort-slider[data-pressed="true"] [data-slot="slider-thumb"] {
+  scale: 1.12;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 22%);
+  transition-duration: 120ms;
+}
+
+.reasoning-effort-label {
+  color: color-mix(in oklab, var(--primary) 60%, var(--foreground));
+}
+
+.reasoning-effort-label[data-max="true"] {
+  color: var(--reasoning-max-accent);
+}
+
+/* A crossfade keeps entering and leaving the top level as smooth as moving
+   the thumb. The accent remains theme-owned; no provider-specific hue or
+   usage claim is implied by this treatment. */
+.reasoning-effort-range::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    to right,
+    var(--primary),
+    var(--reasoning-max-accent)
+  );
+  opacity: 0;
+  transition: opacity 320ms ease-out;
+}
+
+.reasoning-effort-max-range::after {
+  opacity: 1;
+}
+
+[dir="rtl"] .reasoning-effort-range::after {
+  background: linear-gradient(
+    to left,
+    var(--primary),
+    var(--reasoning-max-accent)
+  );
+}
+
+/* A fine edge defines the capsule without a bloom outside the footer. The
+   slow-moving light lives INSIDE the track and is driven by the shared clock. */
+.reasoning-effort-max-glow {
+  box-shadow: 0 0 0 1px
+    color-mix(in srgb, var(--reasoning-max-accent) 24%, transparent);
+}
+
+.reasoning-effort-max-sparkles {
+  animation: reasoning-sparkles-enter 320ms ease-out both;
+}
+
+.reasoning-effort-max-sparkles::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgb(255 255 255 / 0.24),
+    transparent 60%
+  );
+  transform: translateX(var(--reasoning-sheen-x, 0%));
+}
+
+@keyframes reasoning-sparkles-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Small specular highlights, not stop markers. Per-point opacity and the
+   field's gentle drift are written by one shared status-clock subscription. */
+.reasoning-effort-sparkle {
+  background: #fff;
+  filter: drop-shadow(0 0 1px rgb(255 255 255 / 0.5));
+}
+
+.reasoning-effort-sparkle-glint {
+  color: #fff;
+  font-size: 5px;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-effort-slider .reasoning-effort-range,
+  .reasoning-effort-slider > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider[data-dragging] .reasoning-effort-range,
+  .reasoning-effort-slider[data-dragging]
+    > span:has(> [data-slot="slider-thumb"]),
+  .reasoning-effort-slider [data-slot="slider-thumb"],
+  .reasoning-effort-slider[data-pressed] [data-slot="slider-thumb"],
+  .reasoning-effort-range::after {
+    transition: none;
+  }
+  .reasoning-effort-slider[data-pressed] [data-slot="slider-thumb"] {
+    scale: 1;
+  }
+  .reasoning-effort-max-sparkles {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .reasoning-effort-max-glow {
+    box-shadow: none;
+  }
+  .reasoning-effort-range::after,
+  .reasoning-effort-max-sparkles {
+    display: none;
+  }
 }
 
 /* A label-only tooltip must never win hit-testing from what it covers.
@@ -283,6 +509,20 @@
     padding-top: var(--safe-area-inset-top);
     padding-right: var(--safe-area-inset-right);
     padding-left: var(--safe-area-inset-left);
+  }
+
+  /*
+   * The reservation above is PADDING on `#root`, which means the strips it
+   * reserves belong to `#root` and no descendant can paint them. That is
+   * invisible for every ordinary surface, whose ground matches the app's - but
+   * the mobile boot cover is deliberately the launch image's dark, so those
+   * strips would frame it in a different colour for the length of a launch.
+   *
+   * Scoped to the marker rather than applied to `#root` generally: this is the
+   * pre-binding phase only, and the app's own ground must return with the app.
+   */
+  #root:has(> [data-boot-ground]) {
+    background-color: var(--color-zinc-950);
   }
 
   ::selection {
@@ -483,6 +723,52 @@
   overflow-wrap: break-word;
 }
 
+/*
+ * The markdown table's chrome, moved here from inline `style` objects in
+ * `markdown/components/table-wrapper.tsx`. The elements already carried these
+ * class names - they were markers with no rules behind them - so this is where
+ * the styling always belonged. Unlayered, like the two rules above, so it
+ * outranks Tailwind Typography's own prose table styles.
+ *
+ * The `--traycer-code-*` fallbacks are kept exactly as the inline styles wrote
+ * them: a neutral grey that shows through if a surface renders this markdown
+ * outside the scope that declares those variables.
+ */
+.traycer-md-table-wrap {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  border: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+}
+
+.traycer-md-table-wrap > table {
+  min-width: 480px;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.traycer-md-table-wrap thead {
+  background: var(--traycer-code-header-bg, rgba(127, 127, 127, 0.1));
+}
+
+.traycer-md-th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  border-right: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  background: var(--traycer-code-header-bg, rgba(127, 127, 127, 0.1));
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.traycer-md-td {
+  border-top: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  border-right: 1px solid var(--traycer-code-border, rgba(127, 127, 127, 0.3));
+  padding: 0.5rem 0.75rem;
+}
+
 :root {
   /* The pressed-state scrim (see the `press-scrim` utility). Neutral rather
      than hue-matched: it dims a surface, it does not tint it, so the accent
@@ -596,7 +882,7 @@
    * Insetting a `fixed` overlay that a PRIMITIVE already positions has one
    * trap, and it is silent off-device where every token below is zero:
    *
-   *   - `tailwind-merge` only treats two classes as conflicting when their
+   *   - `cn` only treats two classes as conflicting when their
    *     modifiers match, so an override of a `data-[side=left]:inset-y-0` base
    *     has to carry `data-[side=left]:` too. Bare, it is not a smaller
    *     override - it is a second rule, and stylesheet order decides.
@@ -769,10 +1055,13 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
   --color-success: var(--success);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -780,6 +1069,11 @@
   --color-muted: var(--muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
+  /* The reasoning slider's max accent is a registered theme token
+     (`themeTokens` in `lib/themes/theme-definition.ts`): its default lives in
+     `builtin-palettes.ts`, the fallback stylesheet carries it, the applier
+     writes it, and a custom theme overrides it like any other role. */
+  --color-reasoning-max-accent: var(--reasoning-max-accent);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
@@ -840,6 +1134,38 @@
 @utility press-scrim {
   background-image: linear-gradient(var(--press-scrim), var(--press-scrim));
   transition-duration: 0s;
+}
+
+@utility task-surface-frame {
+  margin-top: -1px;
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
+
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    z-index: 30;
+    width: var(--radius-xl);
+    height: var(--radius-xl);
+    pointer-events: none;
+    border-style: solid;
+    border-top-width: 1px;
+    border-color: color-mix(in oklab, var(--color-border) 90%, transparent);
+  }
+
+  &::before {
+    left: 0;
+    border-left-width: 1px;
+    border-top-left-radius: inherit;
+  }
+
+  &::after {
+    right: 0;
+    border-right-width: 1px;
+    border-top-right-radius: inherit;
+  }
 }
 
 /*
@@ -993,8 +1319,8 @@
     opacity: 0;
   }
 
-  /* The close button is inert by default and only becomes clickable once the
-     tab is wide enough and hovered / keyboard-focused. Keep BOTH the `none`
+  /* The close button is inert until keyboard focus, or hover on a wide tab.
+     Keep BOTH the `none`
      default and the `auto` reveal in this same @layer so the reveal wins by
      specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
      button: it lands in Tailwind's `utilities` layer, declared after
@@ -1004,46 +1330,56 @@
     pointer-events: none;
   }
 
-  /* Reveal on hover, or keyboard focus - NOT :focus-within. A mouse-drag reorder
-     focuses the tab div, and dnd-kit swallows the trailing click so the tab is
-     never activated; with :focus-within the reveal (opacity + close button)
-     would stay stuck lit on that inactive tab until focus moved away.
-     Keyboard focus is expressed as :focus-visible (mouse focus doesn't match it,
-     so a drag doesn't stick) across two selectors:
-       - `:focus-visible` for the tab wrapper itself (Tab lands on the tab), and
-       - `:has(:focus-visible)` for a focused descendant - the close button is a
-         SEPARATE tab stop, and when Tab moves onto it the wrapper is no longer
-         :focus-visible, so without this the slot would collapse and hide the
-         very button the user just focused.
-     Keep in sync with the accent chrome's `group-focus-visible/tab` +
-     `group-has-[:focus-visible]/tab` gates in tab-strip-item.tsx.
+  /* Mask only the text so the fade follows its available width without
+     fading the icon, close button or tooltip. */
+  .header-tab-title-text {
+    display: block;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    white-space: nowrap;
+    mask-image: linear-gradient(
+      to right,
+      #000 calc(100% - 1.25rem),
+      transparent
+    );
+  }
 
-     The width is reserved unconditionally once the tab is wide enough to
-     spare the room - hover/focus only toggle opacity now. The title span
-     (the tooltip anchor, tab-strip-item.tsx) sits in the same flex row and
-     used to shrink every time the slot animated 0 -> 1.25rem on hover;
-     Floating UI's autoUpdate would reposition the tooltip against that
-     resize, the content would land under the cursor, hit-testing would
-     drop off the tab, and the slot would collapse - an infinite loop. A
-     stable width breaks that at the source. Below 7rem the button never
-     reveals at all, so the slot stays width 0 (the base rule above) rather
-     than permanently eating title space on narrow tabs. */
+  /* Only the title's text box shrinks. Its full-width tooltip anchor stays
+     fixed so revealing the close control cannot reposition the tooltip. */
+  .group\/tab:focus-visible .header-tab-title,
+  .group\/tab:has(:focus-visible) .header-tab-title {
+    padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
+  }
+
+  .group\/tab:focus-visible .header-tab-trailing-slot,
+  .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
+    width: 1.25rem;
+    opacity: 1;
+  }
+
+  .group\/tab:focus-visible .header-tab-close-button,
+  .group\/tab:has(:focus-visible) .header-tab-close-button {
+    pointer-events: auto;
+  }
+
   @container (min-width: 7rem) {
-    .header-tab-trailing-slot {
-      width: 1.25rem;
+    .group\/tab:hover .header-tab-title {
+      padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
     }
 
-    .group\/tab:hover .header-tab-trailing-slot,
-    .group\/tab:focus-visible .header-tab-trailing-slot,
-    .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
+    .group\/tab:hover .header-tab-trailing-slot {
+      width: 1.25rem;
       opacity: 1;
     }
 
-    .group\/tab:hover .header-tab-close-button,
-    .group\/tab:focus-visible .header-tab-close-button,
-    .group\/tab:has(:focus-visible) .header-tab-close-button {
+    .group\/tab:hover .header-tab-close-button {
       pointer-events: auto;
     }
+  }
+
+  .header-tab-label[data-leader-visible="true"] .header-tab-title {
+    padding-inline-end: 0;
   }
 
   [data-composer-editor] ul {
@@ -1118,21 +1454,6 @@
   [data-composer-editor] blockquote {
     @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
   }
-}
-
-/*
- * Find-in-page highlight paints (`lib/find-engine/find-engine.ts`).
- * Uses the CSS Custom Highlight API so painting never touches
- * `window.getSelection()` - contenteditable editors don't see a
- * selection change and don't grab focus away from the find input.
- */
-::highlight(traycer-find-match) {
-  background-color: color-mix(in srgb, var(--primary) 35%, transparent);
-  color: inherit;
-}
-::highlight(traycer-find-match-active) {
-  background-color: color-mix(in srgb, var(--primary) 75%, transparent);
-  color: var(--primary-foreground);
 }
 
 /*

@@ -1,10 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-} from "@/components/ui/drawer";
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
@@ -18,7 +13,6 @@ import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-
 import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-browsers-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { SwitcherCommentsList } from "@/components/epic-canvas/mobile/switcher-comments-list";
-import { SwitcherPrPresenceProbe } from "@/components/epic-canvas/mobile/switcher-pr-presence-probe";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 import {
@@ -29,12 +23,6 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
-import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
-import {
-  selectPrScopeHasItems,
-  usePrPresenceStore,
-} from "@/stores/epics/pr-presence-store";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import {
   useActiveLeftPanelId,
@@ -100,48 +88,10 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   const { resolvedTheme, themePreset } = useResolvedTheme();
   const persistedCategory = useActiveLeftPanelId(tabId);
   const setActivePanelId = useLeftPanelStore((s) => s.setActivePanelId);
-  // The Pull requests category is presence-gated exactly as the desktop rail
-  // icon is.
-  //
-  // Bootstrap contract: this store is a WARM START, never the only answer. It
-  // is written by the PR panel body, which on a phone only this category can
-  // mount - so read alone it would gate the tab on a cache that only the tab's
-  // own hidden child can fill, and an epic whose PRs this device has never
-  // seen could never grow the tab. `SwitcherPrPresenceProbe` (mounted below,
-  // for as long as the sheet is open) is what actually answers the question;
-  // the cache just spares the first frame's latency on repeat opens.
-  //
-  // The reactive active host is the right scope and not a tab-binding
-  // violation: this sheet is an epic-level surface mounted as a SIBLING of the
-  // shown tile (`MobileEpicTileView`), so it sits outside every tile's
-  // `TabHostProvider` - `useTabHostId()` would throw - exactly like the desktop
-  // sidebar that owns the same panels. It also has to match the writer: the
-  // panel body and the probe both record under this same host, and a reader on
-  // a different scope key could never see what they wrote.
-  const activeHostId = useCanvasHostId();
-  const hasRecordedPullRequests = usePrPresenceStore(
-    selectPrScopeHasItems(activeHostId, epicId),
-  );
-  // Presence is not sufficient on its own: it is persisted per (host, epic) and
-  // outlives the host it was recorded against, so a host that rolls back to a
-  // build without the PR stream would still show the tab - and tapping it would
-  // land the panel's visible "Update required" surface. On a phone the category
-  // simply not being there is the honest answer, matching an epic with no PRs.
-  //
-  // Only a DEFINITE `unsupported` hides it. Support is client-wide evidence
-  // refreshed from any session's handshake manifest and is cleared on every
-  // reconnect, so `unknown` (and the `null` of a client that has not been built
-  // yet) is a routine transient - treating it as unsupported would blink the tab
-  // out and back on each reconnect, which reads as a glitch rather than as a
-  // capability. Holding the last good answer through that window is the stable
-  // choice, and a wrong hold self-corrects the moment the manifest lands.
-  const prStreamSupport = useStreamMethodSupport("pr.subscribeListForEpic");
-  const pullRequestsAvailable =
-    hasRecordedPullRequests && prStreamSupport !== "unsupported";
-  const activeCategory = clampToSwitcherCategory(
-    persistedCategory,
-    pullRequestsAvailable,
-  );
+  // PRs stay reachable even when the task host has none: the panel's host
+  // picker is how the user discovers PRs on another machine. Only mounting
+  // that panel starts PR traffic; the sheet needs no presence probe.
+  const activeCategory = clampToSwitcherCategory(persistedCategory);
 
   const handleCategoryChange = useCallback(
     (value: string) => {
@@ -201,37 +151,33 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
         className={cn(resolvedTheme === "dark" && "dark", "h-[70dvh]")}
       >
         {/* Inside the drawer content so it runs only while the sheet is open. */}
-        <SwitcherPrPresenceProbe epicId={epicId} hostId={activeHostId} />
-        <DrawerHeader className="p-0">
-          {/* vaul/Radix requires a title for screen readers; the sheet's own
-              content says what it is, so it carries no visible heading. */}
-          <DrawerTitle className="sr-only">Switch tab</DrawerTitle>
-        </DrawerHeader>
+        {/* No `DrawerHeader`: vaul/Radix requires a title for screen readers,
+            but the sheet's own content says what it is, so there is no visible
+            heading for a header band to hold. */}
+        <DrawerTitle className="sr-only">Switch tab</DrawerTitle>
         <Tabs
           value={activeCategory}
           onValueChange={handleCategoryChange}
           className="min-h-0 flex-1 gap-0"
         >
           <div className="shrink-0 border-b border-canvas-border/70">
-            <SwitcherCategoryTabs hasPullRequests={pullRequestsAvailable} />
+            <SwitcherCategoryTabs />
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
-            {visibleSwitcherCategoryDefs(pullRequestsAvailable).map(
-              (definition) => (
-                <TabsContent
-                  key={definition.id}
-                  value={definition.id}
-                  className="flex min-h-0 flex-1 flex-col overflow-hidden"
-                >
-                  <SwitcherCategoryBody
-                    categoryId={definition.id}
-                    epicId={epicId}
-                    tabId={tabId}
-                    onClose={handleClose}
-                  />
-                </TabsContent>
-              ),
-            )}
+            {visibleSwitcherCategoryDefs().map((definition) => (
+              <TabsContent
+                key={definition.id}
+                value={definition.id}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
+                <SwitcherCategoryBody
+                  categoryId={definition.id}
+                  epicId={epicId}
+                  tabId={tabId}
+                  onClose={handleClose}
+                />
+              </TabsContent>
+            ))}
           </div>
         </Tabs>
       </DrawerContent>
@@ -332,9 +278,10 @@ function SwitcherEmbedFallback() {
   return (
     <div className="flex min-h-24 flex-1 items-center justify-center p-6">
       <AgentSpinningDots
-        className="size-4 text-muted-foreground"
+        className="size-4"
         testId="switcher-embed-loading"
         variant="dots2"
+        tone="muted"
       />
     </div>
   );

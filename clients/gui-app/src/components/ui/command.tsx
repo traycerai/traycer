@@ -9,13 +9,40 @@ import { ShortcutHint } from "@/components/ui/shortcut-hint";
 
 function Command({
   className,
+  variant = "standalone",
+  selection = "lifted",
   ...props
-}: React.ComponentProps<typeof CommandPrimitive>) {
+}: React.ComponentProps<typeof CommandPrimitive> & {
+  /**
+   * `standalone` is the palette drawn as its own plate. `embedded` is the same
+   * list inside a surface that already drew one - a popover, a pane - so it
+   * contributes no plate of its own. Five surfaces hand-wrote that as some
+   * subset of `rounded-none bg-transparent p-0`, and disagreed about which
+   * parts to include.
+   */
+  readonly variant?: "standalone" | "embedded";
+  /**
+   * How the keyboard cursor is drawn. `lifted` is the default palette row: a
+   * primary tint, a border and a shadow, for a list of ACTIONS where the
+   * cursor is the only state a row has.
+   *
+   * `flat` is for a picker of VALUES, where a row can also be the CHOSEN one -
+   * which the primitive marks with the same primary. Two pickers cancelled the
+   * lift by hand so the two states stay distinguishable; with `flat` the
+   * cursor is a neutral fill and primary means "this is the current value".
+   */
+  readonly selection?: "lifted" | "flat";
+}) {
   return (
     <CommandPrimitive
       data-slot="command"
+      data-variant={variant}
+      data-selection={selection}
       className={cn(
-        "flex size-full flex-col overflow-hidden rounded-xl bg-[var(--command-surface-background,var(--popover))] p-1 text-popover-foreground",
+        "group/command flex size-full flex-col overflow-hidden text-popover-foreground",
+        variant === "embedded"
+          ? "bg-transparent p-0"
+          : "rounded-xl bg-[var(--command-surface-background,var(--popover))] p-1",
         className,
       )}
       {...props}
@@ -36,7 +63,10 @@ function CommandInput({
 }) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
-      <InputGroup className="h-8! rounded-lg border-input/30 bg-input/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+      <InputGroup
+        variant="search"
+        className="h-8! border-[color-mix(in_srgb,var(--input)_30%,var(--popover))] bg-[color-mix(in_srgb,var(--input)_30%,var(--popover))]!"
+      >
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(
@@ -139,7 +169,15 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "group/command-item relative flex cursor-default items-center gap-2 rounded-sm border border-transparent px-2 py-1.5 text-ui-sm outline-hidden select-none transition-[background-color,border-color,box-shadow,color] duration-150 in-data-[slot=dialog-content]:rounded-lg hover:bg-foreground/5 hover:text-foreground active:press-scrim data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:border-primary/35 data-[selected=true]:bg-primary/12 data-[selected=true]:text-foreground data-[selected=true]:shadow-sm [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[selected=true]:*:[svg]:text-primary",
+        "group/command-item relative flex cursor-default items-center gap-2 rounded-sm border border-transparent px-2 py-1.5 text-ui-sm outline-hidden select-none transition-[background-color,border-color,box-shadow,color] duration-150 in-data-[slot=dialog-content]:rounded-lg hover:bg-[color-mix(in_srgb,var(--foreground)_6%,var(--popover))] hover:text-foreground active:press-scrim data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:border-primary/35 data-[selected=true]:bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))] data-[selected=true]:text-foreground data-[selected=true]:shadow-sm [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[selected=true]:*:[svg]:text-primary",
+        // `selection="flat"` (see `Command`): the cursor stops competing with
+        // the primary the CHOSEN row is marked in. A foreground alpha rather
+        // than `bg-accent`, which both sites reached for and which AGENTS.md
+        // rules out on a raised surface.
+        "group-data-[selection=flat]/command:data-[selected=true]:border-transparent group-data-[selection=flat]/command:data-[selected=true]:bg-foreground/8 group-data-[selection=flat]/command:data-[selected=true]:shadow-none group-data-[selection=flat]/command:data-[selected=true]:*:[svg]:text-current",
+        // …and the primary it gave up is what the CHOSEN row takes instead,
+        // which is the whole point of the split.
+        "group-data-[selection=flat]/command:data-[checked=true]:text-primary",
         className,
       )}
       {...props}
@@ -172,7 +210,10 @@ function CommandShortcut({
         {/* Repeated on the keycap because the span above only sets an INHERITED
             color, and `Kbd` paints its own `text-muted-foreground` directly on
             the element, which beats it. */}
-        <Kbd className="font-mono tabular-nums group-data-[selected=true]/command-item:text-foreground">
+        <Kbd
+          className="tabular-nums group-data-[selected=true]/command-item:text-foreground"
+          variant="mono"
+        >
           {children}
         </Kbd>
       </span>

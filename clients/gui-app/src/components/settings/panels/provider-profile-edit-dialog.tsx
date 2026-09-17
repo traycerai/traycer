@@ -306,7 +306,7 @@ function ProfileApiKeyForm(props: {
           id={inputId}
           type="password"
           autoComplete="off"
-          className="w-full min-w-0 flex-1 basis-48 font-mono text-ui-sm"
+          className="w-full min-w-0 flex-1 basis-48"
           placeholder={
             apiKey.configured
               ? "Replace stored key…"
@@ -318,6 +318,8 @@ function ProfileApiKeyForm(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter") onSave();
           }}
+          font="mono"
+          size="sm"
         />
         <Button
           type="button"
@@ -333,8 +335,7 @@ function ProfileApiKeyForm(props: {
           <Button
             type="button"
             size="sm"
-            variant="ghost"
-            className="text-destructive"
+            variant="destructive-ghost"
             onClick={() => {
               if (busy) return;
               // Mirror of `onSave`: the sibling's stale failure must not
@@ -384,6 +385,7 @@ function ProfileEditAccountSection(props: {
   readonly profile: ProviderProfile;
   readonly switchingAccount: boolean;
   readonly startInReauth: boolean;
+  readonly isLocalHost: boolean;
   readonly canOauth: boolean;
   readonly savePending: boolean;
   readonly invalid: boolean;
@@ -397,6 +399,7 @@ function ProfileEditAccountSection(props: {
       <ProviderProfileReauthPanel
         state={props.state}
         profile={props.profile}
+        isLocalHost={props.isLocalHost}
         onSameAccountReconnected={
           props.startInReauth ? props.onFinishSignIn : null
         }
@@ -459,6 +462,7 @@ export function ProfileEditDialog(props: {
   readonly profiles: readonly ProviderProfile[];
   readonly canOauth: boolean;
   readonly startInReauth: boolean;
+  readonly isLocalHost: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
@@ -582,19 +586,16 @@ export function ProfileEditDialog(props: {
         }}
       >
         <DialogContent
-          className="max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] gap-0 overflow-y-auto p-0 sm:max-w-none"
+          layout="banded"
+          className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
           showCloseButton={!switchingAccount}
         >
-          <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
-            <DialogTitle className="text-ui font-semibold leading-snug">
-              {dialogCopy.title}
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-              {dialogCopy.description}
-            </DialogDescription>
+          <DialogHeader className="gap-1.5">
+            <DialogTitle>{dialogCopy.title}</DialogTitle>
+            <DialogDescription>{dialogCopy.description}</DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-5 px-5 pb-5">
+          <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
             <ProviderProfileCard
               key={props.profile.profileId}
               profile={props.profile}
@@ -636,6 +637,7 @@ export function ProfileEditDialog(props: {
               profile={props.profile}
               switchingAccount={switchingAccount}
               startInReauth={props.startInReauth}
+              isLocalHost={props.isLocalHost}
               canOauth={props.canOauth}
               savePending={savePending}
               invalid={invalid}
@@ -652,13 +654,7 @@ export function ProfileEditDialog(props: {
             />
           </div>
 
-          <DialogFooter
-            className={
-              switchingAccount
-                ? "hidden"
-                : "mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3"
-            }
-          >
+          <DialogFooter className={switchingAccount ? "hidden" : ""}>
             <div className="flex w-full flex-wrap items-center justify-between gap-2">
               <TooltipWrapper
                 label={removeDisabledReason}
@@ -670,7 +666,7 @@ export function ProfileEditDialog(props: {
                   <Button
                     type="button"
                     size="sm"
-                    variant="ghost"
+                    variant="destructive-ghost"
                     aria-label={removePresentation.ariaLabel}
                     disabled={
                       removeDisabledReason !== null ||
@@ -678,7 +674,6 @@ export function ProfileEditDialog(props: {
                       savePending
                     }
                     onClick={requestRemove}
-                    className="text-ui-sm text-destructive"
                   >
                     <Trash2 className="size-3.5" />
                     Remove profile

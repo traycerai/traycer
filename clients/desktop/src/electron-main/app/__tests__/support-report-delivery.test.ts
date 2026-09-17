@@ -141,7 +141,9 @@ const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
 let tempDir = "";
 let hostLogPath = "";
 
-function buildService(signedInEmail: string | null): DesktopSupportService {
+function buildService(
+  signedInEmail: string | null | (() => string | null),
+): DesktopSupportService {
   const hostLayout: HostFsLayout = {
     rootDir: tempDir,
     pidMetadataFile: join(tempDir, "pid.json"),
@@ -164,8 +166,10 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
     appName: "Traycer",
     host: { getSnapshot: () => null },
     authSession: {
-      get: () =>
-        signedInEmail === null
+      get: () => {
+        const email =
+          typeof signedInEmail === "function" ? signedInEmail() : signedInEmail;
+        return email === null
           ? { status: "signed-out", token: null, profile: null }
           : {
               status: "signed-in",
@@ -173,9 +177,10 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
               profile: {
                 userId: "user-1",
                 userName: "Test User",
-                email: signedInEmail,
+                email,
               },
-            },
+            };
+      },
     },
     hostLayout,
   });
@@ -500,8 +505,8 @@ describe("DesktopSupportService.submitReport - browser diagnostics consent (tick
   });
 });
 
-describe("DesktopSupportService.submitReport - identity gating (G1)", () => {
-  it("attaches no identity when allowContact is false, even with a signed-in email", async () => {
+describe("DesktopSupportService.submitReport - private identity", () => {
+  it("attaches the signed-in email despite the legacy allowContact:false flag", async () => {
     const service = buildService("anurag@traycer.ai");
     await service.freezeEvidence(KEY, null);
     await service.submitReport({ ...FORM, allowContact: false }, KEY);
@@ -509,10 +514,10 @@ describe("DesktopSupportService.submitReport - identity gating (G1)", () => {
     const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
     expect(
       (feedback as { name?: string; email?: string } | undefined)?.name,
-    ).toBe("anonymous");
+    ).toBe("anurag@traycer.ai");
     expect(
       (feedback as { name?: string; email?: string } | undefined)?.email,
-    ).toBeUndefined();
+    ).toBe("anurag@traycer.ai");
   });
 
   it("attaches identity when allowContact is true and a signed-in email exists", async () => {
@@ -529,7 +534,7 @@ describe("DesktopSupportService.submitReport - identity gating (G1)", () => {
     ).toBe("anurag@traycer.ai");
   });
 
-  it("stays anonymous when allowContact is true but there is no signed-in email", async () => {
+  it("stays anonymous when there is no signed-in email", async () => {
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
     await service.submitReport({ ...FORM, allowContact: true }, KEY);
@@ -541,6 +546,35 @@ describe("DesktopSupportService.submitReport - identity gating (G1)", () => {
     expect(
       (feedback as { name?: string; email?: string } | undefined)?.email,
     ).toBeUndefined();
+  });
+
+  it("uses the email frozen when the draft opened after the account changes", async () => {
+    let email: string | null = "first@traycer.ai";
+    const service = buildService(() => email);
+    await service.freezeEvidence(KEY, null);
+    email = "second@traycer.ai";
+
+    await service.submitReport(FORM, KEY);
+
+    const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
+    expect((feedback as { email?: string } | undefined)?.email).toBe(
+      "first@traycer.ai",
+    );
+  });
+
+  it("keeps a signed-out draft anonymous after sign-in", async () => {
+    let email: string | null = null;
+    const service = buildService(() => email);
+    await service.freezeEvidence(KEY, null);
+    email = "later@traycer.ai";
+
+    await service.submitReport(FORM, KEY);
+
+    const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.name,
+    ).toBe("anonymous");
+    expect((feedback as { email?: string } | undefined)?.email).toBeUndefined();
   });
 });
 
@@ -944,6 +978,20 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 });
 
 describe("DesktopSupportService - freeze idempotency per key", () => {
+  it("reuses the original email for repeated freezes and captures a new draft's email", async () => {
+    let email: string | null = "first@traycer.ai";
+    const service = buildService(() => email);
+    const first = await service.freezeEvidence(KEY, null);
+    email = "second@traycer.ai";
+
+    const repeated = await service.freezeEvidence(KEY, null);
+    const next = await service.freezeEvidence("sender-1:2", null);
+
+    expect(repeated.contactEmail).toBe(first.contactEmail);
+    expect(repeated.contactEmail).toBe("first@traycer.ai");
+    expect(next.contactEmail).toBe("second@traycer.ai");
+  });
+
   it("mints one reportId per draft and reuses it across every submit call", async () => {
     const service = buildService(null);
     const { reportId } = await service.freezeEvidence(KEY, null);
@@ -983,6 +1031,15 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
 });
 
 describe("DesktopSupportService.buildPublicDraft", () => {
+  it("omits the signed-in email from public GitHub drafts", async () => {
+    const service = buildService("anurag@traycer.ai");
+    await service.freezeEvidence(KEY, null);
+
+    const draft = await service.buildPublicDraft(FORM, KEY);
+
+    expect(JSON.stringify(draft)).not.toContain("anurag@traycer.ai");
+  });
+
   it("returns a reportId-aware draft after freeze, independent of Sentry", async () => {
     const service = buildService(null);
     const { reportId } = await service.freezeEvidence(KEY, null);
@@ -1188,6 +1245,15 @@ describe("DesktopSupportService.submitReport - image attachments (ticket 08)", (
 });
 
 describe("DesktopSupportService.saveDiagnosticBundle", () => {
+  it("omits the signed-in email from diagnostic bundles", async () => {
+    const service = buildService("anurag@traycer.ai");
+    await service.freezeEvidence(KEY, null);
+
+    const { path } = await service.saveDiagnosticBundle(FORM, KEY);
+
+    expect(await readFile(path, "utf8")).not.toContain("anurag@traycer.ai");
+  });
+
   it("writes scrubbed form fields and frozen log tails under logs.desktop/host", async () => {
     // Seed real log content with a path/token so freeze captures scrubbed tails.
     await writeFile(

@@ -22,9 +22,19 @@ export type SafeLogValue =
 export type SafeLogFields = Readonly<Record<string, SafeLogValue>>;
 
 const MAX_LOG_STRING_LENGTH = 1_000;
+const MAX_CRASH_COMPONENT_STACK_LENGTH = 32_000;
 const MAX_LOG_DEPTH = 4;
 const MAX_LOG_ARRAY_ITEMS = 20;
 const MAX_LOG_OBJECT_KEYS = 40;
+
+export function isDebugEnabled(): boolean {
+  return (
+    log.transports.file.level === "debug" ||
+    log.transports.file.level === "silly" ||
+    log.transports.console.level === "debug" ||
+    log.transports.console.level === "silly"
+  );
+}
 
 /**
  * Configures `electron-log` so the desktop shell, the renderer, and any
@@ -94,9 +104,17 @@ export function resolveDesktopLogPath(): string {
  * is what made the previous copy of this function unusable anywhere else.
  */
 export function redactLogText(value: string): string {
+  return redactLogTextWithLimit(value, MAX_LOG_STRING_LENGTH);
+}
+
+export function redactCrashComponentStack(value: string): string {
+  return redactLogTextWithLimit(value, MAX_CRASH_COMPONENT_STACK_LENGTH);
+}
+
+function redactLogTextWithLimit(value: string, maxLength: number): string {
   const redacted = redactSensitiveText(value);
-  return redacted.length > MAX_LOG_STRING_LENGTH
-    ? `${redacted.slice(0, MAX_LOG_STRING_LENGTH)}...<truncated>`
+  return redacted.length > maxLength
+    ? `${redacted.slice(0, maxLength)}...<truncated>`
     : redacted;
 }
 

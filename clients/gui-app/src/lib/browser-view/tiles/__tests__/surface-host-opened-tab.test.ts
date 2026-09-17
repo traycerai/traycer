@@ -160,6 +160,51 @@ describe("hostOpenedTabSuppressReason", () => {
     setEpicSurfaceVisibility(EPIC, duplicateViewTabId, false);
     expect(isEpicSurfaceVisible(EPIC)).toBe(false);
   });
+
+  // transcript-record-fingerprint-memo Fix 2, must-NOT-change control: this
+  // set is surface PLACEMENT within this renderer, not "is the epic on
+  // screen", and stays that way even though `epic-parking.ts` and
+  // `cross-window-epic-visibility.ts` now fold window visibility into their
+  // OWN checks. If someone later "simplifies" that by folding document
+  // visibility into THIS set instead, a placed pane in a minimized/backgrounded
+  // window would report itself hidden here too, and an agent-opened browser
+  // tab would silently never surface as a PiP float - it would just never
+  // appear, where today it is waiting as a float once the user restores the
+  // window.
+  it("does not fold document (window) visibility into surface placement, so a placed pane in a hidden document still arms the PiP float", () => {
+    const originalVisibilityState = document.visibilityState;
+    const viewTabId = "view-doc-hidden-control";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    try {
+      setEpicSurfaceVisibility(EPIC, viewTabId, true);
+
+      expect(
+        isEpicSurfaceVisible(EPIC),
+        "isEpicSurfaceVisible must answer true for a placed pane regardless of document.visibilityState - it tracks placement, not window visibility",
+      ).toBe(true);
+      expect(
+        hostOpenedTabSuppressReason({
+          source: "agent",
+          surfacing: "surface",
+          browserPlacement: "pip",
+          epicVisible: isEpicSurfaceVisible(EPIC),
+          manualPipActive: false,
+        }),
+        'folding document visibility into the shared placement set would return "pip-epic-hidden" here and silently drop an agent-opened PiP tab while the window is merely minimized',
+      ).not.toBe("pip-epic-hidden");
+    } finally {
+      // In `finally`, so a failed assertion above cannot leave the placement
+      // standing for a later test that expects the epic hidden.
+      setEpicSurfaceVisibility(EPIC, viewTabId, false);
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: originalVisibilityState,
+      });
+    }
+  });
 });
 
 describe("surfaceHostOpenedTab", () => {

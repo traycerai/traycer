@@ -42,7 +42,7 @@ export function MigrationBlockingModalHost(): ReactNode {
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
           data-testid="migration-blocking-overlay"
-          className="fixed inset-0 isolate z-[60] bg-black/40 duration-100 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0"
+          className="fixed inset-0 isolate z-60 bg-black/40 duration-100 data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
@@ -61,7 +61,7 @@ export function MigrationBlockingModalHost(): ReactNode {
           // frame is portalled and `fixed`, so it centres over the status-bar
           // strip and the landscape sensor housing too unless it is told where
           // the app's part of the screen is.
-          className="fixed top-safe-center-y left-safe-center-x z-[60] flex w-[min(90vw,28rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
+          className="fixed top-safe-center-y left-safe-center-x z-60 flex w-[min(90vw,28rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
         >
           {isRunning ? (
             <RunningBody

@@ -1,3 +1,4 @@
+import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
@@ -6,6 +7,10 @@ import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-
 import { useDraggable } from "@dnd-kit/core";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -147,6 +152,7 @@ import {
 import {
   useAncestorIds,
   useEpicAgentRoleClaims,
+  useEpicAgentSessionFacet,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicChatIds,
@@ -166,6 +172,10 @@ import {
   isCloudChatListSettled,
   useCloudChatList,
 } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import {
   publicationTargetMap,
   useChatPublicationTargets,
@@ -762,8 +772,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // shared-with-task glyph must reflect the tab's owning host, not whichever
   // host the app is active on.
   const sessionHostClient = useEpicSessionHostClient();
+  // `epic.listCollaborators` is a cloud read, so it waits on a verdict. The
+  // glyph this feeds degrades to HIDDEN, not to a "not shared" claim:
+  // `taskHasCollaborators` already reads `undefined` as solo so the indicator
+  // cannot flash during load, and `shouldShowSharedWithTaskIndicator` only ever
+  // ADDS a glyph - an unauthorized session shows one fewer badge and asserts
+  // nothing about who has access. "Hidden" holds after a DEMOTION too: the
+  // hook withholds `data` while `enabled` is false, whatever TanStack still
+  // caches, so a glyph loaded under a verdict goes away with it.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
     client: sessionHostClient,
+    enabled: cloudAuthorized,
     poll: undefined,
     staleTime: undefined,
   });
@@ -787,6 +809,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         )
         .sort(),
     [tree, filterVisibleIds],
+  );
+  // Every chat in this tree belongs to THIS epic, and mixed mode's host leg
+  // asks for the `home: local` partition per chat - which the host can only
+  // resolve with the chat's owning epic. Without the map those chats fall out
+  // of the local partition and their indicators silently read as clear.
+  const indicatorChatEpicIds = useMemo(
+    () =>
+      Object.fromEntries(indicatorChatIds.map((chatId) => [chatId, epicId])),
+    [indicatorChatIds, epicId],
   );
   const epicSessionHostId = useEpicSessionHostId();
   const indicatorChatHostIds = useEpicNodeHostIds(indicatorChatIds);
@@ -1181,7 +1212,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     filterVisibleIds === null &&
     allRootIds.length === 0 &&
     unfoldedCloudChats.length === 0 &&
-    isCloudChatListSettled(cloudChats) &&
+    isCloudChatListSettled(cloudChats, cloudAuthorized) &&
+    !hasPendingRootRows;
+  // The unauthorized TWIN of the arm above, and it is a separate state rather
+  // than a suppression of that one. "No agents yet." is a claim about the TASK,
+  // and an unverified session has no basis for it: the cloud list was never
+  // asked, so a task whose agents all live on other devices looks identical to
+  // an empty one. Going silent instead would be the other failure - this panel
+  // is where a user starts their first agent, and the onboarding line is the
+  // only thing telling them how.
+  const showCloudUncheckedEmptyState =
+    filterVisibleIds === null &&
+    allRootIds.length === 0 &&
+    unfoldedCloudChats.length === 0 &&
+    !cloudAuthorized &&
     !hasPendingRootRows;
   // Rows exist and survive the interface/ownership filters, yet archiving hid
   // every one of them. Distinct from both other arms: the tree is neither empty
@@ -1206,6 +1250,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         title="No agents yet."
         description="Add an agent and choose a Chat or Terminal interface."
         testId="epic-chat-sidebar-empty"
+      />
+    );
+  } else if (showCloudUncheckedEmptyState) {
+    panelContent = (
+      <SidebarPanelEmptyState
+        icon={MessagesSquare}
+        title="No agents on this device."
+        description="Agents on your other devices can't be checked until your sign-in is confirmed. Add an agent to start one here."
+        testId="epic-chat-sidebar-cloud-unchecked-empty"
       />
     );
   } else if (filteredTreeEmpty && searchActive) {
@@ -1335,7 +1388,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   }
 
   return (
-    <ChatIndicatorHostScopes scopes={indicatorScopes}>
+    <ChatIndicatorHostScopes
+      scopes={indicatorScopes}
+      chatEpicIds={indicatorChatEpicIds}
+    >
       <NotificationIndicatorSnapshot onChange={setNotificationIndicators} />
       <SidebarChatSharingContext.Provider value={chatSharingValue}>
         <SidebarViewerContext.Provider value={isViewer}>
@@ -1348,8 +1404,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                     resultCount={searchResultCount}
                   />
                 ) : null}
-                <SidebarContent className="gap-0">
-                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                <SidebarContent>
+                  <SidebarGroup className="min-h-0 flex-1">
                     <SidebarGroupContent
                       ref={treeRegionRef}
                       className="flex min-h-0 flex-1 flex-col"
@@ -1396,9 +1452,10 @@ function PendingCreateRow({ depth, name }: { depth: number; name: string }) {
       >
         <TreeChevronSpacer />
         <AgentSpinningDots
-          className="shrink-0 text-muted-foreground/70"
+          className="shrink-0"
           testId={undefined}
           variant={undefined}
+          tone="muted"
         />
         <span>{name}</span>
       </div>
@@ -1910,10 +1967,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       const found = findOpenTileInTab(tabId, openRef());
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
-          prepareCloseCanvasTabFocusTarget(
-            tabId,
-            found.paneId,
-            found.instanceId,
+          withoutTabRecovery(() =>
+            prepareCloseCanvasTabFocusTarget(
+              tabId,
+              found.paneId,
+              found.instanceId,
+            ),
           ),
         );
       }
@@ -2422,13 +2481,38 @@ function SidebarRowCheckbox(props: {
   readonly onToggleSelection: (id: string) => void;
 }) {
   const { inputId, nodeId, nodeName, isSelected, onToggleSelection } = props;
+  // The checkbox is the only named control on a selection-mode row - its
+  // `aria-label` is what a screen reader announces, and the row `<label>`
+  // around it carries no name of its own. Without the state here the badge
+  // beside it is visible and unspoken, which is the same split the row
+  // button's own `aria-label` already has to close.
+  //
+  // Read here rather than passed in: the badge reads the same selector, so the
+  // two cannot disagree, and threading it would add a prop to a component
+  // whose call site is already at this file's complexity ceiling.
+  //
+  // `isArchived: false` deliberately, and it is not a lie by omission. That
+  // flag exists to stop the row BUTTON saying "archived, stopped" - one fact
+  // twice - and this name does not say "archived" at all, so there is nothing
+  // for `stopped` to repeat here. Suppressing it would drop the state from the
+  // one string this control announces.
+  const sessionFacet = useEpicAgentSessionFacet(nodeId);
+  const stateForAria = describeSessionStateForAria(
+    sessionFacet.sessionState,
+    false,
+    false,
+  );
   return (
     <span className="relative flex size-4 shrink-0">
       <input
         id={inputId}
         type="checkbox"
         checked={isSelected}
-        aria-label={`Select ${nodeName}`}
+        aria-label={
+          stateForAria === null
+            ? `Select ${nodeName}`
+            : `Select ${nodeName}, ${stateForAria}`
+        }
         data-testid={`epic-sidebar-select-${nodeId}`}
         className="peer absolute inset-0 m-0 size-4 cursor-pointer opacity-0"
         onChange={() => {
@@ -2867,14 +2951,65 @@ function describeOfflineLockForAria(
   return `on ${lock.hostLabel}, offline, ${outcome}`;
 }
 
+/**
+ * The session facet as a word in the row's accessible NAME.
+ *
+ * The badge below is inside the row button, whose explicit `aria-label`
+ * replaces its subtree, so without this line the one state a reader most needs
+ * - the agent is asleep, not gone - would be visible and unspoken. `null`
+ * (unknown) and `running` add nothing: the row already reads as a live agent.
+ *
+ * `stopped` is dropped under an archived row for the reason the badge is: the
+ * name already opens with "archived", and `stopped` is written only by the
+ * archive mutation, so "archived, stopped" would be one fact said twice - to
+ * the reader with the least context to discard the repeat. Suppressing it in
+ * only one of the two channels would be worse than in neither.
+ */
+function describeSessionStateForAria(
+  sessionState: AgentSessionState | null,
+  isArchived: boolean,
+  withResumeGuidance: boolean,
+): string | null {
+  // The RESUME GUIDANCE rides here, not only in the badge's tooltip.
+  //
+  // That tooltip hangs off a decorative `span`, so it is unreachable by
+  // keyboard - and this row button's explicit `aria-label` replaces its
+  // subtree anyway, so a description on the badge would never be announced
+  // either. This string is the one channel a screen-reader user actually
+  // gets, and "asleep" alone tells them a state without telling them it is
+  // recoverable, which is the misreading this whole change exists to stop.
+  //
+  // Deliberately NOT solved by making the badge focusable: that adds a tab
+  // stop per sleeping row inside a tree, which is a worse experience than the
+  // one it fixes. The `lastExit` detail stays visual - it is display-only, and
+  // all four exits resume identically, so it earns a tooltip and not a place
+  // in every row's accessible name.
+  //
+  // `withResumeGuidance` because the two callers are asking different
+  // questions. The row BUTTON is the control that opens the agent, so "you can
+  // get it back" belongs in its name. The selection CHECKBOX is not - the
+  // reader is picking rows to bulk-act on, and repeating a resume sentence on
+  // every sleeping row they arrow past is noise in front of the one word that
+  // changes the decision.
+  if (sessionState === "sleeping") {
+    return withResumeGuidance
+      ? "asleep, resumes on the next message or when you open it"
+      : "asleep";
+  }
+  if (sessionState === "stopped" && !isArchived) return "stopped";
+  return null;
+}
+
 function chatRowAriaLabel(input: {
   readonly nodeName: string;
   readonly isArchived: boolean;
   readonly sharedWithTask: boolean;
   readonly offlineLock: OfflineRowLock | null;
+  readonly sessionState: AgentSessionState | null;
 }): string {
   const stateSuffix = [
     input.isArchived ? "archived" : null,
+    describeSessionStateForAria(input.sessionState, input.isArchived, true),
     input.sharedWithTask ? "shared with task" : null,
     describeOfflineLockForAria(input.offlineLock),
   ]
@@ -2947,6 +3082,88 @@ function AgentRoleBadgesForOwner(props: {
 }
 
 /**
+ * What a sleeping agent's tooltip says.
+ *
+ * Two sentences, and the first one carries the whole fix: an idle-reaped agent
+ * is not gone, and the reader does not have to do anything special to get it
+ * back. The second is added only for `process-exit`, where the CLI ended on
+ * its own rather than being taken down - a reader who left an agent running
+ * and came back to "asleep" deserves to know which of those happened. The
+ * other three reasons (`reaped`, `user-stop`, `restart`) are deliberately not
+ * spelled out here: all four resume identically, and only this one contradicts
+ * what the reader would otherwise assume.
+ */
+function sleepingAgentTooltip(lastExit: AgentSessionLastExit | null): string {
+  const base = "Sleeping. Resumes on the next message or when you open it.";
+  return lastExit === "process-exit"
+    ? `${base} Last run exited on its own.`
+    : base;
+}
+
+/**
+ * The session badge on a terminal-agent row: "Asleep" for a resumable agent
+ * whose session is not running, "Stopped" for one that is over as a record.
+ *
+ * Reads the facet itself rather than taking it as a prop, so the row button
+ * that hosts it neither grows a parameter nor re-renders when a sibling
+ * agent's session moves - and so the two states cannot be rendered from two
+ * different reads of the same store.
+ *
+ * `null` (unknown) and `running` render NOTHING, which is the same row every
+ * build before the facet drew. A peer-host row and a cloud replica are both
+ * `null`: only the binding host observes its own session transitions, so a
+ * badge here would be this client guessing about another machine.
+ *
+ * "Stopped" gets no tooltip, matching {@link ArchivedTitlePrefix}: it states a
+ * terminal fact with no follow-on action, where "Asleep" has to say what wakes
+ * it - and it is SUPPRESSED under a row that already reads Archived, because
+ * on that row the two are the same fact twice. `stopped` is written only by the
+ * archive mutation (a delete tombstones the row before the lifecycle could
+ * stamp it), so an archived row is the only one that normally carries it. The
+ * badge is kept for the unarchived case rather than dropped: a `stopped` row
+ * with no Archived prefix should not exist, and if one ever does it is better
+ * seen than swallowed.
+ *
+ * `isArchived` is the ROW's own prop - the same value that renders the prefix -
+ * not a second read of the store, so the prefix and the suppression cannot
+ * disagree by a render.
+ */
+function AgentSessionStateBadge(props: {
+  readonly nodeId: string;
+  readonly isArchived: boolean;
+}) {
+  const facet = useEpicAgentSessionFacet(props.nodeId);
+  if (facet.sessionState === "stopped" && !props.isArchived) {
+    return (
+      <span
+        className="shrink-0 text-ui-xs text-muted-foreground"
+        data-testid={`chat-row-session-state-${props.nodeId}`}
+        data-session-state="stopped"
+      >
+        Stopped
+      </span>
+    );
+  }
+  if (facet.sessionState !== "sleeping") return null;
+  return (
+    <TooltipWrapper
+      label={sleepingAgentTooltip(facet.lastExit)}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span
+        className="shrink-0 text-ui-xs text-muted-foreground"
+        data-testid={`chat-row-session-state-${props.nodeId}`}
+        data-session-state="sleeping"
+      >
+        Asleep
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
  * The row's own class list, lifted out of {@link ChatRowButton} so its five
  * state modifiers stop counting against that component's complexity ceiling.
  * Pure and unchanged - same operands, same order.
@@ -3008,6 +3225,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
   const roleClaims = useEpicAgentRoleClaims(nodeId);
+  // Read HERE as well as inside the badge, because the row button's explicit
+  // `aria-label` replaces its subtree - a state only the badge knows would be
+  // visible and unspoken. The same store read, so the two cannot disagree.
+  const sessionFacet = useEpicAgentSessionFacet(nodeId);
   const ownerHostId = useEpicNodeHostId(nodeId);
   // Session host as the fallback, for the same reason `ChatNode` opens with
   // it: the drag payload names the host the dropped tile binds to.
@@ -3097,8 +3318,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
     },
     [onToggle],
   );
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
   );
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
@@ -3157,6 +3378,15 @@ function ChatRowButton(props: ChatRowButtonProps) {
               ownerKind={resourceOwnerKind}
               claims={roleClaims}
             />
+            {/*
+             * The session state survives selection mode, unlike the owner
+             * metadata below. Bulk-selecting is exactly where a reader decides
+             * what to act on, and "this one is asleep, not stopped" is the
+             * distinction that changes the decision - dropping it here would
+             * hide the fact this change exists to surface, at the one moment
+             * it is being used.
+             */}
+            <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
           </span>
         </span>
       </label>
@@ -3194,6 +3424,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         isArchived,
         sharedWithTask: showSharedIndicator,
         offlineLock,
+        sessionState: sessionFacet.sessionState,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
       data-sidebar-node-id={nodeId}
@@ -3224,6 +3455,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         <span className="flex min-w-0 items-center gap-1.5">
           {isArchived ? <ArchivedTitlePrefix /> : null}
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+          <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
           {showSharedIndicator ? (
             <TooltipWrapper
               label={SHARED_WITH_TASK_TOOLTIP}
@@ -3260,12 +3492,14 @@ function ChatRowButton(props: ChatRowButtonProps) {
             ownerKind={resourceOwnerKind}
             claims={roleClaims}
           />
-          {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
+          {resourceOwnerKind === null ||
+          navigatorResourceMetrics.length === 0 ? null : (
             <OwnerResourceChip
               epicId={epicId}
               kind={resourceOwnerKind}
               ownerId={nodeId}
               hostId={null}
+              metrics={navigatorResourceMetrics}
               className={undefined}
             />
           )}
@@ -3453,7 +3687,7 @@ function NestedChatStatusGlyph(props: {
   if (props.kind === "running") {
     return (
       <AgentSpinningDots
-        className="text-current"
+        className={undefined}
         testId={undefined}
         variant={undefined}
       />
@@ -3827,17 +4061,25 @@ function useChatRowSharing(
   const sharingInFlight = useChatSharingInFlight(epicId);
   const cloudChat = sharing.ownCloudChatByLocalId.get(nodeId);
   const visibility = cloudChat?.visibility ?? null;
+  // A visibility flip is a CLOUD write. The cached cloud-chat rows survive a
+  // demotion to `unverified` (TanStack retains the last success), so the
+  // row's own verdict has to gate the control - the retained data is not
+  // permission to spend. The mutation re-reads the verdict at dispatch too.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const mayMutate = canMutate && cloudAuthorized;
   return {
     entry: decideChatSharingMenuEntry({
       supported: sharing.visibilitySupported,
       isChat: artifactType === "chat",
-      canMutate,
+      canMutate: mayMutate,
       visibility,
       pending: sharingInFlight,
     }),
     onToggle: () => {
       if (
-        !canMutate ||
+        !mayMutate ||
         !sharing.visibilitySupported ||
         sharingInFlight ||
         cloudChat === undefined
@@ -4038,7 +4280,7 @@ function ChatRowArchiveButton(props: {
       >
         {props.pending ? (
           <AgentSpinningDots
-            className="text-current"
+            className={undefined}
             testId={`epic-sidebar-archive-pending-${props.nodeId}`}
             variant={undefined}
           />

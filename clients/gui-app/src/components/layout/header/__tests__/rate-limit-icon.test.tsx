@@ -17,6 +17,7 @@ import {
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
 
 const DYNAMIC_ACTION_ROUTER: KeybindingRouter = {
   getPathname: () => "/",
@@ -94,7 +95,7 @@ vi.mock("@/lib/host", () => ({
 }));
 vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
   useRateLimitProfileSelection: () => ({
-    activeChatSettings: null,
+    shownProfiles: {},
     lastProfileByHarness: {},
   }),
 }));
@@ -245,9 +246,9 @@ describe("<RateLimitIconButton />", () => {
     const button = screen.getByTestId("rate-limit-header-button");
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");
     expect(fills).toHaveLength(2);
-    expect(fills[0].className).toContain("blue-500");
+    expect(fills[0].className).toContain("bg-info");
     expect(fills[0].style.width).toBe("70%");
-    expect(fills[1].className).toContain("blue-500");
+    expect(fills[1].className).toContain("bg-info");
     expect(fills[1].style.width).toBe("40%");
   });
 
@@ -274,9 +275,9 @@ describe("<RateLimitIconButton />", () => {
     const button = screen.getByTestId("rate-limit-header-button");
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");
     expect(fills).toHaveLength(2);
-    expect(fills[0].className).toContain("amber-500");
+    expect(fills[0].className).toContain("bg-warning");
     expect(fills[0].style.width).toBe("92%");
-    expect(fills[1].className).toContain("blue-500");
+    expect(fills[1].className).toContain("bg-info");
     expect(fills[1].style.width).toBe("20%");
   });
 
@@ -301,8 +302,8 @@ describe("<RateLimitIconButton />", () => {
     const fills = within(
       screen.getByTestId("rate-limit-header-button"),
     ).getAllByTestId("rate-limit-bar-fill");
-    expect(fills[0].className).toContain("amber-500");
-    expect(fills[1].className).toContain("red-500");
+    expect(fills[0].className).toContain("bg-warning");
+    expect(fills[1].className).toContain("bg-destructive");
   });
 
   it("marks the gauge without dimming the whole button when data is degraded", () => {
@@ -325,9 +326,13 @@ describe("<RateLimitIconButton />", () => {
     renderIcon();
     const button = screen.getByTestId("rate-limit-header-button");
     expect(hasClass(button, "opacity-[0.55]")).toBe(false);
-    expect(
-      hasClass(screen.getByTestId("rate-limit-gauge-icon"), "text-amber-600"),
-    ).toBe(true);
+    // Checked class by class against the shared token rather than a
+    // hard-coded string, so this stays true if the degraded gauge's shade
+    // ever moves without the two drifting apart unnoticed.
+    const gaugeIcon = screen.getByTestId("rate-limit-gauge-icon");
+    for (const runningLowClass of RUNNING_LOW_TEXT_CLASS_NAME.split(" ")) {
+      expect(hasClass(gaugeIcon, runningLowClass)).toBe(true);
+    }
     // Both bars keep their own severity fill while the gauge carries the
     // degraded-state treatment.
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");

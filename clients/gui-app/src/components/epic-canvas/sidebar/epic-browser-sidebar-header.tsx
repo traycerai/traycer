@@ -39,7 +39,6 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { cn } from "@/lib/utils";
 import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
@@ -56,14 +55,14 @@ import {
 } from "@/stores/epics/panel-header-menu-store";
 
 export const BROWSERS_PANEL_ID = "browsers";
-const FOLLOW_ACTIVE_HOST_VALUE = "browser-follow-active-host";
+const FOLLOW_TASK_HOST_VALUE = "browser-follow-task-host";
 
 export function BrowsersPanelActions(props: LeftPanelSlotProps) {
   const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
   return (
     <BrowserSessionsHostBoundary
       hostId={hostPin.resolvedHostId}
-      epicId={props.epicId}
+      scope={{ kind: "epic", epicId: props.epicId }}
     >
       <BrowsersPanelActionsLive {...props} />
     </BrowserSessionsHostBoundary>
@@ -108,17 +107,16 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
     ? "Filter browsers by host, 1 filter active"
     : "Filter browsers by host";
   const hostSummary =
-    resolvedHost?.label ?? (hostPin.isPinned ? "Selected host" : "Active host");
+    resolvedHost?.label ?? (hostPin.isPinned ? "Selected host" : "Task host");
   return (
     <>
       {searchOpen ? null : (
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label="Search browsers"
           data-testid="epic-browsers-panel-search"
-          className="text-muted-foreground hover:text-foreground"
           onClick={handleSearch}
         >
           <Search className="size-4" aria-hidden />
@@ -126,11 +124,10 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
       )}
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon-sm"
         aria-label="Add browser"
         data-testid="epic-browsers-panel-add"
-        className="text-muted-foreground hover:text-foreground"
         disabled={isAdding}
         onClick={handleAdd}
       >
@@ -146,20 +143,17 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           <DropdownMenuTrigger asChild>
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label={filterLabel}
               data-testid="epic-browsers-panel-filter"
-              className={cn(
-                "relative text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground",
-                hostPin.isPinned && "bg-accent text-accent-foreground",
-              )}
+              className="relative"
             >
               <ListFilter className="size-4" aria-hidden />
               {hostPin.isPinned ? (
                 <span
                   aria-hidden
-                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[9px] leading-none font-semibold text-background ring-1 ring-background"
+                  className="pointer-events-none absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-foreground text-micro leading-none font-semibold text-background ring-1 ring-background"
                 >
                   1
                 </span>
@@ -175,13 +169,11 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
           className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-64 overflow-y-auto"
           data-testid="epic-browsers-panel-filter-menu"
         >
-          <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
-            Filters
-          </DropdownMenuLabel>
+          <DropdownMenuLabel className="mt-1">Filters</DropdownMenuLabel>
           <DropdownMenuSub open={hostMenuOpen} onOpenChange={setHostMenuOpen}>
             <DropdownMenuSubTrigger
               aria-label={`Host, ${hostSummary}`}
-              className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
+              className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center [&>svg:last-child]:ml-0 [&>svg:last-child]:justify-self-end"
               onClick={() => setHostMenuOpen(true)}
             >
               <span className="min-w-0 truncate">Host</span>
@@ -206,7 +198,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
 }
 
 /**
- * The radio list behind the panel's host filter: follow the active host, or pin
+ * The radio list behind the panel's host filter: follow the task default, or pin
  * a specific one. Exported because the mobile switcher's Browsers category
  * mounts the same choices in its own menu shell rather than restating them.
  */
@@ -215,23 +207,23 @@ export function BrowserHostFilterChoices(props: {
 }) {
   const options = useHostOptions();
   const hostPin = useSurfaceHostPin(props.surfaceKey);
-  const value = hostPin.selection ?? FOLLOW_ACTIVE_HOST_VALUE;
-  const activeHostName =
-    options.hosts.find((host) => host.hostId === options.activeHostId)?.name ??
-    "Active host";
+  const value = hostPin.selection ?? FOLLOW_TASK_HOST_VALUE;
+  const followingHostName =
+    options.hosts.find((host) => host.hostId === hostPin.followingHostId)
+      ?.name ?? "Task host";
   return (
     <>
       <DropdownMenuLabel>Show browsers from</DropdownMenuLabel>
       <DropdownMenuRadioGroup value={value}>
         <DropdownMenuRadioItem
-          value={FOLLOW_ACTIVE_HOST_VALUE}
+          value={FOLLOW_TASK_HOST_VALUE}
           onSelect={(event) => {
             event.preventDefault();
             hostPin.setSelection(null);
           }}
         >
-          <span className="min-w-0 flex-1 truncate">Follow active host</span>
-          <DropdownMenuShortcut>{activeHostName}</DropdownMenuShortcut>
+          <span className="min-w-0 flex-1 truncate">Follow task host</span>
+          <DropdownMenuShortcut>{followingHostName}</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
         {options.hosts.length > 0 ? <DropdownMenuSeparator /> : null}
         {options.hosts.map((host) => (
@@ -264,9 +256,10 @@ export function BrowserHostFilterChoices(props: {
       {options.isLoading ? (
         <DropdownMenuItem disabled>
           <AgentSpinningDots
-            className="text-muted-foreground"
+            className={undefined}
             testId={undefined}
             variant={undefined}
+            tone="muted"
           />
           {options.hosts.length === 0
             ? "Loading hosts…"

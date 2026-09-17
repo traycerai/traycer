@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import {
   initialChatHandoffKey,
   migrateInitialChatHandoffState,
@@ -157,6 +158,42 @@ describe("v1 -> v2 persisted-key migration", () => {
     });
   });
 
+  it("keeps a persisted beside placement for the side-chat category intact", () => {
+    const migrated = migrateInitialChatHandoffState({
+      handoffs: {
+        [V1_KEY]: {
+          ...V1_RECORD,
+          placement: {
+            kind: "beside",
+            paneId: "pane-1",
+            category: "side-chat",
+          },
+        },
+      },
+    });
+
+    expect(migrated.handoffs[initialChatHandoffKey(SCOPE)].placement).toEqual({
+      kind: "beside",
+      paneId: "pane-1",
+      category: "side-chat",
+    });
+  });
+
+  it("drops a beside placement carrying a foreign category", () => {
+    const migrated = migrateInitialChatHandoffState({
+      handoffs: {
+        [V1_KEY]: {
+          ...V1_RECORD,
+          placement: { kind: "beside", paneId: "pane-1", category: "browser" },
+        },
+      },
+    });
+
+    expect(
+      migrated.handoffs[initialChatHandoffKey(SCOPE)].placement,
+    ).toBeNull();
+  });
+
   it("drops a record whose status is outside the union rather than stranding it", () => {
     const migrated = migrateInitialChatHandoffState({
       handoffs: {
@@ -269,5 +306,48 @@ describe("initial-chat-handoff-store markInitialTurnStarted", () => {
         .markInitialTurnStarted(SCOPE, CHAT_ID),
     ).toBe(false);
     expect(statusOf()).toBe("failed");
+  });
+});
+
+describe("a registered handoff's content is a GC root for its images", () => {
+  beforeEach(() => {
+    useInitialChatHandoffStore.getState().resetForTests();
+  });
+
+  const IMAGE_HASH = "a".repeat(64);
+  const CONTENT_WITH_IMAGE: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "imageAttachment",
+        attrs: {
+          id: "img-1",
+          fileName: "screenshot.png",
+          mimeType: "image/png",
+          size: 128,
+          hash: IMAGE_HASH,
+        },
+      },
+    ],
+  };
+
+  it("keeps the initial prompt's image hash live until consumed", () => {
+    useInitialChatHandoffStore.getState().register({
+      ...SCOPE,
+      chatId: CHAT_ID,
+      content: CONTENT_WITH_IMAGE,
+      settings: SETTINGS,
+      worktreeIntent: null,
+      placement: null,
+      messageId: "msg-1",
+      clientActionId: "cai-1",
+      createdAt: 1,
+    });
+
+    expect(landingLiveImageRootHashes().has(IMAGE_HASH)).toBe(true);
+
+    useInitialChatHandoffStore.getState().consume(SCOPE);
+
+    expect(landingLiveImageRootHashes().has(IMAGE_HASH)).toBe(false);
   });
 });

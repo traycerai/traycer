@@ -153,6 +153,10 @@ vi.mock("../../app/cert-trust", () => ({
 
 vi.mock("../../browser-view/browser-view-manager", () => ({
   BrowserViewManager: class {
+    // The sessions-open handler arms the window's renderer-reset listener
+    // through this collaborator, so a stream can never outlive its renderer.
+    readonly windows = { ensureResetListener: vi.fn() };
+
     constructor(options: BrowserViewManagerFactoryOptions) {
       captured.managerOptions = options;
     }
@@ -321,7 +325,7 @@ function flushMicrotasks(): Promise<void> {
 }
 
 const STREAM_KEY = {
-  epicId: "epic-1",
+  scope: { kind: "epic", epicId: "epic-1" },
   hostId: "host-1",
   identityKey: "identity-1",
 };

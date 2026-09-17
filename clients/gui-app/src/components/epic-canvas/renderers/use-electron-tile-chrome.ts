@@ -1,4 +1,5 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
+import { toast } from "sonner";
 import type {
   TileChromeCapabilities,
   TileController,
@@ -8,13 +9,17 @@ import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-tab-dis
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
+import { formatByteSize } from "@/lib/format-byte-size";
+import {
+  progressSuccessToast,
+  progressToast,
+} from "@/lib/toast/progress-toast";
 import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
   BrowserViewElectronTabControlAction,
   BrowserViewTileKey,
-  BrowserViewViewportPresetId,
   BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
 
@@ -32,20 +37,15 @@ interface UseElectronTabChromeArgs {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
-  readonly persistViewportPreset: (preset: BrowserViewViewportPresetId) => void;
-  readonly initialViewportPreset: BrowserViewViewportPresetId;
   readonly onAttemptedUrl: (url: string) => void;
 }
 
 interface ElectronTabChrome {
   readonly controller: TileController;
   readonly navigateToUrl: (url: string) => void;
-  readonly downloads: readonly BrowserViewDownloadChange[];
   readonly certificateError: BrowserViewCertificateErrorChange | null;
   readonly certificateProceeding: boolean;
-  readonly cancelDownload: (downloadId: string) => void;
   readonly proceedCertificate: () => void;
-  readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
 /**
@@ -68,15 +68,8 @@ export function useElectronTabChrome(
     canGoBack,
     canGoForward,
     zoomPercent,
-    persistViewportPreset,
-    initialViewportPreset,
     onAttemptedUrl,
   } = args;
-  const [viewportPreset, setViewportPreset] =
-    useState<BrowserViewViewportPresetId>(initialViewportPreset);
-  const [downloads, setDownloads] = useState<
-    readonly BrowserViewDownloadChange[]
-  >([]);
   const [certificateError, setCertificateError] =
     useState<BrowserViewCertificateErrorChange | null>(null);
   const [certificateProceeding, setCertificateProceeding] = useState(false);
@@ -87,12 +80,61 @@ export function useElectronTabChrome(
 
   useEffect(() => {
     if (surfaceServices === null) return;
+    // Keep only unfinished downloads: false means the user closed the toast.
+    const progressToasts = new Map<string, boolean>();
     const subscription = surfaceServices.onDownloadChange((change) => {
       if (!isSameBrowserViewTile(change, tileKey)) return;
-      setDownloads((current) => upsertDownload(current, change));
+      const id = `browser-download:${change.downloadId}`;
+      const dismissed = progressToasts.get(id) === false;
+      // An "updated" interruption is still active; only the final event
+      // clears canCancel. Do not expire an unfinished transfer.
+      if (!change.canCancel) {
+        progressToasts.delete(id);
+        if (dismissed) return;
+        const options = {
+          id,
+          description: downloadLabel(change),
+          duration: 4000,
+          icon: undefined,
+          action: null,
+          onDismiss: undefined,
+        };
+        if (change.state === "completed") {
+          progressSuccessToast(change.filename, options);
+        } else if (change.state === "interrupted") {
+          toast.warning(change.filename, options);
+        } else {
+          toast.message(change.filename, options);
+        }
+        return;
+      }
+      if (dismissed) return;
+      progressToasts.set(id, true);
+      progressToast(change.filename, {
+        id,
+        description: downloadLabel(change),
+        duration: Infinity,
+        action: {
+          label: "Cancel",
+          onClick: (event) => {
+            event.preventDefault();
+            void surfaceServices
+              .cancelDownload({ downloadId: change.downloadId })
+              .catch(ignoreError);
+          },
+        },
+        onDismiss: () => {
+          if (progressToasts.has(id)) progressToasts.set(id, false);
+        },
+      });
     });
     return () => {
       subscription.dispose();
+      // The app toaster outlives this surface; its persistent progress must not.
+      for (const [id, visible] of progressToasts) {
+        if (visible) toast.dismiss(id);
+      }
+      progressToasts.clear();
     };
   }, [surfaceServices, tileKey]);
 
@@ -144,16 +186,6 @@ export function useElectronTabChrome(
     void control({ kind: "goForward" }).catch(ignoreError);
   };
 
-  const applyViewportPreset = (preset: BrowserViewViewportPresetId): void => {
-    setViewportPreset(preset);
-    persistViewportPreset(preset);
-  };
-
-  const cancelDownload = (downloadId: string): void => {
-    if (surfaceServices === null) return;
-    void surfaceServices.cancelDownload({ downloadId }).catch(ignoreError);
-  };
-
   const proceedCertificate = (): void => {
     if (certificateError === null) return;
     if (surfaceServices === null) return;
@@ -174,6 +206,7 @@ export function useElectronTabChrome(
   };
 
   const controller: TileController = {
+    viewport: null,
     capabilities,
     profile,
     url: liveUrl,
@@ -184,7 +217,6 @@ export function useElectronTabChrome(
     canGoBack,
     canGoForward,
     zoomPercent,
-    viewportPreset,
     disabled: false,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
@@ -203,7 +235,6 @@ export function useElectronTabChrome(
     onResetZoom: () => {
       void control({ kind: "resetZoom" }).catch(ignoreError);
     },
-    onViewportPresetChange: applyViewportPreset,
     onOpenDevTools: () => {
       void control({ kind: "openDevTools" }).catch(ignoreError);
     },
@@ -220,26 +251,23 @@ export function useElectronTabChrome(
   return {
     controller,
     navigateToUrl,
-    downloads,
     certificateError,
     certificateProceeding,
-    cancelDownload,
     proceedCertificate,
-    viewportPreset,
   };
 }
 
-function upsertDownload(
-  current: readonly BrowserViewDownloadChange[],
-  change: BrowserViewDownloadChange,
-): readonly BrowserViewDownloadChange[] {
-  const existingIndex = current.findIndex(
-    (download) => download.downloadId === change.downloadId,
-  );
-  if (existingIndex < 0) {
-    return [...current, change].slice(-5);
-  }
-  return current
-    .map((download, index) => (index === existingIndex ? change : download))
-    .slice(-5);
+function downloadLabel(download: BrowserViewDownloadChange): string {
+  if (download.state === "prompting") return "Waiting for save location";
+  if (download.state === "completed") return "Download complete";
+  if (download.state === "cancelled") return "Download cancelled";
+  if (download.state === "interrupted") return "Download interrupted";
+  const received = formatByteSize(download.receivedBytes);
+  const sizeLabel =
+    download.totalBytes > 0
+      ? `${received} of ${formatByteSize(download.totalBytes)}`
+      : received;
+  return download.dangerType === null
+    ? sizeLabel
+    : `${sizeLabel} · ${download.dangerType} confirmed`;
 }

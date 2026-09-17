@@ -1,12 +1,8 @@
-interface SupportedHighlightsAPI {
-  set(name: string, highlight: Highlight): void;
-  delete(name: string): void;
-}
-
-interface HighlightNames {
-  readonly match: string;
-  readonly active: string;
-}
+import { findTextMatches } from "@/lib/find-engine/find-text";
+import {
+  getHighlights,
+  RangeHighlighter,
+} from "@/lib/find-engine/range-highlighter";
 
 const SKIPPED_HIGHLIGHT_ANCESTOR_SELECTOR = [
   "[data-find-skip]",
@@ -44,17 +40,35 @@ export function queryMountedChatFindUnit(
   return null;
 }
 
-export class ChatFindHighlighter {
-  private readonly names: HighlightNames;
-  private styleElement: HTMLStyleElement | null = null;
-
-  constructor(tileInstanceId: string) {
-    const suffix = stableCssIdentSuffix(tileInstanceId);
-    this.names = {
-      match: `traycer-chat-find-match-${suffix}`,
-      active: `traycer-chat-find-active-${suffix}`,
-    };
+/**
+ * Resolve a mounted transcript row by comparing `dataset.messageId`, not an
+ * attribute selector: persisted ids can carry quotes/brackets that would
+ * break interpolation, and jsdom does not implement `CSS.escape`.
+ */
+export function queryMountedChatMessageRoot(
+  scroller: ParentNode,
+  messageId: string,
+): HTMLElement | null {
+  for (const row of scroller.querySelectorAll<HTMLElement>(
+    "[data-message-id]",
+  )) {
+    if (row.dataset.messageId === messageId) return row;
   }
+  return null;
+}
+
+export function queryMountedChatBlock(
+  root: ParentNode,
+  blockId: string,
+): HTMLElement | null {
+  for (const element of root.querySelectorAll<HTMLElement>("[data-block-id]")) {
+    if (element.dataset.blockId === blockId) return element;
+  }
+  return null;
+}
+
+export class ChatFindHighlighter {
+  private readonly highlighter = new RangeHighlighter();
 
   paint(input: {
     readonly root: HTMLElement;
@@ -63,8 +77,7 @@ export class ChatFindHighlighter {
     readonly activeMatchIndex: number;
     readonly scrollActiveIntoView: boolean;
   }): boolean {
-    const highlights = getHighlights();
-    if (highlights === null || typeof Highlight === "undefined") return false;
+    if (getHighlights() === null) return false;
     const ranges = collectTextRanges(input);
     if (ranges.length === 0) {
       this.clear();
@@ -75,16 +88,7 @@ export class ChatFindHighlighter {
       this.clear();
       return false;
     }
-    this.ensureStyleElement();
-    const others = ranges.filter(
-      (_range, index) => index !== input.activeMatchIndex,
-    );
-    if (others.length > 0) {
-      highlights.set(this.names.match, new Highlight(...others));
-    } else {
-      highlights.delete(this.names.match);
-    }
-    highlights.set(this.names.active, new Highlight(active));
+    this.highlighter.paint(input.root, ranges, input.activeMatchIndex);
     // The active match may sit below the fold of a card's own height-capped
     // scroll container (subagent/A2A bodies use `max-h` + `overflow-auto`).
     // Scrolling the match's element walks every scroll ancestor, so the inner
@@ -101,41 +105,12 @@ export class ChatFindHighlighter {
   }
 
   clear(): void {
-    const highlights = getHighlights();
-    if (highlights === null) return;
-    highlights.delete(this.names.match);
-    highlights.delete(this.names.active);
+    this.highlighter.clear();
   }
 
   dispose(): void {
-    this.clear();
-    this.styleElement?.remove();
-    this.styleElement = null;
+    this.highlighter.dispose();
   }
-
-  private ensureStyleElement(): void {
-    if (this.styleElement !== null) return;
-    const style = document.createElement("style");
-    style.dataset.traycerChatFindHighlight = this.names.match;
-    style.textContent = [
-      `::highlight(${this.names.match}) {`,
-      "background-color: color-mix(in srgb, var(--primary) 35%, transparent);",
-      "color: inherit;",
-      "}",
-      `::highlight(${this.names.active}) {`,
-      "background-color: color-mix(in srgb, var(--primary) 75%, transparent);",
-      "color: var(--primary-foreground);",
-      "}",
-    ].join("\n");
-    document.head.append(style);
-    this.styleElement = style;
-  }
-}
-
-function getHighlights(): SupportedHighlightsAPI | null {
-  if (typeof CSS === "undefined") return null;
-  const registry = (CSS as { highlights?: SupportedHighlightsAPI }).highlights;
-  return registry ?? null;
 }
 
 function collectTextRanges(input: {
@@ -144,7 +119,6 @@ function collectTextRanges(input: {
   readonly matchCase: boolean;
   readonly activeMatchIndex: number;
 }): ReadonlyArray<Range> {
-  const needle = input.matchCase ? input.query : input.query.toLowerCase();
   const ranges: Range[] = [];
   const walker = document.createTreeWalker(input.root, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) => {
@@ -166,26 +140,17 @@ function collectTextRanges(input: {
 
   let node = walker.nextNode() as Text | null;
   while (node !== null) {
-    const haystack = input.matchCase ? node.data : node.data.toLowerCase();
-    const step = Math.max(input.query.length, 1);
-    let index = haystack.indexOf(needle);
-    while (index !== -1) {
+    for (const match of findTextMatches(
+      node.data,
+      input.query,
+      input.matchCase,
+    )) {
       const range = new Range();
-      range.setStart(node, index);
-      range.setEnd(node, index + input.query.length);
+      range.setStart(node, match.offset);
+      range.setEnd(node, match.offset + match.length);
       ranges.push(range);
-      index = haystack.indexOf(needle, index + step);
     }
     node = walker.nextNode() as Text | null;
   }
   return ranges;
-}
-
-function stableCssIdentSuffix(value: string): string {
-  let hash = 2_166_136_261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return (hash >>> 0).toString(36);
 }

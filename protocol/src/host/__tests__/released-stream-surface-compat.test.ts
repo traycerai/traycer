@@ -50,8 +50,9 @@ describe("released stream method-name set is not dropped", () => {
  * feature-detects browser support by method presence in the host's openAck
  * manifest, so a parallel `browser.*` stream name would be picked up as a new
  * capability rather than a versioned evolution of an existing one. Browser work
- * must evolve `browser.sessions` / `browser.screencast` additively inside
- * major 1 instead.
+ * must evolve `browser.sessions` / `browser.screencast` under these two names
+ * instead - additive minors, or a separately served major such as the `@2.0`
+ * line beside the frozen v1.3.0 `@1.0` - never a sibling name.
  */
 describe("browser stream namespace is frozen", () => {
   it("exposes exactly browser.sessions and browser.screencast", () => {

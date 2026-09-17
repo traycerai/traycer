@@ -1,15 +1,25 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { PendingHostDelete } from "@/lib/drafts/draft-mirror-session";
+import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  legacyComposerDraftId,
+  migratedLegacyComposerDraftId,
+  mintDraftId,
+} from "@/lib/drafts/draft-ids";
+import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
 import {
   collectDraftAnnotationImageHashes,
   mergeBrowserAnnotationRecords,
   parseBrowserAnnotationRecords,
   type BrowserAnnotationRecord,
 } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 export interface DraftSelection {
@@ -38,7 +48,7 @@ export interface DraftState {
    * Bumped on every real content change - typed/pasted edits via
    * `setSnapshot` AND external replacements via `replaceDraft` (queue-edit
    * restore, failed-send handoff, `clearDraft`). The prompt-stash source
-   * adapter captures this alongside the taskId as a compare-and-swap token:
+   * adapter captures this alongside the chatId as a compare-and-swap token:
    * a stash only clears this draft when the revision it captured still
    * matches, so an edit made while the stash was durably saving is kept.
    *
@@ -49,39 +59,81 @@ export interface DraftState {
    * holding it.
    */
   readonly revision: number;
+  /** Client-minted host row id; null until the first local edit. */
+  readonly draftId: string | null;
+  /** Last host revision we applied or upserted; 0 if never synced. */
+  readonly hostRevision: number;
+  /**
+   * Required by the host whenever `targetChatId` is set. Bound from the
+   * composer (the chat's epic); upserts are skipped until this is known.
+   */
+  readonly targetEpicId: string | null;
+  readonly lastTouchedAt: number;
+  readonly generation: number;
+  readonly syncedGeneration: number;
+  /** Host that currently owns the row; null until a host document applies. */
+  readonly ownerHostId: string | null;
+  readonly origin: "own" | "replica" | null;
+  /**
+   * Ancestor draft id this row was re-keyed from (`detachDraftIdentity`),
+   * carried until the fresh id's first host write is acknowledged. Sent
+   * once as `DraftWrite.supersedes`; the host retracts the ancestor's cloud
+   * row. Cleared on that ACK so no later write repeats it.
+   */
+  readonly supersedes: string | null;
+  readonly publication: DraftPublication | null;
+}
+
+export interface PendingSubmittedDraftDelete {
+  readonly hostId: string;
+  /**
+   * The pending request is a `drafts.retract` of a cloud row `hostId` does
+   * not own (a foreign chat row submitted unedited, or the ancestor of a
+   * fork submitted before its first ack), not a `drafts.delete`. Entries
+   * persisted before the field existed are deletes.
+   */
+  readonly retract: boolean;
 }
 
 interface ComposerDraftStore {
   readonly drafts: Partial<Record<string, DraftState>>;
+  readonly pendingSubmittedDraftDeletes: Partial<
+    Record<string, PendingSubmittedDraftDelete>
+  >;
   /**
    * Records a real document mutation - callers must only invoke this from the
    * editor boundary's document-change signal (never a selection-only echo),
    * so every call unconditionally bumps `revision` without comparing content.
    */
   readonly setSnapshot: (
-    taskId: string,
+    chatId: string,
     content: JsonContent,
     selection: DraftSelection | null,
   ) => void;
   /**
    * Persists a caret move alone. Never touches `revision` - a selection-only
    * change is not a content edit - and never compares/serializes `content`.
+   * `tabHostId` is the host the composer's tab is bound to: on a row that
+   * host does not own (`composerDraftRowIsForeign`) the caret stays local,
+   * since a caret move is not an edit and must neither fork the row nor
+   * queue an upsert through the old identity.
    */
   readonly setSelection: (
-    taskId: string,
+    chatId: string,
     selection: DraftSelection | null,
+    tabHostId: string,
   ) => void;
   readonly replaceDraft: (
-    taskId: string,
+    chatId: string,
     content: JsonContent,
     selection: DraftSelection | null,
   ) => void;
   readonly addBrowserAnnotation: (
-    taskId: string,
+    chatId: string,
     record: BrowserAnnotationRecord,
   ) => void;
   readonly removeBrowserAnnotation: (
-    taskId: string,
+    chatId: string,
     annotationId: string,
   ) => void;
   /**
@@ -90,17 +142,67 @@ interface ComposerDraftStore {
    * was in flight).
    */
   readonly restoreBrowserAnnotations: (
-    taskId: string,
+    chatId: string,
     records: ReadonlyArray<BrowserAnnotationRecord>,
   ) => void;
   /**
-   * Resets a task's draft in place (empty content + empty annotations + bumped
-   * resetEpoch/revision) instead of deleting the map entry. A delete can't
-   * reliably notify every mounted composer for this `taskId` (split panes,
-   * keep-alive tabs): a sibling's `resetEpoch` selector falls back to the same
-   * `?? 0` whether the entry never existed or was just removed.
+   * Resets a chat's draft to empty in place - empty annotations, then the
+   * same `replaceDraft` broadcast used by queue-edit restore / failed-send
+   * handoff - instead of deleting the map entry. A delete can't reliably
+   * notify every mounted composer for this `chatId` (split panes, keep-alive
+   * tabs): a sibling's `resetEpoch` selector falls back to the same `?? 0`
+   * whether the entry never existed or was just removed, so a delete after
+   * routine (non-bumping) keystrokes produces no observable change and the
+   * sibling's stale Tiptap document never clears. Bumping `resetEpoch` in
+   * place is the only way every mounted `useChatComposerDraft` for this
+   * `chatId` reliably observes the clear. The explicit empty-document caret
+   * applies the reset without invoking `setContent(..., null)`'s focus-at-end
+   * behavior in sibling composers. Going through `replaceDraft` is also what
+   * routes the clear to the host mirror.
    */
-  readonly clearDraft: (taskId: string) => void;
+  readonly clearDraft: (chatId: string) => void;
+  /**
+   * The fork rule for a chat draft another host owns (its row here is a
+   * replica): re-mint the draft id and drop ownership while KEEPING the
+   * content, with `supersedes` naming the old id, marked dirty and routed,
+   * so the next flush upserts it under the fresh id as this host's own row.
+   * Nothing is deleted from here: the host that takes the upsert retracts
+   * the ancestor's cloud row, and the ancestor's owner tombstones (or
+   * re-mints) its local row from there.
+   */
+  readonly detachDraftIdentity: (chatId: string) => void;
+  /**
+   * Retire the submitted draft's host identity. `clearDraft` empties the
+   * document but KEEPS `draftId`, so a keystroke landing while the submit
+   * finalizer is still flushing and deleting that row would be published
+   * under the very id about to be tombstoned - and the tombstone's
+   * `rememberSynced(id, 0, ...)` would then mark that content clean, leaving
+   * it local-only. Dropping the id here means the next edit mints a fresh
+   * one and a fresh host row. The row is left CLEAN because it is empty and
+   * its old id is on its way out; nothing is owed to the host.
+   *
+   * `hostId` names the host the pending delete is routed to; `null` records
+   * no pending delete (a row the tab host does not own is retracted through
+   * the cloud by the caller instead of deleted on a host). `supersedes` is
+   * cleared with the id: an unacknowledged fork's ancestor is the caller's
+   * to retract, never the next identity's.
+   */
+  readonly fenceAndDetachSubmittedDraft: (
+    chatId: string,
+    draftId: string,
+    hostId: string | null,
+  ) => void;
+  /**
+   * Record a pending `drafts.retract` of `draftId` through `hostId`, retried
+   * by that host's session until it answers (`completeSubmittedDraftDelete`
+   * clears it). An id already pending a request keeps its entry.
+   */
+  readonly recordPendingSubmittedDraftRetract: (
+    draftId: string,
+    hostId: string,
+  ) => void;
+  readonly completeSubmittedDraftDelete: (draftId: string) => void;
+  readonly bindTarget: (chatId: string, epicId: string) => void;
 }
 const EMPTY_COMPOSER_CONTENT: JsonContent = {
   type: "doc",
@@ -114,22 +216,48 @@ export const EMPTY_COMPOSER_DRAFT: DraftState = {
   browserAnnotations: [],
   resetEpoch: 0,
   revision: 0,
+  draftId: null,
+  hostRevision: 0,
+  targetEpicId: null,
+  lastTouchedAt: 0,
+  generation: 0,
+  syncedGeneration: 0,
+  ownerHostId: null,
+  origin: null,
+  supersedes: null,
+  publication: null,
 };
 
 function ensureDraft(
   drafts: Partial<Record<string, DraftState>>,
-  taskId: string,
+  chatId: string,
 ): DraftState {
-  return drafts[taskId] ?? EMPTY_COMPOSER_DRAFT;
+  return drafts[chatId] ?? EMPTY_COMPOSER_DRAFT;
+}
+
+/**
+ * A chat row the tab's host does not own: a replica, or an own row adopted
+ * on another host. The one predicate behind every chat-side decision that
+ * must not act under the row's current identity - the caret write, the
+ * fork rule on the first edit, and submit's retract-not-delete.
+ */
+export function composerDraftRowIsForeign(
+  row: DraftState,
+  tabHostId: string,
+): boolean {
+  return (
+    row.origin === "replica" ||
+    (row.ownerHostId !== null && row.ownerHostId !== tabHostId)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function hasDraftMap(
-  value: unknown,
-): value is { readonly drafts: Record<string, unknown> } {
+function hasDraftMap(value: unknown): value is Record<string, unknown> & {
+  readonly drafts: Record<string, unknown>;
+} {
   return isRecord(value) && isRecord(value.drafts);
 }
 
@@ -145,61 +273,57 @@ function isDraftSelection(value: unknown): value is DraftSelection {
 
 export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       drafts: {},
-      setSnapshot: (taskId, content, selection) => {
-        set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
-          return {
-            drafts: {
-              ...state.drafts,
-              [taskId]: {
-                ...current,
-                content,
-                selection,
-                revision: current.revision + 1,
-              },
-            },
-          };
+      pendingSubmittedDraftDeletes: {},
+      setSnapshot: (chatId, content, selection) => {
+        const draftId = touchLocalComposerDraft(chatId, {
+          content,
+          selection,
+          bumpRevision: true,
+          bumpResetEpoch: false,
         });
+        notifyDraftLocalEdit(draftId);
       },
-      setSelection: (taskId, selection) => {
-        set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
-          if (
-            current.selection?.from === selection?.from &&
-            current.selection?.to === selection?.to
-          ) {
-            return state;
-          }
-          return {
-            drafts: {
-              ...state.drafts,
-              [taskId]: { ...current, selection },
-            },
-          };
+      setSelection: (chatId, selection, tabHostId) => {
+        const current = ensureDraft(get().drafts, chatId);
+        if (
+          current.selection?.from === selection?.from &&
+          current.selection?.to === selection?.to
+        ) {
+          return;
+        }
+        // A caret move on a row the tab's host does not own stays local: it
+        // is not an edit, must not fork, and must not queue an upsert through
+        // the stale identity - the same predicate the fork rule reads, so an
+        // own row adopted on another host is not bumped dirty and collected
+        // under its old id before any edit forks it.
+        if (composerDraftRowIsForeign(current, tabHostId)) {
+          set((state) => ({
+            drafts: { ...state.drafts, [chatId]: { ...current, selection } },
+          }));
+          return;
+        }
+        const draftId = touchLocalComposerDraft(chatId, {
+          content: current.content,
+          selection,
+          bumpRevision: false,
+          bumpResetEpoch: false,
         });
+        notifyDraftLocalEdit(draftId);
       },
-      replaceDraft: (taskId, content, selection) => {
-        set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
-          return {
-            drafts: {
-              ...state.drafts,
-              [taskId]: {
-                ...current,
-                content,
-                selection,
-                resetEpoch: current.resetEpoch + 1,
-                revision: current.revision + 1,
-              },
-            },
-          };
+      replaceDraft: (chatId, content, selection) => {
+        const draftId = touchLocalComposerDraft(chatId, {
+          content,
+          selection,
+          bumpRevision: true,
+          bumpResetEpoch: true,
         });
+        notifyDraftLocalEdit(draftId);
       },
-      addBrowserAnnotation: (taskId, record) => {
+      addBrowserAnnotation: (chatId, record) => {
         set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
+          const current = ensureDraft(state.drafts, chatId);
           const next = mergeBrowserAnnotationRecords(
             current.browserAnnotations,
             [record],
@@ -208,7 +332,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           return {
             drafts: {
               ...state.drafts,
-              [taskId]: {
+              [chatId]: {
                 ...current,
                 browserAnnotations: next,
                 revision: current.revision + 1,
@@ -217,9 +341,9 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           };
         });
       },
-      removeBrowserAnnotation: (taskId, annotationId) => {
+      removeBrowserAnnotation: (chatId, annotationId) => {
         set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
+          const current = ensureDraft(state.drafts, chatId);
           const next = current.browserAnnotations.filter(
             (record) => record.annotationId !== annotationId,
           );
@@ -227,7 +351,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           return {
             drafts: {
               ...state.drafts,
-              [taskId]: {
+              [chatId]: {
                 ...current,
                 browserAnnotations: next,
                 revision: current.revision + 1,
@@ -236,9 +360,9 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           };
         });
       },
-      restoreBrowserAnnotations: (taskId, records) => {
+      restoreBrowserAnnotations: (chatId, records) => {
         set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
+          const current = ensureDraft(state.drafts, chatId);
           const next = mergeBrowserAnnotationRecords(
             current.browserAnnotations,
             records,
@@ -247,7 +371,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           return {
             drafts: {
               ...state.drafts,
-              [taskId]: {
+              [chatId]: {
                 ...current,
                 browserAnnotations: next,
                 revision: current.revision + 1,
@@ -256,24 +380,129 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           };
         });
       },
-      clearDraft: (taskId) => {
+      clearDraft: (chatId) => {
+        // Sidecar first, document second: `replaceDraft` is the broadcast
+        // (resetEpoch bump + host notify), and the sidecar wipe must already
+        // be in the state that broadcast is observed against.
         set((state) => {
-          const current = ensureDraft(state.drafts, taskId);
+          const current = ensureDraft(state.drafts, chatId);
+          if (current.browserAnnotations.length === 0) return state;
           return {
             drafts: {
               ...state.drafts,
-              [taskId]: {
+              [chatId]: { ...current, browserAnnotations: [] },
+            },
+          };
+        });
+        get().replaceDraft(
+          chatId,
+          EMPTY_COMPOSER_CONTENT,
+          EMPTY_COMPOSER_SELECTION,
+        );
+        scheduleLandingImageReconcile();
+      },
+      detachDraftIdentity: (chatId) => {
+        // The replacement id is minted here, not on the next edit: the dirty
+        // sweep skips a row with no id and the edit listener routes by id, so
+        // a detach that left `draftId` null would keep the content local
+        // until the user typed again.
+        const previousId = ensureDraft(get().drafts, chatId).draftId;
+        if (previousId === null) return;
+        const draftId = mintDraftId();
+        set((state) => {
+          const current = ensureDraft(state.drafts, chatId);
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: {
                 ...current,
-                content: EMPTY_COMPOSER_CONTENT,
-                selection: EMPTY_COMPOSER_SELECTION,
-                browserAnnotations: [],
-                resetEpoch: current.resetEpoch + 1,
-                revision: current.revision + 1,
+                draftId,
+                hostRevision: 0,
+                ownerHostId: null,
+                origin: null,
+                supersedes: previousId,
+                publication: null,
+                generation: current.generation + 1,
               },
             },
           };
         });
-        scheduleLandingImageReconcile();
+        notifyDraftLocalEdit(draftId);
+      },
+      fenceAndDetachSubmittedDraft: (chatId, draftId, hostId) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, chatId);
+          if (current.draftId !== draftId) return state;
+          return {
+            pendingSubmittedDraftDeletes:
+              hostId === null
+                ? state.pendingSubmittedDraftDeletes
+                : {
+                    ...state.pendingSubmittedDraftDeletes,
+                    [draftId]: { hostId, retract: false },
+                  },
+            drafts: {
+              ...state.drafts,
+              [chatId]: {
+                ...current,
+                draftId: null,
+                hostRevision: 0,
+                ownerHostId: null,
+                origin: null,
+                // The one-shot pointer belonged to the id being retired;
+                // the next minted id owes the ancestor nothing (the caller
+                // retracts it alongside this fence).
+                supersedes: null,
+                publication: null,
+                syncedGeneration: current.generation,
+              },
+            },
+          };
+        });
+      },
+      recordPendingSubmittedDraftRetract: (draftId, hostId) => {
+        set((state) => {
+          if (state.pendingSubmittedDraftDeletes[draftId] !== undefined) {
+            return state;
+          }
+          return {
+            pendingSubmittedDraftDeletes: {
+              ...state.pendingSubmittedDraftDeletes,
+              [draftId]: { hostId, retract: true },
+            },
+          };
+        });
+      },
+      completeSubmittedDraftDelete: (draftId) => {
+        set((state) => {
+          if (state.pendingSubmittedDraftDeletes[draftId] === undefined) {
+            return state;
+          }
+          const pendingSubmittedDraftDeletes = {
+            ...state.pendingSubmittedDraftDeletes,
+          };
+          delete pendingSubmittedDraftDeletes[draftId];
+          return { pendingSubmittedDraftDeletes };
+        });
+      },
+      bindTarget: (chatId, epicId) => {
+        const current = ensureDraft(get().drafts, chatId);
+        if (current.targetEpicId === epicId) return;
+        const notifyId = current.draftId;
+        const shouldNotify = current.generation > current.syncedGeneration;
+        set((state) => {
+          const existing = ensureDraft(state.drafts, chatId);
+          if (existing.targetEpicId === epicId) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: { ...existing, targetEpicId: epicId },
+            },
+          };
+        });
+        if (shouldNotify && notifyId !== null) {
+          notifyDraftLocalEdit(notifyId);
+        }
       },
     }),
     {
@@ -282,9 +511,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       // before an `onFinishHydration` subscriber can be registered. Normalize
       // at the merge boundary so legacy revisions are safe on initial import.
       merge: (persistedState, currentState) => {
-        if (!hasDraftMap(persistedState)) {
-          return currentState;
-        }
+        if (!hasDraftMap(persistedState)) return currentState;
         const drafts: Partial<Record<string, DraftState>> = {};
         for (const [taskId, value] of Object.entries(persistedState.drafts)) {
           if (!isRecord(value)) continue;
@@ -300,9 +527,55 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             ),
             resetEpoch: normalizedLegacyResetEpoch(value) + 1,
             revision: normalizedLegacyRevision(value),
+            // Deterministic, not minted: this merged state is not persisted
+            // back by the hydration itself, so a second window hydrating the
+            // same legacy draft must arrive at the same id or both would
+            // publish. Only an ABSENT field is legacy - an explicit null is
+            // `detachSubmittedDraft`'s "mint fresh on the next edit", and
+            // re-deriving the old id here would publish new content under a
+            // row being tombstoned. An explicit id in the retired prefixed
+            // form IS persisted (the next edit or ACK writes the whole row),
+            // so it is mapped forward here to the id the host re-keyed its
+            // row to; left as is, the row would reject that document as
+            // foreign and re-send the long id.
+            draftId:
+              "draftId" in value
+                ? migratedNullableId(normalizedDraftId(value))
+                : legacyComposerDraftId(taskId),
+            hostRevision: normalizedNonNegative(value.hostRevision),
+            targetEpicId: normalizedNullableId(value.targetEpicId),
+            lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
+            generation: 1,
+            syncedGeneration: 0,
+            ownerHostId: normalizedNullableId(value.ownerHostId),
+            origin: normalizedOrigin(value.origin),
+            supersedes: migratedNullableId(
+              normalizedNullableId(value.supersedes),
+            ),
+            publication: null,
           };
         }
-        return { ...currentState, drafts };
+        const pendingSubmittedDraftDeletes: Partial<
+          Record<string, PendingSubmittedDraftDelete>
+        > = {};
+        if (isRecord(persistedState.pendingSubmittedDraftDeletes)) {
+          for (const [draftId, value] of Object.entries(
+            persistedState.pendingSubmittedDraftDeletes,
+          )) {
+            if (!isRecord(value)) continue;
+            const hostId = normalizedNullableId(value.hostId);
+            if (draftId.length === 0 || hostId === null) continue;
+            // A fence keyed by the retired prefixed id guards the same row
+            // the host now holds under the derived id.
+            const fencedId = migratedLegacyComposerDraftId(draftId);
+            if (pendingSubmittedDraftDeletes[fencedId] !== undefined) continue;
+            pendingSubmittedDraftDeletes[fencedId] = {
+              hostId,
+              retract: value.retract === true,
+            };
+          }
+        }
+        return { ...currentState, drafts, pendingSubmittedDraftDeletes };
       },
     },
   ),
@@ -336,10 +609,402 @@ function normalizedLegacyRevision(rawDraft: unknown): number {
 }
 
 export function readComposerDraftSnapshot(
-  taskId: string | undefined,
+  chatId: string | undefined,
 ): DraftState {
-  if (taskId === undefined) return EMPTY_COMPOSER_DRAFT;
-  return ensureDraft(useComposerDraftStore.getState().drafts, taskId);
+  if (chatId === undefined) return EMPTY_COMPOSER_DRAFT;
+  return ensureDraft(useComposerDraftStore.getState().drafts, chatId);
+}
+
+function touchLocalComposerDraft(
+  chatId: string,
+  patch: {
+    readonly content: JsonContent;
+    readonly selection: DraftSelection | null;
+    readonly bumpRevision: boolean;
+    readonly bumpResetEpoch: boolean;
+  },
+): string {
+  let draftId = "";
+  useComposerDraftStore.setState((state) => {
+    const current = ensureDraft(state.drafts, chatId);
+    draftId = current.draftId ?? mintDraftId();
+    return {
+      drafts: {
+        ...state.drafts,
+        [chatId]: {
+          ...current,
+          content: patch.content,
+          selection: patch.selection,
+          draftId,
+          lastTouchedAt: Date.now(),
+          generation: current.generation + 1,
+          revision: patch.bumpRevision
+            ? current.revision + 1
+            : current.revision,
+          resetEpoch: patch.bumpResetEpoch
+            ? current.resetEpoch + 1
+            : current.resetEpoch,
+        },
+      },
+    };
+  });
+  return draftId;
+}
+
+export function composerDraftIsDirty(draftId: string): boolean {
+  const draft = findComposerDraftById(draftId);
+  if (draft === null) return false;
+  return draft.generation > draft.syncedGeneration;
+}
+
+export function composerSubmittedDraftDeleteIsPending(
+  draftId: string,
+): boolean {
+  return (
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId] !==
+    undefined
+  );
+}
+
+export function pendingSubmittedDraftDeleteHostId(
+  draftId: string,
+): string | null {
+  return (
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId]
+      ?.hostId ?? null
+  );
+}
+
+export function pendingSubmittedDraftDelete(
+  draftId: string,
+): PendingSubmittedDraftDelete | null {
+  return (
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId] ??
+    null
+  );
+}
+
+/** Every entry still pending a request through `hostId`, with its kind. */
+export function pendingSubmittedDraftDeletesForHost(
+  hostId: string,
+): readonly PendingHostDelete[] {
+  return Object.entries(
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes,
+  ).flatMap(([draftId, pending]) =>
+    pending?.hostId === hostId ? [{ draftId, retract: pending.retract }] : [],
+  );
+}
+
+export function composerDraftRememberSynced(
+  draftId: string,
+  hostRevision: number,
+  collectedGeneration: number,
+  ownerHostId: string | null,
+): void {
+  const found = findComposerChatIdByDraftId(draftId);
+  if (found === null) return;
+  useComposerDraftStore.setState((state) => {
+    const current = state.drafts[found];
+    if (current === undefined) return state;
+    const clearDirty = collectedGeneration >= current.generation;
+    // The lookup above matched on `draftId`, so this row is the same draft
+    // line the ACK names; clamping is safe within it and only within it. A
+    // different owner is a different numbering and replaces rather than
+    // clamps, exactly as landing does, and a null on either side is
+    // "not known to be different" - which clamps, the safe half.
+    const sameLine =
+      ownerHostId === null ||
+      current.ownerHostId === null ||
+      current.ownerHostId === ownerHostId;
+    return {
+      drafts: {
+        ...state.drafts,
+        [found]: {
+          ...current,
+          // Never backward within a line. This field IS the frontier
+          // `applyComposerHostDocument` fences on, so whatever lowers it
+          // re-opens the door that fence closes - and the store cannot check
+          // the ordering itself. Revisions arrive here from an upsert ACK, a
+          // subscribe-frame acknowledgement and the bootstrap list, and the
+          // session's held revision is not monotonic across a reconnect: a
+          // stale `drafts.list` can reset it below what is already installed,
+          // after which an acknowledgement carries that lower number through.
+          // The session guards its OWN `held` map with `>` on the ACK path;
+          // this is the store half of the same invariant, enforced where the
+          // value is read rather than at each of the callers.
+          hostRevision: sameLine
+            ? Math.max(current.hostRevision, hostRevision)
+            : hostRevision,
+          // Record whose revision it is: this is the ONLY thing that ever
+          // sets an owner on a draft that was published but never sent a
+          // host document, and the fence is keyed on owner equality.
+          ownerHostId:
+            hostRevision > 0 && ownerHostId !== null
+              ? ownerHostId
+              : current.ownerHostId,
+          syncedGeneration: clearDirty
+            ? current.generation
+            : current.syncedGeneration,
+          // The host holds the row (and the retraction debt) from the first
+          // ACK on: the one-shot pointer must not ride a later write.
+          supersedes: hostRevision > 0 ? null : current.supersedes,
+        },
+      },
+    };
+  });
+}
+
+/**
+ * Applies a chat-composer document to the store. Returns whether the row
+ * took it: an id the row no longer carries, or an id fenced by a submit, is
+ * rejected without touching the row.
+ */
+export function applyComposerHostDocument(document: DraftDocument): boolean {
+  if (document.kind !== "chat-composer") return false;
+  const chatId = document.target.chatId;
+  if (chatId === null) return false;
+  // A row re-keyed by the fork rule (or fenced after a submit) must not be
+  // pulled back to a retired identity by an echo for the old id that was
+  // already in flight; the host only ever echoes ids this client minted.
+  // The one echo allowed to move the row's id is a host re-mint that names
+  // the id it replaces.
+  const before = ensureDraft(useComposerDraftStore.getState().drafts, chatId);
+  if (
+    before.draftId !== null &&
+    before.draftId !== document.draftId &&
+    document.supersedes !== before.draftId
+  ) {
+    return false;
+  }
+  // An id fenced by a submit is on its way to a tombstone; its late echo
+  // must not put the sent content back into the cleared composer.
+  if (composerSubmittedDraftDeleteIsPending(document.draftId)) return false;
+  // Revision frontier, the same one `applyLandingHostDocument` keeps and for
+  // the same reason: image reads finish OUT OF ORDER after subscribe-frame
+  // admission. The stream handler admits a frame against the revision it
+  // holds and records the new one synchronously, then awaits the blob
+  // prefetch - so two upserts for this row can both be admitted, and the
+  // slower one lands last. Without this the older continuation overwrites
+  // the newer text, and nothing downstream can restore it.
+  //
+  // Only comparable revisions: the same draft line on the same host. A
+  // re-mint (handled above) and a cloud head's synthetic revision 0 are
+  // different numbering, not an older position in this one.
+  if (
+    before.draftId === document.draftId &&
+    before.ownerHostId === document.ownerHostId &&
+    document.revision > 0 &&
+    before.hostRevision > document.revision
+  ) {
+    return false;
+  }
+  useComposerDraftStore.setState((state) => {
+    const current = ensureDraft(state.drafts, chatId);
+    if (current.generation > current.syncedGeneration) {
+      return {
+        drafts: {
+          ...state.drafts,
+          [chatId]: {
+            ...current,
+            draftId: document.draftId,
+            hostRevision: document.revision,
+            targetEpicId: document.target.epicId ?? current.targetEpicId,
+            ownerHostId: document.ownerHostId,
+            origin: document.origin,
+            publication: document.publication,
+          },
+        },
+      };
+    }
+    return {
+      drafts: {
+        ...state.drafts,
+        [chatId]: {
+          ...current,
+          content: document.portable.content,
+          selection: document.portable.selection,
+          draftId: document.draftId,
+          hostRevision: document.revision,
+          targetEpicId: document.target.epicId ?? current.targetEpicId,
+          lastTouchedAt: document.lastTouchedAt,
+          resetEpoch: current.resetEpoch + 1,
+          revision: current.revision + 1,
+          generation: current.generation,
+          syncedGeneration: current.generation,
+          ownerHostId: document.ownerHostId,
+          origin: document.origin,
+          publication: document.publication,
+        },
+      },
+    };
+  });
+  return true;
+}
+
+export function applyComposerHostDelete(draftId: string): void {
+  const chatId = findComposerChatIdByDraftId(draftId);
+  if (chatId === null) return;
+  useComposerDraftStore.setState((state) => {
+    const current = ensureDraft(state.drafts, chatId);
+    return {
+      drafts: {
+        ...state.drafts,
+        [chatId]: {
+          ...current,
+          content: EMPTY_COMPOSER_CONTENT,
+          selection: EMPTY_COMPOSER_SELECTION,
+          resetEpoch: current.resetEpoch + 1,
+          revision: current.revision + 1,
+          generation: current.generation,
+          syncedGeneration: current.generation,
+          hostRevision: 0,
+        },
+      },
+    };
+  });
+}
+
+export function collectComposerDirtyWrites(): ReadonlyArray<{
+  readonly chatId: string;
+  readonly draft: DraftState;
+}> {
+  const out: Array<{ readonly chatId: string; readonly draft: DraftState }> =
+    [];
+  const drafts = useComposerDraftStore.getState().drafts;
+  for (const [chatId, draft] of Object.entries(drafts)) {
+    if (draft === undefined) continue;
+    if (draft.generation <= draft.syncedGeneration) continue;
+    if (draft.draftId === null) continue;
+    // A replica is never upserted under the owner's identity: an edit
+    // re-keys it first (`detachDraftIdentity`), so a dirty replica is a row
+    // whose content the fresh id already carries.
+    if (draft.origin === "replica") continue;
+    if (isNeverTypedEmptyComposerDraft(draft)) continue;
+    // A pending inline image node means its hash rewrite has not landed yet.
+    // Publishing NOW would put the whole base64 snapshot on the wire - the
+    // upsert, the host row, every subscribe frame and the cloud head - which is
+    // the exact payload this work exists to remove. The rewrite's own document
+    // change bumps `generation` again and schedules the small write moments
+    // later; a failed ingest removes the node and does the same. Either way
+    // this draft is collectable on the next pass.
+    if (containsPendingInlineImageNode(draft.content)) continue;
+    out.push({ chatId, draft });
+  }
+  return out;
+}
+
+/**
+ * A draft nobody has typed into has nothing to back up, and minting a row for
+ * it is not free. `setSelection` - a CARET MOVE alone - mints a `draftId` and
+ * bumps `generation`, so merely clicking into an empty composer makes it
+ * dirty and publishable; submit then retires the id
+ * (`fenceAndDetachSubmittedDraft`) and the next caret move mints another. That
+ * is one cloud row per idle composer per host, and every one of them showed up
+ * on the landing page as an "Untitled draft" row.
+ *
+ * The condition is `revision === 0` - no content edit recorded on this chat's
+ * composer yet - and deliberately not "has no host row yet". The two differ
+ * exactly where it matters: type, have that first upsert commit with
+ * its reply lost, then erase. A draft keyed on the missing host row would be
+ * withheld from then on, and the cloud would go on serving content the user
+ * deleted, because bootstrap suppresses the host's revision for a draft this
+ * store still holds dirty. `revision` was bumped by the typing, so that draft
+ * publishes its erasure.
+ *
+ * Nothing re-arms a withheld draft and nothing needs to: it stays dirty, and
+ * the first real edit bumps `revision` and schedules it through the usual path.
+ *
+ * KNOWN LIMIT: `revision` counts the CHAT's composer lifetime, not one draft
+ * id's. `clearDraft` bumps it on submit and `fenceAndDetachSubmittedDraft`
+ * preserves it, so a fresh id minted after a send starts at `revision > 0` and
+ * an empty row for it is still published. Closing that needs per-draft
+ * bookkeeping (a "revision when this id was minted" stamp), NOT resetting
+ * `revision` on detach: the prompt stash captures `{chatId, revision}` as a
+ * compare-and-swap token and `clearIfUnchanged` compares nothing else, so
+ * making revisions repeat across sends lets an in-flight stash save match a
+ * LATER draft and erase it. Monotonic is what makes that token safe.
+ */
+function isNeverTypedEmptyComposerDraft(draft: DraftState): boolean {
+  return draft.revision === 0 && isEmptyLandingDraftContent(draft.content);
+}
+
+export function dropComposerAbsentFromList(
+  hostId: string,
+  listedIds: ReadonlySet<string>,
+  boundHostByChatId: ReadonlyMap<string, string>,
+): void {
+  const drafts = useComposerDraftStore.getState().drafts;
+  for (const [chatId, draft] of Object.entries(drafts)) {
+    if (draft === undefined || draft.draftId === null) continue;
+    const boundHostId = boundHostByChatId.get(chatId);
+    // Unbound or bound to another host: KEEP. Absence from *this* host's
+    // list is not a delete.
+    if (boundHostId === undefined || boundHostId !== hostId) continue;
+    if (draft.generation > draft.syncedGeneration) continue;
+    if (listedIds.has(draft.draftId)) continue;
+    dropComposerLocalMirror(draft.draftId);
+  }
+}
+
+/**
+ * List-absence on the bound host drops the mirror bookkeeping, never the
+ * typed content. Authoritative host deletes go through
+ * `applyComposerHostDelete` (subscribe delete / `drafts.delete`).
+ */
+function dropComposerLocalMirror(draftId: string): void {
+  const chatId = findComposerChatIdByDraftId(draftId);
+  if (chatId === null) return;
+  useComposerDraftStore.setState((state) => {
+    const current = ensureDraft(state.drafts, chatId);
+    if (current.hostRevision === 0) return state;
+    return {
+      drafts: {
+        ...state.drafts,
+        [chatId]: {
+          ...current,
+          hostRevision: 0,
+        },
+      },
+    };
+  });
+}
+
+function findComposerDraftById(draftId: string): DraftState | null {
+  const chatId = findComposerChatIdByDraftId(draftId);
+  if (chatId === null) return null;
+  return useComposerDraftStore.getState().drafts[chatId] ?? null;
+}
+
+export function findComposerChatIdByDraftId(draftId: string): string | null {
+  const drafts = useComposerDraftStore.getState().drafts;
+  for (const [chatId, draft] of Object.entries(drafts)) {
+    if (draft?.draftId === draftId) return chatId;
+  }
+  return null;
+}
+
+function normalizedDraftId(raw: Record<string, unknown>): string | null {
+  return typeof raw.draftId === "string" && raw.draftId.length > 0
+    ? raw.draftId
+    : null;
+}
+
+function normalizedNullableId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function migratedNullableId(value: string | null): string | null {
+  return value === null ? null : migratedLegacyComposerDraftId(value);
+}
+
+function normalizedOrigin(value: unknown): "own" | "replica" | null {
+  return value === "own" || value === "replica" ? value : null;
+}
+
+function normalizedNonNegative(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
 }
 
 registerExtraImageRootSource({
