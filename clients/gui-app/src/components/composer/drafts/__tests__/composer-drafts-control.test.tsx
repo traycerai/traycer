@@ -195,8 +195,8 @@ function pressKeyPrevented(key: string): boolean {
 
 /**
  * The listed rows, by draft id. Asserted by id rather than by text because a
- * row draws its derived title AND its preview from the same document, so a
- * short draft renders the same words twice by design.
+ * row's text is the draft's own typed content, which these tests seed with
+ * interchangeable fixture prose - the id is the stable handle.
  */
 function listedRowIds(): ReadonlyArray<string> {
   return Array.from(

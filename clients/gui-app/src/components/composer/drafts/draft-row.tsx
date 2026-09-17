@@ -28,11 +28,12 @@ interface DraftRowProps {
 }
 
 /**
- * Two lines (D13): the derived title, then the flattened preview with the
- * row's provenance and its age. Hover or highlight trades the age for the
- * three actions, which is the same swap the prompt stash used - the metadata
- * and the actions occupy one cell and cross-fade, so the row never reflows
- * under the pointer.
+ * The draft's text, wrapped and clamped to three lines, then a metadata line
+ * with the row's provenance and its age. (D13 originally drew a derived title
+ * above a one-line preview; for the usual one-line draft that printed the
+ * same words twice.) Hover or highlight trades the age for the three actions,
+ * which is the same swap the prompt stash used - the metadata and the actions
+ * occupy one cell and cross-fade, so the row never reflows under the pointer.
  */
 export function DraftRow(props: DraftRowProps) {
   const { row, sourceChip, mobile, onHighlight, onOpen, onCopy, onDelete } =
@@ -49,11 +50,11 @@ export function DraftRow(props: DraftRowProps) {
       onMouseMove={onHighlight}
       onSelect={onOpen}
     >
-      <span className="w-full truncate text-ui-sm leading-5 font-medium">
-        {row.title}
+      <span className="line-clamp-3 w-full text-ui-sm leading-5 break-words">
+        {row.preview}
       </span>
       <span className="flex w-full min-w-0 items-center gap-1.5 text-ui-xs leading-5 text-muted-foreground">
-        <span className="min-w-0 flex-1 truncate">{row.preview}</span>
+        <span className="min-w-0 flex-1" />
         {sourceChip === null ? null : (
           <Badge variant="secondary" className="h-4 shrink-0 px-1.5">
             <span className="max-w-40 truncate">{sourceChip}</span>

@@ -20,7 +20,6 @@ import {
   newChatTarget,
   requiredChatTarget,
 } from "@/lib/drafts/draft-write-codec";
-import type { DraftRetractResult } from "@/hooks/drafts/use-draft-retract";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import {
   openEpicTabIntent,
@@ -170,17 +169,19 @@ export function openNewChatDraftRow(
 }
 
 /**
- * Delete a start-page row. The routing is History's, verbatim: an own row goes
- * through the host that HOLDS it (the landing placement can point elsewhere),
- * an unadopted row retires locally, and a foreign row is retracted from the
- * cloud on the user's authority through `hostId`, its local mirror dropped only
- * on a terminal answer.
+ * Delete a start-page row. An own row goes through the host that HOLDS it
+ * (the landing placement can point elsewhere), an unadopted row retires
+ * locally, and a foreign row goes through the store's own `deleteDraft`: the
+ * local mirror (and its tab) is gone at once, and the coordinator retracts
+ * the cloud row through the placement host on the user's authority, retried
+ * from the retirement receipt until that host answers. History used to keep
+ * the mirror until the retract came back, which on a remote host is a visible
+ * lag between the `Deleted` toast and the tab closing.
  */
 export function deleteLandingDraftRow(
   draft: LandingDraftTab,
   hostId: string | null,
   client: DraftClient,
-  retract: (draftId: string) => Promise<DraftRetractResult>,
 ): DraftRowDeleteOutcome {
   const draftId = draft.id;
   const restore = (): void => {
@@ -204,12 +205,7 @@ export function deleteLandingDraftRow(
     useLandingDraftStore.getState().deleteDraft(draftId);
     return { deleted: true, undo: restore };
   }
-  void retract(draftId).then((result) => {
-    if (result.status !== "retracted" && result.status !== "absent") return;
-    // The cloud row is gone; the local mirror goes with it, retired so a
-    // directory fetch already in flight cannot ingest it back.
-    useLandingDraftStore.getState().applyHostDelete(draftId);
-  });
+  useLandingDraftStore.getState().deleteDraft(draftId);
   return { deleted: true, undo: null };
 }
 

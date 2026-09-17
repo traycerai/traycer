@@ -407,8 +407,6 @@ describe("deleteNewChatDraftRow reaches the host with the modal unmounted (criti
 });
 
 describe("deleteLandingDraftRow", () => {
-  const neverRetracts = () => Promise.resolve({ status: "failed" as const });
-
   it("Undo re-installs the draft under a fresh id, keeping it put away", () => {
     const id = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore.getState().setDraftContent(id, typed("kept"), null);
@@ -419,7 +417,7 @@ describe("deleteLandingDraftRow", () => {
     if (draft === undefined) throw new Error("expected a draft");
     expect(draft.closed).toBe(true);
 
-    const outcome = deleteLandingDraftRow(draft, null, null, neverRetracts);
+    const outcome = deleteLandingDraftRow(draft, null, null);
     if (!outcome.deleted || outcome.undo === null) {
       throw new Error("expected an undoable delete");
     }
@@ -451,11 +449,38 @@ describe("deleteLandingDraftRow", () => {
       { ...draft, ownerHostId: OTHER_HOST_ID, origin: "replica" },
       null,
       null,
-      neverRetracts,
     );
 
     expect(outcome).toEqual({ deleted: false });
     expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+  });
+
+  it("drops a foreign row's local mirror at once (D17a), no retract awaited", () => {
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().setDraftContent(id, typed("kept"), null);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((entry) =>
+        entry.id === id
+          ? {
+              ...entry,
+              origin: "replica" as const,
+              ownerHostId: OTHER_HOST_ID,
+            }
+          : entry,
+      ),
+    }));
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    if (draft === undefined) throw new Error("expected a draft");
+
+    const outcome = deleteLandingDraftRow(draft, HOST_ID, null);
+
+    expect(outcome).toEqual({ deleted: true, undo: null });
+    // No `await`: the local mirror and its tab are gone in this same tick,
+    // not once a cloud retract answers.
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(landingDraftIsRetired(id)).toBe(true);
   });
 });
 

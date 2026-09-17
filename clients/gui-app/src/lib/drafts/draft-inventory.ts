@@ -12,8 +12,12 @@ import {
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 
-/** Line 2 of a row is one line; anything past this is never drawn. */
-const PREVIEW_LIMIT = 160;
+/**
+ * A row's text is clamped to a few wrapped lines; past this many characters
+ * nothing is ever drawn, so a pasted essay does not put its whole body in the
+ * DOM.
+ */
+const PREVIEW_LIMIT = 400;
 
 /** A row published by a host before any local composer named its chat/epic. */
 const CHAT_TITLE_FALLBACK = "Chat";
@@ -24,7 +28,10 @@ const NEW_CHAT_TITLE_FALLBACK = "New agent";
 interface DraftInventoryRowFields {
   /** Landing draft id, or the host row's `draftId` for the other kinds. */
   readonly id: string;
-  readonly title: string;
+  /**
+   * The draft's typed text flattened onto one run, or the per-kind fallback
+   * for a textless (image-only) draft.
+   */
   readonly preview: string;
   /** The document itself - Copy flattens it, Undo restores it. */
   readonly content: JsonContent;
@@ -243,36 +250,29 @@ function commonFields(
   id: string,
   content: JsonContent,
   lastTouchedAt: number,
-  titleFallback: string,
+  fallback: string,
 ): Omit<DraftInventoryRowFields, "open" | "foreign"> {
   return {
     id,
-    title: draftTitle(content, titleFallback),
-    preview: draftPreviewText(content),
+    preview: draftPreviewText(content, fallback),
     content,
     lastTouchedAt,
   };
 }
 
 /**
- * Line 1: the first non-empty line of typed text. An image-only draft has no
- * derived text, and the fallback is PER KIND - the same shape
+ * The whole document flattened onto one run of text. An image-only draft has
+ * no derived text, and the fallback is PER KIND - the same shape
  * `landingDraftDisplayTitle` gives the tab strip, but a chat row names its
  * chat and a new-agent row says so, rather than reading `Start Page` in an
  * epic it has nothing to do with.
  */
-function draftTitle(content: JsonContent, fallback: string): string {
-  const text = extractPlainTextFromComposerJSONContent(content).trim();
-  const firstLine = text.split("\n")[0]?.trim() ?? "";
-  return firstLine.length > 0 ? firstLine : fallback;
-}
-
-/** Line 2: the whole document flattened onto one line (D13). */
-function draftPreviewText(content: JsonContent): string {
-  return extractPlainTextFromComposerJSONContent(content)
+function draftPreviewText(content: JsonContent, fallback: string): string {
+  const text = extractPlainTextFromComposerJSONContent(content)
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, PREVIEW_LIMIT);
+  return text.length > 0 ? text : fallback;
 }
 
 /**

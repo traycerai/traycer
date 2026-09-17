@@ -470,7 +470,7 @@ describe("filters and ordering", () => {
 });
 
 describe("row text", () => {
-  it("titles from the first line and flattens the preview onto one", () => {
+  it("flattens the whole document onto one run of preview text", () => {
     const [row] = list({
       scope: LANDING_SCOPE,
       filter: "current",
@@ -493,17 +493,16 @@ describe("row text", () => {
         }),
       ],
     });
-    expect(row.title).toBe("Fix   the parser");
     expect(row.preview).toBe("Fix the parser then ship it");
   });
 
-  it("cuts the preview at 160 characters", () => {
+  it("cuts the preview at 400 characters", () => {
     const [row] = list({
       scope: LANDING_SCOPE,
       filter: "current",
-      landing: [landingTab({ id: "long", content: doc("x".repeat(400)) })],
+      landing: [landingTab({ id: "long", content: doc("x".repeat(500)) })],
     });
-    expect(row.preview).toHaveLength(160);
+    expect(row.preview).toHaveLength(400);
   });
 
   it("falls back to the start-page title for an untyped landing draft", () => {
@@ -512,8 +511,7 @@ describe("row text", () => {
       filter: "current",
       landing: [landingTab({ id: "image-only", content: IMAGE_ONLY_DOC })],
     });
-    expect(row.title).toBe("Start Page");
-    expect(row.preview).toBe("");
+    expect(row.preview).toBe("Start Page");
   });
 
   it("falls back to the chat's own name for an untyped chat draft", () => {
@@ -528,7 +526,7 @@ describe("row text", () => {
         }),
       },
     });
-    expect(named.title).toBe("Refactor the parser");
+    expect(named.preview).toBe("Refactor the parser");
     // Unnamed rows land on the chip fallback, not on "Start Page".
     const [unnamed] = list({
       scope: CHAT_SCOPE,
@@ -541,7 +539,7 @@ describe("row text", () => {
         }),
       },
     });
-    expect(unnamed.title).toBe("Chat");
+    expect(unnamed.preview).toBe("Chat");
   });
 
   it("falls back to New agent for an untyped modal draft", () => {
@@ -555,7 +553,7 @@ describe("row text", () => {
         }),
       },
     });
-    expect(row.title).toBe("New agent");
+    expect(row.preview).toBe("New agent");
   });
 });
 

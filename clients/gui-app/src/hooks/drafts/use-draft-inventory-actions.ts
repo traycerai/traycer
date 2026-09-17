@@ -2,10 +2,6 @@ import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  useDraftRetract,
-  type DraftRetractResult,
-} from "@/hooks/drafts/use-draft-retract";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -51,7 +47,6 @@ export function useDraftInventoryActions(
   const navigate = useNavigate();
   const binding = useHostBinding();
   const surfaceClient = useHostClientForHostId(hostId);
-  const { retract } = useDraftRetract(surfaceClient);
   const { copy } = useClipboardCopy({
     resetMs: 1500,
     onSuccess: () => toast.success("Copied"),
@@ -91,7 +86,6 @@ export function useDraftInventoryActions(
       const outcome = deleteDraftRow(row, {
         surfaceHostId: hostId,
         surfaceClient,
-        retract,
         ownerClient:
           row.kind === "landing"
             ? surfaceClient
@@ -108,7 +102,7 @@ export function useDraftInventoryActions(
         action: { label: "Undo", onClick: undo },
       });
     },
-    [binding, hostId, retract, surfaceClient],
+    [binding, hostId, surfaceClient],
   );
 
   return useMemo(
@@ -122,11 +116,10 @@ function deleteDraftRow(
   context: {
     readonly surfaceHostId: string | null;
     readonly surfaceClient: HostClient<HostRpcRegistry> | null;
-    readonly retract: (draftId: string) => Promise<DraftRetractResult>;
     readonly ownerClient: HostClient<HostRpcRegistry> | null;
   },
 ): DraftRowDeleteOutcome {
-  const { surfaceHostId, surfaceClient, retract, ownerClient } = context;
+  const { surfaceHostId, surfaceClient, ownerClient } = context;
   if (row.kind === "landing") {
     // Re-read the row: the list is a memoised projection, and the routing
     // below turns on ownership fields that must be the store's current ones.
@@ -134,7 +127,7 @@ function deleteDraftRow(
       .getState()
       .drafts.find((entry) => entry.id === row.id);
     if (draft === undefined) return { deleted: false };
-    return deleteLandingDraftRow(draft, surfaceHostId, surfaceClient, retract);
+    return deleteLandingDraftRow(draft, surfaceHostId, surfaceClient);
   }
   if (row.kind === "chat") {
     return deleteComposerDraftRow(
