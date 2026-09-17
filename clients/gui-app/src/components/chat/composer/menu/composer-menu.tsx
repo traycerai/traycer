@@ -388,11 +388,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     <>
       {createPortal(menu, document.body)}
       {/* Pointer-and-keyboard chrome only. The panel is a SIDE surface - it
-          anchors beside the active row and its fit gate asks "does a side
-          have room?", a question a phone answers no for every row, because
-          the menu already spans the width. Whatever the gate concludes from
-          a phone's measurements, there is no placement that does not cover
-          the list, so the panel simply does not exist below `md`. */}
+          anchors beside the active row - and a phone has no side room for
+          any row, because the menu already spans the width. Every placement
+          there covers the list, and the panel's fit gate does not measure
+          side room (see `panelFitFor`), so the panel simply does not exist
+          below `md`. */}
       {isMobile ? null : (
         <MentionPreviewPanel
           panelRef={previewPanelRef}

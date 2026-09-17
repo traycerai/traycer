@@ -55,9 +55,10 @@ export interface MentionPreviewPanelProps {
  * Info-only preview panel pinned beside the composer's @mention/slash menu.
  * Anchored to the active row (via a floating-ui virtual reference reading
  * its live rect), so it tracks the highlighted row vertically as selection
- * changes. Placement prefers the right; `flip` falls back to the left; the
- * `size` gate hides the panel entirely once neither side has room, rather
- * than letting it render past the viewport edge or overlap the list.
+ * changes. Placement prefers the right; `flip` falls back to the left;
+ * `shift` clamps it inside the viewport horizontally, which overlaps the list
+ * when neither side has room; the `size` gate caps it to the viewport and
+ * hides it when too little space is left (see `panelFitFor`).
  */
 export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
   const { panelRef, listRef, activeIndex, preview, disabledReason } = props;
