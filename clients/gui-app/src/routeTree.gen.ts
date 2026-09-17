@@ -33,6 +33,7 @@ import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
+import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
@@ -161,6 +162,11 @@ const SettingsOpeningBehaviorRoute = SettingsOpeningBehaviorRouteImport.update({
   path: "/opening-behavior",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsPermissionsRoute = SettingsPermissionsRouteImport.update({
+  id: "/permissions",
+  path: "/permissions",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: "/providers",
   path: "/providers",
@@ -215,6 +221,7 @@ export interface FileRoutesByFullPath {
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -245,6 +252,7 @@ export interface FileRoutesByTo {
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -278,6 +286,7 @@ export interface FileRoutesById {
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -312,6 +321,7 @@ export interface FileRouteTypes {
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -342,6 +352,7 @@ export interface FileRouteTypes {
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -374,6 +385,7 @@ export interface FileRouteTypes {
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -564,6 +576,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsOpeningBehaviorRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/permissions": {
+      id: "/settings/permissions";
+      path: "/permissions";
+      fullPath: "/settings/permissions";
+      preLoaderRoute: typeof SettingsPermissionsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/providers": {
       id: "/settings/providers";
       path: "/providers";
@@ -637,6 +656,7 @@ interface SettingsRouteChildren {
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
+  SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
@@ -661,6 +681,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
+  SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,

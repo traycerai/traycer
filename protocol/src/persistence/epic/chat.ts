@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreAuto,
   chatRunSettingsSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -96,7 +97,9 @@ export const chatSchemaV18 = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
+  // Pre-`auto`: `chat.subscribe@1.7`/`@1.8` embed this record and both are
+  // RELEASED, so an `auto` chat served on either would fail the whole frame.
+  settings: chatRunSettingsSchemaPreAuto.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchemaV18),
@@ -141,6 +144,10 @@ export const chatSchemaV18 = z.object({
 });
 export const chatSchema = chatSchemaV18.extend({
   messages: z.array(messageSchema),
+  // Re-widened to the live tuple. `chatSchemaV18` pins `permissionMode`
+  // pre-`auto` because `chat.subscribe@1.7`/`@1.8` embed it and both shipped in
+  // `cli-v1.3.0`; only the lines that bind THIS schema may carry the mode.
+  settings: chatRunSettingsSchema.nullable().default(null),
 });
 export type Chat = z.infer<typeof chatSchema>;
 

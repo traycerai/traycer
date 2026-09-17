@@ -20,6 +20,23 @@ const textareaVariants = cva(
         default: "px-2.5 py-2 text-ui md:text-ui-sm",
         sm: "px-2.5 py-2 text-ui-sm",
         xs: "px-2 py-1.5 text-ui-xs",
+        /**
+         * The CODE type scale, which tracks the user's Appearance ▸ Code font
+         * size (`--text-code-sm` is `var(--code-font-size, 12px)`).
+         *
+         * For a long-form mono DOCUMENT - a policy the user writes and reads
+         * at length - as distinct from the short mono fields (a branch prefix,
+         * an args line, a header pair) that take `sm` or `xs` and are chrome
+         * rather than prose. The sibling long-form editor
+         * (`markdown-edit-preview`) reads the same preference directly, and
+         * these two should not disagree about how big the user's code is.
+         *
+         * Deliberately NOT folded into `font: "mono"`: every existing
+         * `font="mono"` call site is one of those short fields and pairs a `ui`
+         * size with it, so carrying the code scale on the font axis would
+         * resize all of them. Opting in is the point.
+         */
+        code: "px-2.5 py-2 text-code-sm",
       },
       font: {
         sans: "",

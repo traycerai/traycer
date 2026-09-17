@@ -71,6 +71,19 @@ export interface ComposerToolbarCatalogScope {
   readonly hostId: string | null;
   /** Restrict the catalog to TUI-capable harnesses (terminal launchers). */
   readonly tuiOnly: boolean;
+  /**
+   * Whether the chat this composer sends on can carry `permissionMode:
+   * "auto"` on its negotiated `chat.subscribe` line, or `null` with no chat
+   * session in scope (the landing composer - the chat it creates negotiates
+   * its own line later).
+   *
+   * Unlike every other field here it cannot be derived from `hostId`:
+   * `chat.subscribe` is a stream method and the negotiated-manifest registry
+   * holds only unary ones, so it has to be handed down from a live session.
+   * It reaches the STICKY CLAMP through `setCatalog`, which is what decides
+   * the mode this composer actually sends.
+   */
+  readonly chatLineCarriesAutoMode: boolean | null;
 }
 
 /**
@@ -119,7 +132,7 @@ export function useComposerToolbarStore(
   onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   catalog: ComposerToolbarCatalogScope,
 ): ComposerToolbarStore {
-  const { hostClient, hostId, tuiOnly } = catalog;
+  const { hostClient, hostId, tuiOnly, chatLineCarriesAutoMode } = catalog;
   const activityEnabled = useSurfaceActivity();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
@@ -170,6 +183,7 @@ export function useComposerToolbarStore(
       onSettingsChange: null,
       tuiOnly,
       hostId,
+      chatLineCarriesAutoMode,
     }),
   );
   // The store's `onSettingsChange` is ALWAYS this recording wrapper, even when
@@ -254,8 +268,18 @@ export function useComposerToolbarStore(
       models,
       modelsLoaded,
       tuiOnly,
+      chatLineCarriesAutoMode,
     });
-  }, [store, hostId, harnesses, models, modelsLoaded, harnessId, tuiOnly]);
+  }, [
+    store,
+    hostId,
+    harnesses,
+    models,
+    modelsLoaded,
+    harnessId,
+    tuiOnly,
+    chatLineCarriesAutoMode,
+  ]);
 
   const registeredControls = useMemo(() => {
     const actions = store.getState();

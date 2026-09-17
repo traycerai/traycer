@@ -15,6 +15,7 @@ import {
 } from "@/lib/commands/actions/new-chat";
 import {
   resolveClonedChatSettings,
+  type ClonedChatPermissionModeUnsupported,
   type ClonedChatProfileRecoveryRequired,
 } from "@/lib/commands/actions/resolve-cloned-chat-settings";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
@@ -114,6 +115,13 @@ export interface CloneChatOnHostSwitchArgs {
    *  `explicitTargetProfileId` after selection or re-enablement. */
   readonly onProfileSelectionRequired: (
     resolution: ClonedChatProfileRecoveryRequired,
+  ) => void;
+  /** The target harness accepts neither the source's permission mode nor any
+   *  rung of its demotion chain, so nothing was created. Separate from
+   *  `onProfileSelectionRequired` because there is no selection that fixes it -
+   *  the caller reports it and stops. */
+  readonly onPermissionModeUnsupported: (
+    resolution: ClonedChatPermissionModeUnsupported,
   ) => void;
   /** Fired right before the settings-only retry fires - the clone still
    *  proceeds, just without history. Two distinct causes, since the right
@@ -244,6 +252,10 @@ export function cloneChatOnHostSwitch(
 
   void resolveSettingsForClone(args)
     .then((resolution) => {
+      if (resolution.status === "permission-mode-unsupported") {
+        if (!cancelled) args.onPermissionModeUnsupported(resolution);
+        return;
+      }
       if (resolution.status !== "ready") {
         if (!cancelled) args.onProfileSelectionRequired(resolution);
         return;
@@ -294,6 +306,7 @@ async function resolveSettingsForClone(
       readonly fallenBackToAmbient: boolean;
     }
   | ClonedChatProfileRecoveryRequired
+  | ClonedChatPermissionModeUnsupported
 > {
   if (args.sourceSettings === null) {
     return { status: "ready", settings: null, fallenBackToAmbient: false };
