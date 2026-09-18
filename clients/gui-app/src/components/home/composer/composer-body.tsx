@@ -61,7 +61,7 @@ export interface ComposerBodyProps {
    * only the landing composer asks for `"collapsed"`, and only below `md`.
    */
   readonly toolbarLayout: "full" | "collapsed";
-  readonly stashControl: ReactNode;
+  readonly draftsControl: ReactNode;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
   readonly dictationControl: ComposerDictationControl | null;
@@ -128,7 +128,7 @@ export function ComposerBody({
   header,
   topBanner,
   toolbarLayout,
-  stashControl,
+  draftsControl,
   attachmentsStrip,
   workspaceControls,
   dictationControl,
@@ -186,7 +186,10 @@ export function ComposerBody({
         onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
         onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
         dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
-        utilityRail={composerMode === "chat" ? stashControl : null}
+        // D11: a terminal-mode draft is still a draft, so the rail renders in
+        // both modes. The attachments strip below stays chat-only - the
+        // terminal launcher has no attachments.
+        utilityRail={draftsControl}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>

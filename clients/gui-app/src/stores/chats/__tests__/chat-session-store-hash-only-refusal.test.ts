@@ -32,7 +32,6 @@ import {
   type DeadSendAccount,
 } from "@/stores/chats/chat-queue-reconciler";
 import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
-import type { PromptStashSnapshot } from "@/lib/composer/prompt-stash-codec";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
@@ -48,7 +47,7 @@ import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-cont
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { putImage, releaseSession } from "@/lib/composer/landing-image-store";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   isDraftBlobConfirmed,
   isDraftBlobUnbridgeable,
@@ -72,15 +71,15 @@ import {
   MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
   type ChatSessionTarget,
 } from "@/stores/chats/session-registry";
+import {
+  draftPlainText,
+  handedOffDrafts,
+  resetHandedOffDrafts,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 
 // `chat-session-store.ts` reaches `draft-mirror-coordinator.ts` (via
-// `draft-image-retry-content.ts` -> `draft-image-byte-target.ts`), whose
-// import in turn fires `usePromptStashStore`'s module-load-time `hydrate()`.
-// That module keeps its own PERMANENTLY-poisoned `dbPromise` in
-// `prompt-stash-repository.ts` (memoized with no reset on failure) - once its
-// first attempt runs before `indexedDB` exists, every later attempt for the
-// rest of this file rejects the same way, and depending on timing that stray
-// rejection can land while one of THIS file's tests is active. This file's
+// `draft-image-retry-content.ts` -> `draft-image-byte-target.ts`), which pulls
+// in a whole live subsystem this file never needs. This file's
 // own code path never needs a real draft-mirror session
 // (`draftMirrorClientForHost` only feeds a byte-resolution leg this suite's
 // hash always resolves through the LOCAL landing store first), so the mock
@@ -98,27 +97,6 @@ vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
 // store itself sidesteps it and lets the assertions read the exact snapshot
 // `handOffUnrecordedPromptToStash` built, not a value round-tripped through
 // IndexedDB.
-const promptStashMocks = vi.hoisted(() => ({
-  save: vi.fn<(snapshot: PromptStashSnapshot) => Promise<void>>(),
-}));
-vi.mock("@/stores/composer/prompt-stash-store", () => ({
-  usePromptStashStore: {
-    getState: () => ({
-      save: promptStashMocks.save,
-      // The handoff calls `saveWhile`, not `save`. Routed through the same
-      // mock so these assertions keep observing it - but HONOURING the
-      // predicate, so a stale-generation write is skipped here exactly as the
-      // real store skips it.
-      saveWhile: (
-        snapshot: PromptStashSnapshot,
-        stillCurrent: () => boolean,
-      ) =>
-        stillCurrent()
-          ? promptStashMocks.save(snapshot)
-          : Promise.resolve(undefined),
-    }),
-  },
-}));
 
 // RR7: a controllable stand-in for the LOCAL image-bytes leg
 // (`resolveDraftImageBytes`'s first, cheapest leg - see
@@ -524,8 +502,7 @@ beforeEach(() => {
       localImageMocks.realGetImageBytes,
     );
   }
-  promptStashMocks.save.mockReset();
-  promptStashMocks.save.mockResolvedValue(undefined);
+  resetHandedOffDrafts();
 });
 
 afterEach(() => {
@@ -2937,9 +2914,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // before saving - so a PREVIOUS test's teardown can land its save inside
     // this one, making any exact count a flake.
     const stashedTexts = (): ReadonlyArray<string> =>
-      promptStashMocks.save.mock.calls.map(([snapshot]) =>
-        JSON.stringify(snapshot.entry.content),
-      );
+      handedOffDrafts().map((draft) => draftPlainText(draft.content));
     await vi.waitFor(
       () => {
         expect(stashedTexts().some((text) => text.includes(TEXT_A))).toBe(true);
@@ -3409,12 +3384,11 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // fail for a reason that had nothing to do with what it asserts.
     await vi.waitFor(
       () => {
-        expect(promptStashMocks.save).toHaveBeenCalledTimes(1);
+        expect(handedOffDrafts()).toHaveLength(1);
       },
       { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
     );
-    const [snapshot] = promptStashMocks.save.mock.calls[0];
-    const text = JSON.stringify(snapshot.entry.content);
+    const text = draftPlainText(handedOffDrafts()[0].content);
     expect(text).toContain(A_PROMPT_TEXT);
     expect(text).toContain("Unsent");
     expect(text).toContain("/repo-cap");

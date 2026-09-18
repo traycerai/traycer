@@ -1,6 +1,5 @@
 import "./stub-sweep-dialog-host-hooks";
 
-import type { DraftRetractResult } from "@/hooks/drafts/use-draft-retract";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatSearchMessageMatch } from "@traycer/protocol/host/chat-search/schemas";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
@@ -44,23 +43,13 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
-import {
-  emptyLandingDraftWorkspaceSnapshot,
-  freshLandingMirrorState,
-  useLandingDraftStore,
-} from "@/stores/home/landing-draft-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
 import { harnessDisplayName } from "@/components/session-import/session-import-model";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
-import {
-  landingDraftIsRetired,
-  pendingLandingDraftDeleteHostId,
-  resetLandingDraftRetirementsForTests,
-} from "@/lib/drafts/landing-draft-retirement";
+import { resetLandingDraftRetirementsForTests } from "@/lib/drafts/landing-draft-retirement";
 import { setLandingPlacementHostReader } from "@/lib/drafts/draft-local-edits";
-import type { JsonContent } from "@traycer/protocol/common/registry";
-import { DraftSurfaceContext } from "@/providers/draft-surface-context";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
@@ -199,7 +188,6 @@ const testState = vi.hoisted(() => ({
   pendingDeleteEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
-  openLandingDraftFromHistory: vi.fn(),
   hostId: "host-test" as string | null,
   // The message-hit section's two inputs. A `null` client is the no-host-runtime
   // reading every case in this file predates, under which the section is not
@@ -231,12 +219,6 @@ vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
-}));
-
-vi.mock("@/lib/commands/actions/open-landing-draft-from-history", () => ({
-  openLandingDraftFromHistory: (navigate: unknown, draftId: string): void => {
-    testState.openLandingDraftFromHistory(navigate, draftId);
-  },
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -308,38 +290,6 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
       ? "idle"
       : (testState.activityByEpicId.get(epicId) ?? "idle"),
 }));
-
-const draftRetractTestState = vi.hoisted(() => ({
-  retract: vi.fn<(draftId: string) => Promise<DraftRetractResult>>(),
-}));
-vi.mock("@/hooks/drafts/use-draft-retract", () => ({
-  useDraftRetract: () => ({
-    mutation: { isPending: false },
-    retract: draftRetractTestState.retract,
-  }),
-}));
-const applyIncomingDraftDocumentMock = vi.hoisted(() => ({
-  apply: vi.fn<(document: unknown) => Promise<void>>(() => Promise.resolve()),
-}));
-const deleteThroughHostMock = vi.hoisted(() => ({
-  record:
-    vi.fn<(draftId: string, hostId: string, hasClient: boolean) => void>(),
-}));
-vi.mock("@/lib/drafts/draft-mirror-coordinator", async () => {
-  const store = await import("@/stores/home/landing-draft-store");
-  return {
-    applyIncomingDraftDocument: (document: unknown): Promise<void> =>
-      applyIncomingDraftDocumentMock.apply(document),
-    deleteLandingDraftThroughHost: (
-      draftId: string,
-      hostId: string,
-      client: unknown,
-    ): void => {
-      deleteThroughHostMock.record(draftId, hostId, client !== null);
-      store.deleteLandingDraftOnHost(draftId, hostId);
-    },
-  };
-});
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
@@ -453,16 +403,13 @@ function historyWorktree(): WorktreeHostEntryV12 {
 }
 
 function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
-  return renderPanelWithOpenItem(variant, initialEntry, null, null);
+  return renderPanelWithOpenItem(variant, initialEntry, null);
 }
 
 function renderPanelWithOpenItem(
   variant: EpicsListPanelVariant,
   initialEntry: string,
   onOpenItem: ((item: HistoryItem) => void) | null,
-  // The start-task draft whose composer sits above the panel, as the draft
-  // tab provides it; `null` mounts the panel outside any draft surface.
-  surfaceDraftId: string | null,
 ) {
   const rootRoute = createRootRoute({
     component: () => <RootOutlet />,
@@ -471,17 +418,15 @@ function renderPanelWithOpenItem(
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <DraftSurfaceContext.Provider value={surfaceDraftId}>
-        <EpicsListPanel
-          variant={variant}
-          className={undefined}
-          onSelectEpic={null}
-          onOpenItem={onOpenItem}
-          routeSearch={null}
-          historyNowMs={null}
-          autoFocusSearch={false}
-        />
-      </DraftSurfaceContext.Provider>
+      <EpicsListPanel
+        variant={variant}
+        className={undefined}
+        onSelectEpic={null}
+        onOpenItem={onOpenItem}
+        routeSearch={null}
+        historyNowMs={null}
+        autoFocusSearch={false}
+      />
     ),
   });
   const oldEpicRoute = createRoute({
@@ -579,16 +524,9 @@ describe("<EpicsListPanel />", () => {
     testState.pendingDeleteEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
-    testState.openLandingDraftFromHistory.mockReset();
     testState.hostId = "host-test";
     testState.chatSearchClient = null;
     testState.chatSearchHits = { kind: "absent" };
-    draftRetractTestState.retract.mockReset();
-    applyIncomingDraftDocumentMock.apply.mockReset();
-    applyIncomingDraftDocumentMock.apply.mockImplementation(() =>
-      Promise.resolve(),
-    );
-    deleteThroughHostMock.record.mockReset();
     testState.activityByEpicId.clear();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     queryClient.clear();
@@ -608,7 +546,7 @@ describe("<EpicsListPanel />", () => {
 
   it("lets a destination picker replace normal row navigation", async () => {
     const onOpenItem = vi.fn();
-    const router = renderPanelWithOpenItem("embedded", "/", onOpenItem, null);
+    const router = renderPanelWithOpenItem("embedded", "/", onOpenItem);
 
     fireEvent.click(
       await screen.findByRole("link", { name: "Open task Open from landing" }),
@@ -3442,445 +3380,4 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByRole("button", { name: /Chat chat-hit/ })).toBeNull();
     expect(screen.queryByRole("heading", { name: /In messages/ })).toBeNull();
   });
-
-  it("shows retained drafts above the task list without selecting a filter", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    const drafts = await screen.findByTestId("history-drafts-block");
-    const tasks = await screen.findByTestId("epics-list-rows");
-    expect(screen.getByText("abandoned prompt")).not.toBeNull();
-    expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(
-      drafts.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
-  });
-
-  it("does not show a block for an empty start-task composer", async () => {
-    useLandingDraftStore.getState().createDraft(null);
-    renderPanel("embedded", "/");
-
-    expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
-  });
-
-  it("hides the draft the composer above it is editing", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    const typingId = useLandingDraftStore.getState().createDraft(null);
-    useLandingDraftStore.getState().setDraftContent(
-      typingId,
-      {
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [{ type: "text", text: "typing now" }],
-          },
-        ],
-      },
-      null,
-    );
-    renderPanelWithOpenItem("embedded", "/", null, typingId);
-
-    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
-    expect(screen.queryByText("typing now")).toBeNull();
-  });
-
-  it("does not expose drafts as a task filter", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
-    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
-    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
-  });
-
-  it("opens a retained draft through openLandingDraftFromHistory", async () => {
-    const draftId = seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Open draft abandoned prompt",
-      }),
-    );
-
-    expect(testState.openLandingDraftFromHistory).toHaveBeenCalledTimes(1);
-    expect(testState.openLandingDraftFromHistory.mock.calls[0][1]).toBe(
-      draftId,
-    );
-  });
-
-  it("asks for confirmation before deleting a retained draft", async () => {
-    const draftId = seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("embedded", "/");
-
-    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
-    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
-
-    expect(
-      await screen.findByTestId("history-drafts-delete-dialog"),
-    ).not.toBeNull();
-    expect(screen.getByText('Delete "abandoned prompt"?')).not.toBeNull();
-    expect(
-      screen.getByText(
-        /removes the start-task draft here and from every device/i,
-      ),
-    ).not.toBeNull();
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-
-    fireEvent.click(screen.getByTestId("history-drafts-delete-cancel"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("history-drafts-delete-dialog")).toBeNull();
-    });
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-
-    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(screen.queryByText("abandoned prompt")).toBeNull();
-  });
-
-  it("warns that an open draft will be deleted on every device", async () => {
-    const draftId = seedRetainedLandingDraft("live tab");
-    useLandingDraftStore.getState().openDraft(draftId);
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    expect(
-      await screen.findByText(/this draft is currently open/i),
-    ).not.toBeNull();
-    expect(screen.getByText(/every device/i)).not.toBeNull();
-  });
-
-  it("retracts through the placement host client and drops the mirror when a replica row's delete is confirmed (retracted)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("someone else's draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "retracted" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    // A retract completes locally - there is nothing left pending on any host.
-    expect(pendingLandingDraftDeleteHostId(draftId)).toBeNull();
-    expect(deleteThroughHostMock.record).not.toHaveBeenCalled();
-  });
-
-  it("drops the mirror when retract reports the cloud row already absent", async () => {
-    const draftId = seedForeignOwnedLandingDraft("already-gone draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "absent" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-  });
-
-  it("retracts a row this host owns but adopted on another host", async () => {
-    const draftId = seedOwnAdoptedOnOtherHostLandingDraft(
-      "own row adopted elsewhere",
-    );
-    draftRetractTestState.retract.mockResolvedValue({ status: "retracted" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    expect(deleteThroughHostMock.record).not.toHaveBeenCalled();
-  });
-
-  it("deletes an own row already owned by the History host through that host, even though the landing placement points elsewhere", async () => {
-    // The placement-based authority (`deleteDraft` consults it) would call
-    // this row foreign, since the placement reader names a different host
-    // than the row's owner. `HistoryDraftsList` must not go through that
-    // authority for a row it already owns - it routes the delete through
-    // `hostId` explicitly via `deleteLandingDraftOnHost`.
-    setLandingPlacementHostReader(() => "other-host");
-    const draftId = seedOwnLandingDraft("own draft on history host");
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(draftRetractTestState.retract).not.toHaveBeenCalled();
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    expect(pendingLandingDraftDeleteHostId(draftId)).toBe(testState.hostId);
-    // This file mounts no <HostRuntimeProvider>, so useHostClientForHostId
-    // resolves null here - the call still names hostId, just with no client.
-    expect(deleteThroughHostMock.record).toHaveBeenCalledWith(
-      draftId,
-      testState.hostId,
-      false,
-    );
-  });
-
-  it("contrast: retires a never-adopted own row locally with a null pending host", async () => {
-    const draftId = seedRetainedLandingDraft("never adopted own draft");
-
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-    expect(landingDraftIsRetired(draftId)).toBe(true);
-    expect(pendingLandingDraftDeleteHostId(draftId)).toBeNull();
-  });
-
-  it("leaves a foreign-owned draft in place when retract reports unsupported (a host predating drafts.retract)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("unsupported-host draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "unsupported" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-    expect(landingDraftIsRetired(draftId)).toBe(false);
-  });
-
-  it("leaves a foreign-owned draft in place when retract fails (not conclusive)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("failed-retract draft");
-    draftRetractTestState.retract.mockResolvedValue({ status: "failed" });
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    await waitFor(() => {
-      expect(draftRetractTestState.retract).toHaveBeenCalledWith(draftId);
-    });
-    // A `failed` retract is not conclusive (host offline, too old, etc.) -
-    // the row must stay, unlike `retracted`/`absent` above.
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-    expect(landingDraftIsRetired(draftId)).toBe(false);
-  });
-
-  it("deletes an unowned non-replica row locally when there is no resolved host", async () => {
-    const draftId = seedRetainedLandingDraft("no-host own draft");
-    testState.hostId = null;
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    expect(draftRetractTestState.retract).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(
-        useLandingDraftStore
-          .getState()
-          .drafts.some((draft) => draft.id === draftId),
-      ).toBe(false);
-    });
-  });
-
-  it("leaves a replica draft in place when there is no resolved host (host-scoped delete cannot route a retract)", async () => {
-    const draftId = seedForeignOwnedLandingDraft("no-host replica draft");
-    testState.hostId = null;
-    renderPanel("embedded", "/");
-
-    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
-    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
-
-    expect(draftRetractTestState.retract).not.toHaveBeenCalled();
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === draftId),
-    ).toBe(true);
-    expect(landingDraftIsRetired(draftId)).toBe(false);
-  });
-
-  it("caps the draft block and expands it on request", async () => {
-    for (let index = 0; index < 6; index += 1) {
-      seedRetainedLandingDraft(`draft ${index}`);
-    }
-
-    renderPanel("page", "/");
-
-    expect(await screen.findAllByTestId("history-drafts-row")).toHaveLength(5);
-    fireEvent.click(screen.getByRole("button", { name: "View all 6" }));
-    expect(screen.getAllByTestId("history-drafts-row")).toHaveLength(6);
-    expect(screen.getByRole("button", { name: "Show less" })).not.toBeNull();
-  });
-
-  it("hides the drafts block in the destination picker", async () => {
-    seedRetainedLandingDraft("abandoned prompt");
-    renderPanel("picker", "/");
-
-    expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
-  });
 });
-
-function seedRetainedLandingDraft(text: string): string {
-  const content: JsonContent = {
-    type: "doc",
-    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-  };
-  const id = useLandingDraftStore.getState().createDraft(null);
-  useLandingDraftStore.getState().setDraftContent(id, content, null);
-  useLandingDraftStore.getState().closeDraft(id);
-  return id;
-}
-
-// A row this panel's host ("host-test") already owns and has adopted.
-function seedOwnLandingDraft(text: string): string {
-  const id = "own-history-draft";
-  useLandingDraftStore.setState((state) => ({
-    drafts: [
-      ...state.drafts,
-      {
-        id,
-        content: {
-          type: "doc",
-          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-        },
-        selection: null,
-        lastTouchedAt: Date.now(),
-        settings: null,
-        composerMode: "chat",
-        workspace: emptyLandingDraftWorkspaceSnapshot(),
-        ...freshLandingMirrorState(),
-        ownerHostId: "host-test",
-        origin: "own",
-        adoption: { state: "adopted", hostId: "host-test" },
-        closed: true,
-      },
-    ],
-  }));
-  return id;
-}
-
-// A row this panel's host ("host-test") does not own - `origin: "replica"`,
-// so `HistoryDraftsList`'s delete always retracts it regardless of
-// ownerHostId.
-function seedForeignOwnedLandingDraft(text: string): string {
-  const id = "foreign-draft";
-  useLandingDraftStore.setState((state) => ({
-    drafts: [
-      ...state.drafts,
-      {
-        id,
-        content: {
-          type: "doc",
-          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-        },
-        selection: null,
-        lastTouchedAt: Date.now(),
-        settings: null,
-        composerMode: "chat",
-        workspace: emptyLandingDraftWorkspaceSnapshot(),
-        ...freshLandingMirrorState(),
-        ownerHostId: "host-b",
-        origin: "replica",
-        adoption: { state: "adopted", hostId: "host-b" },
-        closed: true,
-      },
-    ],
-  }));
-  return id;
-}
-
-// A row this panel's host ("host-test") owns (`origin: "own"`) but that is
-// ADOPTED on a different host ("host-other") - the own-row analogue of a
-// replica. `HistoryDraftsList` cannot delete it through `hostId` (it is not
-// the owner there), so it retracts too.
-function seedOwnAdoptedOnOtherHostLandingDraft(text: string): string {
-  const id = "own-draft-adopted-elsewhere";
-  useLandingDraftStore.setState((state) => ({
-    drafts: [
-      ...state.drafts,
-      {
-        id,
-        content: {
-          type: "doc",
-          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-        },
-        selection: null,
-        lastTouchedAt: Date.now(),
-        settings: null,
-        composerMode: "chat",
-        workspace: emptyLandingDraftWorkspaceSnapshot(),
-        ...freshLandingMirrorState(),
-        ownerHostId: "host-other",
-        origin: "own",
-        adoption: { state: "adopted", hostId: "host-other" },
-        closed: true,
-      },
-    ],
-  }));
-  return id;
-}
