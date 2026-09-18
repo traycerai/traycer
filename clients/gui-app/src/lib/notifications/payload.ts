@@ -15,7 +15,6 @@ import {
   existingEpicTabIntentWithNestedFocus,
   navigateToTabIntent,
   openOrFocusEpicIntent,
-  resourceEpicTabIntent,
 } from "@/lib/tab-navigation";
 import { ensureSettingsTab } from "@/lib/commands/actions/open-system-tab";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -880,7 +879,7 @@ function routeOpenChatNotification(
     ...state.openTabOrder,
     ...Object.keys(state.tabsById),
   ].filter((tabId, index, tabIds) => tabIds.indexOf(tabId) === index);
-  const match = candidateTabIds
+  let match = candidateTabIds
     .flatMap((tabId) => {
       const tab = state.tabsById[tabId];
       if (tab?.epicId !== payload.epicId) return [];
@@ -919,28 +918,13 @@ function routeOpenChatNotification(
       })
       .at(0);
     if (closedMatch === undefined) return false;
-    navigateToTabIntent(
-      navigate,
-      resourceEpicTabIntent({
-        epicId: payload.epicId,
-        tabId: closedMatch.tabId,
-        name: undefined,
-        focus: {
-          focusedAt: receivedAt,
-          focusArtifactId: chatId,
-          focusThreadId: undefined,
-          migrationSource: undefined,
-        },
-        preparation: {
-          kind: "open-tile",
-          node: closedMatch.node,
-          gesture: "single",
-        },
-        includeNestedFocus: true,
-      }),
-      undefined,
-    );
-    return true;
+    state.restoreClosedTilePreview(closedMatch.tabId, null, closedMatch.node);
+    const restored = findOpenTileInTab(closedMatch.tabId, {
+      id: closedMatch.node.id,
+      hostId: closedMatch.node.hostId,
+    });
+    if (restored === null) return false;
+    match = { tabId: closedMatch.tabId, ...restored };
   }
 
   const nestedFocus = state.prepareSetActiveTileTabFocusTarget(

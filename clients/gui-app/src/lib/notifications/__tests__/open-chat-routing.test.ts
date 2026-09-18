@@ -149,6 +149,7 @@ describe("open-chat notification routing, an active tile A + a CLOSED same-id ti
       canvasByTabId: {},
       openTabOrder: [],
       closedTilePayloadsByTabId: {},
+      pendingCreateArtifactIds: new Set<string>(),
     });
   });
 
@@ -219,6 +220,11 @@ describe("open-chat notification routing, an active tile A + a CLOSED same-id ti
       if (reopenedB === undefined) {
         throw new Error("expected the closed tile to have been reopened");
       }
+      // The reopen must consume the closed-payload entry, not leave a
+      // now-live tile still occupying the tab's FIFO budget.
+      expect(
+        after.closedTilePayloadsByTabId[tabId]?.[closedTile.instanceId],
+      ).toBeUndefined();
       expect(canvas.tilesByInstanceId[openTile.instanceId]).toEqual(openTile);
       // Re-read the pane fresh rather than reusing the pre-route `paneId`:
       // the reopen may not keep the same pane object/id.
@@ -236,4 +242,46 @@ describe("open-chat notification routing, an active tile A + a CLOSED same-id ti
       });
     },
   );
+
+  it("reopens a closed pending-create terminal-agent at its ORIGINAL instance and revives its pending-create liveness", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-1", "Epic 1");
+    const agent = makeOpenableNodeRef({
+      id: "agent-1",
+      instanceId: "inst-agent-1",
+      type: "terminal-agent",
+      name: "Pending agent",
+      hostId: "host-closed",
+    });
+    store.markArtifactPendingCreate(agent.id);
+    store.openTileInTab(tabId, agent);
+    const paneId = requirePane(tabId).id;
+    store.closeCanvasTab(tabId, paneId, agent.instanceId);
+
+    // Real close already clears the LIVE pending set while preserving
+    // `pendingCreate: true` on the cached closed payload (pinned elsewhere;
+    // not re-asserted here).
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(agent.id),
+    ).toBe(false);
+
+    const navigate = vi.fn();
+    const routed = routeNotificationForHost(
+      navigate,
+      { kind: "chat", epicId: "epic-1", chatId: "agent-1" },
+      1_000,
+      { originHostId: "host-closed", effectiveHostId: "host-closed" },
+    );
+
+    expect(routed).toBe(true);
+    const after = useEpicCanvasStore.getState();
+    // Reuses the ORIGINAL instance, not a freshly minted one.
+    expect(
+      after.canvasByTabId[tabId]?.tilesByInstanceId[agent.instanceId],
+    ).toEqual(agent);
+    expect(
+      after.closedTilePayloadsByTabId[tabId]?.[agent.instanceId],
+    ).toBeUndefined();
+    expect(after.pendingCreateArtifactIds.has(agent.id)).toBe(true);
+  });
 });

@@ -499,8 +499,8 @@ export interface EpicCanvasStore {
    * addressing that exact instanceId resolves directly after the reopen.
    * Evicts the now-live entry from `closedTilePayloadsByTabId` - a later
    * close re-captures it - and restores its pending-create marker while the
-   * optimistic record is still projecting. Back/forward's preview-reopen path
-   * (`history-navigation.ts`) is the only caller.
+   * optimistic record is still projecting. Shared by back/forward navigation
+   * and notification jumps to closed tiles.
    */
   restoreClosedTilePreview: (
     tabId: string,
