@@ -14,8 +14,9 @@ const PANEL_MIN_HEIGHT_PX = 48;
  *   width check therefore only hides the panel on a viewport too narrow for
  *   it; a panel with no room on either side of the menu is slid back on
  *   screen, over the list, and still shows.
- * - Height: measured from the anchor row's top to the boundary's bottom less
- *   padding, so a row too close to the bottom edge hides the panel.
+ * - Height: measured from the anchor row's top to the bottom of the usable
+ *   area - the viewport less the padding and the strip a software keyboard
+ *   covers - so a row too close to that edge hides the panel.
  *
  * `availableWidth`/`availableHeight` can go negative (the reference itself
  * already overflows the boundary before this middleware runs); clamp to 0

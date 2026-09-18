@@ -11,7 +11,7 @@ import { createPortal } from "react-dom";
 import { RemoveScroll } from "react-remove-scroll";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { autoUpdate, computePosition, type Placement } from "@floating-ui/dom";
+import { autoUpdate, computePosition } from "@floating-ui/dom";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import {
   type MentionStepChromeStatus,
 } from "@/lib/composer/mentions";
 import type { MentionPreview } from "@/lib/composer/types";
+import { subscribeNativeKeyboardState } from "@/lib/native-keyboard";
 import { cn } from "@/lib/utils";
 
 import {
@@ -43,7 +44,11 @@ import {
 
 import { MentionMenuItem } from "./mention-menu-item";
 import { MentionPreviewPanel } from "./mention-preview-panel";
-import { composerMenuMiddleware } from "./composer-menu-middleware";
+import {
+  composerMenuMiddleware,
+  initialComposerMenuPlacement,
+  readComposerMenuReservedEdges,
+} from "./composer-menu-middleware";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
@@ -52,16 +57,6 @@ const SLASH_MENU_COPY = {
   empty: "No matching commands",
 };
 const LOAD_FAILED_LABEL = "Couldn't load commands";
-
-// Open-time preference only: how much room a side needs before it is worth
-// opening into. The rendered menu routinely exceeds this - a full roster of
-// files or terminals grows the list to its `max-h` viewport cap - and that is
-// fine, because `flip()` re-picks the side once the real height is known and
-// `shift()` clamps the menu inside the viewport on both axes (see
-// `composerMenuMiddleware`). Nothing here bounds the menu.
-const MENU_HEIGHT_ESTIMATE = 280;
-
-type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
 
 interface MenuSlice {
   readonly open: boolean;
@@ -238,7 +233,10 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
 
   // Floating-ui positioning. The caret rect can be unavailable at open, so
   // recompute placement on each update and let the middleware keep the menu
-  // inside the viewport.
+  // inside the usable viewport. The menu never occupies the strip the
+  // software keyboard covers: the keyboard inset is read on every pass, and a
+  // keyboard opening or closing - which moves nothing `autoUpdate` observes -
+  // repositions it too.
   useLayoutEffect(() => {
     const floating = floatingRef.current;
     if (floating === null) return;
@@ -251,9 +249,14 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     };
 
     const reposition = (): void => {
+      const reserved = readComposerMenuReservedEdges();
       void computePosition(virtualReference, floating, {
-        placement: selectInitialPlacement(pickerStore),
-        middleware: composerMenuMiddleware(),
+        placement: initialComposerMenuPlacement(
+          pickerStore.getState().clientRect?.() ?? null,
+          window.innerHeight,
+          reserved,
+        ),
+        middleware: composerMenuMiddleware(reserved),
       }).then(({ x, y }) => {
         floating.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(
           y,
@@ -262,7 +265,12 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     };
 
     reposition();
-    return autoUpdate(virtualReference, floating, reposition);
+    const stopAutoUpdate = autoUpdate(virtualReference, floating, reposition);
+    const unsubscribeKeyboard = subscribeNativeKeyboardState(reposition);
+    return () => {
+      stopAutoUpdate();
+      unsubscribeKeyboard();
+    };
   }, [pickerStore]);
 
   const headerLabel = copy.header;
@@ -313,9 +321,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         // Width fits content (w-max) so short menus stay compact and long command
         // names render in full, with a comfortable floor (min-w) and a
         // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
-        // shift() clamps the grown menu inside the viewport horizontally and
-        // vertically (CLAUDE.md sizing).
-        className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
+        // shift() clamps the grown menu inside the usable viewport horizontally
+        // and vertically, and size() writes a max-height no taller than that
+        // area, which the column layout takes out of the list (CLAUDE.md
+        // sizing).
+        className="pointer-events-auto fixed top-0 left-0 z-50 flex w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] flex-col overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
         <div
           // The marker Shift+Tab's explicit focus move targets (see
@@ -325,7 +335,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           // Present only when a step actually published chrome, so the query
           // cannot land on a button-less header.
           data-mention-step-chrome={chrome === null ? undefined : true}
-          className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5"
+          className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-1.5"
         >
           <div className="flex min-w-0 shrink items-center gap-1.5">
             <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
@@ -362,7 +372,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           // display shows more of the list instead of scrolling it behind a
           // fixed ceiling.
           className={cn(
-            "overflow-y-auto py-1",
+            "min-h-0 overflow-y-auto py-1",
             kind === "mention" && step.kind === "provider"
               ? "max-h-[70vh]"
               : "max-h-[min(50vh,16rem)]",
@@ -404,18 +414,6 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
       )}
     </>
   );
-}
-
-function selectInitialPlacement(store: ComposerPickerStore): LockedPlacement {
-  const rect = store.getState().clientRect?.() ?? null;
-  // No rect yet - fall back to bottom-start; autoUpdate will reposition once
-  // the rect becomes available.
-  if (rect === null) return "bottom-start";
-  const spaceBelow = window.innerHeight - rect.bottom;
-  const spaceAbove = rect.top;
-  if (spaceBelow >= MENU_HEIGHT_ESTIMATE) return "bottom-start";
-  if (spaceAbove >= MENU_HEIGHT_ESTIMATE) return "top-start";
-  return spaceBelow >= spaceAbove ? "bottom-start" : "top-start";
 }
 
 function activeDialogContentShard(): HTMLElement | null {
