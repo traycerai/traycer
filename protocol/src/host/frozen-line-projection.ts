@@ -16,14 +16,28 @@ import { z } from "zod";
  * leaves sit inside an array and 27 of them share ONE catch scope -
  * `providers[].nativeCapabilities`, a whole-object `.catch(DEFAULT)` - so a
  * single new settings tab costs a 7.0 peer its MCP, Plugins AND Skills tabs
- * together. Seven leaves have no `.catch()` between them and the root at all,
- * where growth fails the entire `providers.list` response rather than degrading
- * part of it; four sit under an array and so are repairable here
- * (`servers[].status`, `servers[].statusSource`,
- * `servers[].tools[].denySources[]`, `skills[].source`) and three are scalars
- * that nothing can rescue by dropping (`native|0|3.server.status`,
- * `native|0|3.server.statusSource`, `native|1.code`). Those three are where a
- * `.catch()` - not a pin - is the missing defence.
+ * together.
+ *
+ * TWELVE of the 63 enum leaves on that row have no `.catch()` between them and
+ * the root at all, where growth fails the entire `providers.list` response
+ * rather than degrading part of it. Four are on the row itself
+ * (`providers[].providerId`, `candidates[].kind`, `apiKey.source`,
+ * `auth.status`) and eight are under `native`. Nine of the twelve sit under an
+ * array and are therefore repairable HERE - dropping the element keeps the
+ * call alive. The other three are scalars nothing can rescue by dropping, and
+ * they are the sharp ones, because a pin cannot help them either:
+ *
+ *   native|0|3.server.status         native|0|3.server.statusSource
+ *   native|1.code
+ *
+ * Those three want a `.catch()`; the nine want a pin plus this walk. Note in
+ * particular that `native|0|3.server.tools[].denySources[]` IS one of the nine:
+ * arm 3 is `{kind:"mcpDiscover", server: <the same schema servers[] arrays>}`,
+ * so `server` not itself being in an array is irrelevant - `denySources` is
+ * `z.array(enum)` nested inside `tools[]`, and dropping a member rescues it
+ * exactly as it does on the `servers[]` arm. An earlier revision of this file
+ * said that leaf needed a `.catch()`; that was wrong, and wrong in the
+ * direction that would have sent the next person to fix it in the wrong place.
  *
  * WHAT ARMS THIS, AND WHAT IS DORMANT. The host parses the resolver result
  * against the CANONICAL (head) schema and fails the call before any downgrade
@@ -151,14 +165,31 @@ function countArrayElements(value: unknown): number {
  *
  * Identity is about the RESULT, not about the work. Every object and record
  * node allocates a `{ ...value }` on the way down and discards it when no child
- * moved, and the union case runs `safeParse` PER ARM, which is where the cost
- * actually is. So this is not free: on a `providers.list` payload both the head
- * and the 7.0 row accept - 8 rows with full `nativeCapabilities`, plus a native
- * MCP result of 6 servers x 8 tools - the walk measures ~2.5x the frozen
- * parse it precedes, making the combined call ~3x a bare parse (0.037 ms ->
- * 0.12 ms). Bounded, on a response already parsed twice over (here and again by
- * the peer), and it buys the tabs a `.catch()` would otherwise drop - but state
- * it as a multiple, not as "free".
+ * moved, and the union case runs `safeParse` per arm AND once more on the union
+ * itself, which is where the cost actually is.
+ *
+ * So this is not free. On a `providers.list` payload both the head and the 7.0
+ * row accept - 8 rows with full `nativeCapabilities`, plus a native MCP result
+ * of 6 servers x 8 tools, on which the walk returns identity - the walk costs
+ * about 3x the frozen parse it precedes and the combined call about 4x a bare
+ * parse. Those RATIOS held across runtimes; the absolute did not, so it is
+ * worth naming: ~0.12 ms under vitest's Node workers (parse ~0.029 ms) and
+ * ~0.17 ms under Bun directly (parse ~0.041 ms). An earlier revision claimed
+ * 2.5x/3x from a run with too little warm-up.
+ *
+ * Bounded work on a response already parsed twice over (here and again by the
+ * peer), and it buys the tabs a `.catch()` would otherwise drop - but state it
+ * as a multiple, and never as "free".
+ *
+ * One structural note for whoever profiles this next: on a 9->7 downgrade each
+ * row is walked twice and fully parsed four times over (the live enabled-
+ * profiles pre-pass, the row helper's `safeParse`, this walk's per-element
+ * `safeParse` on `providers[]`, and the final frozen parse), plus the handler's
+ * own caller-side parse. `parseProvidersListResponseForFrozenLine` re-walks
+ * rows that `projectRowsOntoFrozenLine` already handled. That redundancy is
+ * known and deliberate for now - each parse has a different owner and merging
+ * them would couple the row helper to the response helper - but it is the first
+ * place to look if this ever shows up in a profile.
  */
 function project(schema: z.ZodType, value: unknown): unknown {
   const def = nodeOf(schema);
@@ -178,6 +209,20 @@ function project(schema: z.ZodType, value: unknown): unknown {
       if (value === null || value === undefined) return value;
       return def.innerType ? project(def.innerType, value) : value;
     }
+    // NOTE for `object` and `record` below: both deliberately visit only the
+    // declared children - an object's `shape`, a record's `valueType`. An
+    // object's `catchall` and a record's `keyType` are NOT walked, and that is
+    // a scope decision rather than an oversight. The rule here is "an array
+    // keeps the elements that survive"; a record key or a catchall-typed value
+    // is not an array member, so dropping one would be a SECOND rule needing
+    // its own never-empty exception. Skipping them leaves the enclosing object
+    // to fail into its nearest `.catch()` - the behaviour that already shipped.
+    //
+    // The guard test makes the opposite choice and walks both, because the two
+    // have opposite failure modes: a walk that silently skips a child makes the
+    // guard's completeness claim VACUOUSLY TRUE, whereas skipping one here just
+    // declines to repair something. Both of the guard's holes were found that
+    // way, so the asymmetry is load-bearing and not an inconsistency.
     case "object": {
       const shape = def.shape;
       if (!shape || !isPlainRecord(value)) return value;
@@ -217,6 +262,23 @@ function project(schema: z.ZodType, value: unknown): unknown {
       // a confident wrong answer; letting the enclosing `.catch()` serve its
       // default says "unknown" instead. Degrading to unknown is allowed;
       // fabricating a positive claim is not.
+      //
+      // TWO HONEST LIMITS on that reasoning, both dormant today and both worth
+      // stating rather than discovering later:
+      //
+      //   1. It is emptiness-shaped where the hazard is field-shaped. That same
+      //      consumer filters by model family and THEN tests `length === 0`, so
+      //      dropping the one scope that gated the selected model produces the
+      //      identical false "not limited" without ever emptying the array.
+      //      This rule does not cover that; only pinning the severity enum and
+      //      refusing to drop from THIS field would. `severity` is unpinned, so
+      //      nothing reaches it yet.
+      //   2. It fires on EVERY array, including ones with no enclosing
+      //      `.catch()` at all - and `native` has none on any of the four
+      //      response schemas. There, restoring the original means the whole
+      //      response fails where an emptied array would at least have
+      //      delivered something parseable. That is the one place the stated
+      //      rationale ("let the catch say unknown") has no catch to appeal to.
       if (kept.length === 0 && value.length > 0) return value;
       return changed ? kept : value;
     }
@@ -246,18 +308,32 @@ function project(schema: z.ZodType, value: unknown): unknown {
       let bestRetained = -1;
       for (const arm of options) {
         const projected = project(arm, value);
-        const parsed = arm.safeParse(projected);
-        if (!parsed.success) continue;
+        if (!arm.safeParse(projected).success) continue;
         // Identity on the PROJECTION is what says "this arm needed no repair".
-        // It has to be tested on the projection and not on `parsed.data`, which
-        // is a fresh object for every object schema and so never identical.
+        // It has to be tested on the projection and never on a parse RESULT,
+        // which is a fresh object for every object schema and so never
+        // identical to what went in.
         if (projected === value) return value;
-        // Score the PARSED result though, not the projected input: an arm
-        // strips the keys it does not model, so scoring the input credits an
-        // arm for data it is about to throw away, and a narrow arm carrying a
-        // fat unmodeled field would beat the arm that actually keeps the
-        // payload.
-        const retained = countArrayElements(parsed.data);
+        // Score what the UNION yields for this projection, not what the ARM
+        // alone would. The caller re-parses the finished value through this
+        // same union, and a union resolves FIRST-MATCH-WINS in declaration
+        // order - so an arm can win the score and then hand its value to an
+        // EARLIER arm that keeps less. Scoring `arm.safeParse(...)` was wrong
+        // for exactly the overlap this branch exists to handle:
+        //
+        //   armA = { items: array(enum["a","b"]) }                 (first)
+        //   armB = { items: array(enum["a"]), extra: array(...) }  (second)
+        //   value = { items: ["a","b","c"], extra: ["x","x","x"] }
+        //
+        // armB scored 4 against armA's 2 and won, but the caller's parse then
+        // matched armA and delivered `{items:["a"]}` - one element, where
+        // armA's own projection would have delivered `{items:["a","b"]}`. The
+        // scoring actively chose the worse answer. Scoring the union's own
+        // resolution is the only measure that matches what the peer receives.
+        const resolved = schema.safeParse(projected);
+        const retained = resolved.success
+          ? countArrayElements(resolved.data)
+          : -1;
         if (retained > bestRetained) {
           best = projected;
           bestRetained = retained;

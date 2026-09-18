@@ -261,6 +261,45 @@ describe("projectOntoFrozenLine", () => {
     }
   });
 
+  it("is scored on what the UNION resolves to, not on the arm that won", () => {
+    // Every union test above asserts on the PROJECTION. That is the wrong end
+    // of the pipe: the caller re-parses through the same union, and a union
+    // resolves FIRST-MATCH-WINS in declaration order - so the arm that wins the
+    // score is not necessarily the arm that serves the value.
+    //
+    // Scoring `arm.safeParse(...)` made this concretely worse than picking an
+    // arm at random would have:
+    //
+    //   projection chose  {items:["a"], extra:[...]}   (armB, scored 4 vs 2)
+    //   union.parse gave  {items:["a"]}                 (armA matched FIRST)
+    //   armA alone gave   {items:["a","b"]}             (strictly better)
+    //
+    // Asserting through the final parse is the only framing that can see it,
+    // which is why this test exists rather than another projection assertion.
+    const armA = z.object({ items: z.array(z.enum(["a", "b"])) });
+    const armB = z.object({
+      items: z.array(z.enum(["a"])),
+      extra: z.array(z.enum(["x"])),
+    });
+    const union = z.union([armA, armB]);
+    const value = { items: ["a", "b", "c"], extra: ["x", "x", "x"] };
+
+    const served = union.safeParse(projectOntoFrozenLine(union, value));
+    expect(served.success).toBe(true);
+    if (!served.success) return;
+    expect(served.data).toEqual({ items: ["a", "b"] });
+
+    // And the same assertion through the fixtures above, so the parse-through
+    // framing covers the whole branch rather than only its regression.
+    const three = z.object({ items: z.array(z.enum(["a", "b", "c"])) });
+    const one = z.object({ items: z.array(z.enum(["a"])) });
+    for (const u of [z.union([one, three]), z.union([three, one])]) {
+      expect(
+        u.parse(projectOntoFrozenLine(u, { items: ["a", "b", "c", "d"] })),
+      ).toEqual({ items: ["a", "b", "c"] });
+    }
+  });
+
   it("never empties a non-empty array, because [] is a positive claim", () => {
     // `profiles[].rateLimitLimitedScopes` reads `null` as "could not determine,
     // fall back to rateLimitStatus" and `[]` as "determined: nothing limited".

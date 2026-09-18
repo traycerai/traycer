@@ -4277,20 +4277,25 @@ function projectRowsOntoFrozenLine<T extends z.ZodType>(
  *
  * The row helper above covers `providers[]`. This covers the response's OTHER
  * half - `native`, the optional MCP/plugins/skills query result - which no row
- * helper touches and where every catch-less leaf in the response lives. Seven
- * enum leaves have no `.catch()` between them and the root, so growth there
- * fails the ENTIRE `providers.list` response rather than degrading part of it,
- * and all seven are under `native`. Four are under an array and so are
- * repairable by dropping (`servers[].status`, `servers[].statusSource`,
- * `servers[].tools[].denySources[]`, `skills[].source`); the remaining three
- * are scalars on the single-server and error arms, which dropping cannot
- * rescue and which want a `.catch()` rather than a pin. Calling this instead of
- * a bare `.safeParse` is what puts those four inside the projection's reach.
+ * helper touches. Of the TWELVE catch-less enum leaves on `providers.list@7.0`,
+ * eight are under `native`, and growth in any of them fails the ENTIRE
+ * `providers.list` response rather than degrading part of it. FIVE sit under an
+ * array and so are repairable by dropping - `servers[].status`,
+ * `servers[].statusSource`, `servers[].tools[].denySources[]`,
+ * `skills[].source`, and `server.tools[].denySources[]` on the single-server
+ * arm. The other three are scalars (`server.status` and `server.statusSource`
+ * on that same arm, plus the error arm's `code`); dropping cannot rescue those,
+ * and they want a `.catch()` rather than a pin. Calling this instead of a bare
+ * `.safeParse` is what puts the five inside the projection's reach.
+ *
+ * The remaining four catch-less leaves are on the row itself and reach the
+ * projection through `projectRowsOntoFrozenLine` above, where an unrepresentable
+ * value drops its row - already the shipped behaviour.
  *
  * Reach, not effect: like the row helper, this only acts on a leaf the frozen
  * line pins STRICTLY NARROWER than the head, because the host has already
  * parsed the value against the head before any downgrade runs. None of the
- * seven is pinned narrower today - see the module docblock on
+ * eight is pinned narrower today - see the module docblock on
  * `frozen-line-projection.ts` - so this is currently a parse with a walk in
  * front of it, waiting on the first of those enums to move.
  */

@@ -68,14 +68,17 @@ import { providerSettingsTabSchema } from "@traycer/protocol/host/provider-nativ
  *   - `denySources[]` appears TWICE - under `native|0|0.servers[]` and again
  *     under `native|0|3.server` - and neither has a `.catch()` between it and
  *     the response root. Growing that enum does not degrade the response, it
- *     fails the whole `providers.list` call. The two are NOT equally salvage-
- *     able, and the difference is the array: the `servers[]` one sits under one
- *     and so a pin there would let the projection drop the member and keep the
- *     call; the `native|0|3.server` one is the single-server arm, where the
- *     unknown member has no array to be dropped from, so a pin alone still
- *     fails the call and what it needs is a `.catch()`. Same enum, two leaves,
- *     two different fixes - which is the argument for reading the path and not
- *     just the field name.
+ *     fails the whole `providers.list` call. BOTH are repairable by a pin plus
+ *     the projection: arm 3 is `{kind:"mcpDiscover", server: <the same schema
+ *     `servers[]` arrays>}`, so `server` not itself sitting in an array is
+ *     irrelevant - `denySources` is `z.array(enum)` nested inside `tools[]`
+ *     either way, and dropping the member rescues the call on both arms.
+ *
+ *     An earlier revision of this comment claimed the single-server one had
+ *     "no array to be dropped from" and needed a `.catch()` instead. That was
+ *     false, and it is the shape of error worth guarding against here: the path
+ *     was read down to `.server` and the reasoning stopped there, when the two
+ *     `[]` segments that decide the answer come after it.
  *   - `managedVersions.available[].installState|4.reason` reaches
  *     `providerManagedInstallErrorReasonSchema` - the SAME enum the row's own
  *     `managedInstallState` was just pinned away from. One field being frozen
@@ -179,7 +182,6 @@ const INERT_LEAF_KINDS = new Set([
   "any",
   "unknown",
   "nan",
-  "template_literal",
   "custom",
 ]);
 
@@ -200,7 +202,24 @@ type ZodNodeDef = z.core.$ZodTypeDef & {
   readonly keyType?: z.ZodType;
   readonly shape?: Readonly<Record<string, z.ZodType>>;
   readonly options?: readonly z.ZodType[];
+  // An object's UNDECLARED-key schema. `z.object(...).catchall(enum)` puts a
+  // live enum on a released row without it ever appearing in `shape`, and
+  // `.catchall(...)` is already an idiom in this tree (`notifications/
+  // payloads.ts` uses it at 10+ sites). `looseObject` sets it to `unknown` and
+  // `strictObject` to `never`, both inert, so traversing it costs nothing and
+  // closes a real path.
+  readonly catchall?: z.ZodType;
+  // A template literal's segments: a mix of string literals and SCHEMAS.
+  // `z.templateLiteral(["tab-", providerSettingsTabSchema])` genuinely
+  // constrains the wire - it rejects `"tab-zzz"` - so a schema hiding in here
+  // is a live enum by any definition this guard uses.
+  readonly parts?: readonly unknown[];
 };
+
+/** A `parts` entry is a schema rather than a literal segment. */
+function isSchemaPart(part: unknown): part is z.ZodType {
+  return typeof part === "object" && part !== null && "_zod" in part;
+}
 
 function defOf(schema: z.ZodType): ZodNodeDef {
   return schema._zod.def;
@@ -252,6 +271,23 @@ function collectEnums(
     case "object": {
       for (const [key, child] of Object.entries(def.shape ?? {})) {
         collectEnums(child, path ? `${path}.${key}` : key, found, depth + 1);
+      }
+      // The catchall too - same class of hole as the record key below, and
+      // `object` being a HANDLED kind means the throw in `default:` cannot
+      // catch it for us.
+      if (def.catchall) {
+        collectEnums(def.catchall, `${path}{catchall}`, found, depth + 1);
+      }
+      return;
+    }
+    case "template_literal": {
+      // NOT an inert leaf, despite looking like one: its `parts` interleave
+      // string literals with schemas, and a schema here constrains the wire
+      // exactly as a bare enum would.
+      for (const [index, part] of (def.parts ?? []).entries()) {
+        if (isSchemaPart(part)) {
+          collectEnums(part, `${path}\`${index}\``, found, depth + 1);
+        }
       }
       return;
     }
@@ -375,6 +411,38 @@ describe("released providers.list lines reach no UNREVIEWED live enum", () => {
       byName: z.record(z.string(), providerSettingsTabSchema),
     });
     expect(liveEnumPaths(valued)).toEqual(["byName{}"]);
+  });
+
+  it("sees an enum reached through a CATCHALL or a TEMPLATE LITERAL", () => {
+    // Two more of the same class as the record key, both found by review after
+    // that one was fixed - which is the argument for these controls existing at
+    // all. A walk that skips a child schema in silence reports no path and
+    // passes; every kind that can hold one therefore needs a control, not an
+    // assurance.
+    //
+    // `catchall` is the sharper of the two, because `.catchall(...)` is already
+    // an idiom in this tree rather than a hypothetical.
+    const viaCatchall = z
+      .object({ a: z.string() })
+      .catchall(providerSettingsTabSchema);
+    expect(liveEnumPaths(z.object({ byKey: viaCatchall }))).toEqual([
+      "byKey{catchall}",
+    ]);
+
+    const viaTemplate = z.templateLiteral(["tab-", providerSettingsTabSchema]);
+    expect(liveEnumPaths(z.object({ slug: viaTemplate }))).toEqual(["slug`1`"]);
+
+    // Both genuinely constrain the wire, so a leak through either would be a
+    // real one rather than a notational curiosity.
+    expect(viaCatchall.safeParse({ a: "s", x: "zzz" }).success).toBe(false);
+    expect(viaCatchall.safeParse({ a: "s", x: "mcp" }).success).toBe(true);
+    expect(viaTemplate.safeParse("tab-zzz").success).toBe(false);
+    expect(viaTemplate.safeParse("tab-mcp").success).toBe(true);
+
+    // And the two object variants that set a catchall implicitly stay inert,
+    // so traversing it adds no path to the accepted list.
+    expect(liveEnumPaths(z.looseObject({ a: z.string() }))).toEqual([]);
+    expect(liveEnumPaths(z.strictObject({ a: z.string() }))).toEqual([]);
   });
 
   it("detects a leaf that is live rather than merely enum-shaped", () => {
