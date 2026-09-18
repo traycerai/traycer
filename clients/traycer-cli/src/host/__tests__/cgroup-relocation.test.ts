@@ -462,13 +462,14 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
   });
 
   it("resolves when the ack arrives AFTER the process exit - Bun does not drain fd 3 before it reports the child gone", async () => {
-    // Bun 1.3.12 counts stdout/stderr toward its child close accounting but
-    // returns the extra descriptor from `net.connect({fd})` without adding it,
-    // so with stdio 0-2 inherited the process can be reported gone while fd 3
-    // still holds the ack. Deciding on that report alone rejects a relocation
-    // that had already acknowledged AND completed: a false "never started", a
-    // second terminal envelope over the child's own, and the real exit code
-    // lost. The tree and dev paths of this CLI run under Bun.
+    // Bun counts stdout/stderr toward its child close accounting but returns
+    // the extra descriptor from `net.connect({fd})` without adding it - true of
+    // 1.3.12 and 1.3.14 alike, whose `node:child_process` builtins are
+    // identical - so with stdio 0-2 inherited the process can be reported gone
+    // while fd 3 still holds the ack. Deciding on that report alone rejects a
+    // relocation that had already acknowledged AND completed: a false "never
+    // started", a second terminal envelope over the child's own, and the real
+    // exit code lost. The tree and dev paths of this CLI run under Bun.
     mocks.cgroup = V2_HOST_UNIT_CGROUP;
     mocks.packaged = true;
     process.argv = packagedArgv() as string[];

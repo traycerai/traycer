@@ -4,7 +4,7 @@ Thanks for helping improve Traycer! This repo holds the open-source clients, CLI
 
 ## Prerequisites
 
-- **Bun 1.3.12** — the `packageManager` is pinned; install from <https://bun.sh>
+- **Bun 1.3.14** — the `packageManager` is pinned; install from <https://bun.sh>
 - **Node 24**
 
 ## Setup

@@ -4,7 +4,7 @@ Deeper notes for working on the Traycer clients, CLI, and protocol.
 
 ## Toolchain
 
-- **Bun 1.3.12** — pinned via `packageManager`
+- **Bun 1.3.14** — pinned via `packageManager`
 - **Node 24**
 - **Nx** runs the workspace targets (`build` / `lint` / `test` / `format`) with caching
 
