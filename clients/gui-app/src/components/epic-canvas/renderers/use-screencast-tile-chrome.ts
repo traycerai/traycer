@@ -25,6 +25,8 @@ const SCREENCAST_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   back: true,
   forward: true,
   reload: true,
+  // The screencast nav wire has no stop; the spinner rides inside Reload.
+  stop: false,
   zoom: false,
   devtools: false,
   find: false,
@@ -135,6 +137,7 @@ export function useScreencastTileChrome(
       onForward();
     },
     onReload,
+    onStop: ignoreChromeAction,
     onZoomOut: ignoreChromeAction,
     onZoomIn: ignoreChromeAction,
     onResetZoom: ignoreChromeAction,

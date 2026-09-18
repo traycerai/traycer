@@ -149,6 +149,24 @@ function setupEvent(fields: {
   });
 }
 
+function forkEvent(fields: { eventId: string; timestamp: number }): ChatEvent {
+  return chatEventSchema.parse({
+    eventId: fields.eventId,
+    type: "chat.forked",
+    timestamp: fields.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: { sourceChatId: "c", sourceHostId: "h" },
+  });
+}
+
 function pauseEvent(fields: {
   eventId: string;
   type: ChatEvent["type"];
@@ -617,6 +635,67 @@ describe("setup cards", () => {
       "setup-card:chat-1:0:200",
       "m-2",
     ]);
+  });
+
+  it("does not pin a genesis-shaped card once a preceding fork disqualifies it, weaving it by timestamp among the inherited history instead", () => {
+    // A forked chat inherits history, then continues into its OWN worktree.
+    // That continuation window has no `setup.creating` (same shape as a
+    // genesis card) but must NOT pin above the inherited messages - only an
+    // INITIAL worktree, preceding any fork, belongs there.
+    const inheritedUser = userMessage({ messageId: "m-0", timestamp: 10 });
+    const inheritedAssistant = assistantMessage({
+      messageId: "m-a0",
+      timestamp: 15,
+      turnId: "t-0",
+      startedAt: 20,
+      blocks: [textBlock("b-0", 20)],
+    });
+    const fork = forkEvent({ eventId: "e-fork", timestamp: 30 });
+    const continuation = setupEvent({
+      eventId: "e-setup",
+      type: "setup.running",
+      timestamp: 40,
+      workspacePath: "/w",
+    });
+    const newUser = userMessage({ messageId: "m-1", timestamp: 50 });
+
+    expect(
+      project(
+        [inheritedUser, inheritedAssistant, newUser],
+        [fork, continuation],
+        null,
+      ),
+    ).toEqual([
+      "m-0",
+      "assistant:t-0",
+      "forked-chat-link:e-fork",
+      "setup-card:chat-1:0:40",
+      "m-1",
+    ]);
+  });
+
+  it("still pins an ordinary genesis card (no preceding fork) ahead of the same inherited history", () => {
+    // Identical fixture to the previous test, minus the fork event: the
+    // ordinary back-filled genesis card still pins to ordinal 0.
+    const inheritedUser = userMessage({ messageId: "m-0", timestamp: 10 });
+    const inheritedAssistant = assistantMessage({
+      messageId: "m-a0",
+      timestamp: 15,
+      turnId: "t-0",
+      startedAt: 20,
+      blocks: [textBlock("b-0", 20)],
+    });
+    const genesis = setupEvent({
+      eventId: "e-setup",
+      type: "setup.running",
+      timestamp: 40,
+      workspacePath: "/w",
+    });
+    const newUser = userMessage({ messageId: "m-1", timestamp: 50 });
+
+    expect(
+      project([inheritedUser, inheritedAssistant, newUser], [genesis], null),
+    ).toEqual(["setup-card:chat-1:0:40", "m-0", "assistant:t-0", "m-1"]);
   });
 });
 

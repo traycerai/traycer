@@ -1249,7 +1249,7 @@ function describeTurnRows(input: {
  *
  * Three placements, and only one of them is a sort:
  *
- * - the GENESIS card (window 0 with no `setup.creating` event) pins to ordinal
+ * - the GENESIS card (window 0 with no `setup.creating` or preceding fork event) pins to ordinal
  *   0, because its stamp is back-filled and can land after the first message;
  * - a card whose `triggeringMessageId` names a row that exists is woven
  *   immediately ABOVE that row, by id - the card is announced before the slow
@@ -1291,7 +1291,7 @@ function placeSetupCards(
     anchorId: window.triggeringMessageId,
   }));
 
-  const pinGenesis = !windows[0].hasCreatingEvent;
+  const pinGenesis = windows[0].isGenesisPin;
   const baseIds = new Set(base.map((row) => row.rowId));
   const cardsByAnchor = new Map<string, TranscriptRowDescriptor[]>();
   const floating: TranscriptRowDescriptor[] = [];
