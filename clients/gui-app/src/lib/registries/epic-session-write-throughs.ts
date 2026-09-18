@@ -17,10 +17,23 @@
  * (`lib/registries/epic-session-controller.ts`), which owns WHEN; this module
  * owns WHAT, and nothing else writes a tab name from a session.
  *
- * Every write re-checks `isCurrent` first. The subscriptions are torn down on
- * every path that drops the handle, but a store or Query-cache notification
- * already in flight when that happens must not write into the next identity's
- * caches, and detaching cannot recall it.
+ * Every write re-checks two things first.
+ *
+ * `isCurrent`: the subscriptions are torn down on every path that drops the
+ * handle, but a store or Query-cache notification already in flight when that
+ * happens must not write into the next identity's caches, and detaching
+ * cannot recall it.
+ *
+ * {@link isEpicSessionLive}: a session is an AUTHORITY only while it is live.
+ * The mounted effects got that for free - a mounted session is one the user
+ * is looking at on a connected host - and a warm one does not: it can sit
+ * unmounted on a host that went away, holding a title the user has since
+ * changed from History (`useEpicUpdateTitle` patches the caches on RPC
+ * success and never touches this store). Re-applying its title then REVERTS
+ * the rename, on every host's caches, on every fetch. So while the session is
+ * not live the subscriptions stay attached and write nothing; the liveness
+ * facts live in the same store, so the transition back to live is itself a
+ * store notification and the store halves flush whatever changed meanwhile.
  */
 import type { QueryCacheNotifyEvent, QueryClient } from "@tanstack/react-query";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -56,6 +69,16 @@ export interface EpicSessionWriteThroughSpec {
 
 export interface EpicSessionWriteThroughs {
   /**
+   * Run every writer against the session's CURRENT state, synchronously.
+   *
+   * The writers are store subscribers, and so is whoever is about to let the
+   * session go (the controller's metadata hold). Subscriber order decides who
+   * sees a title first, and the one that releases demand can evict the
+   * session - detaching these - before they have run. The owner calls this
+   * before releasing, so no ordering can lose a write.
+   */
+  flush(): void;
+  /**
    * Re-apply the session's current title to the epic's tab records. Called
    * when membership changes: a duplicated tab, or one opened in this window
    * for an epic already live here, is seeded from the session at once rather
@@ -81,6 +104,22 @@ export function readEpicSessionTitle(handle: OpenEpicStoreHandle): string {
   return title.trim();
 }
 
+/**
+ * Whether the session may speak for the epic right now: its snapshot has
+ * loaded AND its host transport is open.
+ *
+ * The RAW renderer-host transport, not the blended `connectionStatus`: that
+ * one also reads "reconnecting" while the host's cloud link is down, which is
+ * the steady state of a local-homed epic on an offline machine, and its
+ * document is still the freshest copy there is. Residual, accepted: a
+ * reachable host whose cloud link is down is still treated as an authority,
+ * which is the same lag a mounted, connected session already has.
+ */
+export function isEpicSessionLive(handle: OpenEpicStoreHandle): boolean {
+  const state = handle.store.getState();
+  return state.snapshotLoaded && state.hostTransportStatus === "open";
+}
+
 function normalizeGeneratedTitle(title: string): string | null {
   const trimmed = title.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -101,12 +140,18 @@ function normalizeGeneratedTitle(title: string): string | null {
  * "this tab still has no real name" - and a host-synthesized "Untitled"
  * written over an empty record would be this module inventing a name.
  */
-function attachTabNameSync(spec: EpicSessionWriteThroughSpec): {
-  readonly refresh: () => void;
+interface AttachedWriter {
+  readonly flush: () => void;
   readonly detach: () => void;
-} {
+}
+
+function mayWrite(spec: EpicSessionWriteThroughSpec): boolean {
+  return spec.isCurrent() && isEpicSessionLive(spec.handle);
+}
+
+function attachTabNameSync(spec: EpicSessionWriteThroughSpec): AttachedWriter {
   const refresh = (): void => {
-    if (!spec.isCurrent()) return;
+    if (!mayWrite(spec)) return;
     const title = readEpicSessionTitle(spec.handle);
     if (!isRealEpicTitle(title)) return;
     const canvas = useEpicCanvasStore.getState();
@@ -118,7 +163,7 @@ function attachTabNameSync(spec: EpicSessionWriteThroughSpec): {
     }
   };
   refresh();
-  return { refresh, detach: spec.handle.store.subscribe(refresh) };
+  return { flush: refresh, detach: spec.handle.store.subscribe(refresh) };
 }
 
 /**
@@ -137,7 +182,7 @@ function attachTitleCacheSync(
   spec: EpicSessionWriteThroughSpec,
   queryClient: QueryClient,
   userId: string,
-): () => void {
+): AttachedWriter {
   const { epicId, handle } = spec;
   const scope = { hostId: null, userId };
   let lastObservedTitle: string | null = null;
@@ -147,7 +192,9 @@ function attachTitleCacheSync(
     updateEpicTitleInCloudTaskCaches(queryClient, scope, epicId, title);
   };
   const syncChangedTitle = (): void => {
-    if (!spec.isCurrent()) return;
+    // Gated BEFORE `lastObservedTitle` moves: a title seen while the gate was
+    // closed is still unwritten, and the reopening flush has to find it new.
+    if (!mayWrite(spec)) return;
     const title = currentTitle();
     if (title === null || title === lastObservedTitle) return;
     lastObservedTitle = title;
@@ -155,7 +202,9 @@ function attachTitleCacheSync(
   };
   const syncMatchingQueryUpdate = (event: QueryCacheNotifyEvent): void => {
     if (event.type !== "updated") return;
-    if (!spec.isCurrent()) return;
+    // The half that can REVERT: it re-applies over any differing result, so
+    // it must never run for a session that is not the fresh party.
+    if (!mayWrite(spec)) return;
     const queryKey: unknown = event.query.queryKey;
     if (!Array.isArray(queryKey)) return;
     if (
@@ -173,9 +222,12 @@ function attachTitleCacheSync(
   const unsubscribeQueries = queryClient
     .getQueryCache()
     .subscribe(syncMatchingQueryUpdate);
-  return () => {
-    unsubscribeStore();
-    unsubscribeQueries();
+  return {
+    flush: syncChangedTitle,
+    detach: () => {
+      unsubscribeStore();
+      unsubscribeQueries();
+    },
   };
 }
 
@@ -199,11 +251,11 @@ function attachHomeCacheSync(
   spec: EpicSessionWriteThroughSpec,
   queryClient: QueryClient,
   userId: string,
-): () => void {
+): AttachedWriter {
   const { epicId, handle } = spec;
   let lastSyncedLocalHome: boolean | null = null;
   const syncHome = (): void => {
-    if (!spec.isCurrent()) return;
+    if (!mayWrite(spec)) return;
     const state = handle.store.getState();
     // Only a FRESH cloud-status frame for this open cycle is evidence. The
     // pre-connect default is not a statement about home, and writing it into
@@ -267,28 +319,32 @@ function attachHomeCacheSync(
   };
 
   syncHome();
-  return handle.store.subscribe(syncHome);
+  return { flush: syncHome, detach: handle.store.subscribe(syncHome) };
 }
 
 export function attachEpicSessionWriteThroughs(
   spec: EpicSessionWriteThroughSpec,
 ): EpicSessionWriteThroughs {
   const tabNames = attachTabNameSync(spec);
-  const detachers: Array<() => void> = [tabNames.detach];
+  const writers: AttachedWriter[] = [tabNames];
   const { cacheUserId, queryClient } = spec;
   if (queryClient !== null && cacheUserId !== null) {
-    detachers.push(attachTitleCacheSync(spec, queryClient, cacheUserId));
-    detachers.push(attachHomeCacheSync(spec, queryClient, cacheUserId));
+    writers.push(attachTitleCacheSync(spec, queryClient, cacheUserId));
+    writers.push(attachHomeCacheSync(spec, queryClient, cacheUserId));
   }
   let detached = false;
   return {
+    flush: () => {
+      if (detached) return;
+      for (const writer of writers) writer.flush();
+    },
     refreshTabNames: () => {
-      if (!detached) tabNames.refresh();
+      if (!detached) tabNames.flush();
     },
     detach: () => {
       if (detached) return;
       detached = true;
-      for (const detach of detachers) detach();
+      for (const writer of writers) writer.detach();
     },
   };
 }

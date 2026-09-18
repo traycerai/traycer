@@ -77,10 +77,19 @@
  * They were React effects - one in the mounted epic route, two in the
  * provider - so a title that landed on a never-activated tab reached the
  * strip through the registry but was persisted nowhere. One set is attached
- * per handle the entry HOLDS, for as long as it holds it (a warm, suspended
- * session is still live and still writes), moved on a re-point, and dropped
- * with the handle and at every auth boundary. The metadata hold only
- * OBSERVES the title now; the tab-name write-through is the one writer.
+ * per handle the entry HOLDS, for as long as it holds it, moved on a
+ * re-point, and dropped with the handle and at every auth boundary.
+ *
+ * Attached is not the same as writing. A warm, suspended session stays
+ * attached, but it WRITES only while it is live (snapshot loaded, host
+ * transport open): unmounted on a host that went away it is the stale party,
+ * and its title would revert a rename made from History. The gate is read at
+ * write time and reopening it flushes.
+ *
+ * The metadata hold only OBSERVES the title; the tab-name write-through is
+ * the one writer. The hold ends on a real DOCUMENT title from a live session
+ * - when every writer has had something to write - and flushes them before it
+ * releases demand, so no subscriber order can evict a session unwritten.
  *
  * ## Publish channels
  *
@@ -150,7 +159,7 @@ import { isRealEpicTitle } from "@/lib/display-title";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   attachEpicSessionWriteThroughs,
-  readEpicSessionTitle,
+  isEpicSessionLive,
   type EpicSessionWriteThroughs,
 } from "@/lib/registries/epic-session-write-throughs";
 
@@ -334,12 +343,24 @@ function requireConstructionHostStamp(handle: OpenEpicStoreHandle): string {
 }
 
 /**
- * Whether the session has observed a REAL title. The same predicate that
- * decides whether a hidden tab has metadata worth a session at all, so a
- * host-synthesized placeholder cannot end a hold the tab record still needs.
+ * Whether the metadata hold has nothing left to wait for: EVERY title writer
+ * has had something to write.
+ *
+ * So it reads the DOCUMENT title, not `readEpicSessionTitle`. The tab-name
+ * writer takes the workspace-context light as a fallback and may name the tab
+ * early from it, but the History writer is fed by `epic.title` alone, and the
+ * light can arrive first (`applyEarlyMeta`). Ending on the light let the cap
+ * take the session before the document title landed: tab named, History
+ * never written, and the one-shot already spent. And it reads liveness,
+ * because a writer that is gated shut has written nothing either.
+ *
+ * `isRealEpicTitle` is the same predicate that decides whether a hidden tab
+ * has metadata worth a session at all, so a host-synthesized placeholder
+ * cannot end a hold the tab record still needs.
  */
-function sessionHasRealTitle(handle: OpenEpicStoreHandle): boolean {
-  return isRealEpicTitle(readEpicSessionTitle(handle));
+function sessionTitleIsWritable(handle: OpenEpicStoreHandle): boolean {
+  if (!isEpicSessionLive(handle)) return false;
+  return isRealEpicTitle(handle.store.getState().epic.title);
 }
 
 interface MetadataHold {
@@ -1194,11 +1215,9 @@ function createEpicSessionController(): EpicSessionController {
   }
 
   /**
-   * Keep a freshly built HIDDEN session resident until its first non-empty
-   * title is observed, bounded by the pending-title backstop. The title read
-   * is the store's own `epic.title` - the doc/lane title the generated title
-   * is written to - not the workspace-context light, which the host fills
-   * with a placeholder.
+   * Keep a freshly built HIDDEN session resident until its first real title
+   * can be written everywhere it belongs (`sessionTitleIsWritable`), bounded
+   * by the pending-title backstop.
    */
   function startMetadataHold(
     entry: ControllerEntry,
@@ -1211,15 +1230,21 @@ function createEpicSessionController(): EpicSessionController {
       // cancelled (a park, an eviction, sign-out) spends nothing.
       entry.metadataDemandSpent = true;
       cancelMetadataHold(entry);
+      // BEFORE the demand goes. This hold and the write-throughs subscribe to
+      // one store, and releasing demand can evict the session - detaching
+      // them - inside this very notification. Whichever subscribed first
+      // runs first, so without this a hold that happens to lead them lets the
+      // session go with its title unwritten. Flushing makes the order moot.
+      if (entry.writeThroughs?.handle === handle) {
+        entry.writeThroughs.attachment?.flush();
+      }
       settleDemand(entry);
       publishSnapshots(entry);
     };
     const observe = (): void => {
-      // Observed only. The title is WRITTEN by the session's tab-name
-      // write-through, which was attached before this hold and so runs first
-      // on the same notification: one writer, and the record is real by the
-      // time the hold lets the session go.
-      if (!sessionHasRealTitle(handle)) return;
+      // Observed only: the title is WRITTEN by the session's write-throughs,
+      // the one tab-name writer. `end` flushes them before it lets go.
+      if (!sessionTitleIsWritable(handle)) return;
       end();
     };
     const unsubscribe = handle.store.subscribe(observe);
@@ -1682,7 +1707,7 @@ function createEpicSessionController(): EpicSessionController {
     // bound host rather than wherever the window moved meanwhile.
     entry.originalHostId ??= nextSession.hostId;
     // BEFORE the hold: a warm handle that already carries its title ends the
-    // hold in its first observation, and the tab record must be real by then.
+    // hold in its first observation, and the hold flushes what is attached.
     syncWriteThroughs(entry);
     // Unobserved metadata is its OWN demand source, not a property of being
     // hidden: a session acquired while a pane happens to be showing an unnamed
@@ -2013,6 +2038,9 @@ function createEpicSessionController(): EpicSessionController {
       entry.published = nextHandle;
       entry.sessionHostClient = resolveClient(hostId);
       restampHostClient(entry);
+      // BEFORE the hold, as on first acquisition: the replacement's
+      // write-throughs attach first, so they lead the hold on its store.
+      syncWriteThroughs(entry);
       // Re-point during a residency hold: the hold restarts on the replacement.
       if (entry.metadataHold !== null) startMetadataHold(entry, nextHandle);
       present(entry, {
