@@ -26,7 +26,6 @@ import {
 } from "@/lib/attachments/use-attachment-blob-src";
 import { useDraftFirstImageFetcher } from "@/lib/attachments/use-draft-image-fetcher";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import {
   draftImageInliningNeeded,
@@ -98,6 +97,7 @@ import {
   useEpicNodeOwnerKind,
   useEpicNodeWorkspaceFolders,
   useEpicPermissionRole,
+  useEpicTitle,
 } from "@/lib/epic-selectors";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import {
@@ -159,12 +159,7 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
-import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
-import {
-  useNewConversationPromptStashDestination,
-  useNewConversationPromptStashSource,
-} from "./use-new-conversation-prompt-stash-adapters";
+import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
 
 /**
  * Isolated subscriber for the live draft content. The editor rewrites content
@@ -186,7 +181,7 @@ function NewConversationModalAttachmentStrip(props: {
   // is a draft the user has not sent yet, and `useEpicImageFetcher` has no
   // local-store leg - so a hash-only chip whose bytes are sitting in this very
   // window's image partition renders blank through it. The epic leg stays
-  // because a prompt-stash restore can carry a hash this epic genuinely holds.
+  // because a draft opened here can carry a hash this epic genuinely holds.
   const fetcher = useDraftFirstImageFetcher(
     useEpicImageFetcher(),
     props.hostId,
@@ -626,6 +621,23 @@ export function NewConversationModalBody(props: {
     (state) => state.setComposerMode,
   );
   const clearDraft = useNewConversationModalStore((state) => state.clearDraft);
+  // Record this epic's name on the draft patch so the drafts list can name
+  // the row once no modal for this epic is mounted (the title comes from the
+  // open-epic projector, which only exists while the epic is open). Keyed on
+  // `draftId` as well as the title: the setter is a no-op until the patch
+  // exists, which is the first keystroke, not this mount.
+  const liveEpicTitle = useEpicTitle();
+  const epicTitle = liveEpicTitle.length > 0 ? liveEpicTitle : null;
+  const setNewChatEpicTitle = useNewConversationModalStore(
+    (state) => state.setNewChatEpicTitle,
+  );
+  const draftId = useNewConversationModalStore(
+    (state) => state.draftPatchesByEpicId[epicId]?.draftId ?? null,
+  );
+  useEffect(() => {
+    if (draftId === null) return;
+    setNewChatEpicTitle(epicId, epicTitle);
+  }, [draftId, epicId, epicTitle, setNewChatEpicTitle]);
   // The modal's host can change under an open session, so a SUBMIT consumes
   // every host's copy of the slot - not just the one selected at submit.
   const clearStagedIntent = useWorktreeIntentStagingStore(
@@ -768,61 +780,6 @@ export function NewConversationModalBody(props: {
             hasLandingImageBytes(hash) || epicImagePresence(hash),
     [epicImagePresence],
   );
-  const fetchEpicImage = useEpicImageFetcher();
-  const readPromptStashImage = useCallback(
-    async (hash: string) => {
-      // "Epic OR resolvable", not "epic only". The presence predicate probes
-      // the epic doc's attachment map, which is a statement about a SENT
-      // image; a hash this composer minted is not in it and never will be, so
-      // gating on it alone refused to stash exactly the drafts this surface
-      // exists to hold. It is partial availability, never provenance.
-      if (epicImagePresence?.(hash) === true) {
-        // Capture deliberately survives composer unmount, so this read is not
-        // coupled to component-lifecycle cancellation. `.fetch` directly: this
-        // one-shot read bypasses `imageBlobCache`, so it wants the byte source
-        // rather than the cache subject bundled with it.
-        const read = await fetchEpicImage.fetch(
-          hash,
-          new AbortController().signal,
-        );
-        return new Uint8Array(read.bytes);
-      }
-      return resolveDraftImageBytes(
-        hash,
-        draftImageByteTargetForHost(resolvedHostId),
-      );
-    },
-    [epicImagePresence, fetchEpicImage, resolvedHostId],
-  );
-  const promptStashSource = useNewConversationPromptStashSource({
-    epicId,
-    seedContent: seed.content,
-    editorRef,
-  });
-  const promptStashDestination = useNewConversationPromptStashDestination({
-    epicId,
-    seedContent: seed.content,
-    editorRef,
-  });
-  const promptStash = usePromptStash({
-    // Registered for the modal's whole open lifetime, not just chat mode:
-    // unregistering on every chat<->terminal toggle would hand the top of
-    // the stack back to whatever composer sits beneath this modal (see
-    // `active-prompt-stash-registry.ts`), letting Cmd+S mutate a hidden
-    // draft. `disabled` below suppresses the action itself while the modal
-    // owns no stashable content, without giving up ownership of the slot.
-    active: true,
-    disabled: promptStashDisabled({
-      isSubmitting,
-      attachmentPending,
-      chatComposerActive,
-    }),
-    editorRef,
-    readHashImage: readPromptStashImage,
-    source: promptStashSource,
-    destination: promptStashDestination,
-    hostId: resolvedHostId,
-  });
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -1348,10 +1305,18 @@ export function NewConversationModalBody(props: {
       // used to opt out and render the desktop row at any width, which made
       // one composer look like two depending on where it was opened from.
       toolbarLayout={isMobile ? "collapsed" : "full"}
-      stashControl={
-        <PromptStashControl
-          controller={promptStash}
+      draftsControl={
+        <ComposerDraftsControl
+          scope={{ surface: "new-chat", epicId }}
+          hostId={resolvedHostId}
           pickerStore={pickerStore}
+          editorRef={editorRef}
+          // Owns Cmd+S for the modal's whole open lifetime, not just chat
+          // mode: unregistering on every chat<->terminal toggle would hand the
+          // top of the stack back to whatever composer sits beneath this modal
+          // (see `active-drafts-control-registry.ts`), and the drafts list is
+          // meaningful in either mode anyway.
+          active
         />
       }
       attachmentsStrip={
@@ -1562,22 +1527,5 @@ function useGlobalWorkspaceSnapshot(
         primaryPath: bucket.primaryPath,
       };
     }),
-  );
-}
-
-/**
- * `usePromptStash`'s `disabled` flag stays true for the modal's whole
- * terminal-mode span, not just while a save/paste is in flight - see the
- * call site's comment on why `active` no longer tracks `chatComposerActive`.
- * Extracted (rather than inlined at the call site) to keep
- * `NewConversationModalBody` under the complexity lint threshold.
- */
-function promptStashDisabled(args: {
-  readonly isSubmitting: boolean;
-  readonly attachmentPending: boolean;
-  readonly chatComposerActive: boolean;
-}): boolean {
-  return (
-    args.isSubmitting || args.attachmentPending || !args.chatComposerActive
   );
 }

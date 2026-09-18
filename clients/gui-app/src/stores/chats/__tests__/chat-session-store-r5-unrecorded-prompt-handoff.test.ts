@@ -12,12 +12,11 @@
  *    account is built from, not the old per-slot `sweptRefsByKey` (dropped by
  *    every mutation that resolves a slot).
  *
- * `save` is mocked here, as the existing hash-only-refusal suite does, so
- * assertions read the exact `PromptStashSnapshot` the store handed off - but
- * every captured snapshot is ALSO replayed through the REAL repository
- * (fake-indexeddb) to prove it actually persists and restores, which is the
- * whole point of R5F1: a snapshot that merely "looks right" to a mock can
- * still be the one shape `savePromptStashSnapshot` refuses.
+ * Nothing is mocked on the destination side: the handoff's last step is a
+ * synchronous `installLandingDraft`, so the REAL landing draft store is both
+ * the observation surface and the durability proof. That is the whole point of
+ * R5F1 - a document that merely "looks right" to a mock can still be one the
+ * real destination refuses, and here there is no gap between the two.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -31,7 +30,6 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@/lib/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
-import type { PromptStashSnapshot } from "@/lib/composer/prompt-stash-codec";
 import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
 
 import {
@@ -42,8 +40,8 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
-import { pngBytesOfSize } from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/image-fixtures";
 import {
   putDraftBlobs,
   resetDraftBlobTransportForTests,
@@ -54,14 +52,10 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import {
-  loadPromptStashSnapshot,
-  savePromptStashSnapshot,
-} from "@/lib/composer/prompt-stash-repository";
-import { materializePromptStashEntry } from "@/lib/composer/prompt-stash-content";
-import {
-  promptStashRowId,
-  type PromptStashRow,
-} from "@/lib/composer/prompt-stash-codec";
+  handedOffDrafts,
+  resetHandedOffDrafts,
+  waitForHandedOffDraft,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 import {
   ChatSessionRegistry,
   MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
@@ -70,28 +64,6 @@ import {
 
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
-}));
-
-const promptStashMocks = vi.hoisted(() => ({
-  save: vi.fn<(snapshot: PromptStashSnapshot) => Promise<void>>(),
-}));
-vi.mock("@/stores/composer/prompt-stash-store", () => ({
-  usePromptStashStore: {
-    getState: () => ({
-      save: promptStashMocks.save,
-      // The handoff calls `saveWhile`, not `save`. Routed through the same
-      // mock so these assertions keep observing it - but HONOURING the
-      // predicate, so a stale-generation write is skipped here exactly as the
-      // real store skips it.
-      saveWhile: (
-        snapshot: PromptStashSnapshot,
-        stillCurrent: () => boolean,
-      ) =>
-        stillCurrent()
-          ? promptStashMocks.save(snapshot)
-          : Promise.resolve(undefined),
-    }),
-  },
 }));
 
 const originalCreateImageBitmap = globalThis.createImageBitmap;
@@ -332,45 +304,21 @@ async function seedConfirmedImage(
   return hash;
 }
 
-/** Replays a captured snapshot through the REAL repository, proving it is
- * not merely a mock-shaped object but one `savePromptStashSnapshot` actually
- * accepts and `materializePromptStashEntry` actually restores. */
-async function assertSnapshotSurvivesRealRepository(
-  snapshot: PromptStashSnapshot,
-): Promise<JsonContent> {
-  await savePromptStashSnapshot(snapshot);
-  const { rows } = await loadPromptStashSnapshot();
-  const row = rows.find(
-    (candidate: PromptStashRow) =>
-      promptStashRowId(candidate) === snapshot.entry.id,
-  );
-  expect(row?.kind).toBe("entry");
-  if (row === undefined || row.kind !== "entry") {
-    throw new Error("expected the entry to survive a real save");
-  }
-  return materializePromptStashEntry(row.entry);
-}
-
 /**
- * Coverage-fix helper: locates, among every snapshot `save` actually
- * received, the one whose content contains `text`, then replays THAT one
- * through the real repository. Every matrix case below used to inspect only
- * the mocked call args - a real gap, since a mock accepts a snapshot of any
- * shape and a test that never replays it through `savePromptStashSnapshot`
- * cannot tell a well-formed handoff from a malformed one that merely
- * "looks right".
+ * The installed draft whose content contains `text`, from the REAL landing
+ * draft store. Every matrix case below used to inspect only a mock's call args
+ * - a real gap, since a mock accepts a document of any shape. There is no mock
+ * left to accept one: what these read IS the durable row.
  */
-async function assertMatchingSnapshotSurvivesRealRepository(
-  text: string,
-): Promise<JsonContent> {
-  const match = promptStashMocks.save.mock.calls
-    .map(([snapshot]) => snapshot)
-    .find((snapshot) => JSON.stringify(snapshot.entry.content).includes(text));
+function installedDraftContaining(text: string): JsonContent {
+  const match = handedOffDrafts().find((draft) =>
+    JSON.stringify(draft.content).includes(text),
+  );
   expect(match).toBeDefined();
   if (match === undefined) {
-    throw new Error(`expected a stashed snapshot containing ${text}`);
+    throw new Error(`expected an installed draft containing ${text}`);
   }
-  return assertSnapshotSurvivesRealRepository(match);
+  return match.content;
 }
 
 let harness: Harness | null = null;
@@ -378,8 +326,7 @@ let secondHarness: Harness | null = null;
 
 beforeEach(() => {
   installFreshIndexedDb();
-  promptStashMocks.save.mockReset();
-  promptStashMocks.save.mockResolvedValue(undefined);
+  resetHandedOffDrafts();
   Object.defineProperty(globalThis, "createImageBitmap", {
     configurable: true,
     writable: true,
@@ -449,24 +396,21 @@ describe("R5F2: lastCopyPrompts covers a notice created well before disposal", (
     harness.handle.dispose();
 
     await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
+      expect(
+        handedOffDrafts().some((snapshot) =>
+          JSON.stringify(snapshot.content).includes(B_TEXT),
+        ),
+      ).toBe(true);
     });
-    const texts = promptStashMocks.save.mock.calls.map(([snapshot]) =>
-      JSON.stringify(snapshot.entry.content),
-    );
-    expect(texts.some((text) => text.includes(B_TEXT))).toBe(true);
 
-    // Real-repository proof: the captured snapshot for B actually persists
-    // and restores, not merely "looks right" to the mock.
-    const bSnapshot = promptStashMocks.save.mock.calls
-      .map(([snapshot]) => snapshot)
-      .find((snapshot) =>
-        JSON.stringify(snapshot.entry.content).includes(B_TEXT),
-      );
+    // Durability proof: the row B was handed off as is in the real store, not
+    // merely "looks right" to a mock.
+    const bSnapshot = handedOffDrafts().find((snapshot) =>
+      JSON.stringify(snapshot.content).includes(B_TEXT),
+    );
     expect(bSnapshot).toBeDefined();
     if (bSnapshot === undefined) throw new Error("expected B's snapshot");
-    const restored = await assertSnapshotSurvivesRealRepository(bSnapshot);
-    expect(JSON.stringify(restored)).toContain(B_TEXT);
+    expect(JSON.stringify(bSnapshot.content)).toContain(B_TEXT);
   });
 
   it("positive control: once the notice is delivered (markNoticeDelivered), that prompt is NOT stashed at dispose", async () => {
@@ -506,15 +450,15 @@ describe("R5F2: lastCopyPrompts covers a notice created well before disposal", (
     await vi.waitFor(
       () => {
         expect(
-          promptStashMocks.save.mock.calls.some(([snapshot]) =>
-            JSON.stringify(snapshot.entry.content).includes(A_TEXT),
+          handedOffDrafts().some((snapshot) =>
+            JSON.stringify(snapshot.content).includes(A_TEXT),
           ),
         ).toBe(true);
       },
       { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
     );
-    const texts = promptStashMocks.save.mock.calls.map(([snapshot]) =>
-      JSON.stringify(snapshot.entry.content),
+    const texts = handedOffDrafts().map((snapshot) =>
+      JSON.stringify(snapshot.content),
     );
     expect(texts.some((text) => text.includes(B_TEXT))).toBe(false);
   });
@@ -587,14 +531,12 @@ describe("R5F3: every handoff variant carries the full frozen account", () => {
 
     harness.handle.dispose();
 
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const [snapshot] = promptStashMocks.save.mock.calls[0];
-    const text = JSON.stringify(snapshot.entry.content);
+    const text = await waitForHandedOffDraft(
+      "/repo-primary-worktree",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
     // Every staged entry named, not just the primary `workspacePath` - and via
     // `retryHandoffAccountFor`, which the preconditions above pin.
-    expect(text).toContain("/repo-primary-worktree");
     expect(text).toContain("/repo-secondary");
   });
 
@@ -638,12 +580,12 @@ describe("R5F3: every handoff variant carries the full frozen account", () => {
 
     harness.handle.dispose();
 
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const [snapshot] = promptStashMocks.save.mock.calls[0];
-    const text = JSON.stringify(snapshot.entry.content);
-    expect(text).toContain("/repo-restoration");
+    // The wait IS the assertion: it settles only once a handed-off draft names
+    // this worktree, which is what `displacedReason` (not `reason`) carries.
+    await waitForHandedOffDraft(
+      "/repo-restoration",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
   });
 });
 
@@ -697,12 +639,10 @@ describe("R5F4: sessionSweptRefsForHost is the monotonic source for a sweep's ac
 
     harness.handle.dispose();
 
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const [snapshot] = promptStashMocks.save.mock.calls[0];
-    const text = JSON.stringify(snapshot.entry.content);
-    expect(text).toContain("no longer exists");
+    const text = await waitForHandedOffDraft(
+      "no longer exists",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
     expect(text).toContain("/repo-post-ack");
   });
 
@@ -758,12 +698,10 @@ describe("R5F4: sessionSweptRefsForHost is the monotonic source for a sweep's ac
 
     harness.handle.dispose();
 
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const [snapshot] = promptStashMocks.save.mock.calls[0];
-    const text = JSON.stringify(snapshot.entry.content);
-    expect(text).toContain("no longer exists");
+    const text = await waitForHandedOffDraft(
+      "no longer exists",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
     expect(text).toContain("/repo-later-sweep");
   });
 
@@ -841,12 +779,10 @@ describe("R5F4: sessionSweptRefsForHost is the monotonic source for a sweep's ac
 
     harness.handle.dispose();
 
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const [snapshot] = promptStashMocks.save.mock.calls[0];
-    const text = JSON.stringify(snapshot.entry.content);
-    expect(text).toContain("no longer exists");
+    const text = await waitForHandedOffDraft(
+      "no longer exists",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
     expect(text).toContain("/repo-partial-swept");
   });
 });
@@ -1005,12 +941,15 @@ describe("R5F2: the four-state x cap matrix (each state protects the session, an
       }
 
       await vi.waitFor(() => {
-        expect(promptStashMocks.save).toHaveBeenCalled();
+        expect(
+          handedOffDrafts().some((snapshot) =>
+            JSON.stringify(snapshot.content).includes(text),
+          ),
+        ).toBe(true);
       });
-      const savedTexts = promptStashMocks.save.mock.calls.map(([snapshot]) =>
-        JSON.stringify(snapshot.entry.content),
+      const savedTexts = handedOffDrafts().map((snapshot) =>
+        JSON.stringify(snapshot.content),
       );
-      expect(savedTexts.some((saved) => saved.includes(text))).toBe(true);
       expect(
         savedTexts.some(
           (saved) => saved.includes(text) && saved.includes("/repo-matrix"),
@@ -1040,20 +979,16 @@ describe("R5F2: the four-state x cap matrix (each state protects the session, an
       //
       // Image survival is asserted where it is deterministic: the real-
       // repository round trip in
-      // `lib/drafts/__tests__/unrecorded-prompt-handoff-real-repository.test.ts`
+      // `lib/drafts/__tests__/unrecorded-prompt-handoff-landing-install.test.ts`
       // and the capacity case in the R6F3 file. What THIS matrix claims is the
       // text and the worktree, and that is what it checks.
-      const matching = promptStashMocks.save.mock.calls
-        .map(([snapshot]) => snapshot)
-        .filter((snapshot) =>
-          JSON.stringify(snapshot.entry.content).includes(text),
-        );
+      const matching = handedOffDrafts().filter((snapshot) =>
+        JSON.stringify(snapshot.content).includes(text),
+      );
       expect(matching.length).toBeGreaterThan(0);
 
-      // Coverage fix: replay the actual matching snapshot through the real
-      // repository rather than trusting the mocked call args alone.
-      const restored = await assertMatchingSnapshotSurvivesRealRepository(text);
-      expect(JSON.stringify(restored)).toContain(text);
+      // Coverage fix: read the actual matching row out of the real store rather than trusting the mocked call args alone.
+      expect(JSON.stringify(installedDraftContaining(text))).toContain(text);
     });
 
     it(`state ${name}: held during warm-cap overflow (a plain otherwise-idle sibling is evicted instead), and eventually the deferral cap disposes it with the prompt stashed`, async () => {
@@ -1113,17 +1048,15 @@ describe("R5F2: the four-state x cap matrix (each state protects the session, an
       }
 
       await vi.waitFor(() => {
-        expect(promptStashMocks.save).toHaveBeenCalled();
+        expect(
+          handedOffDrafts().some((snapshot) =>
+            JSON.stringify(snapshot.content).includes(text),
+          ),
+        ).toBe(true);
       });
-      const savedTexts = promptStashMocks.save.mock.calls.map(([snapshot]) =>
-        JSON.stringify(snapshot.entry.content),
-      );
-      expect(savedTexts.some((saved) => saved.includes(text))).toBe(true);
 
-      // Coverage fix: replay the actual matching snapshot through the real
-      // repository rather than trusting the mocked call args alone.
-      const restored = await assertMatchingSnapshotSurvivesRealRepository(text);
-      expect(JSON.stringify(restored)).toContain(text);
+      // Coverage fix: read the actual matching row out of the real store rather than trusting the mocked call args alone.
+      expect(JSON.stringify(installedDraftContaining(text))).toContain(text);
     });
   }
 });

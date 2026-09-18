@@ -40,7 +40,7 @@ import {
 } from "@/stores/composer/composer-draft-store";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 const EMPTY_DOC: JsonContent = {
   type: "doc",
@@ -129,6 +129,8 @@ function useReingestOnReplacementHarness(props: HarnessProps): {
   useChatComposerDraft({
     chatId: props.chatId,
     epicId: "epic-1",
+    chatTitle: null,
+    epicTitle: null,
     hostId: "host-1",
     editorRef: props.editorRef,
     editorReadyTick: props.editorReadyTick,

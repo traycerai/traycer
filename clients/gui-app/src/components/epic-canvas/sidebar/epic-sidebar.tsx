@@ -71,6 +71,12 @@ import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import { PanelGroupSectionHeader } from "@/components/epic-canvas/sidebar/epic-sidebar-header";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
+import { EpicSidebarMessageHits } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits";
+import {
+  messageHitsTreeState,
+  showsMessageHitsSection,
+  useEpicSidebarMessageHits,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import {
   ArtifactReadLifecycleBridge,
   ArtifactTreePanelBody,
@@ -1167,6 +1173,21 @@ function SidebarReparentPanelDropZone(props: {
 }
 
 function ChatsPanelBody(props: LeftPanelBodyProps) {
+  // Asked here and placed by the tree, so the panel's one search box drives
+  // both readers - the tree's title filter and the index's message hits - off
+  // a single request, and the tree's empty state knows what the messages below
+  // it found. See `epic-sidebar-message-hits-state.ts`.
+  const hits = useEpicSidebarMessageHits({
+    epicId: props.epicId,
+    tabId: props.tabId,
+  });
+  const hitsState = messageHitsTreeState(hits.status);
+  const messageHits = {
+    state: hitsState,
+    node: showsMessageHitsSection(hitsState) ? (
+      <EpicSidebarMessageHits state={hits} />
+    ) : null,
+  };
   return (
     <SnapshotGate skeleton={CHATS_PANEL_SKELETON}>
       <SidebarReparentPanelDropZone
@@ -1174,7 +1195,11 @@ function ChatsPanelBody(props: LeftPanelBodyProps) {
         viewTabId={props.tabId}
         panelId="chats"
       >
-        <ChatTreePanelBody epicId={props.epicId} tabId={props.tabId} />
+        <ChatTreePanelBody
+          epicId={props.epicId}
+          tabId={props.tabId}
+          messageHits={messageHits}
+        />
       </SidebarReparentPanelDropZone>
     </SnapshotGate>
   );

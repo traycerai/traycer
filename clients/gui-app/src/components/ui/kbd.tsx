@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 //     this is not "the variant sets a text colour"; the `in-[…]` rules do it
 //     automatically inside a Button, and this variant is the same treatment
 //     for a cap rendered somewhere a Button is not.
-//   - `size="xs"` — a cap inside dense chrome (the prompt-stash rows, the
+//   - `size="xs"` — a cap inside dense chrome (the Drafts popover rows, the
 //     leader-key digit on a tab).
 const kbdVariants = cva(
   "pointer-events-none inline-flex w-fit items-center justify-center gap-1 border border-border/60 bg-foreground/8 px-1 font-sans font-medium text-muted-foreground select-none in-data-[slot=tooltip-content]:border-background/20 in-data-[slot=tooltip-content]:bg-background/20 in-data-[slot=tooltip-content]:text-background dark:in-data-[slot=tooltip-content]:bg-background/10 [&_svg:not([class*='size-'])]:size-3",

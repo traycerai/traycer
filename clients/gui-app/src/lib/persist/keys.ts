@@ -251,6 +251,14 @@ export const PERSIST_STORES = [
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
+  // The new-agent modal's per-epic draft patch. Persisted (D21) so a modal
+  // draft survives a reload and lists before host sync, exactly as a chat
+  // draft does — same tier and same reasoning as `composerDraft`.
+  {
+    camelName: "newConversationDraft",
+    leaf: "new-conversation-drafts",
+    kind: "static",
+  },
   // Enumerated under the `interview-drafts` leaf, but persisted as one key per
   // (chatId, blockId) — `interview-drafts:{encChatId}:{encBlockId}` — for
   // cross-window isolation (see `interviewDraftKey`). The `traycer-gui-app:`

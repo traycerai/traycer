@@ -10,7 +10,7 @@ import {
 import { reconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   forgetBlobUnsupportedHost,
   forgetConfirmedDraftBlobs,
@@ -200,6 +200,24 @@ describe("draft blob transport", () => {
     };
     const confirmed = await putDraftBlobs(HOST, client, [hash], OWNER);
     expect(confirmed).toEqual([]);
+  });
+
+  it("skips a hash the landing store does not hold", async () => {
+    let calls = 0;
+    const client = {
+      request: ((_method, _params) => {
+        calls += 1;
+        return Promise.resolve({ ok: true as const });
+      }) as HostRequester<HostRpcRegistry>["request"],
+    };
+    const confirmed = await putDraftBlobs(
+      HOST,
+      client,
+      ["cd".repeat(32)],
+      null,
+    );
+    expect(confirmed).toEqual([]);
+    expect(calls).toBe(0);
   });
 
   it("readBlob missing collapses to no local bytes", async () => {
