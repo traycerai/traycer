@@ -4277,14 +4277,22 @@ function projectRowsOntoFrozenLine<T extends z.ZodType>(
  *
  * The row helper above covers `providers[]`. This covers the response's OTHER
  * half - `native`, the optional MCP/plugins/skills query result - which no row
- * helper touches and which is the sharpest leaf in the whole catalog: there is
- * no `.catch()` anywhere between its `servers[].tools[].denySources[]` enum and
- * the root, so one unknown deny source throws the ENTIRE `providers.list`
- * response instead of degrading any part of it. Every other leaf measured here
- * degrades; this one fails the call.
+ * helper touches and where every catch-less leaf in the response lives. Seven
+ * enum leaves have no `.catch()` between them and the root, so growth there
+ * fails the ENTIRE `providers.list` response rather than degrading part of it,
+ * and all seven are under `native`. Four are under an array and so are
+ * repairable by dropping (`servers[].status`, `servers[].statusSource`,
+ * `servers[].tools[].denySources[]`, `skills[].source`); the remaining three
+ * are scalars on the single-server and error arms, which dropping cannot
+ * rescue and which want a `.catch()` rather than a pin. Calling this instead of
+ * a bare `.safeParse` is what puts those four inside the projection's reach.
  *
- * A response that already parses costs one parse and is returned unchanged, so
- * this is the same call it replaces on every path but the drifted one.
+ * Reach, not effect: like the row helper, this only acts on a leaf the frozen
+ * line pins STRICTLY NARROWER than the head, because the host has already
+ * parsed the value against the head before any downgrade runs. None of the
+ * seven is pinned narrower today - see the module docblock on
+ * `frozen-line-projection.ts` - so this is currently a parse with a walk in
+ * front of it, waiting on the first of those enums to move.
  */
 export function parseProvidersListResponseForFrozenLine<T extends z.ZodType>(
   frozen: T,

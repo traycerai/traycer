@@ -8,6 +8,7 @@ import {
   providerCliStateSchemaV80,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV91,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -83,6 +84,89 @@ function nativeMcpResultWithDenySources(denySources: readonly string[]) {
   };
 }
 
+type EnumWalkDef = z.core.$ZodTypeDef & {
+  readonly innerType?: z.ZodType;
+  readonly element?: z.ZodType;
+  readonly valueType?: z.ZodType;
+  readonly shape?: Readonly<Record<string, z.ZodType>>;
+  readonly options?: readonly z.ZodType[];
+};
+
+function collectEnumMembers(
+  schema: z.ZodType,
+  path: string,
+  out: Map<string, readonly string[]>,
+  depth: number,
+): void {
+  if (depth > 40) return;
+  const def: EnumWalkDef = schema._zod.def;
+  switch (def.type) {
+    case "enum":
+      out.set(path, Object.keys((def as { entries?: object }).entries ?? {}));
+      return;
+    case "catch":
+    case "optional":
+    case "nullable":
+    case "default":
+    case "nonoptional":
+    case "readonly":
+      if (def.innerType)
+        collectEnumMembers(def.innerType, path, out, depth + 1);
+      return;
+    case "array":
+      if (def.element) {
+        collectEnumMembers(def.element, `${path}[]`, out, depth + 1);
+      }
+      return;
+    case "object":
+      for (const [key, child] of Object.entries(def.shape ?? {})) {
+        collectEnumMembers(
+          child,
+          path ? `${path}.${key}` : key,
+          out,
+          depth + 1,
+        );
+      }
+      return;
+    case "union":
+      (def.options ?? []).forEach((arm, index) => {
+        collectEnumMembers(arm, `${path}|${index}`, out, depth + 1);
+      });
+      return;
+    case "record":
+      if (def.valueType) {
+        collectEnumMembers(def.valueType, `${path}{}`, out, depth + 1);
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * Paths where `row`'s enum admits strictly FEWER members than the head row does
+ * at the same path - the only places the projection can ever drop anything,
+ * because the host has already parsed the value against the head.
+ */
+function strictlyNarrowerEnumPaths(row: z.ZodType): string[] {
+  const head = new Map<string, readonly string[]>();
+  collectEnumMembers(providersListResponseSchema, "", head, 0);
+  const rowEnums = new Map<string, readonly string[]>();
+  collectEnumMembers(row, "", rowEnums, 0);
+  const narrower: string[] = [];
+  for (const [path, members] of rowEnums) {
+    const headMembers = head.get(path);
+    if (!headMembers) continue;
+    if (
+      members.length < headMembers.length &&
+      members.every((member) => headMembers.includes(member))
+    ) {
+      narrower.push(path);
+    }
+  }
+  return narrower;
+}
+
 describe("projectOntoFrozenLine", () => {
   it("returns an already-valid value by identity, without copying it", () => {
     // The overwhelmingly common case: nothing has drifted. It must cost one
@@ -135,6 +219,67 @@ describe("projectOntoFrozenLine", () => {
         items: ["a", "b"],
       });
     }
+  });
+
+  it("scores arms by what SURVIVES when every arm needs repair", () => {
+    // The test above never reaches the scoring branch: `wide` matches
+    // unchanged, so the identity short-circuit fires first. Here BOTH arms have
+    // to drop something, which is the only way the comparison runs at all.
+    const three = z.object({ items: z.array(z.enum(["a", "b", "c"])) });
+    const one = z.object({ items: z.array(z.enum(["a"])) });
+    const value = { items: ["a", "b", "c", "d"] };
+
+    for (const union of [z.union([one, three]), z.union([three, one])]) {
+      expect(projectOntoFrozenLine(union, value)).toEqual({
+        items: ["a", "b", "c"],
+      });
+    }
+  });
+
+  it("scores what an arm KEEPS, not what it was handed", () => {
+    // An arm strips the keys it does not model, so scoring the projected INPUT
+    // credits an arm for data it is about to throw away. Here the narrow arm
+    // carries a fat unmodeled field: scored on input it wins with 4 and the
+    // peer receives `{items:["a"]}`; scored on output it correctly loses.
+    const modelsBoth = z.object({
+      items: z.array(z.enum(["a", "b"])),
+      junk: z.array(z.enum(["x"])),
+    });
+    const modelsItemsOnly = z.object({ items: z.array(z.enum(["a"])) });
+    const value = { items: ["a", "b"], junk: ["x", "y", "z"] };
+
+    for (const union of [
+      z.union([modelsBoth, modelsItemsOnly]),
+      z.union([modelsItemsOnly, modelsBoth]),
+    ]) {
+      expect(projectOntoFrozenLine(union, value)).toMatchObject({
+        items: ["a", "b"],
+      });
+    }
+  });
+
+  it("never empties a non-empty array, because [] is a positive claim", () => {
+    // `profiles[].rateLimitLimitedScopes` reads `null` as "could not determine,
+    // fall back to rateLimitStatus" and `[]` as "determined: nothing limited".
+    // Emptying it would turn "this model is rate limited" into a confident
+    // "not limited"; leaving it lets the enclosing `.catch()` say "unknown".
+    // Degrading to unknown is allowed, asserting a falsehood is not.
+    const schema = z.object({ scopes: z.array(z.enum(["known"])) });
+    const allUnrepresentable = { scopes: ["future-a", "future-b"] };
+    expect(projectOntoFrozenLine(schema, allUnrepresentable)).toBe(
+      allUnrepresentable,
+    );
+
+    // A PARTIAL drop is still the right thing - the survivors are real.
+    expect(
+      projectOntoFrozenLine(schema, { scopes: ["known", "future-a"] }),
+    ).toEqual({ scopes: ["known"] });
+
+    // And an array that was already empty stays empty rather than being
+    // mistaken for one this rule has to protect.
+    expect(projectOntoFrozenLine(schema, { scopes: [] })).toEqual({
+      scopes: [],
+    });
   });
 
   it("drops one unknown tab instead of the whole capability object", () => {
@@ -234,30 +379,40 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
     ).toEqual(["claude-code"]);
   });
 
-  it("serves the response at all when a deny source outgrows the line", () => {
-    // `native.servers[].tools[].denySources[]` is the one measured leaf with NO
-    // `.catch()` between it and the root, so growth there does not degrade the
-    // response - it THROWS, and the peer's whole providers.list call fails.
-    const response = {
+  it("is ARMED only by a pin, and today that is one leaf - proven, not assumed", () => {
+    // This test replaced one that "rescued" a grown `denySources` member. That
+    // test was vacuous, and the reason is the whole precondition of this
+    // mechanism: the host parses the resolver result against the CANONICAL
+    // (head) schema and 500s on failure BEFORE any downgrade runs
+    // (`traycer-host/src/transport/rpc/handler.ts`, `canonicalResultParse`). So
+    // a value only ever reaches the projection if the head already accepted it.
+    const unreachable = {
       providers: [],
       native: nativeMcpResultWithDenySources(["user", "future-source"]),
     };
-
-    // CONTROL: the plain frozen parse the bridge used to do.
-    expect(() => providersListResponseSchemaV70.parse(response)).toThrow();
-
-    const projected = projectOntoFrozenLine(
-      providersListResponseSchemaV70,
-      response,
+    expect(providersListResponseSchema.safeParse(unreachable).success).toBe(
+      false,
     );
-    const parsed = providersListResponseSchemaV70.parse(projected);
-    expect(parsed.native).not.toBeNull();
-    // The server, its tool and the deny source the line knows all survive; only
-    // the member it cannot represent is gone.
-    expect(parsed.native).toMatchObject({
-      kind: "mcp",
-      servers: [{ name: "s", tools: [{ name: "t", denySources: ["user"] }] }],
-    });
+
+    // The consequence: where a frozen row binds the SAME enum object as the
+    // head, it accepts exactly what the head accepts and the walk drops
+    // nothing. Only a leaf pinned STRICTLY NARROWER than the head can ever be
+    // acted on - so that set is the mechanism's live surface, and it belongs in
+    // a test rather than in a claim.
+    const narrower = strictlyNarrowerEnumPaths(providersListResponseSchemaV70);
+    expect(narrower).toEqual([
+      // A scalar: the row is dropped, exactly as it always was.
+      "providers[].providerId",
+      // The one field this actually changes today.
+      "providers[].managedVersions.sharedWithProviders[]",
+    ]);
+
+    // 9.1 shares every enum object with the head, so nothing on it is armed
+    // yet. The four pins it carries are byte-identical to live by design; they
+    // arm the day the live enum moves, and not before.
+    expect(strictlyNarrowerEnumPaths(providersListResponseSchemaV91)).toEqual(
+      [],
+    );
   });
 
   it("still drops a whole row when the row itself is unrepresentable", () => {

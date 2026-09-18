@@ -2264,6 +2264,13 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE: ProviderNativeCa
 // the 29 other array-of-enum leaves measured on `providers.list@7.0` at once.
 // Cuts 2 and 3 remain the reparse's job, unchanged.
 //
+// Read that as REACH, not as effect. The mechanism acts on a leaf only where
+// the frozen line pins it strictly narrower than the head, because the host
+// rejects a resolver result against the head before any downgrade runs. The
+// `supportedTabs` pin just below is byte-identical to live today, so cut 1 is
+// armed and idle: it starts dropping tabs on the day a tab id is added to the
+// live enum and not before - which is the day this note was written for.
+//
 // 1. FILTER `supportedTabs` before the parse; never reparse it. `z.array(enum)`
 //    rejects a whole array over one unknown member, the capability object fails
 //    with it, and the `.catch()` on the pre-image state then serves the empty

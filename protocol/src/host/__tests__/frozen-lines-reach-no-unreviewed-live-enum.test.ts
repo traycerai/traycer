@@ -46,9 +46,13 @@ import {
 /**
  * Every field of a released `providers.list` row that still reads a live enum.
  *
- * All four released rows share this exact set - they are the same shape modulo
- * the id enum and a couple of profile keys - so one list covers them and a
- * divergence between rows is itself a failure worth seeing.
+ * All four released rows reach this exact set, which is an assertion below and
+ * not an assumption here - each row gets its own `it`. They are NOT the same
+ * shape: 9.0 and 9.1 carry fields 7.0 never had. They coincide because every
+ * field those later rows added was pinned rather than left live, so it
+ * contributes no path. That is the invariant worth watching - a row diverging
+ * from the others means a new field went onto a released line still reading
+ * live, and the row that diverges names the line it happened on.
  *
  * These are ACCEPTED as live, not endorsed. The accepted reason for all of them
  * is the same and it is a scoping one: pinning a leaf only helps if the
@@ -63,8 +67,14 @@ import {
  *   - `denySources[]` appears TWICE - under `native|0|0.servers[]` and again
  *     under `native|0|3.server` - and neither has a `.catch()` between it and
  *     the response root. Growing that enum does not degrade the response, it
- *     fails the whole `providers.list` call. The projection now keeps the call
- *     alive; these are the two leaves where a pin would matter most.
+ *     fails the whole `providers.list` call. The two are NOT equally salvage-
+ *     able, and the difference is the array: the `servers[]` one sits under one
+ *     and so a pin there would let the projection drop the member and keep the
+ *     call; the `native|0|3.server` one is the single-server arm, where the
+ *     unknown member has no array to be dropped from, so a pin alone still
+ *     fails the call and what it needs is a `.catch()`. Same enum, two leaves,
+ *     two different fixes - which is the argument for reading the path and not
+ *     just the field name.
  *   - `managedVersions.available[].installState|4.reason` reaches
  *     `providerManagedInstallErrorReasonSchema` - the SAME enum the row's own
  *     `managedInstallState` was just pinned away from. One field being frozen
@@ -137,11 +147,40 @@ const ACCEPTED_LIVE_ENUM_PATHS: readonly string[] = [
 
 /**
  * Depth ceiling for the walk. Not a tuning knob - it is the termination
- * guarantee that replaces identity dedup, set far above the deepest real path
- * (about 8) so tripping it means a genuinely recursive schema arrived and this
+ * guarantee that replaces identity dedup. The deepest real path is 13, measured
+ * rather than eyeballed, and it is the same 13 on all four released rows and on
+ * the head: `native|0|0.servers[].transport|0.env[].name`. 50 is set far enough
+ * above that so tripping it means a genuinely recursive schema arrived and this
  * walk needs rethinking, not a bigger number.
  */
 const MAX_WALK_DEPTH = 50;
+
+/**
+ * Node kinds that cannot contain another schema, so reaching one ends that
+ * branch honestly. Everything NOT listed here is a kind this walk does not know
+ * how to traverse, and the difference matters: a kind that can hold a child
+ * schema must be traversed or the guard goes vacuously green through it.
+ */
+const INERT_LEAF_KINDS = new Set([
+  "string",
+  "number",
+  "int",
+  "boolean",
+  "bigint",
+  "symbol",
+  "date",
+  "file",
+  "literal",
+  "null",
+  "undefined",
+  "void",
+  "never",
+  "any",
+  "unknown",
+  "nan",
+  "template_literal",
+  "custom",
+]);
 
 /**
  * A schema's definition, widened with the child-schema fields zod puts on the
@@ -224,6 +263,19 @@ function collectEnums(
       return;
     }
     default:
+      // An unrecognised node kind must STOP the walk, never be skipped. A skip
+      // makes this whole guard vacuously green: bind the live tab enum onto a
+      // released row behind a `z.lazy`, `z.tuple`, `z.intersection`,
+      // `.transform()`, `z.set`, or a `z.record` whose KEY is the enum, and a
+      // silently-returning walk reports no path and passes while the leak is
+      // real. None of those kinds is in these rows today - which is exactly
+      // when to make that a checked fact rather than a standing assumption.
+      if (!INERT_LEAF_KINDS.has(def.type)) {
+        throw new Error(
+          `unhandled schema kind "${def.type}" at ${path || "<root>"} - teach ` +
+            `collectEnums to traverse it before this guard can be trusted`,
+        );
+      }
       return;
   }
 }
@@ -245,8 +297,10 @@ function liveEnumPaths(row: z.ZodType): string[] {
     // already on the list. `nativeCapabilities.mcp.removeServer`,
     // `.schemasSource`, `.toolsSource`, every `actionScopes.*` variant and
     // `profiles[].reusedTombstone.accentColor` are all real paths a
-    // one-per-enum list hid, and the set went from 29 to 54 when this was
-    // fixed - so the shortcut was already concealing two thirds of the answer.
+    // one-per-enum list hid: the set went 29 -> 54 when this was fixed, and
+    // 54 -> 58 when identity dedup came out of `collectEnums`. So the two
+    // shortcuts between them were hiding 29 of the 58 real paths - half the
+    // answer, from a walk that looked exhaustive.
     for (const path of where) paths.push(path.replace("providers[].", ""));
   }
   return paths.sort();
