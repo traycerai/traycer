@@ -24,15 +24,18 @@ const MENU_HEIGHT_ESTIMATE = 280;
 export type ComposerMenuPlacement = "bottom-start" | "top-start";
 
 /**
- * Strips at the top and bottom of the viewport that are on screen but not
- * the menu's to use: the device's top safe-area inset (status bar, sensor
- * housing) and the software keyboard covering the bottom. Both are 0 wherever
- * nothing covers the viewport - desktop, the browser, and shells whose OS
- * resizes the page for the keyboard.
+ * Strips along each edge of the viewport that are on screen but not the
+ * menu's to use: the device's safe-area insets (status bar, sensor housing,
+ * home indicator) and the software keyboard covering the bottom. The menu is
+ * portalled outside `#root`, so none of the app's own safe-area reservation
+ * applies to it. Every edge is 0 wherever nothing covers the viewport -
+ * desktop, the browser, and shells whose OS resizes the page for the keyboard.
  */
 export interface ComposerMenuReservedEdges {
   readonly topPx: number;
   readonly bottomPx: number;
+  readonly leftPx: number;
+  readonly rightPx: number;
 }
 
 /**
@@ -41,15 +44,20 @@ export interface ComposerMenuReservedEdges {
  * is the signal that it has.
  */
 export function readComposerMenuReservedEdges(): ComposerMenuReservedEdges {
+  const insets = readSafeAreaInsets();
   return {
-    topPx: readSafeAreaInsets().top,
-    bottomPx: readNativeKeyboardInsetPx(),
+    topPx: insets.top,
+    // The larger, not the sum: the keyboard's height is its whole frame,
+    // which already covers the home-indicator strip beneath it.
+    bottomPx: Math.max(insets.bottom, readNativeKeyboardInsetPx()),
+    leftPx: insets.left,
+    rightPx: insets.right,
   };
 }
 
 /**
  * The padding the composer's floating surfaces keep from the viewport: a small
- * gutter on every side, plus the reserved edges above and below.
+ * gutter on every side, plus that side's reserved edge.
  */
 export function composerMenuViewportPadding(
   reserved: ComposerMenuReservedEdges,
@@ -57,8 +65,8 @@ export function composerMenuViewportPadding(
   return {
     top: MENU_VIEWPORT_PADDING_PX + reserved.topPx,
     bottom: MENU_VIEWPORT_PADDING_PX + reserved.bottomPx,
-    left: MENU_VIEWPORT_PADDING_PX,
-    right: MENU_VIEWPORT_PADDING_PX,
+    left: MENU_VIEWPORT_PADDING_PX + reserved.leftPx,
+    right: MENU_VIEWPORT_PADDING_PX + reserved.rightPx,
   };
 }
 
