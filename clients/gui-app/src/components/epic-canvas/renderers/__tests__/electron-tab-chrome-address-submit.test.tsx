@@ -87,18 +87,38 @@ describe("address bar submit routes through the real chrome hook", () => {
     expect(control).toHaveBeenCalledExactlyOnceWith({ kind: "reload" });
   });
 
-  it("reloads when Enter submits an address that normalizes to the current one", async () => {
+  it("reloads when Enter submits a bare host that canonicalizes to the current root URL", async () => {
     const control = vi.fn(() => Promise.resolve());
     const user = userEvent.setup();
-    // The live URL is scheme-qualified already; typing the bare host with no
-    // scheme still normalizes to the same `https://example.com`, so this must
-    // reload rather than fall through to a literal-string mismatch.
-    const liveUrl = "https://example.com";
+    // The live URL is already in its canonical `URL#href` form (trailing
+    // slash on an empty path); typing the bare host with no scheme produces
+    // `https://example.com` (no trailing slash) before canonicalization, so
+    // this only reloads if the comparison runs both sides through
+    // `parseHttpUrl(...).href` rather than comparing literal strings.
+    const liveUrl = "https://example.com/";
     render(<AddressBarHarness liveUrl={liveUrl} control={control} />);
 
     await submitAddress(user, "example.com");
 
     expect(control).toHaveBeenCalledExactlyOnceWith({ kind: "reload" });
+  });
+
+  it("navigates, rather than reloads, when the submitted address differs from the current one only by a trailing slash on a non-root path", async () => {
+    const control = vi.fn(() => Promise.resolve());
+    const user = userEvent.setup();
+    // Canonicalization must not overreach into stripping trailing slashes
+    // wholesale: `/dashboard` and `/dashboard/` are different resources, and
+    // `URL#href` itself only adds a trailing slash to an EMPTY path, so this
+    // guards against a broader (and wrong) slash-insensitive comparison.
+    const liveUrl = "https://example.com/dashboard";
+    render(<AddressBarHarness liveUrl={liveUrl} control={control} />);
+
+    await submitAddress(user, "https://example.com/dashboard/");
+
+    expect(control).toHaveBeenCalledExactlyOnceWith({
+      kind: "navigate",
+      url: "https://example.com/dashboard/",
+    });
   });
 
   it("navigates, and does not reload, when Enter submits a different address", async () => {
