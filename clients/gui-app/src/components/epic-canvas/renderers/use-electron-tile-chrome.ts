@@ -178,6 +178,10 @@ export function useElectronTabChrome(
     void control({ kind: "reload" }).catch(ignoreError);
   };
 
+  const stop = (): void => {
+    void control({ kind: "stop" }).catch(ignoreError);
+  };
+
   const goBack = (): void => {
     if (!canGoBack) return;
     setCertificateError(null);
@@ -232,6 +236,7 @@ export function useElectronTabChrome(
     onBack: goBack,
     onForward: goForward,
     onReload: reload,
+    onStop: stop,
     onZoomOut: () => {
       void control({ kind: "zoomOut" }).catch(ignoreError);
     },
