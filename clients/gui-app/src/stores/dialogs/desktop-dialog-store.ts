@@ -7,6 +7,7 @@ import {
 } from "@/lib/report-issue-draft-context";
 
 export type DesktopDialogKind =
+  | "drafts"
   | "about-details"
   | "logs"
   | "open-epic-in-new-window"
@@ -62,6 +63,7 @@ export interface DesktopDialogState {
     readonly draftId: number;
     readonly reportId: string;
   } | null;
+  readonly openDrafts: () => void;
   readonly openAboutDetails: () => void;
   readonly openLogs: () => void;
   readonly openEpicInNewWindow: () => void;
@@ -90,6 +92,9 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   updateUnsyncedEpics: [],
   updateUnsyncedOtherWindowsUnknown: false,
   lastConfirmedReport: null,
+  openDrafts: () => {
+    set({ activeDialog: "drafts" });
+  },
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });
   },

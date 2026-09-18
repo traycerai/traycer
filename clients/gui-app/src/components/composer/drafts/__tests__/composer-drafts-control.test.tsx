@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RefObject } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -13,15 +13,10 @@ import {
   resetDraftMirrorCoordinatorForTests,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
-import { resetActiveDraftsControlForTests } from "@/lib/commands/active-drafts-control-registry";
 import {
-  useComposerDraftStore,
-  type DraftState,
-} from "@/stores/composer/composer-draft-store";
-import {
-  useNewConversationModalStore,
-  type NewConversationModalDraftPatch,
-} from "@/stores/epics/new-conversation-modal-store";
+  openActiveDraftsControl,
+  resetActiveDraftsControlForTests,
+} from "@/lib/commands/active-drafts-control-registry";
 import {
   useLandingDraftStore,
   type LandingDraftTab,
@@ -46,7 +41,6 @@ vi.mock("@/hooks/drafts/use-draft-inventory-actions", () => ({
 }));
 
 const HOST_ID = "host-drafts";
-const EPIC_ID = "epic-1";
 
 const EMPTY_WORKSPACE: LandingDraftWorkspaceSnapshot = {
   folders: [],
@@ -81,50 +75,6 @@ function landingTab(
     publication: null,
     confirmedHostBlobHashes: [],
     closed: true,
-    ...overrides,
-  };
-}
-
-function chatDraft(overrides: Partial<DraftState>): DraftState {
-  return {
-    content: typed("chat draft"),
-    selection: null,
-    browserAnnotations: [],
-    resetEpoch: 0,
-    revision: 1,
-    draftId: "draft-chat",
-    hostRevision: 1,
-    targetEpicId: EPIC_ID,
-    lastTouchedAt: 3_000,
-    generation: 1,
-    syncedGeneration: 1,
-    ownerHostId: HOST_ID,
-    origin: "own",
-    supersedes: null,
-    publication: null,
-    chatTitle: "Sibling chat",
-    epicTitle: "Payments",
-    ...overrides,
-  };
-}
-
-function newChatPatch(
-  overrides: Partial<NewConversationModalDraftPatch>,
-): NewConversationModalDraftPatch {
-  return {
-    content: typed("new agent draft"),
-    selection: null,
-    settings: null,
-    composerMode: "chat",
-    workspace: null,
-    revision: 1,
-    draftId: "draft-new-chat",
-    hostRevision: 1,
-    lastTouchedAt: 4_000,
-    generation: 1,
-    syncedGeneration: 1,
-    epicTitle: "Payments",
-    ownerHostId: HOST_ID,
     ...overrides,
   };
 }
@@ -204,13 +154,6 @@ function listedRowIds(): ReadonlyArray<string> {
   ).map((element) => element.dataset.draftRowId ?? "");
 }
 
-function rowText(rowId: string): string {
-  return (
-    document.querySelector<HTMLElement>(`[data-draft-row-id="${rowId}"]`)
-      ?.textContent ?? ""
-  );
-}
-
 describe("ComposerDraftsControl", () => {
   beforeEach(() => {
     window.innerWidth = 1024;
@@ -229,15 +172,6 @@ describe("ComposerDraftsControl", () => {
       ],
       activeDraftId: "landing-active",
     });
-    useComposerDraftStore.setState({
-      drafts: {
-        "chat-1": chatDraft({
-          draftId: "draft-chat-1",
-          content: typed("Half-written question"),
-        }),
-      },
-    });
-    useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
     mountSession();
   });
 
@@ -247,8 +181,6 @@ describe("ComposerDraftsControl", () => {
     resetDraftMirrorCoordinatorForTests();
     resetActiveDraftsControlForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-    useComposerDraftStore.setState({ drafts: {} });
-    useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
     actions.openRow.mockReset();
     actions.copyRow.mockReset();
     actions.deleteRow.mockReset();
@@ -266,6 +198,16 @@ describe("ComposerDraftsControl", () => {
     ).toBeGreaterThan(0);
   });
 
+  // H02: the start-page control has no filter any more - always `current`,
+  // so there is nothing left to toggle and no source chip to show.
+  it("never shows a filter toggle", () => {
+    renderLandingControl("landing-active");
+    openList();
+
+    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start page" })).toBeNull();
+  });
+
   it("counts only the current-surface rows, and hides the badge at zero", () => {
     const { unmount } = renderLandingControl("landing-active");
     const trigger = screen.getByRole("button", { name: /drafts/i });
@@ -278,29 +220,6 @@ describe("ComposerDraftsControl", () => {
     const empty = screen.getByRole("button", { name: /drafts/i });
     expect(empty.getAttribute("aria-label")).toBe("Drafts");
     expect(empty.textContent).toBe("Drafts");
-  });
-
-  it("switches to All from the toggle and chips each row's source", () => {
-    useNewConversationModalStore.setState({
-      draftPatchesByEpicId: { [EPIC_ID]: newChatPatch({}) },
-    });
-    renderLandingControl("landing-active");
-    openList();
-
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
-
-    // Newest first (D12).
-    expect(listedRowIds()).toEqual([
-      "draft-new-chat",
-      "draft-chat-1",
-      "landing-a",
-    ]);
-    // The start page has no epic, so every in-epic row is outside the scope's
-    // and carries the epic prefix. Asserted on the ROW, not the document:
-    // "Start page" is also the filter toggle's own segment label.
-    expect(rowText("draft-chat-1")).toContain("Payments · Sibling chat");
-    expect(rowText("draft-new-chat")).toContain("Payments · New agent");
-    expect(rowText("landing-a")).toContain("Start page");
   });
 
   it("renders a mention as a chip in the row, not the raw @ serialised form", () => {
@@ -348,15 +267,29 @@ describe("ComposerDraftsControl", () => {
     expect(content?.textContent).not.toContain("@CODE_OF_CONDUCT.md");
   });
 
-  it("toggles the filter on Tab", () => {
+  // Review finding 5: the registry's callback must ensure the list open, not
+  // toggle it - a second shortcut fire, or choosing "Drafts" from the palette
+  // while the list is already open, must never close it.
+  it("the registry's shortcut/palette entries ensure the list open, never toggling it closed", () => {
     renderLandingControl("landing-active");
-    openList();
+
+    let opened = false;
+    act(() => {
+      opened = openActiveDraftsControl("shortcut");
+    });
+    expect(opened).toBe(true);
     expect(listedRowIds()).toEqual(["landing-a"]);
 
-    pressKey("Tab");
-    expect(listedRowIds()).toEqual(["draft-chat-1", "landing-a"]);
+    act(() => {
+      opened = openActiveDraftsControl("shortcut");
+    });
+    expect(opened).toBe(true);
+    expect(listedRowIds()).toEqual(["landing-a"]);
 
-    pressKey("Tab");
+    act(() => {
+      opened = openActiveDraftsControl("palette");
+    });
+    expect(opened).toBe(true);
     expect(listedRowIds()).toEqual(["landing-a"]);
   });
 
@@ -433,46 +366,6 @@ describe("ComposerDraftsControl", () => {
     expect(screen.getByRole("button", { name: "Delete draft" })).toBeTruthy();
   });
 
-  it("chips every in-epic row on a chat surface, without the epic prefix", () => {
-    useComposerDraftStore.setState({
-      drafts: {
-        "chat-1": chatDraft({
-          draftId: "draft-chat-1",
-          content: typed("Half-written question"),
-        }),
-        "chat-2": chatDraft({
-          draftId: "draft-chat-2",
-          chatTitle: "Release checklist",
-          content: typed("A different thread"),
-        }),
-      },
-    });
-    useNewConversationModalStore.setState({
-      draftPatchesByEpicId: { [EPIC_ID]: newChatPatch({}) },
-    });
-    render(
-      <ComposerDraftsControl
-        scope={{ surface: "chat", epicId: EPIC_ID, chatId: "chat-1" }}
-        hostId={HOST_ID}
-        pickerStore={createComposerPickerStore()}
-        editorRef={editorRef}
-        active
-      />,
-    );
-    openList();
-
-    expect(screen.getByRole("button", { name: "This task" })).toBeTruthy();
-    // The scope's own chat is the live buffer, never a row; the start page's
-    // drafts belong to All.
-    expect(listedRowIds()).toEqual(["draft-new-chat", "draft-chat-2"]);
-    // Inside the scope's own epic the chip is the bare name - but it is still
-    // there, because a draft's text does not say which chat it belongs to.
-    expect(rowText("draft-chat-2")).toContain("Release checklist");
-    expect(rowText("draft-chat-2")).not.toContain("Payments ·");
-    expect(rowText("draft-new-chat")).toContain("New agent");
-    expect(rowText("draft-new-chat")).not.toContain("Payments ·");
-  });
-
   // `PopoverContent` un-presents its portal on a pane switch while leaving the
   // root open, so an ungated control would keep eating keys while invisible -
   // and `d` would delete a draft the user is no longer looking at.
@@ -524,22 +417,6 @@ describe("ComposerDraftsControl", () => {
     // send whatever is in the composer.
     expect(pressKeyPrevented("Enter")).toBe(true);
     expect(actions.openRow).not.toHaveBeenCalled();
-    expect(screen.getByText("No drafts here yet")).toBeTruthy();
-  });
-
-  it("says so when a chat surface's epic has no other drafts", () => {
-    render(
-      <ComposerDraftsControl
-        scope={{ surface: "chat", epicId: EPIC_ID, chatId: "chat-1" }}
-        hostId={HOST_ID}
-        pickerStore={createComposerPickerStore()}
-        editorRef={editorRef}
-        active
-      />,
-    );
-    openList();
-
-    expect(listedRowIds()).toEqual([]);
     expect(screen.getByText("No drafts here yet")).toBeTruthy();
   });
 });

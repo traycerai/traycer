@@ -51,6 +51,32 @@ export function DraftRow(props: DraftRowProps) {
       onMouseMove={onHighlight}
       onSelect={onOpen}
     >
+      <DraftRowBody
+        row={row}
+        sourceChip={sourceChip}
+        trailing={
+          <DraftRowTrailing
+            mobile={mobile}
+            relative={relative}
+            onOpen={onOpen}
+            onCopy={onCopy}
+            onDelete={onDelete}
+          />
+        }
+      />
+    </CommandItem>
+  );
+}
+
+/** Content and metadata shared by the start-page picker and avatar dialog. */
+export function DraftRowBody(props: {
+  readonly row: DraftInventoryRow;
+  readonly sourceChip: string | null;
+  readonly trailing: ReactNode;
+}) {
+  const { row, sourceChip, trailing } = props;
+  return (
+    <>
       {/* The same read-only renderer the queue and the sent message use, so
           mention, slash-command and image chips survive the round trip
           instead of flattening to `@epic:<id>`. `emptyLabel` is the per-kind
@@ -64,7 +90,7 @@ export function DraftRow(props: DraftRowProps) {
       <span className="flex w-full min-w-0 items-center gap-1.5 text-ui-xs leading-5 text-muted-foreground">
         <span className="min-w-0 flex-1" />
         {sourceChip === null ? null : (
-          <Badge variant="secondary" size="xs" className="shrink-0">
+          <Badge variant="secondary" size="xs" className="min-w-0">
             <span className="max-w-40 truncate">{sourceChip}</span>
           </Badge>
         )}
@@ -73,19 +99,13 @@ export function DraftRow(props: DraftRowProps) {
             Open
           </Badge>
         ) : null}
-        <DraftRowTrailing
-          mobile={mobile}
-          relative={relative}
-          onOpen={onOpen}
-          onCopy={onCopy}
-          onDelete={onDelete}
-        />
+        {trailing}
       </span>
-    </CommandItem>
+    </>
   );
 }
 
-function DraftRowTrailing(props: {
+export function DraftRowTrailing(props: {
   readonly mobile: boolean;
   readonly relative: string;
   readonly onOpen: () => void;
@@ -95,7 +115,7 @@ function DraftRowTrailing(props: {
   const { mobile, relative, onOpen, onCopy, onDelete } = props;
   if (mobile) {
     return (
-      <span className="flex shrink-0 items-center gap-0.5">
+      <span className="pointer-events-none relative flex shrink-0 items-center gap-0.5">
         <span className="tabular-nums">{relative}</span>
         <DraftRowIconButton label="Copy draft" onPress={onCopy}>
           <Copy className="size-3.5" aria-hidden />
@@ -198,7 +218,7 @@ function DraftRowIconButton(props: {
     <button
       type="button"
       aria-label={label}
-      className="inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+      className="pointer-events-auto inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();

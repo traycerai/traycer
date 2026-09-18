@@ -49,8 +49,6 @@ import { useNewConversationModalStore } from "@/stores/epics/new-conversation-mo
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useMemo, useSyncExternalStore } from "react";
 
-const NO_ITEMS: ReadonlyArray<CommandItem> = [];
-
 function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const kind = ctx.focusedComposerKind;
   // Live binding so rebinding ⌃⌥M / Alt+Shift+M updates the palette's shortcut
@@ -81,8 +79,8 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   // render, so opening the top-level palette does not eagerly hit SDKs.
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
-    if (kind === null) return NO_ITEMS;
     const items: Array<CommandItem> = [buildDraftsItem(draftsShortcut)];
+    if (kind === null) return items;
     if (activeModelPicker !== null) {
       items.push(
         buildChangeModelItem(
@@ -123,7 +121,7 @@ function buildDraftsItem(shortcut: ChordString | null): CommandItem {
   return {
     id: "composer:drafts",
     label: "Drafts",
-    description: "Open the drafts list for this composer.",
+    description: "Browse saved drafts.",
     keywords: ["drafts", "saved", "prompt"],
     group: "suggested",
     scope: "actions",

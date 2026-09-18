@@ -1,3 +1,5 @@
+import { DraftsDialog } from "@/components/composer/drafts/drafts-dialog";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -14,6 +16,7 @@ import { OpenEpicInNewWindowDialog } from "./desktop/open-epic-in-new-window-dia
 
 export function DesktopDialogHost(): ReactNode {
   const runnerHost = useRunnerHost();
+  const hostId = useEffectiveHostId();
   const support = useMemo(
     () => resolveDesktopSupportBridge(runnerHost),
     [runnerHost],
@@ -50,6 +53,9 @@ export function DesktopDialogHost(): ReactNode {
 
   return (
     <>
+      {activeDialog === "drafts" ? (
+        <DraftsDialog hostId={hostId} onClose={close} />
+      ) : null}
       <AboutDetailsDialog
         open={activeDialog === "about-details"}
         onOpenChange={(open) => {

@@ -1,3 +1,4 @@
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -437,7 +438,11 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   // No-op (false) when no composer is active, matching the "hidden/disabled"
   // surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
-  "composer.drafts": () => openActiveDraftsControl(),
+  "composer.drafts": () => {
+    if (openActiveDraftsControl()) return true;
+    useDesktopDialogStore.getState().openDrafts();
+    return true;
+  },
 };
 
 export function dispatchAction(

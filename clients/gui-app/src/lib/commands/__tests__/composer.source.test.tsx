@@ -313,9 +313,11 @@ describe("composerSource", () => {
     useNewConversationModalStore.getState().resetForTests();
   });
 
-  it("emits nothing when no composer is registered", () => {
+  // H10/H12: Drafts is always in the palette, even with no composer focused -
+  // its Cmd+S opens the avatar menu's dialog rather than a composer control.
+  it("emits only the Drafts row when no composer is registered", () => {
     const items = captureItems(null, null);
-    expect(items).toEqual([]);
+    expect(items.map((i) => i.id)).toEqual(["composer:drafts"]);
   });
 
   it("landing composer shows provider / model; no new-chat items", () => {
@@ -333,7 +335,7 @@ describe("composerSource", () => {
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
-  it("emits a context-gated Drafts row bound to composer.drafts", () => {
+  it("emits a Drafts row bound to composer.drafts on the landing composer", () => {
     registerFocusedComposerControls(
       "landing",
       stubControls({}),
@@ -346,6 +348,19 @@ describe("composerSource", () => {
     expect(item?.actionId).toBe("composer.drafts");
     expect(item?.label).toBe("Drafts");
     expect(item?.shortcut).toBe("mod+s");
+  });
+
+  // H10/H12: unlike every other row here, Drafts does not depend on a
+  // focused composer - off the start page, Cmd+S still has somewhere to go
+  // (the avatar menu's dialog), so the palette keeps offering it.
+  it("keeps the Drafts row on a non-landing composer", () => {
+    registerFocusedComposerControls(
+      "chat-tile",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    const ids = captureItems("epic-1", "chat-tile").map((i) => i.id);
+    expect(ids).toContain("composer:drafts");
   });
 
   it("hides Change model… when no picker is registered", () => {

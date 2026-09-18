@@ -67,14 +67,10 @@ export type DraftInventoryRow =
  * Which composer is asking. The scope's OWN draft is the live buffer being
  * edited, so it is never a row under either filter.
  */
-export type DraftInventoryScope =
-  | { readonly surface: "landing"; readonly activeDraftId: string | null }
-  | {
-      readonly surface: "chat";
-      readonly epicId: string;
-      readonly chatId: string;
-    }
-  | { readonly surface: "new-chat"; readonly epicId: string };
+export interface DraftInventoryScope {
+  readonly surface: "landing";
+  readonly activeDraftId: string | null;
+}
 
 export type DraftInventoryFilter = "current" | "all";
 
@@ -106,13 +102,8 @@ export interface DraftInventoryInput {
 export function listDraftInventory(
   input: DraftInventoryInput,
 ): ReadonlyArray<DraftInventoryRow> {
-  const all = input.filter === "all";
-  const onLanding = input.scope.surface === "landing";
-  const rows: DraftInventoryRow[] = [];
-  // D05: the start page's "current" is the start page, and the two in-epic
-  // surfaces' "current" is the epic. Each lists the other kinds only under All.
-  if (onLanding || all) rows.push(...landingRows(input));
-  if (!onLanding || all) {
+  const rows = [...landingRows(input)];
+  if (input.filter === "all") {
     rows.push(...chatRows(input), ...newChatRows(input));
   }
   // D12: flat, newest first, ties broken by id so the order is total.
@@ -155,8 +146,7 @@ function newChatOwnerHostId(
 function landingRows(
   input: DraftInventoryInput,
 ): ReadonlyArray<DraftInventoryRow> {
-  const activeId =
-    input.scope.surface === "landing" ? input.scope.activeDraftId : null;
+  const activeId = input.scope.activeDraftId;
   const rows: DraftInventoryRow[] = [];
   for (const draft of input.landing) {
     if (draft.id === activeId) continue;
@@ -180,8 +170,6 @@ function landingRows(
 function chatRows(
   input: DraftInventoryInput,
 ): ReadonlyArray<DraftInventoryRow> {
-  const { scope } = input;
-  const epicScoped = input.filter === "current" && scope.surface !== "landing";
   const rows: DraftInventoryRow[] = [];
   for (const [chatId, draft] of Object.entries(input.composer)) {
     if (draft === undefined) continue;
@@ -189,8 +177,6 @@ function chatRows(
     if (draftId === null || targetEpicId === null || ownerHostId === null) {
       continue;
     }
-    if (scope.surface === "chat" && chatId === scope.chatId) continue;
-    if (epicScoped && targetEpicId !== scope.epicId) continue;
     if (!input.liveSessionHostIds.has(ownerHostId)) continue;
     if (isEmptyLandingDraftContent(draft.content)) continue;
     // A textless chat draft falls back to the chat it belongs to - which is
@@ -214,15 +200,11 @@ function chatRows(
 function newChatRows(
   input: DraftInventoryInput,
 ): ReadonlyArray<DraftInventoryRow> {
-  const { scope } = input;
-  const epicScoped = input.filter === "current" && scope.surface !== "landing";
   const rows: DraftInventoryRow[] = [];
   for (const [epicId, patch] of Object.entries(input.newChat)) {
     if (patch === undefined) continue;
     const { draftId, content } = patch;
     if (draftId === null || content === null) continue;
-    if (scope.surface === "new-chat" && epicId === scope.epicId) continue;
-    if (epicScoped && epicId !== scope.epicId) continue;
     const ownerHostId = newChatOwnerHostId(epicId, patch);
     if (ownerHostId === null) continue;
     if (!input.liveSessionHostIds.has(ownerHostId)) continue;

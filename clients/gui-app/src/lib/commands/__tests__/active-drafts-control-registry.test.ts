@@ -10,6 +10,7 @@ import {
 } from "@/lib/keybindings/dispatch";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
 import { isRepeatSensitiveAction } from "@/lib/keybindings/dispatch";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 function noopRouter(): KeybindingRouter {
   return {
@@ -30,12 +31,17 @@ function noopRouter(): KeybindingRouter {
 }
 
 describe("active-drafts-control-registry", () => {
-  beforeEach(() => resetActiveDraftsControlForTests());
-  afterEach(() => resetActiveDraftsControlForTests());
+  beforeEach(() => {
+    resetActiveDraftsControlForTests();
+    useDesktopDialogStore.getState().close();
+  });
+  afterEach(() => {
+    resetActiveDraftsControlForTests();
+    useDesktopDialogStore.getState().close();
+  });
 
   it("no-ops when no composer is registered", () => {
     expect(openActiveDraftsControl()).toBe(false);
-    expect(dispatchAction("composer.drafts", noopRouter())).toBe(false);
   });
 
   it("dispatches the top-of-stack action", () => {
@@ -84,6 +90,34 @@ describe("active-drafts-control-registry", () => {
     resetActiveDraftsControlForTests();
     expect(openActiveDraftsControl()).toBe(false);
     expect(leaked).not.toHaveBeenCalled();
+  });
+});
+
+// H12: `Cmd+S` opens the start-page control when one is active; anywhere else
+// it opens the avatar menu's Drafts dialog. No dependency on the Home tab
+// setting - this always fires, unlike the old Home fallback it replaces.
+describe("composer.drafts falling back to the avatar Drafts dialog", () => {
+  beforeEach(() => {
+    resetActiveDraftsControlForTests();
+    useDesktopDialogStore.getState().close();
+  });
+  afterEach(() => {
+    resetActiveDraftsControlForTests();
+    useDesktopDialogStore.getState().close();
+  });
+
+  it("opens the drafts dialog when no composer is registered", () => {
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
+    expect(useDesktopDialogStore.getState().activeDialog).toBe("drafts");
+  });
+
+  it("prefers the real registry over the dialog when a composer is active", () => {
+    const composer = vi.fn();
+    registerActiveDraftsControl(composer);
+
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
+    expect(composer).toHaveBeenCalledTimes(1);
+    expect(useDesktopDialogStore.getState().activeDialog).toBe(null);
   });
 });
 
