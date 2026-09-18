@@ -7,7 +7,7 @@
  * (`useChatSearchResults` -> `mergeChatSearchPages`); expanding a group renders
  * whatever `renderExpansion` returns, which in the app is a chat-scoped query.
  */
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import type {
   ChatSearchChatMatch,
@@ -23,7 +23,10 @@ import {
   highlightSegments,
   type ChatSearchMergedResults,
 } from "@/lib/chat-search/chat-search-results";
-import type { ChatSearchLoadMoreError } from "@/hooks/chats/use-chat-search-query";
+import type {
+  ChatSearchLoadMoreError,
+  ChatSearchPageError,
+} from "@/hooks/chats/use-chat-search-query";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -90,20 +93,26 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
     });
   }, []);
 
-  const { chatMatches, messageMatches } = results;
+  const { chatMatches, chatNextCursor, messageMatches, messageNextCursor } =
+    results;
   const { chatsError, chatsShown, exhausted, messagesError, messagesShown } =
     sectionsOf(results, loadMoreError);
+  const loadMoreChats = useMemo(
+    () =>
+      chatNextCursor === null ? null : () => onShowMoreChats(chatNextCursor),
+    [chatNextCursor, onShowMoreChats],
+  );
+  const loadMoreMessages = useMemo(
+    () =>
+      messageNextCursor === null
+        ? null
+        : () => onShowMoreMessages(messageNextCursor),
+    [messageNextCursor, onShowMoreMessages],
+  );
 
   return (
     <div className="flex flex-col pb-2">
-      {results.indexState === "partial" ? (
-        <p
-          role="status"
-          className="mx-3 mt-2 rounded-md bg-foreground/5 px-2.5 py-1.5 text-ui-xs text-muted-foreground"
-        >
-          Still indexing chats on this host. Some results may be missing.
-        </p>
-      ) : null}
+      {results.indexState === "partial" ? <ChatSearchPartialIndexNote /> : null}
       {exhausted ? (
         <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground">
           No chats match.
@@ -134,10 +143,9 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
           {chatMatches.length === 0 ? <EmptyPageNote /> : null}
           <SectionContinuation
             error={chatsError}
-            nextCursor={results.chatNextCursor}
             label="Show more chats"
             disabled={loadingMore}
-            onShowMore={onShowMoreChats}
+            onShowMore={loadMoreChats}
           />
         </section>
       ) : null}
@@ -163,6 +171,7 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
                   onToggleExpanded={() => toggleExpanded(key)}
                   renderExpansion={renderExpansion}
                   taskTitle={taskTitles.get(match.epicId) ?? null}
+                  variant="full"
                 />
               );
             })}
@@ -170,10 +179,9 @@ export function ChatSearchResultsView(props: ChatSearchResultsViewProps) {
           {messageMatches.length === 0 ? <EmptyPageNote /> : null}
           <SectionContinuation
             error={messagesError}
-            nextCursor={results.messageNextCursor}
             label="Show more message matches"
             disabled={loadingMore}
-            onShowMore={onShowMoreMessages}
+            onShowMore={loadMoreMessages}
           />
         </section>
       ) : null}
@@ -258,7 +266,29 @@ function ChatMatchRow(props: RowProps<ChatSearchChatMatch>) {
   );
 }
 
-function MessageMatchRow(props: RowProps<ChatSearchMessageMatch>) {
+/**
+ * How wide a column the row is drawn in. `compact` is the sidebar's ~300px
+ * one: the task label goes (every hit there belongs to the task on screen) and
+ * the snippet takes a single line. Everything else - time, tier, match count,
+ * the expand toggle - is the same row.
+ *
+ * A variant rather than a `className` on purpose: the call site places the
+ * row, the row owns how it looks.
+ */
+export type ChatSearchRowVariant = "full" | "compact";
+
+export interface ChatSearchMessageMatchRowProps {
+  readonly match: ChatSearchMessageMatch;
+  readonly expanded: boolean;
+  readonly onOpen: (target: ChatSearchOpenTarget) => void;
+  readonly onToggleExpanded: () => void;
+  readonly renderExpansion: (target: ChatSearchExpansionTarget) => ReactNode;
+  /** The task list's name for this result's task, when it has one. */
+  readonly taskTitle: string | null;
+  readonly variant: ChatSearchRowVariant;
+}
+
+export function MessageMatchRow(props: ChatSearchMessageMatchRowProps) {
   const navProps = useChatSearchNavProps();
   const {
     expanded,
@@ -267,6 +297,7 @@ function MessageMatchRow(props: RowProps<ChatSearchMessageMatch>) {
     onToggleExpanded,
     renderExpansion,
     taskTitle,
+    variant,
   } = props;
   const best = match.best;
   return (
@@ -286,14 +317,21 @@ function MessageMatchRow(props: RowProps<ChatSearchMessageMatch>) {
         <span className="truncate font-medium text-foreground">
           {displayChatTitle(match.title)}
         </span>
-        <span className="line-clamp-2 text-ui-xs text-foreground/80">
+        <span
+          className={cn(
+            "text-ui-xs text-foreground/80",
+            variant === "compact" ? "line-clamp-1" : "line-clamp-2",
+          )}
+        >
           <ChatSearchHighlightedText
             text={best.snippet.text}
             ranges={best.snippet.highlights}
           />
         </span>
         <RowMeta>
-          <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
+          {variant === "compact" ? null : (
+            <TaskLabel epicId={match.epicId} listedTitle={taskTitle} />
+          )}
           <span>{chatSearchTierLabel(best)}</span>
           <ChatSearchResultTime at={best.createdAt} />
           <span>{formatMatchCount(match.matchCount)}</span>
@@ -347,6 +385,22 @@ function ExpandToggle(props: {
       />
       {props.label}
     </button>
+  );
+}
+
+/**
+ * The index is still building, so an absent result may only be an unread chat.
+ * Rendered by every surface that shows hits, so the caveat reads the same
+ * wherever the hits are.
+ */
+export function ChatSearchPartialIndexNote() {
+  return (
+    <p
+      role="status"
+      className="mx-3 mt-2 rounded-md bg-foreground/5 px-2.5 py-1.5 text-ui-xs text-muted-foreground"
+    >
+      Still indexing chats on this host. Some results may be missing.
+    </p>
   );
 }
 
@@ -408,14 +462,14 @@ function sectionsOf(
  * in that control's place, with a retry that refetches only that page. The rows
  * above stay either way.
  */
-function SectionContinuation(props: {
-  readonly error: ChatSearchLoadMoreError | null;
-  readonly nextCursor: string | null;
+export function SectionContinuation(props: {
+  readonly error: ChatSearchPageError | null;
   readonly label: string;
   readonly disabled: boolean;
-  readonly onShowMore: (cursor: string) => void;
+  /** Loads the next page; `null` when the section is out of pages. */
+  readonly onShowMore: (() => void) | null;
 }) {
-  const { error, nextCursor, onShowMore } = props;
+  const { error, onShowMore } = props;
   if (error !== null) {
     return (
       <div className="flex flex-wrap items-center gap-x-1 px-1.5 pt-0.5">
@@ -426,12 +480,12 @@ function SectionContinuation(props: {
       </div>
     );
   }
-  if (nextCursor === null) return null;
+  if (onShowMore === null) return null;
   return (
     <ShowMoreButton
       label={props.label}
       disabled={props.disabled}
-      onClick={() => onShowMore(nextCursor)}
+      onClick={onShowMore}
     />
   );
 }
