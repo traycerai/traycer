@@ -12,6 +12,12 @@ import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 import { PaneFocusProbeContext } from "@/components/epic-tabs/pane-visibility-context";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
 import { useBrowserAddressShortcut } from "@/lib/browser-view/tiles/browser-address-shortcut";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  resetTabsStoreForTest,
+  seedActiveEpicTabInTabsStore,
+} from "@/stores/tabs/test-support/tabs-store-fixtures";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 
 /**
  * A minimal stand-in for a browser tile's chrome: real `useAddressDraft` (so
@@ -48,6 +54,29 @@ function AddressProbe(props: {
         value={addressValue}
         onChange={(event) => onAddressChange(event.currentTarget.value)}
       />
+    </div>
+  );
+}
+
+/** An inline dialog must defer before the containing tile can claim the chord. */
+function InlineDialogAddressProbe(): ReactElement {
+  const tileRef = useRef<HTMLDivElement | null>(null);
+  const { focusAddress, setAddressInput, addressValue, onAddressChange } =
+    useAddressDraft("https://example.com/inline");
+  useBrowserAddressShortcut({ enabled: true, tileRef, focusAddress });
+  return (
+    <div ref={tileRef} data-testid="tile-inline">
+      <input
+        aria-label="Address inline"
+        ref={setAddressInput}
+        value={addressValue}
+        onChange={(event) => onAddressChange(event.currentTarget.value)}
+      />
+      <div role="dialog" data-state="open" data-leader-scope="">
+        <button type="button" data-testid="inline-dialog-button">
+          Open
+        </button>
+      </div>
     </div>
   );
 }
@@ -293,5 +322,129 @@ describe("focusBrowserAddressForShortcut fallback through the real KeybindingPro
     });
 
     expect(document.activeElement).not.toBe(addressInput("a"));
+  });
+});
+
+// Leader-scope dialogs allow app dispatch even while ordinary dialogs block it.
+describe("focusBrowserAddressForShortcut defers to an open leader-scope dialog", () => {
+  const SEED_EPIC_ID = "epic-dialog-guard";
+  const CHAT_A: EpicNodeRef = {
+    id: "chat-a",
+    instanceId: "inst-a",
+    type: "chat",
+    name: "Chat A",
+    hostId: "host-A",
+  };
+
+  // Give group.focus-editor a real composer so the test proves dispatch survives.
+  function seedActiveGroupTab(): {
+    readonly tabId: string;
+    readonly groupId: string;
+    readonly instanceId: string;
+  } {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab(SEED_EPIC_ID, "Epic");
+    store.openTileInTab(tabId, CHAT_A);
+    seedActiveEpicTabInTabsStore(tabId);
+    const groupId =
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId ?? null;
+    if (groupId === null) throw new Error("expected an active group");
+    return { tabId, groupId, instanceId: CHAT_A.instanceId };
+  }
+
+  /** Mirrors `TabGroupView`'s own tab-body wrapper markup - see `tab-group-view.tsx`. */
+  function buildSelectedTabWrapper(
+    groupId: string,
+    instanceId: string,
+  ): HTMLElement {
+    const group = document.createElement("div");
+    group.setAttribute("data-group-id", groupId);
+    const selectedTab = document.createElement("div");
+    selectedTab.setAttribute("data-tab-instance-id", instanceId);
+    selectedTab.setAttribute("data-selected", "true");
+    group.appendChild(selectedTab);
+    document.body.appendChild(group);
+    return selectedTab;
+  }
+
+  function appendComposerEditor(parent: HTMLElement): HTMLElement {
+    const composer = document.createElement("div");
+    composer.setAttribute("data-chat-composer", "");
+    const editor = document.createElement("div");
+    editor.setAttribute("data-composer-editor", "");
+    editor.setAttribute("tabindex", "-1");
+    composer.appendChild(editor);
+    parent.appendChild(composer);
+    return editor;
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    resetTabsStoreForTest();
+  });
+
+  afterEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    resetTabsStoreForTest();
+  });
+
+  it("keeps mod+L on group.focus-editor when a leader-scope dialog holds a focused, non-editable button", () => {
+    const { tabId, groupId, instanceId } = seedActiveGroupTab();
+    const selectedTab = buildSelectedTabWrapper(groupId, instanceId);
+    const editor = appendComposerEditor(selectedTab);
+    const router = buildProviderRouterSource(`/epics/${SEED_EPIC_ID}/${tabId}`);
+
+    render(
+      <KeybindingProvider router={router}>
+        <AddressProbe enabled label="a" />
+      </KeybindingProvider>,
+    );
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-state", "open");
+    dialog.setAttribute("data-leader-scope", "");
+    const dialogButton = document.createElement("button");
+    dialogButton.type = "button";
+    dialogButton.textContent = "Open";
+    dialog.appendChild(dialogButton);
+    document.body.appendChild(dialog);
+    dialogButton.focus();
+    expect(document.activeElement).toBe(dialogButton);
+
+    act(() => {
+      dispatchModL(dialogButton);
+    });
+
+    expect(document.activeElement).not.toBe(addressInput("a"));
+    expect(document.activeElement).toBe(editor);
+  });
+
+  it("keeps mod+L on group.focus-editor when the leader-scope dialog is nested inside the browser tile itself", () => {
+    const { tabId, groupId, instanceId } = seedActiveGroupTab();
+    const selectedTab = buildSelectedTabWrapper(groupId, instanceId);
+    const editor = appendComposerEditor(selectedTab);
+    const router = buildProviderRouterSource(`/epics/${SEED_EPIC_ID}/${tabId}`);
+
+    render(
+      <KeybindingProvider router={router}>
+        <InlineDialogAddressProbe />
+      </KeybindingProvider>,
+    );
+
+    const dialogButton = screen.getByTestId("inline-dialog-button");
+    dialogButton.focus();
+    expect(document.activeElement).toBe(dialogButton);
+
+    act(() => {
+      dispatchModL(dialogButton);
+    });
+
+    expect(document.activeElement).not.toBe(addressInput("inline"));
+    expect(document.activeElement).toBe(editor);
   });
 });

@@ -40,6 +40,18 @@ export function focusBrowserAddressForShortcut(event: KeyboardEvent): boolean {
   ) {
     return false;
   }
+  // Leader-aware dialogs allow app dispatch, but still own their focus.
+  if (
+    event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof Element &&
+          target.matches('[role="dialog"][data-state="open"]'),
+      )
+  ) {
+    return false;
+  }
   const candidates = [...targets].filter(
     ({ tile, isPaneFocused }) => tile.isConnected && isPaneFocused(),
   );
