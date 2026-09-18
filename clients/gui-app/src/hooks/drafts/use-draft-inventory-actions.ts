@@ -137,7 +137,10 @@ export function useDraftInventoryActions(
         action: {
           label: "Undo",
           onClick: () => {
-            undo();
+            if (!undo()) {
+              toast("Undo skipped. You typed something new here.");
+              return;
+            }
             Analytics.getInstance().track(AnalyticsEvent.DraftDeleteUndone, {
               surface,
               draft_kind,

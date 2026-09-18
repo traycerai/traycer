@@ -6,6 +6,7 @@ import { useDraftInventoryActions } from "@/hooks/drafts/use-draft-inventory-act
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
 import { resetLandingDraftRetirementsForTests } from "@/lib/drafts/landing-draft-retirement";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   useLandingDraftStore,
@@ -354,6 +355,7 @@ describe("useDraftInventoryActions", () => {
     const onUndo = lastToastCall?.[1]?.action?.onClick;
     expect(onUndo).toBeDefined();
 
+    trackSpy.mockClear();
     act(() => {
       onUndo?.();
     });
@@ -362,7 +364,69 @@ describe("useDraftInventoryActions", () => {
       surface: "start_page",
       draft_kind: "start_page",
     });
+    expect(trackSpy).toHaveBeenCalledTimes(1);
     expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+  });
+
+  it("shows a skip toast and fires no draft_delete_undone when Undo cannot apply", () => {
+    useComposerDraftStore.getState().bindTarget("chat-undo-skip", "epic-undo-skip");
+    useComposerDraftStore
+      .getState()
+      .setSnapshot("chat-undo-skip", typed("original"), null);
+    const draftId =
+      useComposerDraftStore.getState().drafts["chat-undo-skip"]?.draftId;
+    if (draftId === undefined || draftId === null) {
+      throw new Error("expected a draft id");
+    }
+    const row = chatRow({
+      id: draftId,
+      chatId: "chat-undo-skip",
+      epicId: "epic-undo-skip",
+      ownerHostId: null,
+    });
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    const { result } = renderHook(() =>
+      useDraftInventoryActions(null, "avatar_menu"),
+    );
+
+    act(() => {
+      result.current.deleteRow(row, "pointer");
+    });
+    // The user reopens the chat and types before pressing Undo.
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot("chat-undo-skip", typed("new work"), null);
+    });
+
+    const lastToastCall = toastFn.mock.calls.at(-1) as
+      | [string, { action?: { onClick?: () => void } }]
+      | undefined;
+    const onUndo = lastToastCall?.[1]?.action?.onClick;
+    expect(onUndo).toBeDefined();
+    trackSpy.mockClear();
+
+    act(() => {
+      onUndo?.();
+    });
+
+    expect(toastFn).toHaveBeenCalledWith(
+      "Undo skipped. You typed something new here.",
+    );
+    expect(trackSpy).not.toHaveBeenCalledWith(
+      AnalyticsEvent.DraftDeleteUndone,
+      expect.anything(),
+    );
+    expect(
+      useComposerDraftStore.getState().drafts["chat-undo-skip"]?.content,
+    ).toEqual(typed("new work"));
+
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
   });
 
   it("does not fire draft_deleted when the row no longer exists in the store", () => {

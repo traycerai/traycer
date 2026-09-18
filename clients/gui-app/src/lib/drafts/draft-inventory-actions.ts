@@ -71,11 +71,11 @@ type DraftClient = HostRequester<HostRpcRegistry> | null;
  * `deleted: false` means nothing was removed anywhere - the caller shows no
  * toast rather than claiming a delete that did not happen. `undo` is null for
  * a row this host does not own: a retract has no local snapshot to restore
- * (D17).
+ * (D17). Undo returns whether it restored the local buffer.
  */
 export type DraftRowDeleteOutcome =
   | { readonly deleted: false }
-  | { readonly deleted: true; readonly undo: (() => void) | null };
+  | { readonly deleted: true; readonly undo: (() => boolean) | null };
 
 /**
  * Open a chat row: activate its epic's header tab and land the chat tile on
@@ -152,8 +152,13 @@ export function openChatDraftRow(
  */
 export function openNewChatDraftRow(
   navigate: NavigateFn,
-  row: { readonly epicId: string; readonly epicTitle: string | null },
-): void {
+  row: {
+    readonly epicId: string;
+    readonly epicTitle: string | null;
+    readonly ownerHostId: string | null;
+  },
+): boolean {
+  if (row.ownerHostId === null) return false;
   const tabId = useEpicCanvasStore
     .getState()
     .resolveTargetTabForEpic(row.epicId, row.epicTitle ?? undefined);
@@ -167,8 +172,9 @@ export function openNewChatDraftRow(
     tabId,
     placement: null,
     parentId: null,
-    hostId: null,
+    hostId: row.ownerHostId,
   });
+  return true;
 }
 
 /**
@@ -187,8 +193,9 @@ export function deleteLandingDraftRow(
   client: DraftClient,
 ): DraftRowDeleteOutcome {
   const draftId = draft.id;
-  const restore = (): void => {
+  const restore = (): boolean => {
     restoreLandingDraft(draft);
+    return true;
   };
   // With no resolved host there is nowhere to route a delete or a retract, and
   // a local-only delete of a row with a cloud copy would leave that copy to be
@@ -261,10 +268,14 @@ export function deleteComposerDraftRow(
     row.draftId,
     row.foreign ? null : row.ownerHostId,
   );
+  // Undo may restore only this cleared buffer, never a later edit.
+  const cleared = readComposerDraftSnapshot(row.chatId);
   const undo = row.foreign
     ? null
-    : (): void => {
+    : (): boolean => {
+        if (readComposerDraftSnapshot(row.chatId) !== cleared) return false;
         restoreComposerDraft(row.chatId, before, row.ownerHostId, client);
+        return true;
       };
   if (row.ownerHostId === null) return { deleted: true, undo };
   if (row.foreign) {
@@ -324,8 +335,7 @@ function restoreComposerDraft(
   // withholding the collector applies.
   if (after.draftId === null || after.targetEpicId === null) return;
   void publishRestoredDraft(
-    ownerHostId,
-    client,
+    { hostId: ownerHostId, client },
     composerDraftWrite({
       draftId: after.draftId,
       kind: "chat-composer",
@@ -346,6 +356,7 @@ function restoreComposerDraft(
       supersedes: after.supersedes,
     }),
     applyComposerHostDocument,
+    () => composerBoundHostId(chatId) === null,
   );
 }
 
@@ -355,11 +366,15 @@ function restoreComposerDraft(
  * failure leaves a dirty local row for the next session that binds it.
  */
 async function publishRestoredDraft(
-  hostId: string,
-  client: HostRequester<HostRpcRegistry>,
+  owner: {
+    readonly hostId: string;
+    readonly client: HostRequester<HostRpcRegistry>;
+  },
   write: DraftWrite,
   apply: (document: DraftDocument) => void,
+  stillUnmounted: () => boolean,
 ): Promise<void> {
+  const { hostId, client } = owner;
   try {
     await putDraftBlobsForWrite(
       hostId,
@@ -367,6 +382,8 @@ async function publishRestoredDraft(
       write,
       currentDraftBlobOwnerId(),
     );
+    // Blob upload yielded: a mounted session may now own this write.
+    if (!stillUnmounted()) return;
     const response = await client.request("drafts.upsert", { draft: write });
     apply(response.draft);
   } catch (error: unknown) {
@@ -430,6 +447,8 @@ export function deleteNewChatDraftRow(
     useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId] ??
     null;
   useNewConversationModalStore.getState().clearDraft(row.epicId);
+  const cleared =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId];
   if (!routed && client !== null && row.ownerHostId !== null) {
     void client
       .request("drafts.delete", { draftId: row.draftId })
@@ -445,7 +464,14 @@ export function deleteNewChatDraftRow(
   return {
     deleted: true,
     undo: () => {
+      if (
+        useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId] !==
+        cleared
+      ) {
+        return false;
+      }
       restoreNewChatDraft(row, before, content, client);
+      return true;
     },
   };
 }
@@ -488,8 +514,7 @@ function restoreNewChatDraft(
     return;
   }
   void publishRestoredDraft(
-    ownerHostId,
-    client,
+    { hostId: ownerHostId, client },
     composerDraftWrite({
       draftId: after.draftId,
       kind: "new-chat",
@@ -506,5 +531,6 @@ function restoreNewChatDraft(
       supersedes: null,
     }),
     applyNewChatHostDocument,
+    () => newChatBoundHostId(epicId) === null,
   );
 }
