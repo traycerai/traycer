@@ -254,10 +254,18 @@ try {
   process.exitCode = 1;
 } finally {
   client?.close();
-  if (chrome !== undefined) {
-    await terminateProcessTree(chrome);
-  }
+  // Vite first, and a Chrome that survives its kill must not strand the rest
+  // of the cleanup: the dev server would keep its port and the profile its
+  // directory.
   viteProcess?.kill("SIGTERM");
+  if (chrome !== undefined) {
+    try {
+      await terminateProcessTree(chrome);
+    } catch (error) {
+      console.error("Chrome termination failed:", error);
+      process.exitCode = 1;
+    }
+  }
   if (chromeProfilePath !== undefined) {
     await rm(chromeProfilePath, {
       recursive: true,
