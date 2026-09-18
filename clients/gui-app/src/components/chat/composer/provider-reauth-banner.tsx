@@ -643,6 +643,7 @@ function OAuthReauthForm({
       <OAuthWaitingRow
         loginUrl={flow.state.url}
         userCode={flow.state.userCode}
+        loginCapability={loginCapability}
         isLocalHost={isLocalHost}
         codePaste={flow.codePaste}
         cancelPending={flow.cancelPending}
@@ -789,6 +790,7 @@ function OAuthWaitingDetails(props: {
 function OAuthWaitingRow({
   loginUrl,
   userCode,
+  loginCapability,
   isLocalHost,
   codePaste,
   cancelPending,
@@ -797,6 +799,7 @@ function OAuthWaitingRow({
 }: {
   readonly loginUrl: string | null;
   readonly userCode: string | null;
+  readonly loginCapability: ProviderLoginCapability | null;
   readonly isLocalHost: boolean;
   readonly codePaste: ProviderProfileLoginFlow["codePaste"];
   readonly cancelPending: boolean;
@@ -806,7 +809,7 @@ function OAuthWaitingRow({
   const openLink = useOpenLink();
   const autoOpen = useAutoOpenLoginUrl(
     isLocalHost,
-    userCode,
+    loginCapability,
     loginUrl,
     (url) => {
       void openLink(url, "auth", null);
