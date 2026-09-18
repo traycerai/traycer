@@ -657,6 +657,14 @@ export const chatTranscriptDerivedSchema = z.object({
 });
 export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
 
+/** Frozen derived shape for chat.subscribe@1.8–1.12, before fork-aware placement. */
+export const chatTranscriptDerivedSchemaPreSetupPlacement =
+  chatTranscriptDerivedSchema.extend({
+    setupCardWindows: z.array(
+      setupCardWindowIdentitySchema.omit({ isGenesisPin: true }),
+    ),
+  });
+
 /**
  * The hydrated rows a snapshot ships inline - the streaming tail.
  *
