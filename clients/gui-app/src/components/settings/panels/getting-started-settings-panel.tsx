@@ -23,6 +23,7 @@ import {
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useHostBinding } from "@/lib/host";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { GETTING_STARTED } from "./getting-started-settings.definitions";
 import "./getting-started-settings.css";
@@ -59,6 +60,18 @@ type CardId = (typeof CARDS)[number]["id"];
  * footnote.
  */
 const UNAVAILABLE_ON_THIS_SHELL = "Available in the desktop app";
+
+/**
+ * What "Replay" replays on the installed app, which is not what the shared
+ * definition says.
+ *
+ * The definition's "Your workspace, providers, and tasks." names the three acts,
+ * and the installed app runs none of them - its tour is the welcome and then the
+ * guided tour of the tasks over the real app. Overridden HERE rather than in the
+ * definition because the definition is also the settings-search copy, which is
+ * the desktop's and stays true there.
+ */
+const MOBILE_APP_TOUR_DESCRIPTION = "A quick tour of your tasks.";
 
 /** Everything a card prints, derived once so the markup only reads it. */
 function cardPresentation(
@@ -244,7 +257,9 @@ export function GettingStartedSettingsPanel() {
               </div>
               <h2 className="text-ui-sm font-medium">{card.row.label}</h2>
               <p className="mt-1 text-ui-sm leading-relaxed text-muted-foreground">
-                {card.row.description}
+                {card.id === "tour" && isMobileApp()
+                  ? MOBILE_APP_TOUR_DESCRIPTION
+                  : card.row.description}
               </p>
               <span className="mt-auto flex w-full items-center justify-between gap-2 pt-7 text-ui-xs text-muted-foreground">
                 {unavailableReason ?? action}

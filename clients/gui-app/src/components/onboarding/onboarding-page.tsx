@@ -54,6 +54,7 @@ import {
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { isMobileApp } from "@/lib/mobile-app";
 import {
   clampOnboardingStep,
   isLastOnboardingStep,
@@ -130,7 +131,133 @@ function stepMotion(direction: number, reduced: boolean): StepMotion {
   };
 }
 
+/**
+ * First run, and the Settings replay.
+ *
+ * Two shapes, and the signal that picks between them is the PRODUCT one
+ * (`isMobileApp`), never the viewport: a narrow desktop window is a desktop
+ * user who gets the three acts in the phone layout, and the installed app is
+ * the only place the acts are dropped. About nine in ten people who open the
+ * installed app have already run this tour on the desktop app, so its
+ * providers act asks them to set up accounts they set up weeks ago and its
+ * import act offers to import what is already imported. What is left worth
+ * showing on a phone is the welcome, and then the guided landing tour over the
+ * real app - which is the act a phone user has never seen.
+ *
+ * `isMobileApp()` is set once by the Capacitor entry before the first render
+ * and can never flip, so branching above the hooks is safe: neither shape ever
+ * has to become the other.
+ */
 export function OnboardingPage(props: { readonly replay: boolean }) {
+  if (isMobileApp()) return <OnboardingWelcomeRun replay={props.replay} />;
+  return <OnboardingActs replay={props.replay} />;
+}
+
+/**
+ * The installed app's whole tour: the welcome, and then the app.
+ *
+ * It renders no tour layer, mounts no act, arms no session-import scan and
+ * prefetches no providers - not gated-off versions of them, none of them at
+ * all - so there is nothing that could flash between the welcome leaving and
+ * the first draft arriving. What happens at the end is exactly what finishing
+ * the desktop tour does: completion is recorded, the first-task guide is armed
+ * and the app opens on a new draft, where the guide takes over and teaches the
+ * menu and the drawer (or the add-folder flow, for an account with no tasks).
+ */
+function OnboardingWelcomeRun(props: { readonly replay: boolean }) {
+  const { replay } = props;
+  const reducedMotion = useReducedMotion() === true;
+  const [welcomePhase, setWelcomePhase] = useState<WelcomePhase>("welcome");
+  const navigate = useNavigate();
+  const restart = useOnboardingStore((state) => state.restart);
+  const complete = useOnboardingStore((state) => state.complete);
+  const setTourOpen = useOnboardingTourOpenStore((state) => state.setOpen);
+
+  useLayoutEffect(() => {
+    restart();
+    if (!replay) {
+      useFirstTaskGuideStore.getState().prepare();
+      // Browser setup stays in Getting started instead of interrupting the first task.
+      useFeatureAnnouncementsStore.getState().consume("login-import");
+    }
+  }, [restart, replay]);
+
+  // Holds the announcement toasts off the welcome, the same as the desktop
+  // stage. The guide takes the hold over from here, before this unmounts.
+  useEffect(() => {
+    setTourOpen(true);
+    return () => setTourOpen(false);
+  }, [setTourOpen]);
+
+  useEffect(() => {
+    Analytics.getInstance().track(AnalyticsEvent.OnboardingStarted, {
+      mode: replay ? "replay" : "first_run",
+    });
+  }, [replay]);
+
+  useEffect(() => {
+    if (welcomePhase === "ready") return;
+    // The tour's own timings, read live for the same reason (see `stepMotion`'s
+    // twin in `OnboardingTour`): motion's `useReducedMotion` can lag a
+    // preference changed since the app loaded.
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches
+      ? { welcome: 300, leaving: 150 }[welcomePhase]
+      : { welcome: 1800, leaving: 320 }[welcomePhase];
+    const timer = window.setTimeout(
+      () => setWelcomePhase(welcomePhase === "welcome" ? "leaving" : "ready"),
+      duration,
+    );
+    return () => window.clearTimeout(timer);
+  }, [welcomePhase]);
+
+  // Skipping and letting it finish are the same outcome here, because the
+  // welcome IS the tour on this shell - so "Skip welcome" only shortens the
+  // animation, it never skips guidance. Both routes arrive as `ready`.
+  //
+  // Latched: `complete()` and `activate()` are idempotent but `navigate` is
+  // not, and this effect is re-run by a store subscription landing in the same
+  // commit as the phase change.
+  const finished = useRef(false);
+  useEffect(() => {
+    if (welcomePhase !== "ready" || finished.current) return;
+    finished.current = true;
+    Analytics.getInstance().track(AnalyticsEvent.OnboardingCompleted, {
+      last_step: "welcome",
+    });
+    const guide = useFirstTaskGuideStore.getState();
+    // A replay re-arms from scratch: `prepare` clears the hints the last run
+    // acknowledged, without which "Replay" would show a tour that is already
+    // finished. First run prepared at mount.
+    if (replay) guide.prepare();
+    guide.activate();
+    complete();
+    // Not `router.history.back()`, which is what the desktop replay does: the
+    // guide this replay just armed lives on the landing page, so going back to
+    // Settings would arm it behind the panel the user is looking at.
+    void navigate({ to: "/draft/new", replace: true });
+  }, [welcomePhase, replay, complete, navigate]);
+
+  return (
+    <main className="onboarding-shell relative isolate flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background font-heading text-foreground">
+      {/* Held `welcoming` through the hand-off: there is no stage for the field
+          to settle into, so letting it re-form for the one frame between
+          `ready` and the navigation would be a flash and nothing else. */}
+      <OnboardingField welcoming />
+      <div
+        aria-hidden="true"
+        className="onboarding-grain pointer-events-none absolute inset-0"
+      />
+      <WelcomeLayer
+        phase={welcomePhase}
+        reducedMotion={reducedMotion}
+        onSkip={() => setWelcomePhase("leaving")}
+      />
+    </main>
+  );
+}
+
+function OnboardingActs(props: { readonly replay: boolean }) {
   const [scopedHostId, setScopedHostId] = useState<string | null>(null);
   const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
   // The ambient capability fixes the tour's shape. The import stage checks

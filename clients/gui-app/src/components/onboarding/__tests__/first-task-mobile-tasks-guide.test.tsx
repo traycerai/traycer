@@ -285,6 +285,63 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     });
   });
 
+  // The bug this replaced: step 2's button was "Show me" and only FOCUSED the
+  // row. There is no visible focus on a touch device and no keyboard to carry
+  // it, so the card's only affordance measurably did nothing. It opens the task
+  // now, which is the gesture the step is teaching.
+  it("opens the first task from step two's action and ends the guide", async () => {
+    mountTrigger();
+    render(<Harness />);
+    fireEvent(window, new Event("resize"));
+    await screen.findByTestId("guide-coachmark");
+
+    const { row } = mountDrawer(OPEN_SHEET);
+    // What the real drawer's `openItem` does when a row is pressed.
+    const opened = vi.fn(() => {
+      const guide = useFirstTaskGuideStore.getState();
+      if (guide.status === "active") guide.dismiss();
+    });
+    row.addEventListener("click", opened);
+    useMobileNavStore.setState({ open: true });
+    fireEvent(window, new Event("resize"));
+    await expectCardTitle("Resume any task");
+
+    fireEvent.click(screen.getByRole("button", { name: /Open task/ }));
+
+    expect(opened).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(row);
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+  });
+
+  // The X and Escape are still a dismissal, not an open: the step has a way out
+  // that is not "resume something".
+  it("still dismisses from the card's X and from Escape without opening a task", async () => {
+    mountTrigger();
+    render(<Harness />);
+    fireEvent(window, new Event("resize"));
+    await screen.findByTestId("guide-coachmark");
+
+    const { row } = mountDrawer(OPEN_SHEET);
+    const opened = vi.fn();
+    row.addEventListener("click", opened);
+    useMobileNavStore.setState({ open: true });
+    fireEvent(window, new Event("resize"));
+    await expectCardTitle("Resume any task");
+
+    fireEvent.keyDown(row, { key: "Escape" });
+    expect(opened).not.toHaveBeenCalled();
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+
+    useFirstTaskGuideStore.getState().activate();
+    await screen.findByTestId("guide-coachmark");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Dismiss getting started guide" }),
+    );
+
+    expect(opened).not.toHaveBeenCalled();
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+  });
+
   it("draws nothing while the task query is still outstanding", () => {
     history.current = { ...TASKS, data: undefined, isPending: true };
     mountTrigger();

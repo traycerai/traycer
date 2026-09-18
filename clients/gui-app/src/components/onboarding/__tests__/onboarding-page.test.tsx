@@ -786,6 +786,203 @@ describe("OnboardingPage", () => {
   });
 });
 
+/**
+ * The installed app, which is a PRODUCT branch and not a width: about nine in
+ * ten people who open it have already run the tour on the desktop app, so the
+ * acts are dropped there and the welcome hands straight over to the landing
+ * guide. Everything here is keyed to `setMobileApp(true)` and nothing to the
+ * viewport - the phone-layout suite below is the same width with the flag off,
+ * and it still gets all three acts.
+ */
+describe("OnboardingPage on the installed mobile app", () => {
+  beforeEach(() => {
+    stubElementScrollTo();
+    setViewportWidth(393);
+    resetFeatureAnnouncementsStore();
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSessionImportRunStore.setState({ runs: new Map() });
+    useFirstTaskGuideStore.setState({
+      status: "inactive",
+      imports: new Map(),
+      workspaceReviewed: false,
+      acknowledgedHints: new Set(),
+    });
+    setMobileApp(true);
+    capabilityMock.available = true;
+    hostsMock.ids = ["host-a"];
+    prefetchMock.renders = 0;
+    scanMock.activeCalls.length = 0;
+    navigateMock.mockReset();
+    historyBackMock.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    restoreElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    resetFeatureAnnouncementsStore();
+    useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSessionImportRunStore.setState({ runs: new Map() });
+    setMobileApp(false);
+  });
+
+  it("plays only the welcome, then completes and opens a new draft with the guide armed", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+
+      expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
+      // Not a hidden tour layer - no tour at all. Nothing of the acts exists to
+      // flash between the welcome leaving and the draft arriving.
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+      expect(screen.queryByTestId("onboarding-advance")).toBeNull();
+      expect(screen.queryByTestId("onboarding-skip")).toBeNull();
+      // And none of the acts' work is started either: no provider prefetch, and
+      // the session-import scan is never even asked about.
+      expect(screen.queryByTestId("provider-prefetch")).toBeNull();
+      expect(prefetchMock.renders).toBe(0);
+      expect(scanMock.activeCalls).toEqual([]);
+
+      // The desktop's own welcome timings, unchanged.
+      void act(() => vi.advanceTimersByTime(1799));
+      expect(useOnboardingStore.getState().completedAt).toBeNull();
+      void act(() => vi.advanceTimersByTime(1));
+      expect(
+        screen
+          .getByTestId("onboarding-welcome-skip")
+          .closest("section")
+          ?.getAttribute("data-leaving"),
+      ).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(319));
+      expect(navigateMock).not.toHaveBeenCalled();
+      void act(() => vi.advanceTimersByTime(1));
+
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+      expect(useOnboardingStore.getState().completedAt).toEqual(
+        expect.any(Number),
+      );
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(historyBackMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the short welcome and leave timings when reduced motion is preferred", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+
+      void act(() => vi.advanceTimersByTime(300));
+      expect(
+        screen
+          .getByTestId("onboarding-welcome-skip")
+          .closest("section")
+          ?.getAttribute("data-leaving"),
+      ).toBe("true");
+
+      void act(() => vi.advanceTimersByTime(149));
+      expect(navigateMock).not.toHaveBeenCalled();
+      void act(() => vi.advanceTimersByTime(1));
+
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Skipping is not skipping guidance here: the welcome IS the tour on this
+  // shell, so the only thing the button shortens is the animation.
+  it("gives Skip welcome the same outcome as letting the welcome finish", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
+
+      expect(useOnboardingStore.getState().completedAt).toBeNull();
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      void act(() => vi.advanceTimersByTime(320));
+
+      expect(useOnboardingStore.getState().completedAt).toEqual(
+        expect.any(Number),
+      );
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(screen.queryByTestId("onboarding-step")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // "Replay" has to show the tour again, and on this shell the tour the user
+  // would recognise is the landing guide - so the replay re-arms it from
+  // scratch and goes to the page it lives on, rather than back to Settings.
+  it("re-arms the landing guide on replay and navigates instead of going back", () => {
+    useOnboardingStore.setState({ completedAt: 123, step: 0 });
+    useFirstTaskGuideStore.setState({
+      status: "finished",
+      acknowledgedHints: new Set(["tasks-menu"]),
+    });
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay />);
+      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
+      void act(() => vi.advanceTimersByTime(320));
+
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      // `prepare()` ran, so last run's acknowledgements are not still retiring
+      // the steps this replay is meant to show.
+      expect(useFirstTaskGuideStore.getState().acknowledgedHints.size).toBe(0);
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: "/draft/new",
+        replace: true,
+      });
+      expect(historyBackMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A replay is not a first run: the announcement it would otherwise consume is
+  // still owed to the user, exactly as on the desktop.
+  it("consumes the login import announcement on first run only", () => {
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage replay={false} />);
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["login-import"],
+      ).toEqual(expect.any(Number));
+
+      cleanup();
+      resetFeatureAnnouncementsStore();
+      render(<OnboardingPage replay />);
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["login-import"],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("OnboardingPage phone layout", () => {
   beforeEach(() => {
     stubElementScrollTo();

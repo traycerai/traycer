@@ -55,7 +55,12 @@ const STEPS = {
     // read two screens ago reads as the same screen returning.
     title: "Resume any task",
     content: "Tap a task to continue it.",
-    action: "Show me",
+    // It OPENS the first task rather than pointing at it. On a touch device
+    // "Show me" resolved to a focus ring nobody can see, so the button was a
+    // control that did nothing - the step's dead end. Pressing the row is the
+    // gesture the step is teaching, performed once on the user's behalf, and
+    // the drawer's own `openItem` ends the guide from there.
+    action: "Open task",
   },
 } as const;
 
@@ -157,11 +162,16 @@ export function FirstTaskCoachmark(props: {
   // the control: clicking the first task card would open a task they never
   // chose. And it is the one step whose action does not settle it - opening a
   // task is what acknowledges it, through the click listener above.
-  // `tasks-pick` joins them: there is nothing to press for the user - which
-  // task they resume is theirs to choose - so "Show me" puts the first row
-  // under their finger and stops there.
+  //
+  // `tasks-pick` is deliberately NOT in that set, though it looks like its
+  // twin. A focus ring is the whole affordance there, and on the phone this
+  // step only ever runs on there is no visible focus and no keyboard to carry
+  // it - so focusing the row left a button that measurably did nothing. The
+  // cost of pressing it is a task the user did not choose, which on this step
+  // is recoverable in one gesture (it opens a task they already own, and Back
+  // returns), where a dead control is not recoverable at all.
   const interact =
-    writing || props.step === "imported" || props.step === "tasks-pick"
+    writing || props.step === "imported"
       ? focusGuideTarget
       : interactWithGuideTarget;
   if (acknowledged) return null;

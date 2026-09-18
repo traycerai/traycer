@@ -80,6 +80,18 @@ function cardOf(node: EventTarget | null): Element | null {
   return node instanceof Element ? node.closest(".first-task-coachmark") : null;
 }
 
+/**
+ * Whether this key means "the card's primary action", which is the arrow in
+ * either hand's reach and Enter only while the CARD itself holds focus - Enter
+ * on a control inside the card is that control's own.
+ */
+function forwardKey(event: KeyboardEvent, card: Element): boolean {
+  return (
+    event.key === "ArrowRight" ||
+    (event.key === "Enter" && event.target === card)
+  );
+}
+
 function hasModifier(event: KeyboardEvent): boolean {
   return [
     event.repeat,
@@ -144,15 +156,13 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
       return;
     }
     if (!card || hasModifier(event)) return;
-    const forward =
-      event.key === "ArrowRight" ||
-      (event.key === "Enter" && event.target === card);
+    const forward = forwardKey(event, card);
     if (event.key !== "ArrowLeft" && !forward) return;
     event.preventDefault();
     setKeyboardNavigation(true);
     if (!forward) props.back?.();
     else if (props.action !== null) props.action.onClick();
-    else interactWithGuideTarget(target);
+    else if (!interactWithGuideTarget(target)) onClose();
   });
   // Armed for the coachmark's whole life, not per target. Keyed on `target`,
   // the listener went up one effect flush AFTER the commit that put the card
@@ -398,10 +408,18 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
               <button
                 type="button"
                 className="onboarding-button onboarding-button--primary"
+                // The default action presses the thing the card points at, and
+                // when there is nothing pressable there it CLOSES rather than
+                // sitting still. A card whose only button does nothing is a
+                // dead end the user cannot reason about - they pressed the one
+                // affordance offered and the guide neither moved nor left - so
+                // the honest fallback is to get out of the way. Steps that
+                // deliberately only focus their target pass an `action` and
+                // never reach this.
                 onClick={(event) => {
                   setKeyboardNavigation(event.detail === 0);
                   if (props.action !== null) props.action.onClick();
-                  else interactWithGuideTarget(held);
+                  else if (!interactWithGuideTarget(held)) onClose();
                 }}
               >
                 <span className="first-task-coachmark-action-label">
