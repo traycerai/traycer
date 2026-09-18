@@ -613,3 +613,34 @@ function listsEqual<Item extends string>(
     bundle.every((item, index) => item === snapshot[index])
   );
 }
+
+export function useLayoutPresetMatch(): LayoutPresetMatch {
+  const statusBar = useLayoutStore((state) => state.statusBar);
+  const composer = useLayoutStore((state) => state.composer);
+  const pinContextUsageBreakdown = useSettingsStore(
+    (state) => state.pinContextUsageBreakdown,
+  );
+  const pinnedContextBreakdownFields = useSettingsStore(
+    (state) => state.pinnedContextBreakdownFields,
+  );
+  const contextIndicatorStyle = useSettingsStore(
+    (state) => state.contextIndicatorStyle,
+  );
+  const chatTurnMinimapSide = useSettingsStore(
+    (state) => state.chatTurnMinimapSide,
+  );
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
+  );
+  return matchLayoutPreset({
+    statusBar,
+    composer,
+    chat: {
+      pinContextUsageBreakdown,
+      pinnedContextBreakdownFields,
+      contextIndicatorStyle,
+      chatTurnMinimapSide,
+    },
+    sidebar: { navigatorResourceMetrics },
+  });
+}

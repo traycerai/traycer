@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import {
   applyLayoutPreset,
   LAYOUT_PRESET_LABELS,
-  matchLayoutPreset,
+  useLayoutPresetMatch,
   resetLayoutToDefaults,
   useLayoutIsFullyDefault,
   type LayoutPresetId,
@@ -19,8 +19,6 @@ import {
 } from "@/lib/layout-presets";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
-import { useLayoutStore } from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const PRESET_OPTIONS: ReadonlyArray<SettingsSegmentedOption<LayoutPresetId>> = [
   { value: "default", label: LAYOUT_PRESET_LABELS.default },
@@ -169,33 +167,3 @@ const PRESET_ANALYTICS_SETTINGS: Readonly<
  * primitive, and the snapshot is assembled in render where that does not
  * matter.
  */
-function useLayoutPresetMatch(): LayoutPresetMatch {
-  const statusBar = useLayoutStore((state) => state.statusBar);
-  const composer = useLayoutStore((state) => state.composer);
-  const pinContextUsageBreakdown = useSettingsStore(
-    (state) => state.pinContextUsageBreakdown,
-  );
-  const pinnedContextBreakdownFields = useSettingsStore(
-    (state) => state.pinnedContextBreakdownFields,
-  );
-  const contextIndicatorStyle = useSettingsStore(
-    (state) => state.contextIndicatorStyle,
-  );
-  const chatTurnMinimapSide = useSettingsStore(
-    (state) => state.chatTurnMinimapSide,
-  );
-  const navigatorResourceMetrics = useSettingsStore(
-    (state) => state.navigatorResourceMetrics,
-  );
-  return matchLayoutPreset({
-    statusBar,
-    composer,
-    chat: {
-      pinContextUsageBreakdown,
-      pinnedContextBreakdownFields,
-      contextIndicatorStyle,
-      chatTurnMinimapSide,
-    },
-    sidebar: { navigatorResourceMetrics },
-  });
-}
