@@ -41,7 +41,7 @@ export const EpicSessionContext = createStableDevContext(
   () => createContext<OpenEpicStoreHandle | null>(null),
 );
 
-type EpicSessionPresentationState =
+export type EpicSessionPresentationState =
   | {
       readonly kind: "ready";
       readonly targetHostId: string | null;

@@ -211,7 +211,8 @@ vi.mock(
   },
 );
 
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { setTestEpicSessionHostClientResolver } from "@/lib/registries/test-support/epic-session-controller-test-support";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   clearSessionCreatedEpics,
   markEpicCreatedThisSession,
@@ -271,6 +272,22 @@ import {
 import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+
+/**
+ * The stub map answers `unknown` (it is handed to `vi.mock`, which is not
+ * type-checked); the controller's environment is. Narrowed on the members the
+ * controller reads rather than cast.
+ */
+function isStubHostClient(
+  value: unknown,
+): value is HostClient<HostRpcRegistry> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "getActiveHost" in value &&
+    "getRequestContextUserId" in value
+  );
+}
 
 /**
  * The jsdom setup file's coreless worker, captured before this suite can
@@ -820,13 +837,20 @@ async function readRootEdit(
   return value;
 }
 
-describe("<EpicSessionProvider />", () => {
+describe("<TestEpicSessionTab />", () => {
   beforeEach(() => {
     // Capture unconditionally: even a test that installs no worker factory is
     // followed by an `afterEach`, and restoring an uninitialised sentinel there
     // would erase the jsdom setup file's coreless worker for the next test.
     workerFactoryBeforeTest = getEpicRuntimeWorkerFactoryOverride();
     window.localStorage.clear();
+    // The controller resolves a client for ANY host it re-points to, where
+    // the provider called the (mocked) hook for one. Same stub map, one seam
+    // over.
+    setTestEpicSessionHostClientResolver((hostId) => {
+      const client = resolveSessionHostClient(hostId);
+      return isStubHostClient(client) ? client : null;
+    });
     hostState.id = "host-a";
     hostState.attached = true;
     hostBindingRef.value = null;
@@ -903,9 +927,9 @@ describe("<EpicSessionProvider />", () => {
       installManifestDerivedWorker();
       const seenHandles: OpenEpicStoreHandle[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => {
@@ -938,9 +962,9 @@ describe("<EpicSessionProvider />", () => {
       installManifestDerivedWorker();
       const seenHandles: OpenEpicStoreHandle[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => expect(fixture.opens.state).toBe(1));
@@ -1001,12 +1025,12 @@ describe("<EpicSessionProvider />", () => {
         installManifestDerivedWorker();
         const seenHandles: OpenEpicStoreHandle[] = [];
         const view = render(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-plan-restricted-ladder"
             tabId="epic-plan-restricted-ladder"
           >
             <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
         try {
           await act(() => Promise.resolve());
@@ -1077,7 +1101,7 @@ describe("<EpicSessionProvider />", () => {
         const seenHandles: OpenEpicStoreHandle[] = [];
         const presentations: Array<EpicSessionPresentation | null> = [];
         const view = render(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-plan-restricted-retry-cancel"
             tabId="epic-plan-restricted-retry-cancel"
           >
@@ -1087,7 +1111,7 @@ describe("<EpicSessionProvider />", () => {
                 presentations.push(presentation)
               }
             />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
         try {
           await act(() => Promise.resolve());
@@ -1182,12 +1206,12 @@ describe("<EpicSessionProvider />", () => {
         try {
           const seenHandles: OpenEpicStoreHandle[] = [];
           const view = render(
-            <EpicSessionProvider
+            <TestEpicSessionTab
               epicId="epic-plan-restricted-unmount-cancel"
               tabId="epic-plan-restricted-unmount-cancel"
             >
               <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-            </EpicSessionProvider>,
+            </TestEpicSessionTab>,
           );
           await act(() => Promise.resolve());
           fixture.openLaneStreams(0);
@@ -1244,12 +1268,12 @@ describe("<EpicSessionProvider />", () => {
         const { cancelSpy, restore } = spyOnPlanRestrictedBackoffCancel();
         const seenHandles: OpenEpicStoreHandle[] = [];
         const view = render(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-plan-restricted-repoint-cancel"
             tabId="epic-plan-restricted-repoint-cancel"
           >
             <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
         try {
           await act(() => Promise.resolve());
@@ -1285,12 +1309,12 @@ describe("<EpicSessionProvider />", () => {
           act(() => {
             hostState.id = "host-plan-restricted-repoint";
             view.rerender(
-              <EpicSessionProvider
+              <TestEpicSessionTab
                 epicId="epic-plan-restricted-repoint-cancel"
                 tabId="epic-plan-restricted-repoint-cancel"
               >
                 <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-              </EpicSessionProvider>,
+              </TestEpicSessionTab>,
             );
           });
           await act(() => Promise.resolve());
@@ -1346,7 +1370,7 @@ describe("<EpicSessionProvider />", () => {
     const renderedHandles: Array<OpenEpicStoreHandle | null> = [];
     let stampedAtFirstHandleRender: unknown = "not-observed-yet";
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <RenderCapturingHandleProbe
           onRender={(handle) => {
             renderedHandles.push(handle);
@@ -1361,7 +1385,7 @@ describe("<EpicSessionProvider />", () => {
             }
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     try {
       await act(() => Promise.resolve());
@@ -1381,11 +1405,11 @@ describe("<EpicSessionProvider />", () => {
       act(() => {
         hostState.id = "host-b";
         view.rerender(
-          <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
             <RenderCapturingHandleProbe
               onRender={(handle) => renderedHandles.push(handle)}
             />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
       });
       expect(streams).toHaveLength(2);
@@ -1453,14 +1477,14 @@ describe("<EpicSessionProvider />", () => {
       const seenHandles: OpenEpicStoreHandle[] = [];
       const seenFetchers: ScopedImageBytesFetcher[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
           <ArtifactAttachmentScopeContext.Provider value={scope}>
             <ImageFetcherProbe
               onFetcher={(fetcher) => seenFetchers.push(fetcher)}
             />
           </ArtifactAttachmentScopeContext.Provider>
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => expect(fixture.opens.state).toBe(1));
@@ -1553,7 +1577,7 @@ describe("<EpicSessionProvider />", () => {
     }));
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <SessionHostClientProbe
           onClient={(client) => {
             seenClients.push(client);
@@ -1564,7 +1588,7 @@ describe("<EpicSessionProvider />", () => {
             seenClients.push(client);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1598,13 +1622,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1670,13 +1694,13 @@ describe("<EpicSessionProvider />", () => {
     signInAs("user-alice");
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1747,13 +1771,13 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1816,13 +1840,13 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1859,13 +1883,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1884,7 +1908,7 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -1893,7 +1917,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -1924,13 +1948,13 @@ describe("<EpicSessionProvider />", () => {
       installManifestDerivedWorker();
       const seenHandles: OpenEpicStoreHandle[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe
             onHandle={(handle) => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => expect(fixture.opens.state).toBe(1));
@@ -1960,13 +1984,13 @@ describe("<EpicSessionProvider />", () => {
         act(() => {
           hostState.id = "host-b";
           view.rerender(
-            <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+            <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
               <HandleProbe
                 onHandle={(handle) => {
                   seenHandles.push(handle);
                 }}
               />
-            </EpicSessionProvider>,
+            </TestEpicSessionTab>,
           );
         });
 
@@ -2048,9 +2072,9 @@ describe("<EpicSessionProvider />", () => {
       };
     });
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => expect(seenHandles).toHaveLength(1));
@@ -2060,12 +2084,12 @@ describe("<EpicSessionProvider />", () => {
       await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -2117,14 +2141,14 @@ describe("<EpicSessionProvider />", () => {
     });
     const body = (): React.JSX.Element => (
       <>
-        <EpicSessionProvider epicId="epic-session-test" tabId="tab-a">
+        <TestEpicSessionTab epicId="epic-session-test" tabId="tab-a">
           <HandleProbe onHandle={(handle) => handlesA.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsA.push(p)} />
-        </EpicSessionProvider>
-        <EpicSessionProvider epicId="epic-session-test" tabId="tab-b">
+        </TestEpicSessionTab>
+        <TestEpicSessionTab epicId="epic-session-test" tabId="tab-b">
           <HandleProbe onHandle={(handle) => handlesB.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsB.push(p)} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </>
     );
     const view = render(body());
@@ -2219,14 +2243,14 @@ describe("<EpicSessionProvider />", () => {
     });
     const body = (): React.JSX.Element => (
       <>
-        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-a">
+        <TestEpicSessionTab epicId="epic-retry-sibling-adopt" tabId="tab-a">
           <HandleProbe onHandle={(handle) => handlesA.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsA.push(p)} />
-        </EpicSessionProvider>
-        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-b">
+        </TestEpicSessionTab>
+        <TestEpicSessionTab epicId="epic-retry-sibling-adopt" tabId="tab-b">
           <HandleProbe onHandle={(handle) => handlesB.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsB.push(p)} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </>
     );
     const view = render(body());
@@ -2323,11 +2347,11 @@ describe("<EpicSessionProvider />", () => {
     // throw propagates out of `render` and this call itself rejects, so the
     // pin fails at the render rather than on an assertion about the fallback.
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
 
@@ -2359,14 +2383,14 @@ describe("<EpicSessionProvider />", () => {
         };
       });
       const view = render(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -2374,7 +2398,7 @@ describe("<EpicSessionProvider />", () => {
       act(() => {
         hostState.id = "host-b";
         view.rerender(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-session-test"
             tabId="epic-session-test"
           >
@@ -2383,7 +2407,7 @@ describe("<EpicSessionProvider />", () => {
                 presentations.push(presentation)
               }
             />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
       });
       expect(streams).toHaveLength(2);
@@ -2442,7 +2466,7 @@ describe("<EpicSessionProvider />", () => {
       rotateRow("host-b", "pubkey-b0");
 
       const body = () => (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2450,7 +2474,7 @@ describe("<EpicSessionProvider />", () => {
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
       const view = render(body());
       await act(() => Promise.resolve());
@@ -2524,9 +2548,9 @@ describe("<EpicSessionProvider />", () => {
       presentations.push(presentation);
     };
     const tree = () => (
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <PresentationProbe onPresentation={record} />
-      </EpicSessionProvider>
+      </TestEpicSessionTab>
     );
     const view = render(tree());
 
@@ -2560,14 +2584,14 @@ describe("<EpicSessionProvider />", () => {
       hostState.id = null;
       hostState.attached = false;
       render(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -2592,11 +2616,11 @@ describe("<EpicSessionProvider />", () => {
     hostState.id = null;
     hostState.attached = true;
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     // No timer advance anywhere in this case: the authority has spoken, so the
@@ -2615,14 +2639,14 @@ describe("<EpicSessionProvider />", () => {
       hostState.id = null;
       hostState.attached = false;
       render(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -2668,13 +2692,13 @@ describe("<EpicSessionProvider />", () => {
     rotateRow(OWNER_IDENTITY_HOST_ID, "pubkey-a");
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -2727,13 +2751,13 @@ describe("<EpicSessionProvider />", () => {
     // must NOT crash and must NOT create a session.
     hostState.id = null;
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -2748,7 +2772,7 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-a";
       view.rerender(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2757,7 +2781,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -2833,7 +2857,7 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2842,7 +2866,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
     await waitFor(() => {
@@ -2920,7 +2944,7 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2929,7 +2953,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
 
@@ -2997,7 +3021,7 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -3006,7 +3030,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
 
@@ -3077,13 +3101,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -3142,13 +3166,13 @@ describe("<EpicSessionProvider />", () => {
     }));
 
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="tab-cleanup">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="tab-cleanup">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -3190,13 +3214,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId="epic-conflict" tabId={conflictTabId}>
+      <TestEpicSessionTab epicId="epic-conflict" tabId={conflictTabId}>
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -3240,12 +3264,12 @@ describe("<EpicSessionProvider />", () => {
       onHandle: (handle: OpenEpicStoreHandle) => void,
     ): React.JSX.Element {
       return (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <HandleProbe onHandle={onHandle} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
     }
 
@@ -3474,12 +3498,12 @@ describe("<EpicSessionProvider />", () => {
       onHandle: (handle: OpenEpicStoreHandle) => void,
     ): React.JSX.Element {
       return (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <HandleProbe onHandle={onHandle} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
     }
 
@@ -3658,13 +3682,13 @@ describe("<EpicSessionProvider />", () => {
 
     const seenClients: unknown[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <SessionHostClientProbe
           onClient={(client) => {
             seenClients.push(client);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     const createHostClient = resolveSessionHostClient("host-create");
@@ -3706,9 +3730,9 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => expect(seenHandles).toHaveLength(1));
@@ -3718,9 +3742,9 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -3767,9 +3791,9 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     // The seed answers regardless of the authority being detached:
@@ -3785,9 +3809,9 @@ describe("<EpicSessionProvider />", () => {
       hostState.attached = true;
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
     // Give any erroneous re-point effect a chance to start.
@@ -3837,12 +3861,12 @@ describe("<EpicSessionProvider />", () => {
       const seenHandles: OpenEpicStoreHandle[] = [];
       const presentations: Array<EpicSessionPresentation | null> = [];
       render(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -3926,14 +3950,14 @@ describe("<EpicSessionProvider />", () => {
 
     const presentations: Array<EpicSessionPresentation | null> = [];
     render(
-      <EpicSessionProvider
+      <TestEpicSessionTab
         epicId="epic-retry-silence"
         tabId="epic-retry-silence"
       >
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
     await waitFor(() => {
@@ -3989,13 +4013,13 @@ describe("<EpicSessionProvider />", () => {
       onPresentation: (presentation: EpicSessionPresentation | null) => void,
     ): React.JSX.Element {
       return (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-retry-warm-remount"
           tabId="epic-retry-warm-remount"
         >
           <HandleProbe onHandle={onHandle} />
           <PresentationProbe onPresentation={onPresentation} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
     }
 
@@ -4078,12 +4102,12 @@ describe("<EpicSessionProvider />", () => {
     const seenHandles: OpenEpicStoreHandle[] = [];
     const presentations: Array<EpicSessionPresentation | null> = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
 
@@ -4145,12 +4169,12 @@ describe("<EpicSessionProvider />", () => {
     const firstSurface: OpenEpicStoreHandle[] = [];
     const presentations: Array<EpicSessionPresentation | null> = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-1`}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-1`}>
         <HandleProbe onHandle={(handle) => firstSurface.push(handle)} />
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
     expect(firstSurface).toHaveLength(1);
@@ -4170,9 +4194,9 @@ describe("<EpicSessionProvider />", () => {
     // exactly what makes it take the acquire path rather than any re-point arm.
     const secondSurface: OpenEpicStoreHandle[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-2`}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-2`}>
         <HandleProbe onHandle={(handle) => secondSurface.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
 
@@ -4208,9 +4232,9 @@ describe("<EpicSessionProvider />", () => {
     });
 
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await waitFor(() => {
       expect(seenHandles).toHaveLength(1);
@@ -4232,9 +4256,9 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
     await waitFor(() => {
@@ -4321,9 +4345,9 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -4410,11 +4434,11 @@ describe("<EpicSessionProvider />", () => {
 
     const renderedHandles: Array<OpenEpicStoreHandle | null> = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <RenderCapturingHandleProbe
           onRender={(handle) => renderedHandles.push(handle)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -4531,11 +4555,11 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <EpicSessionGate fallback={null}>
             <CommentPollProbe />
           </EpicSessionGate>
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
 
