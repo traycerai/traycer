@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import { routeNotificationForHost } from "@/lib/notifications/payload";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
@@ -12,6 +13,15 @@ import type {
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
+import {
+  __getOpenEpicRegistryForTests,
+  getOpenEpicRegistry,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
 /**
  * Ticket: a cloned agent can leave TWO tiles with the SAME chat id open in
@@ -52,20 +62,31 @@ function seedCanvasWithTiles(tiles: readonly EpicCanvasTileRef[]): void {
   });
 }
 
-describe("open-chat notification routing, same-id tile in the same canvas", () => {
-  beforeEach(async () => {
-    __resetTabNavigationControllerForTesting();
-    __resetTabSyncCoordinatorForTesting();
-    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
-    await Promise.resolve();
-    await Promise.resolve();
-    useEpicCanvasStore.setState({
-      tabsById: {},
-      canvasByTabId: {},
-      openTabOrder: [],
-    });
-  });
+function requirePane(tabId: string): TilePane {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+  if (canvas === undefined) throw new Error("expected a canvas for tabId");
+  if (canvas.root === null || canvas.root.kind !== "pane") {
+    throw new Error("expected a single unsplit pane for this fixture");
+  }
+  return canvas.root;
+}
 
+beforeEach(async () => {
+  __resetTabNavigationControllerForTesting();
+  __resetTabSyncCoordinatorForTesting();
+  installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+  await Promise.resolve();
+  await Promise.resolve();
+  useEpicCanvasStore.setState({
+    tabsById: {},
+    canvasByTabId: {},
+    openTabOrder: [],
+    closedTilePayloadsByTabId: {},
+    pendingCreateArtifactIds: new Set<string>(),
+  });
+});
+
+describe("open-chat notification routing, same-id tile in the same canvas", () => {
   it("finds the SECOND same-id tile bound to the target host, when a wrong-host tile with the same id is discovered first", () => {
     // The wrong-host tile sits FIRST in the pane's tab order, so an id-only
     // lookup returns it before ever reaching the correctly-hosted one.
@@ -138,32 +159,8 @@ describe("open-chat notification routing, same-id tile in the same canvas", () =
  * targets it - not just navigated past while A stays on screen.
  */
 describe("open-chat notification routing, an active tile A + a CLOSED same-id tile B in the same canvas", () => {
-  beforeEach(async () => {
-    __resetTabNavigationControllerForTesting();
-    __resetTabSyncCoordinatorForTesting();
-    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
-    await Promise.resolve();
-    await Promise.resolve();
-    useEpicCanvasStore.setState({
-      tabsById: {},
-      canvasByTabId: {},
-      openTabOrder: [],
-      closedTilePayloadsByTabId: {},
-      pendingCreateArtifactIds: new Set<string>(),
-    });
-  });
-
-  function requirePane(tabId: string): TilePane {
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
-    if (canvas === undefined) throw new Error("expected a canvas for tabId");
-    if (canvas.root === null || canvas.root.kind !== "pane") {
-      throw new Error("expected a single unsplit pane for this fixture");
-    }
-    return canvas.root;
-  }
-
   it.each(["chat", "terminal-agent"] as const)(
-    "reopens and focuses the closed %s tile B on its own host, leaving the open tile A intact",
+    "reopens and focuses the closed %s tile B, leaving tile A intact",
     (tileType) => {
       const store = useEpicCanvasStore.getState();
       const tabId = store.openEpicTab("epic-1", "Epic 1");
@@ -243,7 +240,7 @@ describe("open-chat notification routing, an active tile A + a CLOSED same-id ti
     },
   );
 
-  it("reopens a closed pending-create terminal-agent at its ORIGINAL instance and revives its pending-create liveness", () => {
+  it("reopens a closed pending-create agent at its original instance and revives pending-create liveness", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic 1");
     const agent = makeOpenableNodeRef({
@@ -283,5 +280,190 @@ describe("open-chat notification routing, an active tile A + a CLOSED same-id ti
       after.closedTilePayloadsByTabId[tabId]?.[agent.instanceId],
     ).toBeUndefined();
     expect(after.pendingCreateArtifactIds.has(agent.id)).toBe(true);
+  });
+
+  it("closes the still-live tile and the old payload on confirmed delete, preserving a peer-host tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-1", "Epic 1");
+    const peerHostTile = makeOpenableNodeRef({
+      id: "chat-1",
+      instanceId: "inst-open-a",
+      type: "chat",
+      name: "A (peer host)",
+      hostId: "host-open",
+    });
+    const closedOld = makeOpenableNodeRef({
+      id: "chat-1",
+      instanceId: "inst-closed-b-old",
+      type: "chat",
+      name: "B (closed, older)",
+      hostId: "host-closed",
+    });
+    // Left OPEN, not manually closed - proves the helper's own close (not a
+    // pre-existing stale entry) is what the sweep must catch too.
+    const liveB = makeOpenableNodeRef({
+      id: "chat-1",
+      instanceId: "inst-live-b",
+      type: "chat",
+      name: "B (still open)",
+      hostId: "host-closed",
+    });
+    store.openTileInTab(tabId, peerHostTile);
+    store.openTileInTab(tabId, closedOld);
+    store.closeCanvasTab(tabId, requirePane(tabId).id, closedOld.instanceId);
+    store.openTileInTab(tabId, liveB);
+
+    const before = useEpicCanvasStore.getState();
+    expect(
+      before.closedTilePayloadsByTabId[tabId]?.[closedOld.instanceId]?.node,
+    ).toEqual(closedOld);
+    expect(
+      before.canvasByTabId[tabId]?.tilesByInstanceId[liveB.instanceId],
+    ).toEqual(liveB);
+
+    store.closeConfirmedDeletedAgentTiles(
+      "epic-1",
+      "chat-1",
+      "host-closed",
+      "chat",
+    );
+
+    const after = useEpicCanvasStore.getState();
+    expect(
+      after.canvasByTabId[tabId]?.tilesByInstanceId[liveB.instanceId],
+    ).toBeUndefined();
+    expect(
+      after.closedTilePayloadsByTabId[tabId]?.[closedOld.instanceId],
+    ).toBeUndefined();
+    expect(
+      after.closedTilePayloadsByTabId[tabId]?.[liveB.instanceId],
+    ).toBeUndefined();
+    // A same-id row on another host is a different identity and is untouched.
+    expect(
+      after.canvasByTabId[tabId]?.tilesByInstanceId[peerHostTile.instanceId],
+    ).toEqual(peerHostTile);
+
+    const navigate = vi.fn();
+    const routed = routeNotificationForHost(
+      navigate,
+      { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      1_000,
+      { originHostId: "host-closed", effectiveHostId: "host-open" },
+    );
+    expect(routed).toBe(false);
+  });
+});
+
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function makeDeadSessionMeta(epicId: string): SnapshotMetaEpic {
+  return {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: epicId,
+      title: "Epic test",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 0,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "u",
+      version: "1",
+    },
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
+  };
+}
+
+/**
+ * A live, loaded Epic session with an EMPTY tree - the projection a remote
+ * deletion leaves behind once it has synced. No `tuiAgents`/`chats` entry is
+ * ever seeded for the closed row this suite proves dead.
+ */
+function newDeadEpicSession(epicId: string, hostId: string): void {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const handle = openStoreForTest({
+    epicId,
+    userId: null,
+    factories: { streamClientFactory: factory, laneSelection: null },
+    writeCommand: null,
+  });
+  if (captured.value === null) throw new Error("stream factory not invoked");
+  captured.value.onSnapshot(
+    makeDeadSessionMeta(epicId),
+    Y.encodeStateAsUpdate(new Y.Doc()),
+  );
+  getOpenEpicRegistry().acquireMounted(epicId, () => handle);
+  const sessionHandle = getOpenEpicRegistry().peek(epicId);
+  if (sessionHandle === null) throw new Error("expected a mounted session");
+  // The check this suite exercises judges same-host-ness against the
+  // SESSION's own stamped host, not the app-wide effective one.
+  handleHostIds.set(sessionHandle, hostId);
+}
+
+describe("open-chat notification routing, a closed tile whose record is proven dead", () => {
+  afterEach(() => {
+    __getOpenEpicRegistryForTests().disposeAll();
+  });
+
+  it("does not reopen a proven-dead closed agent tile, and discards the stale payload", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-1", "Epic 1");
+    const closedAgent = makeOpenableNodeRef({
+      id: "agent-1",
+      instanceId: "inst-agent-1",
+      type: "terminal-agent",
+      name: "Deleted agent",
+      hostId: "host-open",
+    });
+    store.openTileInTab(tabId, closedAgent);
+    store.closeCanvasTab(tabId, requirePane(tabId).id, closedAgent.instanceId);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        closedAgent.instanceId
+      ],
+    ).toBeDefined();
+
+    // A remote deletion has since synced: the session's own loaded tree no
+    // longer carries this agent at all.
+    newDeadEpicSession("epic-1", "host-open");
+
+    const navigate = vi.fn();
+    const routed = routeNotificationForHost(
+      navigate,
+      { kind: "chat", epicId: "epic-1", chatId: "agent-1" },
+      1_000,
+      { originHostId: "host-open", effectiveHostId: "host-open" },
+    );
+
+    expect(routed).toBe(false);
+    const after = useEpicCanvasStore.getState();
+    expect(
+      after.canvasByTabId[tabId]?.tilesByInstanceId[closedAgent.instanceId],
+    ).toBeUndefined();
+    expect(
+      after.closedTilePayloadsByTabId[tabId]?.[closedAgent.instanceId],
+    ).toBeUndefined();
   });
 });

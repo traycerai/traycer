@@ -2746,6 +2746,23 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               get().closeCanvasTab(tabId, paneId, instanceId);
             }),
           );
+          // Closing captures Back/Forward payloads; a confirmed deletion
+          // retires both those entries and any older closed instances.
+          const afterClose = get();
+          for (const [tabId, tab] of Object.entries(afterClose.tabsById)) {
+            if (tab?.epicId !== epicId) continue;
+            for (const [instanceId, payload] of Object.entries(
+              afterClose.closedTilePayloadsByTabId[tabId] ?? {},
+            )) {
+              if (
+                payload?.node.type === agentType &&
+                payload.node.id === agentId &&
+                payload.node.hostId === hostId
+              ) {
+                afterClose.discardClosedTilePayload(tabId, instanceId);
+              }
+            }
+          }
         },
 
         prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {

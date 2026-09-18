@@ -152,12 +152,12 @@ function MobileCurrentTileBarBody(
   // strip would start over at that hand-off, so one continuous chat outage
   // would read as a fresh "Syncing…" a minute in, and would set its animation
   // running again past the bound the escalation exists to impose. Keyed on the
-  // tile's id, so swiping to a different chat starts a new spell instead of
-  // inheriting this one's verdict.
+  // tile's host and id, so swiping to a different chat starts a new spell
+  // instead of inheriting this one's verdict.
   const chatSpell = useStreamSyncingSpell({
     status: chatSync.status,
     hasContent: chatSync.hasContent,
-    identity: tile.id,
+    identity: `chat:${tile.hostId}:${tile.id}`,
   });
   // REPORTED, not rendered. The one indicator lives in the app shell, which
   // orders this against the session and Epic legs by rank - so there is no

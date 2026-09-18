@@ -112,8 +112,6 @@ export function useEpicDeleteTuiAgent() {
               ctx.hostId,
               "terminal-agent",
             );
-          // Closing captures Back/Forward payloads, so discard them afterwards.
-          discardDeletedTuiAgentPayloads(variables);
         }
         // The deletion is a registry fact on a migrated host; without this the
         // row would linger in the tree until the next poll tick.
@@ -173,27 +171,4 @@ export function useEpicRenameTuiAgent() {
       },
     },
   });
-}
-
-/** Run after closing deleted tiles: closing also captures Back/Forward payloads. */
-function discardDeletedTuiAgentPayloads({
-  epicId,
-  tuiAgentId,
-  hostId,
-}: DeleteTuiAgentMutationInput): void {
-  const state = useEpicCanvasStore.getState();
-  for (const [tabId, tab] of Object.entries(state.tabsById)) {
-    if (tab?.epicId !== epicId) continue;
-    for (const [instanceId, payload] of Object.entries(
-      state.closedTilePayloadsByTabId[tabId] ?? {},
-    )) {
-      if (
-        payload?.node.type === "terminal-agent" &&
-        payload.node.id === tuiAgentId &&
-        payload.node.hostId === hostId
-      ) {
-        state.discardClosedTilePayload(tabId, instanceId);
-      }
-    }
-  }
 }

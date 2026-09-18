@@ -17,6 +17,7 @@ import {
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
 import { ensureSettingsTab } from "@/lib/commands/actions/open-system-tab";
+import { preservedTileRecordIsLive } from "@/lib/commands/actions/history-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import {
   findOpenArtifactInTab,
@@ -914,14 +915,25 @@ function routeOpenChatNotification(
             (targetHostId === null || node.hostId === targetHostId)
           );
         });
-        return closed === undefined ? [] : [{ tabId, node: closed.node }];
+        return closed === undefined ? [] : [{ tabId, payload: closed }];
       })
       .at(0);
     if (closedMatch === undefined) return false;
-    state.restoreClosedTilePreview(closedMatch.tabId, null, closedMatch.node);
+    const node = closedMatch.payload.node;
+    if (
+      !preservedTileRecordIsLive(
+        closedMatch.payload,
+        payload.epicId,
+        state.pendingCreateArtifactIds,
+      )
+    ) {
+      state.discardClosedTilePayload(closedMatch.tabId, node.instanceId);
+      return false;
+    }
+    state.restoreClosedTilePreview(closedMatch.tabId, null, node);
     const restored = findOpenTileInTab(closedMatch.tabId, {
-      id: closedMatch.node.id,
-      hostId: closedMatch.node.hostId,
+      id: node.id,
+      hostId: node.hostId,
     });
     if (restored === null) return false;
     match = { tabId: closedMatch.tabId, ...restored };

@@ -33,6 +33,7 @@ import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import type { ChatProjection } from "@/stores/epics/open-epic/types";
 import { useEpicCanvas, useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
+import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (title, rename gating).
@@ -532,6 +533,49 @@ describe("<MobileCurrentTileBar />", () => {
       expect(published()).toBeDefined();
       view.unmount();
       expect(published()).toBeUndefined();
+    });
+
+    it("does not inherit a prior chat's escalation when the same content id is shown on another host", () => {
+      vi.useFakeTimers();
+      try {
+        const aTile: EpicCanvasTileRef = { ...CHAT_TILE, hostId: "host-A" };
+        const bTile: EpicCanvasTileRef = {
+          ...CHAT_TILE,
+          instanceId: "inst-2-host-b",
+          hostId: "host-B",
+        };
+        chatSyncMock.current.value = {
+          status: "reconnecting",
+          hasContent: true,
+          wake: chatWakeSpy,
+        };
+        const view = render(
+          <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={aTile} />,
+        );
+        act(() => {
+          vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS);
+        });
+        expect(
+          publishedFor(`chat:host-A:${CHAT_TILE.id}`)?.spell.escalated,
+        ).toBe(true);
+
+        view.rerender(
+          <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={bTile} />,
+        );
+        expect(publishedFor(`chat:host-A:${CHAT_TILE.id}`)).toBeUndefined();
+        const bEntry = publishedFor(`chat:host-B:${CHAT_TILE.id}`);
+        expect(bEntry?.spell.syncing).toBe(true);
+        expect(bEntry?.spell.escalated).toBe(false);
+
+        act(() => {
+          vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS);
+        });
+        expect(
+          publishedFor(`chat:host-B:${CHAT_TILE.id}`)?.spell.escalated,
+        ).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
