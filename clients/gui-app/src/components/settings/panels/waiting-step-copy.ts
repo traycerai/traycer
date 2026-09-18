@@ -41,7 +41,7 @@ export function waitingStepCopy(args: {
   if (args.phase === "verifying") {
     return {
       title: "Checking approval…",
-      guidance: "This usually takes only a moment.",
+      guidance: null,
     };
   }
   if (args.deviceCode) {

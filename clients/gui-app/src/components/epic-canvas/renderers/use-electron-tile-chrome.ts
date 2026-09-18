@@ -1,3 +1,4 @@
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { toast } from "sonner";
 import type {
@@ -163,13 +164,22 @@ export function useElectronTabChrome(
     event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
   ): void => {
     event.preventDefault();
-    navigateToUrl(normalizeBrowserAddressInput(addressValue));
+    navigateToUrl(
+      normalizeBrowserAddressInput(
+        addressValue,
+        useSettingsStore.getState().browserSearchEngine,
+      ),
+    );
   };
 
   const reload = (): void => {
     setCertificateError(null);
     setCertificateProceeding(false);
     void control({ kind: "reload" }).catch(ignoreError);
+  };
+
+  const stop = (): void => {
+    void control({ kind: "stop" }).catch(ignoreError);
   };
 
   const goBack = (): void => {
@@ -226,6 +236,7 @@ export function useElectronTabChrome(
     onBack: goBack,
     onForward: goForward,
     onReload: reload,
+    onStop: stop,
     onZoomOut: () => {
       void control({ kind: "zoomOut" }).catch(ignoreError);
     },

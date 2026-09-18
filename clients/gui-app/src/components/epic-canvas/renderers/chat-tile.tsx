@@ -2123,7 +2123,11 @@ function useChatTileSessionViewModel(
   useSetupTerminalListRefreshDriver({ handle });
   // Persist the setup terminal as a saved (background) canvas tab so it survives
   // a restart like a user-opened terminal, instead of vanishing (no saved tab).
-  useSetupTerminalTabRegisterDriver({ handle, viewTabId });
+  useSetupTerminalTabRegisterDriver({
+    handle,
+    viewTabId,
+    owningTileInstanceId: node.instanceId,
+  });
 
   // A chat is editable only by its own owner; every other user is read-only.
   // Gate on a KNOWN non-owner (access resolved AND not the owner) rather than a

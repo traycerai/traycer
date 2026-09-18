@@ -198,6 +198,8 @@ export interface BrowserViewWebContents {
   isDestroyed(): boolean;
   close(): void;
   reload(): void;
+  /** Cancels any pending navigation, without touching the committed page. */
+  stop(): void;
   findInPage(text: string, options: BrowserViewFindInPageOptions): number;
   stopFindInPage(action: "clearSelection"): void;
   getZoomFactor(): number;

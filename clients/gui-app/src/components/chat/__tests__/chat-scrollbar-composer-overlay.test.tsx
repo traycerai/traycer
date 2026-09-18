@@ -375,7 +375,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       );
       // Main composer: outer edge-lane only (no vertical padding / bg-canvas).
       expect(source).toMatch(
-        /data-chat-composer="" className="pointer-events-none px-4"/,
+        /data-chat-composer=""\s+className="pointer-events-none px-4"/,
       );
       // Centered backplate: relative, paint, pb-4, pointer-free 1px seal with
       // after:content-[''] so the pseudo-element actually renders.
@@ -384,7 +384,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       );
       // Vertical top spacing stays on the centered child, not the outer.
       expect(source).toMatch(
-        /data-chat-composer="" className="pointer-events-none px-4"[\s\S]*?topSpacing === "normal" \? "pt-4" : "pt-0"/,
+        /data-chat-composer=""\s+className="pointer-events-none px-4"[\s\S]*?topSpacing === "normal" \? "pt-4" : "pt-0"/,
       );
 
       // Negative: full-width wrappers must not re-own the old paint/spacing.

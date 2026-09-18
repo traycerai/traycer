@@ -68,6 +68,11 @@ const buttonVariants = cva(
         // to a visible 1.087. The `dark:*-input/*` fills stay: `--input`
         // never collapses.
         outline: `border-border bg-background hover:bg-foreground/5 hover:text-foreground active:press-scrim dark:border-input dark:bg-input/30 dark:hover:bg-input/50 ${ON_STATE}`,
+        // `outline`'s border with a translucent fill: a clickable ROW sitting
+        // over other rows scrolling underneath it (session import's
+        // already-imported task), where `outline`'s opaque `bg-background`
+        // would occlude them.
+        "card-row": `border-border bg-background/60 hover:bg-foreground/5 hover:text-foreground active:press-scrim dark:border-input dark:bg-input/30 dark:hover:bg-input/50 ${ON_STATE}`,
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:press-scrim aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         // Same two weights as `outline` above, and for the same reason: the
@@ -135,6 +140,12 @@ const buttonVariants = cva(
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-sm in-data-[slot=button-group]:rounded-md",
         "icon-lg": "size-9",
+        // A full-width clickable ROW instead of a centered control: content
+        // left-aligns and the box grows to fit it rather than clipping to a
+        // fixed height. Session import's already-imported task row is the
+        // one call site.
+        "card-row":
+          "h-auto min-w-0 justify-start gap-3 rounded-xl px-4 py-3 text-left",
       },
     },
     defaultVariants: {

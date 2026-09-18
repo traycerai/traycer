@@ -118,6 +118,7 @@ function SessionImportDialogBody(props: {
         <div className="-mx-4 -mb-4 flex min-h-0 flex-1 flex-col">
           {hostReady && scanSupported ? (
             <SessionImportWizard
+              hostPicker={null}
               surface="dialog"
               scan={scan}
               // Submit means go: the dialog gets out of the way and the

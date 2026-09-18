@@ -1,4 +1,4 @@
-import { use, useEffect, useRef, useState, type ReactNode } from "react";
+import { use, useEffect, useState, type ReactNode } from "react";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
@@ -6,10 +6,6 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
-import {
-  useStatusBarDensity,
-  type StatusBarDensity,
-} from "@/components/layout/status-bar/status-bar-density";
 import { StatusBarRateLimitCluster } from "@/components/layout/status-bar/status-bar-rate-limit-cluster";
 import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
 import {
@@ -82,23 +78,11 @@ function ScopedAppStatusBar(props: {
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
 }): ReactNode {
-  const barRef = useRef<HTMLDivElement | null>(null);
-  const measuredDensity = useStatusBarDensity(barRef);
-  // A mobile viewport takes the `compact` rung whatever it measures, which is
-  // the one place the strip overrides its own measurement.
-  //
-  // Measured, a phone is `icon-only` (its bar is the viewport, and every phone
-  // is under 500px), and an icon-only strip says nothing the mobile header's
-  // rate-limit button is not already saying one row up - so the opt-in footer
-  // would draw a second copy of the header's icons and no readings. `compact`
-  // caps the ladder at `no-timers`: percentages and their labels, no mode
-  // word, no mini bars, no countdowns. The ladder is untouched below that and
-  // still folds whole providers into the `+N` chip when they do not fit, so a
-  // narrow phone converges on its own rather than on a second width table.
+  // Read for the chord ownership below, not for how the strip is drawn: a
+  // phone's footer draws the same readings as a desktop strip and scrolls
+  // them under a finger, so the viewport decides who holds a shortcut and
+  // nothing about what is on screen.
   const narrowViewport = useIsMobileViewport();
-  const density: StatusBarDensity = narrowViewport
-    ? "compact"
-    : measuredDensity;
   const rateLimitsEnabled = useLayoutStore(
     (state) => state.statusBar.rateLimits.enabled,
   );
@@ -203,12 +187,7 @@ function ScopedAppStatusBar(props: {
         app-wide and deliberately not the bottom, so this strip owns that edge.
       */}
       <div
-        ref={barRef}
         data-testid="app-status-bar"
-        // The rung the strip settled on, published for the same reason the
-        // preview publishes its own: which rung is live is otherwise only
-        // visible as the absence of things.
-        data-density={density}
         className="shrink-0 border-t border-border/90 bg-canvas pb-safe-bottom text-canvas-foreground"
       >
         <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
@@ -233,14 +212,12 @@ function ScopedAppStatusBar(props: {
                 preference that hides them is flipped. The notice for an
                 unresolved pick takes the same slot.
 
-                The slot is also the row's GROWER, which is what lets the usage
-                cluster inside it know how much room it has: a `flex: 0 1 auto`
-                slot is sized by its own content, so a cluster measuring
-                anything inside it would be measuring itself. It replaces the
-                spacer that used to sit between the two clusters - the spare
-                room has to be absorbed by exactly one box, and it may as well
-                be the one that needs to know how much there is. The right-hand
-                cluster is pushed to the far edge either way.
+                The slot is also the row's GROWER: the spare room has to be
+                absorbed by exactly one box, and it is this one, so the usage
+                cluster's scroller inside it has exactly the room the resource
+                readout leaves - never more, which is what would push that
+                readout off the right edge. The right-hand cluster is pinned
+                to the far edge either way.
               */}
               <span
                 data-testid="status-bar-rate-limit-slot"
@@ -250,7 +227,6 @@ function ScopedAppStatusBar(props: {
                   scopedToOwnHost={scopedToOwnHost}
                   rateLimitsEnabled={rateLimitsEnabled}
                   providers={windowedProviders}
-                  density={density}
                   profileSelection={profileSelection}
                   scope={scope}
                 />
@@ -287,7 +263,6 @@ function ScopedAppStatusBar(props: {
               triggerNode={
                 <StatusBarResourceSegment
                   {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
-                  density={density}
                   hostId={scope.hostId}
                   hostLabel={scope.hostLabel}
                   hasExplicitPick={props.hasExplicitPick}
@@ -312,7 +287,6 @@ function StatusBarUsageSlot(props: {
   readonly scopedToOwnHost: boolean;
   readonly rateLimitsEnabled: boolean;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
-  readonly density: StatusBarDensity;
   readonly profileSelection: RateLimitProfileSelection;
   readonly scope: HostScope;
 }): ReactNode {
@@ -321,8 +295,8 @@ function StatusBarUsageSlot(props: {
   if (!props.rateLimitsEnabled) return null;
   return (
     <StatusBarRateLimitCluster
+      hostId={props.scope.hostId}
       providers={props.providers}
-      density={props.density}
       profileSelection={props.profileSelection}
     />
   );

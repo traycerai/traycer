@@ -452,6 +452,9 @@ export class BrowserViewManager {
       case "reload":
         this.reloadEntry(entry);
         return true;
+      case "stop":
+        this.stopEntry(entry);
+        return true;
       case "goBack":
         this.moveEntryInHistory(entry, "back");
         return true;
@@ -786,6 +789,34 @@ export class BrowserViewManager {
   private reloadEntry(entry: BrowserViewEntry): void {
     this.startNavigationAttempt(entry);
     entry.webContents.reload();
+  }
+
+  /**
+   * The browser's Stop button. Cancels the pending navigation and settles
+   * the tile on the page it still shows.
+   *
+   * The settle has to come from here: a navigation stopped before it commits
+   * emits NOTHING in Electron (`WebContents::DidFinishNavigation` returns
+   * early on `!HasCommitted()`), so nothing else would ever take the entry
+   * out of `loading`. The attempt is retired as well, for the `loadURL`
+   * rejection that follows a stop (`ERR_ABORTED`): `navigate()` settles only
+   * the attempt that failed, and this one was settled by the stop - without
+   * the bump it would re-settle with "Navigation failed" over a page that
+   * loaded fine. `requestedUrl` follows the page the tab is left on, as it
+   * does after every other settle - the stopped url is no longer the intent.
+   *
+   * A tab the host has not accepted yet is `loading` for its provisioning,
+   * not for a navigation of its own, and its `requestedUrl` is the initial
+   * navigation still to come - so there is nothing to stop and nothing here
+   * may touch (see `handleCommittedNavigation` on the same guard).
+   */
+  private stopEntry(entry: BrowserViewEntry): void {
+    if (!entry.identity.lifecycle.accepted) return;
+    if (entry.status !== "loading") return;
+    entry.webContents.stop();
+    entry.navigationAttempt += 1;
+    entry.requestedUrl = entry.currentUrl;
+    this.setStatus(entry, "ready", null);
   }
 
   /**
