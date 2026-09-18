@@ -72,6 +72,7 @@ function event(id: number): CommGraphEvent {
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
   };
 }
 
