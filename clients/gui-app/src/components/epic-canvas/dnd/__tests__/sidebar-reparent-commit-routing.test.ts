@@ -726,6 +726,67 @@ describe("commitSidebarReparentDrop resolves the OWNER host's client for a cross
 });
 
 /**
+ * A doc-homed chat's addressability must be judged against the RPC's actual
+ * OWNER host, not the viewer/session host the sidebar is projected from.
+ */
+describe("commitSidebarReparentDrop judges a doc-homed chat's addressability against the OWNER host, not the viewer", () => {
+  it("owner floor-era ALLOWS the send even though the viewer/session host serves a modern record plane", async () => {
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+    // Owner is host-2; session ("getEpicSessionHandleHostId"'s stub) is
+    // host-1.
+    seam.hostIdByNodeId = { "chat-doc": "host-2" };
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    const reparentChat = vi.fn<
+      MockMethodHandler<HostRpcRegistry, "epic.reparentChat">
+    >(() => Promise.resolve({ updated: true }));
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": reparentChat,
+    });
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(reparentChat).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      chatId: "chat-doc",
+      newParentId: "chat-parent",
+    });
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("owner registry-serving REFUSES the send even though the viewer/session host is floor-era", async () => {
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+    seam.hostIdByNodeId = { "chat-doc": "host-2" };
+    recordNegotiatedHostMethods("host-2", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    const reparentChat = vi.fn<
+      MockMethodHandler<HostRpcRegistry, "epic.reparentChat">
+    >(() => Promise.resolve({ updated: true }));
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": reparentChat,
+    });
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(reparentChat).not.toHaveBeenCalled();
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * Rejections are asserted through Node's own `process` event rather than a
  * DOM `unhandledrejection` listener: `vitest.config.ts` sets
  * `dangerouslyIgnoreUnhandledErrors` and the setup file registers a

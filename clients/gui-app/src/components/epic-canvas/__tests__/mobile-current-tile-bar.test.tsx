@@ -23,6 +23,12 @@ import {
   useSurfaceSyncStore,
   type SurfaceSyncEntry,
 } from "@/stores/sync/surface-sync-store";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (title, rename gating).
@@ -37,7 +43,10 @@ vi.mock("@/components/epic-canvas/canvas/browser-tab-presentation", () => ({
 
 const holder = vi.hoisted(() => ({ role: "owner" }));
 
-vi.mock("@/lib/epic-selectors", () => ({
+// `useEpicNodeHostId` passes through REAL - the cross-host write-route gate
+// reads it against the real session handle below.
+vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => holder.role,
@@ -67,21 +76,24 @@ function makeMutateAsync<TVariables>(
   };
 }
 
-// `useSwitcherRename` (the hook this bar's title delegates rename commits to)
-// now reads a REAL session handle for the optimistic overlay
-// (`beginRenameMutation` / `retirePendingMutation`), so it is backed by a real
-// `createOpenEpicStore` session rather than a fake shape. The mutation hooks
-// stay mocked (rather than the `useSwitcherRename` mapping itself), which
-// exercises the real kind -> mutation mapping in `use-switcher-rename.ts`.
+// `useSwitcherRename` reads a REAL session handle for the optimistic overlay
+// (`beginRenameMutation` / `retirePendingMutation`); the mutation hooks stay
+// mocked, exercising the real kind -> mutation mapping in
+// `use-switcher-rename.ts`. `useMaybeOpenEpicHandle` and `useOpenEpicHandle`
+// return the SAME handle: `useEpicNodeHostId` and `useChatWriteRoute` must see
+// one session for the cross-host gate comparison to mean anything.
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  // The chat write-routing gate reads the session through the
-  // NON-throwing accessor. `null` is the honest double here: this suite
-  // mounts no epic store, and no session means no epic write path to gate.
-  useMaybeOpenEpicHandle: () => null,
+  useMaybeOpenEpicHandle: () => mocks.handle.current,
   useOpenEpicHandle: () => {
     if (mocks.handle.current === null) throw new Error("no handle seeded");
     return mocks.handle.current;
   },
+}));
+// Defaults to `null` (no session context, matching every existing test);
+// the cross-host write-route suite below overrides it.
+const sessionHostIdMock = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => sessionHostIdMock.value,
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicRenameChat: () => ({
@@ -171,6 +183,27 @@ const FILE_TILE: EpicCanvasTileRef = {
   workspacePath: "/ws",
   filePath: "index.ts",
 };
+
+/** A `ChatProjection` literal with every field populated explicitly. */
+function chatRow(
+  id: string,
+  hostId: string,
+  docResident: boolean | null,
+): ChatProjection {
+  return {
+    id,
+    title: id,
+    parentId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    userId: null,
+    hostId,
+    isTitleEditedByUser: false,
+    docResident,
+    settings: null,
+    archivedAt: null,
+  };
+}
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -446,6 +479,85 @@ describe("<MobileCurrentTileBar />", () => {
       expect(published()).toBeDefined();
       view.unmount();
       expect(published()).toBeUndefined();
+    });
+  });
+
+  describe("cross-host write-route gate", () => {
+    afterEach(() => {
+      sessionHostIdMock.value = null;
+      resetNegotiatedManifests();
+    });
+
+    function seedChatRow(row: ChatProjection): void {
+      const handle = mocks.handle.current;
+      if (handle === null) throw new Error("expected a seeded session handle");
+      handle.store.setState({
+        chats: { byId: { [row.id]: row }, allIds: [row.id] },
+      });
+    }
+
+    it("stays editable, and commits to its OWN host, when a same-id row projected from another host is unadopted", async () => {
+      // host-A must actually serve a chat record plane, or its row resolves
+      // "registry-rpc" on its own and the test can't tell the gate apart.
+      recordNegotiatedHostMethods("host-A", ["epic.listChatRecords"]);
+      const projectedRowOnA = chatRow("chat-shared", "host-A", true);
+      seedChatRow(projectedRowOnA);
+      expect(
+        resolveChatWriteRoute({
+          chatsById: { "chat-shared": projectedRowOnA },
+          isChatRow: true,
+          nodeId: "chat-shared",
+          sessionHostId: "host-A",
+        }),
+      ).toBe("unavailable");
+      sessionHostIdMock.value = "host-A";
+      const tile: EpicCanvasTileRef = {
+        id: "chat-shared",
+        instanceId: "inst-cross",
+        type: "chat",
+        name: "Cross-host chat",
+        hostId: "host-B",
+      };
+
+      render(<MobileCurrentTileBar epicId="epic-1" tile={tile} />);
+      expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
+        "BUTTON",
+      );
+
+      const input = openEdit();
+      fireEvent.change(input, { target: { value: "Renamed on B" } });
+      fireEvent.blur(input);
+
+      await waitFor(() =>
+        expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1),
+      );
+      expect(mutateSpies.renameChat).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        chatId: "chat-shared",
+        title: "Renamed on B",
+        hostId: "host-B",
+      });
+    });
+
+    it("stays disabled for a row unadopted on its OWN (matching) host", () => {
+      sessionHostIdMock.value = "host-B";
+      recordNegotiatedHostMethods("host-B", ["epic.listChatRecords"]);
+      seedChatRow(chatRow("chat-same", "host-B", true));
+      const tile: EpicCanvasTileRef = {
+        id: "chat-same",
+        instanceId: "inst-same",
+        type: "chat",
+        name: "Same-host chat",
+        hostId: "host-B",
+      };
+
+      render(<MobileCurrentTileBar epicId="epic-1" tile={tile} />);
+
+      const title = screen.getByTestId("mobile-current-tile-title");
+      expect(title.tagName).toBe("SPAN");
+      expect(
+        screen.queryByTestId("mobile-current-tile-title-input"),
+      ).toBeNull();
     });
   });
 });

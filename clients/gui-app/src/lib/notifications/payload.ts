@@ -15,6 +15,7 @@ import {
   existingEpicTabIntentWithNestedFocus,
   navigateToTabIntent,
   openOrFocusEpicIntent,
+  resourceEpicTabIntent,
 } from "@/lib/tab-navigation";
 import { ensureSettingsTab } from "@/lib/commands/actions/open-system-tab";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -899,34 +900,43 @@ function routeOpenChatNotification(
     })
     .at(0);
   if (match === undefined) {
-    const closedMatchTabId = candidateTabIds.find((tabId) => {
-      const tab = state.tabsById[tabId];
-      if (tab?.epicId !== payload.epicId) return false;
-      return Object.values(state.closedTilePayloadsByTabId[tabId] ?? {}).some(
-        (closed) => {
-          const node = closed?.node;
+    const closedMatch = candidateTabIds
+      .flatMap((tabId) => {
+        const tab = state.tabsById[tabId];
+        if (tab?.epicId !== payload.epicId) return [];
+        const closed = Object.values(
+          state.closedTilePayloadsByTabId[tabId] ?? {},
+        ).find((entry) => {
+          const node = entry?.node;
           if (node === undefined) return false;
           return (
             node.id === chatId &&
             isChatArtifactTileType(node.type) &&
             (targetHostId === null || node.hostId === targetHostId)
           );
-        },
-      );
-    });
-    if (closedMatchTabId === undefined) return false;
+        });
+        return closed === undefined ? [] : [{ tabId, node: closed.node }];
+      })
+      .at(0);
+    if (closedMatch === undefined) return false;
     navigateToTabIntent(
       navigate,
-      existingEpicTabIntentWithNestedFocus({
+      resourceEpicTabIntent({
         epicId: payload.epicId,
-        tabId: closedMatchTabId,
+        tabId: closedMatch.tabId,
+        name: undefined,
         focus: {
           focusedAt: receivedAt,
           focusArtifactId: chatId,
           focusThreadId: undefined,
           migrationSource: undefined,
         },
-        nestedFocus: null,
+        preparation: {
+          kind: "open-tile",
+          node: closedMatch.node,
+          gesture: "single",
+        },
+        includeNestedFocus: true,
       }),
       undefined,
     );

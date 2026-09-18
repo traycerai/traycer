@@ -821,13 +821,15 @@ export async function commitSidebarReparentDrop(
   ) {
     return;
   }
-  // Resolved before the branch: the chat arm of the addressability test needs
-  // the session host to read this host's negotiated record-plane coverage, and
-  // the terminal arm needs nothing - so one read serves both.
-  const reparentHostId = getEpicSessionHandleHostId(handle);
+  // Judge addressability against the same host that will receive the write.
+  const sessionHostId = getEpicSessionHandleHostId(handle);
+  const ownerHostId =
+    evaluation.node.family === "agent"
+      ? reparentOwnerHostId(state, evaluation.node, sessionHostId)
+      : sessionHostId;
   const agentRoute =
     evaluation.node.family === "agent"
-      ? agentReparentRoute(state, evaluation.node, reparentHostId)
+      ? agentReparentRoute(state, evaluation.node, ownerHostId)
       : "doc";
   // A chat the host's record plane will not address has nowhere to go, so the
   // drop is a silent cancel - this file's own rule for a move it cannot make -
@@ -845,13 +847,7 @@ export async function commitSidebarReparentDrop(
     // back into the tree. Refusals (`E_AGENT_NOT_LOCAL` for a row another
     // host owns) are the host's answer and are surfaced as a toast, the same
     // way the hook-based chat mutations surface theirs.
-    const sessionHostId = reparentHostId;
     const movedNodeType = evaluation.node.type;
-    const ownerHostId = reparentOwnerHostId(
-      state,
-      evaluation.node,
-      sessionHostId,
-    );
     if (ownerHostId === null) return;
     const client =
       ownerHostId === sessionHostId
