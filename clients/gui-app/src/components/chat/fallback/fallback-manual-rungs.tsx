@@ -25,6 +25,7 @@ import {
 import {
   fallbackProviderModelLabel,
   useFallbackModelLabels,
+  type FallbackModelLabelResolver,
 } from "./fallback-identity";
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
@@ -130,6 +131,68 @@ function ManualRungActions({
       epicId={epicId}
       chatId={chatId}
       hostId={hostId}
+      surface="error_card"
+    />
+  );
+}
+
+/**
+ * The same manual rungs, on the GRACE CARD instead of the error row.
+ *
+ * ## Why this exists
+ *
+ * The countdown card used to offer three things: "Don't switch", "Sign in
+ * instead" and a destination menu - so a user who had already fixed the
+ * failure by hand (topped up an account, switched a profile in Settings) had no
+ * way to say so. The only controls were "abandon the recovery" and "go
+ * somewhere else", and neither is "the thing you were trying to do will work
+ * now, just run it". They watched the switch happen instead; that report is
+ * what this closes.
+ *
+ * `retry` is the rung that says it, because `retry` re-runs whatever the chat
+ * is set to NOW - which after a manual fix is the fixed tuple.
+ *
+ * ## No `turnId` here, deliberately
+ *
+ * The error-card wrapper takes one because durable transcript can hold several
+ * failed attempts and the affordances belong to exactly one row. This card is
+ * one per chat and is rendered from the LIVE traversal, and the host defines
+ * `lastFailedAttempt` during a hold only for the attempt that hold armed for
+ * (`fallbackHeldFailureFor` matches both attempt ids). So there is no "which
+ * row" question to answer, and inventing one here would mean re-deriving an
+ * identity the host has already scoped.
+ *
+ * Renders nothing when the host offers no attempt - which includes every
+ * traversal state except `hold`, since that carve-out is the host's and this
+ * component does not second-guess which state it is in.
+ */
+export function FallbackGraceRungActions({
+  epicId,
+  chatId,
+  hostId,
+  client,
+}: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}) {
+  const attempt = useChatLastFailedAttempt({ epicId, chatId, hostId });
+  if (attempt === undefined) return null;
+  // The same link-only carve-out the error card makes, and it has to be
+  // repeated rather than shared: a retry on a signed-out account sends the
+  // identical request to the identical account. The re-auth banner is the way
+  // back in, and on this card "Sign in instead" is already the control that
+  // says so.
+  if (attempt.failure.reason === "auth") return null;
+  return (
+    <ManualRungAffordances
+      attempt={attempt}
+      client={client}
+      epicId={epicId}
+      chatId={chatId}
+      hostId={hostId}
+      surface="grace_card"
     />
   );
 }
@@ -252,18 +315,108 @@ function manualRungCatalogueRead(failedTuple: ChatRunSettings | null): {
  * still here, which is exactly how {@link FallbackWaitingMenu} already gets
  * this right.
  */
+/**
+ * The three switch decisions, resolved together because they are ONE decision
+ * seen from three angles: whether this surface draws the switch, whether it
+ * carries the emphasis, and what to say when it is missing.
+ *
+ * Extracted rather than left inline for two reasons. The honest one is the
+ * complexity budget - adding the `surface` distinction pushed
+ * `ManualRungAffordances` past it. The better one is that all three were
+ * already reading `surface` separately, and three separate reads of the same
+ * fact is how two of them end up disagreeing.
+ *
+ * ## The grace card draws no switch
+ *
+ * That card's own leased menu (`<FallbackGraceMenu>`) is the switch there, and
+ * it is not a duplicate of this one: it takes a grace-hold lease that pauses
+ * the countdown while the popover is open. Rendering both would put two switch
+ * controls side by side and the wrong one would be the leaseless one.
+ *
+ * The EXPLANATION goes with it, and that is the same argument rather than an
+ * exception to it. The sentence exists because a control that simply vanishes
+ * reads as a broken product and a user cannot act on an absence - but on the
+ * grace card the switch is not absent, so printing "no other provider is
+ * available to switch to" beside a working Switch control would be that same
+ * broken-product reading, pointed the other way.
+ *
+ * So the grace card answers all three at once and never consults the rungs: no
+ * switch, no emphasis, nothing to explain.
+ *
+ * ## On the error card
+ *
+ * Retry re-runs the SAME account and model (`retry` is the same tuple by
+ * definition). For a failure the provider will keep refusing until something
+ * changes - a spent quota, an unpaid bill - that is very unlikely to do
+ * anything, and the engine agrees: `rate_limit` and `billing` get no transient
+ * retry either, only the outage-shaped failures do. So the switch leads and
+ * Retry sits beside it as the secondary; offering them as equals made the
+ * useless one the leftmost thing on the card.
+ *
+ * The explanation's subject is the FAILED tuple the host named, resolved
+ * through the same module every other fallback surface names a tuple with.
+ * Never the chat's current settings: this is bound to an attempt, and a chat
+ * reconfigured since would be explained in terms of a model that never ran.
+ */
+function switchAffordanceFor(input: {
+  readonly surface: "error_card" | "grace_card";
+  readonly attempt: LastFailedAttempt;
+  readonly modelLabelFor: FallbackModelLabelResolver;
+}): {
+  readonly offersSwitch: boolean;
+  readonly switchLeads: boolean;
+  readonly switchExplanation: string | null;
+} {
+  const { surface, attempt, modelLabelFor } = input;
+  if (surface === "grace_card") {
+    return { offersSwitch: false, switchLeads: false, switchExplanation: null };
+  }
+  const offersSwitch = attempt.eligibleRungs.includes("switch");
+  const failedTuple = attempt.failedTuple;
+  return {
+    offersSwitch,
+    switchLeads:
+      offersSwitch &&
+      (attempt.failure.reason === "rate_limit" ||
+        attempt.failure.reason === "billing"),
+    switchExplanation: describeSwitchDisposition(
+      attempt.switchDisposition,
+      failedTuple === null
+        ? null
+        : fallbackProviderModelLabel(failedTuple, modelLabelFor),
+    ),
+  };
+}
+
 function ManualRungAffordances({
   attempt,
   client,
   epicId,
   chatId,
   hostId,
+  surface,
 }: {
   readonly attempt: LastFailedAttempt;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatId: string;
   readonly hostId: string;
+  /**
+   * Which surface these affordances are mounted on, and the ONE thing it
+   * changes is whether the switch is offered here.
+   *
+   * `error_card` is durable transcript and owns the whole set. `grace_card` is
+   * the countdown in the composer, which already has a destination menu of its
+   * own - `<FallbackGraceMenu>`, in its `menu` slot - and that menu is not a
+   * duplicate of this one: it takes a grace-hold LEASE that pauses the
+   * countdown while the popover is open. Rendering both would put two
+   * switch controls side by side, and the wrong one would be the leaseless one.
+   *
+   * A required prop rather than an optional flag, so a new call site has to say
+   * which surface it is; a defaulted one would silently take the transcript's
+   * answer.
+   */
+  readonly surface: "error_card" | "grace_card";
 }) {
   const publishConfirmed = usePublishConfirmedManualFallbackAction({
     epicId,
@@ -424,22 +577,13 @@ function ManualRungAffordances({
       ? null
       : formatWaitTime(attempt.failure.resetsAt, now),
   );
-  // Why there is no Switch… button, in the host's own terms - the exact
-  // counterpart to `waitExplanation`, and added for the same reason F6 added
-  // that one: a control that simply vanishes reads as a broken product, and a
-  // user cannot act on an absence.
-  //
-  // The subject is the FAILED tuple the host named, resolved through the same
-  // module every other fallback surface names a tuple with. Never the chat's
-  // current settings: this row is bound to an attempt, and a chat reconfigured
-  // since would be explained in terms of a model that never ran.
-  const failedTuple = attempt.failedTuple;
-  const switchExplanation = describeSwitchDisposition(
-    attempt.switchDisposition,
-    failedTuple === null
-      ? null
-      : fallbackProviderModelLabel(failedTuple, modelLabelFor),
-  );
+  // All three switch decisions in one call - see the helper for why they are
+  // one decision and not three.
+  const { offersSwitch, switchLeads, switchExplanation } = switchAffordanceFor({
+    surface,
+    attempt,
+    modelLabelFor,
+  });
 
   // Whether the RETRY is the request in flight, as opposed to a switch or a
   // wait sent from the same hook. Without this the card answered a press with
@@ -453,17 +597,6 @@ function ManualRungAffordances({
   // unnecessary anyway.
   const retryInFlight =
     runManualRung.isPending && runManualRung.variables.rung === "retry";
-  // Retry re-runs the SAME account and model (`retry` is the same tuple by
-  // definition). For a failure the provider will keep refusing until something
-  // changes - a spent quota, an unpaid bill - that is very unlikely to do
-  // anything, and the engine agrees: `rate_limit` and `billing` get no
-  // transient retry either, only the outage-shaped failures do. So the switch
-  // leads and Retry sits beside it as the secondary. Offering them as equals
-  // made the useless one the leftmost thing on the card.
-  const switchLeads =
-    rungs.includes("switch") &&
-    (attempt.failure.reason === "rate_limit" ||
-      attempt.failure.reason === "billing");
   const retryButton = rungs.includes("retry") ? (
     <ManualRetryButton
       disabled={busy}
@@ -494,7 +627,7 @@ function ManualRungAffordances({
       />
       <div className="flex flex-wrap items-center gap-2">
         {switchLeads ? null : retryButton}
-        {rungs.includes("switch") ? (
+        {offersSwitch ? (
           <FallbackDestinationMenu
             triggerLabel={SWITCH_LABEL}
             triggerDisabled={busy}
