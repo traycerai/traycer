@@ -509,6 +509,8 @@ describe("browser annotation image gating", () => {
         hostId: "host-1",
         editorRef,
         editorReadyTick: 1,
+        chatTitle: null,
+        epicTitle: null,
       }),
     );
 

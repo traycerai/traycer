@@ -5,7 +5,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   getImageBytes,
   sessionImageBytes,

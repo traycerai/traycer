@@ -222,10 +222,7 @@ import {
   buildUnrecordedPromptHandoff,
 } from "@/lib/drafts/unrecorded-prompt-handoff";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
-import type { PromptStashSnapshot } from "@/lib/composer/prompt-stash-codec";
-import { abortLiveFencedPromptStashWrites } from "@/lib/composer/prompt-stash-repository";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
 import {
   invalidateDraftBlobConfirmations,
@@ -2696,10 +2693,10 @@ function collectPendingRestoreContentImageHashes(): ReadonlyArray<string> {
  * neither covers the other - the crops live under the annotation hash, not
  * inside the document.
  *
- * Held from just before the capture starts until its save settles, because
+ * Held from just before the capture starts until the handoff settles, because
  * `dispose()` removes the store from `liveChatSessionStores` in the same tick
- * and every root above is derived from that set. Keyed by the stash entry id,
- * which is unique per handoff and is what the `finally` has in hand.
+ * and every root above is derived from that set. Keyed by a capture id minted
+ * per handoff, which is what the `finally` has in hand.
  */
 interface HandoffCaptureRoot {
   readonly content: JsonContent;
@@ -5525,12 +5522,13 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     /**
-     * Write whatever prompt exists only in this store to the prompt stash.
+     * Put whatever prompt exists only in this store into the Drafts control,
+     * as a closed start-page draft.
      *
      * Best effort and deliberately fire-and-forget: `dispose` is synchronous
      * and the shared registry gives it no await, so blocking is not on the
-     * table. The write is an IndexedDB put that outlives this turn, which is
-     * the whole point - the alternative is not "a slower handoff", it is none.
+     * table. The install outlives this turn, which is the whole point - the
+     * alternative is not "a slower handoff", it is none.
      */
     const handOffUnrecordedPromptToStash = (): void => {
       const state = get();
@@ -5563,90 +5561,78 @@ export function createChatSessionStoreWithNotificationDependencies(
         Object.values(state.lastCopyPrompts),
         retryHandoffAccountFor,
       )) {
-        const entry = { id: uuidv4(), createdAt: Date.now() };
+        const captureId = uuidv4();
         // Root the bytes for the capture. Registered BEFORE the first await:
         // `dispose()` drops this store from `liveChatSessionStores`
         // synchronously, so from that instant until the read completes nothing
         // else names these hashes and a concurrent sweep is free to delete
         // them.
-        handoffCaptureRoots.set(entry.id, {
+        handoffCaptureRoots.set(captureId, {
           content: source.content,
           browserAnnotations: source.browserAnnotations,
         });
-        // Stamped before the first await, checked at every save. See
-        // `identityGeneration`: the synchronous flag cannot fence a capture
-        // that was already in flight when the account changed.
+        // Stamped before the first await, re-asked synchronously right before
+        // the install. See `identityGeneration`: the synchronous flag cannot
+        // fence a capture that was already in flight when the account changed,
+        // and installing then would file the outgoing account's prompt in the
+        // incoming account's Drafts list - and root its images in that
+        // account's landing partition.
         const startedAtGeneration = identityGeneration;
-        // `saveWhile`, not `save`: the check has to live INSIDE the write,
-        // because `save` awaits `hydrate` first and an identity change landing
-        // during hydration is invisible to any check made before the call. The
-        // account changing means writing now would file the outgoing account's
-        // prompt under the incoming one, in a stash that has no partition to
-        // tell them apart.
         const stillCurrent = (): boolean =>
           identityGeneration === startedAtGeneration;
-        const save = (snapshot: PromptStashSnapshot): Promise<void> =>
-          usePromptStashStore.getState().saveWhile(snapshot, stillCurrent);
-        // Released as soon as the snapshot exists, NOT when the save settles.
-        // From that point the snapshot carries its own `imagesByHash`, so it
-        // is self-contained and the partition copy is redundant - while a
-        // pending hydrate or transaction can keep a save outstanding far past
-        // the read's own deadline, pinning a disposed document all that time.
+        // Released once the handoff's READS have settled, which is not the
+        // same moment as its install. The image resolution is bounded but not
+        // cancellable, so a deadline that fires leaves the original import
+        // still reading blobs while the text-only fallback installs - and from
+        // the instant `dispose()` dropped this store, these roots are the only
+        // thing naming those hashes. `PromptHandoffOutcome.readsSettled` is
+        // that second moment; on every other path it is already resolved.
         const releaseCaptureRoots = (): void => {
-          handoffCaptureRoots.delete(entry.id);
+          handoffCaptureRoots.delete(captureId);
         };
         void buildUnrecordedPromptHandoff({
-          ...entry,
           content: source.content,
           browserAnnotations: source.browserAnnotations,
           reason: source.reason,
-          // The SAME resolver the composer's own stash capture uses. Passing
-          // an empty `imagesByHash` instead - which this did - made every
-          // hash-only handoff throw inside the repository and vanish.
+          stillCurrent,
+          // The SAME resolver the composer's own draft images use. Passing an
+          // empty image map instead - which this did - made every hash-only
+          // handoff throw and vanish.
           readHashImage: (hash) =>
             resolveDraftImageBytes(
               hash,
               draftImageByteTargetForHost(options.hostId),
             ),
         })
-          .then((snapshot) => {
-            releaseCaptureRoots();
-            return save(snapshot);
-          })
           // SECOND chance, text-only. The handoff's own fallback covers a
-          // document it cannot BUILD; this covers one it cannot SAVE, which is
-          // a different failure at a later stage. Carrying the bytes into the
-          // stash means the entry is charged against
-          // `PROMPT_STASH_BUDGET_BYTES`, so a large image can be refused with
-          // `PromptStashCapacityExceededError` - and that landed straight in
-          // the swallow below, losing the words to protect a picture.
+          // document whose IMAGES it cannot resolve; this covers an install
+          // that threw, which is a different failure at a later stage.
           //
           // `buildTextOnlyPromptHandoff` rather than a null resolver: an
           // INLINE image is read from the node before any resolver is
-          // consulted, so the null-resolver version of this rebuilt the same
-          // oversized entry and was refused all over again.
+          // consulted, so the null-resolver version of this re-imported the
+          // same oversized document and was refused all over again.
           .catch(() =>
             buildTextOnlyPromptHandoff({
-              ...entry,
               content: source.content,
-              // Not carried - this path owns no blobs for a record to name -
-              // but passed so the entry can SAY the sidecar was dropped
-              // rather than looking like a complete capture.
+              // Not carried - a landing draft owns no annotation sidecar - but
+              // passed so the draft can SAY the sidecar was dropped rather
+              // than looking like a complete capture.
               browserAnnotations: source.browserAnnotations,
               reason: source.reason,
               cause: "capacity",
-            }).then(save),
+              stillCurrent,
+            }),
           )
-          // `save` awaits `hydrate`, which rejects when IndexedDB is
-          // unavailable - so a bare `void` here is an unhandled rejection on
-          // exactly the machines least able to absorb one. Swallowed to match
-          // this store's own fire-and-forget convention, and because there is
-          // nothing left to fall back to: the session is already torn down by
-          // the time this settles. A stash that cannot be written is a stash
-          // the user cannot read either, so the failure is visible there.
+          // The roots outlive the INSTALL, not just the call: see
+          // `releaseCaptureRoots` above.
+          .then((outcome) => outcome.readsSettled)
+          // Swallowed to match this store's own fire-and-forget convention,
+          // and because there is nothing left to fall back to: the session is
+          // already torn down by the time this settles. A draft that cannot be
+          // installed is one the user cannot read either, so the failure is
+          // visible there.
           .catch(() => undefined)
-          // Backstop: the `.then` above releases on the ordinary path, but a
-          // build that REJECTS never reaches it. Deleting twice is harmless.
           .finally(releaseCaptureRoots);
       }
     };
@@ -9774,9 +9760,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`, and at that boundary the shared
         // registry disposes whatever the predicate says. A longer timer is not
         // a handoff. So before this store goes, anything that exists ONLY here
-        // is written to the prompt stash - the app's durable, user-visible
-        // home for an unsent prompt, which outlives the session and has its
-        // own UI for finding and restoring it.
+        // is installed as a closed start-page draft - the app's durable,
+        // user-visible home for an unsent prompt (D01/D03), which outlives the
+        // session and has its own UI, the composer's Drafts control, for
+        // finding and reopening it.
         //
         // Every disposal route lands here: warm-cap overflow and idle expiry
         // both end at `policy.dispose(handle)`, which is `handle.dispose()`.
@@ -10279,17 +10266,18 @@ function withoutRecordKeyGeneric<T>(
 /**
  * True while an AUTH IDENTITY teardown is disposing sessions.
  *
- * The durable handoff must never cross accounts. The prompt stash is ONE
- * IndexedDB database (`traycer-gui-app:prompt-stash`) with no per-account
- * partition, so a prompt written during a sign-out or user-switch is a prompt
- * the NEXT person to sign in opens their composer and finds. That is precisely
+ * The durable handoff must never cross accounts. A handed-off prompt becomes a
+ * closed start-page draft in the Drafts control, and the landing draft store is
+ * per WINDOW rather than per account, so a draft installed during a sign-out or
+ * user-switch is a draft the NEXT person to sign in opens and finds - with its
+ * images rooted in their landing partition. That is precisely
  * what `EpicSessionLifecycleBridge` exists to prevent - it already dismisses
  * the retained-draft TOAST on this boundary for the same reason, and the
  * handoff quietly inverted that policy by writing the same text somewhere
  * durable instead.
  *
  * It is also worse than a race with the sign-out wipe: the handoff is
- * fire-and-forget and resolves images first, so its write lands SECONDS after
+ * fire-and-forget and resolves images first, so its install lands SECONDS after
  * disposal - after a wipe has run, into the store the next identity will use.
  *
  * So on this boundary the prompt is DROPPED, matching the bridge's existing
@@ -10303,14 +10291,14 @@ let identityTeardownInProgress = false;
 
 /**
  * Bumped by every identity teardown. A handoff stamps this before its first
- * await and re-checks it at the save boundary.
+ * await and re-checks it synchronously at the install boundary.
  *
  * The boolean above is a START-TIME question and cannot answer a LIFETIME one.
  * An ordinary disposal - a closed tab - begins a capture and leaves the
  * registry; the user then signs out while that image read is still pending.
  * The wrapped teardown cannot reach an in-flight job it never knew about, the
- * flag is back to `false` by the time the read returns, and the save puts the
- * previous account's prompt into the shared stash under the next one. The flag
+ * flag is back to `false` by the time the read returns, and the install puts
+ * the previous account's prompt into the next one's drafts list. The flag
  * is necessary (it stops a teardown's OWN disposals from stashing) and it is
  * not sufficient.
  *
@@ -10331,13 +10319,11 @@ export function disposingForIdentityTeardown(run: () => void): void {
   // Bumped FIRST, so a capture already in flight is stale before any of the
   // teardown below runs.
   identityGeneration += 1;
-  // And then STOP what is already running. Bumping the generation only makes
-  // the next predicate sample false; a fenced write whose transaction is open
-  // has already passed its sample, and the writes after it are each awaited -
-  // so it would still commit. Aborting rolls those transactions back in full.
-  // "Refuse to start" and "stop what is running" are different guarantees and
-  // this boundary needs both.
-  abortLiveFencedPromptStashWrites();
+  // Bumping it is now enough on its own. The handoff's last step is a
+  // synchronous `installLandingDraft` guarded by a re-check of this same
+  // generation, so there is no open transaction between the sample and the
+  // effect for a "stop what is running" call to roll back - which is what the
+  // retired prompt stash's awaited multi-step write needed.
   identityTeardownInProgress = true;
   try {
     run();

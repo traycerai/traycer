@@ -15,7 +15,7 @@ import {
   tryReserveLandingImageResidency,
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   awaitLandingImageSizes,
   imageHashKeys,

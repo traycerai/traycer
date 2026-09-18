@@ -237,4 +237,46 @@ describe("useKeybindingStore", () => {
       "mod+alt+v",
     );
   });
+
+  it("seeds composer.drafts from a rebound legacy composer.stash", async () => {
+    const legacy: Record<string, string | null> = {
+      ...getDefaultBindings(),
+      "composer.stash": "mod+alt+s",
+    };
+    // The renamed id is not in the persisted record at all, which is exactly
+    // the shape an upgrade produces.
+    delete legacy["composer.drafts"];
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: legacy }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["composer.drafts"]).toBe(
+      "mod+alt+s",
+    );
+  });
+
+  it("keeps an explicit composer.drafts rebind over the legacy value", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "composer.stash": "mod+alt+s",
+            "composer.drafts": "mod+alt+d",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["composer.drafts"]).toBe(
+      "mod+alt+d",
+    );
+  });
 });
