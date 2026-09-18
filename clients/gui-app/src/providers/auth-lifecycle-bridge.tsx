@@ -10,6 +10,8 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
+import { clearProfileCopyObservations } from "@/hooks/providers/profile-copy/profile-copy-observations";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import {
@@ -101,6 +103,17 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
+      // The profile-copy dialog is mounted at the app root and survives a
+      // switch, so its module-level store is on this boundary too: left
+      // standing, account B would see A's open dialog - A's profile name and
+      // A's captured source and destination host ids, which it would then dial
+      // under B's session. The same store holds the one-sign-in-at-a-time
+      // lock and the per-draft refusals, all account A's. The operation
+      // HANDLES are persisted and switch through their own persist bridge.
+      useProfileCopyFlowStore.getState().reset();
+      // Which copy attempts this window already reported and refreshed for:
+      // account A's ids, dropped with the rest of A's renderer state.
+      clearProfileCopyObservations();
       // A last-copy draft toast is minted with NO duration, and the app-level
       // `<Toaster />` is mounted outside this tree - so it is the one piece of
       // renderer state that survives everything disposed above and keeps the

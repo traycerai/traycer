@@ -59,6 +59,12 @@ export const landingTerminalsKey = (identity: string | null): string =>
 export const surfaceHostSelectionKey = (identity: string | null): string =>
   scopedPersistKey("surface-host-selection", scopeBucket(identity));
 
+// Profile-copy operation handles started from this window (T6). Identity-scoped
+// like the pins above: a handle names an account's source host and operation,
+// and another account must never reopen - or see - a copy it did not start.
+export const profileCopyOperationsKey = (identity: string | null): string =>
+  scopedPersistKey("profile-copy-operations", scopeBucket(identity));
+
 // Arg order is `(identity, epicId)` but the emitted string keeps today's
 // `…:open-epic:{identityBucket}:{epicId}` order (the current store's local
 // `persistKey(epicId, userId)` emitted exactly this).
@@ -195,7 +201,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (10) ───────────────────────────────────────────
+  // ── Scoped zustand stores (11) ───────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -226,6 +232,11 @@ export const PERSIST_STORES = [
   {
     camelName: "surfaceHostSelection",
     leaf: "surface-host-selection",
+    kind: "scoped",
+  },
+  {
+    camelName: "profileCopyOperations",
+    leaf: "profile-copy-operations",
     kind: "scoped",
   },
   {

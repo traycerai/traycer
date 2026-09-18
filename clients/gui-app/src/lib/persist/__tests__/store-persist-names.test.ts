@@ -28,6 +28,7 @@ import { useSetupTerminalsStore } from "@/stores/worktree/setup-terminals";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
 import { useLayoutStore } from "@/stores/settings/layout-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 
@@ -178,6 +179,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useSurfaceHostSelectionStore",
     useSurfaceHostSelectionStore,
     "traycer-gui-app:surface-host-selection:anon",
+  ],
+  [
+    "useProfileCopyOperationsStore",
+    useProfileCopyOperationsStore,
+    "traycer-gui-app:profile-copy-operations:anon",
   ],
 ];
 

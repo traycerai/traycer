@@ -15,6 +15,7 @@ import { NotificationEmissionController } from "@/components/layout/bridges/noti
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
+import { ProfileCopyFlowHost } from "@/components/settings/panels/profile-copy/profile-copy-flow-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
@@ -142,6 +143,12 @@ export function RootComponent() {
           <>
             <SystemTabModalHost />
             <ChatSearchDialogHost />
+            {/* The profile-copy dialog. Here rather than in Settings: Providers
+                settings drops its body while a deep link moves its host scope,
+                which would unmount a live sign-in on the very navigation "Open
+                profile" makes; and not behind the default-host scope, because
+                a copy dials only the hosts it captured. */}
+            <ProfileCopyFlowHost />
             {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
             <NotificationsMobileSheet />

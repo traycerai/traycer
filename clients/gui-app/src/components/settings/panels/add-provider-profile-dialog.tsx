@@ -649,7 +649,7 @@ function ShareSkillsAndPluginsField({
   );
 }
 
-function WaitingStepDeviceCode(props: {
+export function WaitingStepDeviceCode(props: {
   readonly processingCode: boolean;
   readonly userCode: string | null;
   readonly copied: boolean;
@@ -679,7 +679,7 @@ function WaitingStepDeviceCode(props: {
   );
 }
 
-function WaitingStepUrlActions(props: {
+export function WaitingStepUrlActions(props: {
   readonly processingCode: boolean;
   readonly loginUrl: string | null;
   readonly autoOpen: boolean;

@@ -26,6 +26,7 @@ import {
   ProviderProfilesRefreshButton,
 } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
+import { ProfileCopyEntryButton } from "./profile-copy/profile-copy-entry-button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
@@ -319,6 +320,11 @@ export function ProviderProfileScopedSection(
               </span>
             </TooltipWrapper>
           ) : null}
+          <ProfileCopyEntryButton
+            hostId={hostId}
+            providerId={state.providerId}
+            profile={selectedProfile}
+          />
           <TooltipWrapper
             label="Change the profile name and accent color, sign in again, or remove this profile."
             side="bottom"
