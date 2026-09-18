@@ -25,10 +25,7 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { useLayoutStore } from "@/stores/settings/layout-store";
-import {
-  isVisualLayoutEditorEnabled,
-  useSettingsStore,
-} from "@/stores/settings/settings-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
 // Frameless-desktop detection: Electron's preload bridge exposes
@@ -118,11 +115,11 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
-      <div data-customize-inert className="inline-flex items-center">
+      <div data-customize-inert className="contents">
         <DesktopMenuBar />
       </div>
       {showTabStrip ? (
-        <div data-customize-inert className="inline-flex items-center">
+        <div data-customize-inert className="contents">
           <HistoryNavButtons />
         </div>
       ) : null}
@@ -262,16 +259,23 @@ function HeaderClusterContextMenu(props: {
 }): ReactNode {
   const editing = useCustomizeStore((state) => state.session !== null);
   const narrowViewport = useIsMobileViewport();
-  if (!isVisualLayoutEditorEnabled() || narrowViewport || editing)
-    return props.children;
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const enabled = featureEnabled && !narrowViewport && !editing;
+  // Gate interaction, not ancestors: switching Customize must retain live leaves.
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => customizeLayoutAction()}>
-          Customize layout…
-        </ContextMenuItem>
-      </ContextMenuContent>
+      <ContextMenuTrigger asChild disabled={!enabled}>
+        {props.children}
+      </ContextMenuTrigger>
+      {enabled ? (
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+            Customize layout…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      ) : null}
     </ContextMenu>
   );
 }

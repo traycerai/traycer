@@ -15,7 +15,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Button } from "@/components/ui/button";
 import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
-import { isVisualLayoutEditorEnabled } from "@/stores/settings/settings-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import {
   ContextMenu,
@@ -406,7 +406,10 @@ function RailContextMenuContent(props: {
   const pointedEntry =
     entries.find((entry) => entry.definition.id === contextPanelId) ?? null;
   const editing = useCustomizeStore((state) => state.session !== null);
-  const showCustomizeEntry = isVisualLayoutEditorEnabled() && !editing;
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const showCustomizeEntry = featureEnabled && !editing;
 
   return (
     <ContextMenuContent

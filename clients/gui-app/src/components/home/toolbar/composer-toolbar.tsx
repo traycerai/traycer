@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
-import { isVisualLayoutEditorEnabled } from "@/stores/settings/settings-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 
 interface ComposerToolbarProps {
@@ -147,8 +147,10 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
 
   const editing = useCustomizeStore((state) => state.session !== null);
   const narrowViewport = useIsMobileViewport();
-  const showCustomizeEntry =
-    isVisualLayoutEditorEnabled() && !editing && !narrowViewport;
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const showCustomizeEntry = featureEnabled && !editing && !narrowViewport;
 
   // Both clusters render through the same `renderToolbarItem` map now that an
   // item may move between them, so both need the full prop set - what used to
@@ -219,15 +221,19 @@ function ComposerToolbarContextMenu(props: {
   readonly enabled: boolean;
   readonly children: ReactNode;
 }): ReactNode {
-  if (!props.enabled) return props.children;
+  // Gate interaction, not ancestors: switching Customize must retain live leaves.
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => customizeLayoutAction()}>
-          Customize layout…
-        </ContextMenuItem>
-      </ContextMenuContent>
+      <ContextMenuTrigger asChild disabled={!props.enabled}>
+        {props.children}
+      </ContextMenuTrigger>
+      {props.enabled ? (
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+            Customize layout…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      ) : null}
     </ContextMenu>
   );
 }

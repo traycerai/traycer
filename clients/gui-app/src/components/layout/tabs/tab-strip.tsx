@@ -12,7 +12,7 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
 import { headerTabClassName } from "@/components/layout/tabs/tab-chrome-tokens";
 import { cn } from "@/lib/utils";
-import { isVisualLayoutEditorEnabled } from "@/stores/settings/settings-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import {
   memo,
@@ -119,8 +119,10 @@ function TabStripBody() {
   const homeTabEnabled = useLayoutSetting("homeTabEnabled");
   const editing = useCustomizeStore((state) => state.session !== null);
   const narrowViewport = useIsMobileViewport();
-  const showCustomizeEntry =
-    isVisualLayoutEditorEnabled() && !editing && !narrowViewport;
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const showCustomizeEntry = featureEnabled && !editing && !narrowViewport;
   // `activeItemId === null` over a populated strip means Home holds the
   // selection; over an empty one it means the same thing, since Home is the
   // only surface left to hold it.
@@ -515,15 +517,19 @@ function TabStripContextMenu(props: {
   readonly enabled: boolean;
   readonly children: ReactNode;
 }): ReactNode {
-  if (!props.enabled) return props.children;
+  // Gate interaction, not ancestors: switching Customize must retain live leaves.
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => customizeLayoutAction()}>
-          Customize layout…
-        </ContextMenuItem>
-      </ContextMenuContent>
+      <ContextMenuTrigger asChild disabled={!props.enabled}>
+        {props.children}
+      </ContextMenuTrigger>
+      {props.enabled ? (
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+            Customize layout…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      ) : null}
     </ContextMenu>
   );
 }

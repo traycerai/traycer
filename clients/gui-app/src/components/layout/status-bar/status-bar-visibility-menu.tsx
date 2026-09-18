@@ -12,7 +12,7 @@ import { trackSettingChanged } from "@/lib/analytics";
 import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import { isVisualLayoutEditorEnabled } from "@/stores/settings/settings-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { useLayoutStore } from "@/stores/settings/layout-store";
 
@@ -72,8 +72,10 @@ export function StatusBarVisibilityMenu(
   // that moves nothing, and leave it waiting for the next desktop window.
   const narrowViewport = useIsMobileViewport();
   const editing = useCustomizeStore((state) => state.session !== null);
-  const showCustomizeEntry =
-    isVisualLayoutEditorEnabled() && !narrowViewport && !editing;
+  const featureEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const showCustomizeEntry = featureEnabled && !narrowViewport && !editing;
 
   return (
     <ContextMenu>
