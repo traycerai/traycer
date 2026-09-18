@@ -267,6 +267,7 @@ import {
 } from "./use-chat-archive-hidden-ids";
 import {
   chatFilterEmptyStateDescription,
+  chatSearchEmptyStateDescription,
   FILTERED_EMPTY_TITLE,
   useChatFilterMatchIds,
 } from "./epic-sidebar-panel-filters";
@@ -280,6 +281,7 @@ import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-sou
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { ChatSearchHeaderInput } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-search";
+import type { ChatTreeMessageHits } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import {
   chatSearchMatchIds,
   expandMatchesToVisibleIds,
@@ -317,6 +319,18 @@ import {
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
   readonly tabId: string;
+  /**
+   * The message-hit section that follows this tree, built by the mount point
+   * and placed here so it lands inside the tree's own scroll container, right
+   * under the rows rather than pinned to the bottom of the panel. It stays a
+   * SIBLING of `role="tree"` - a hit is not a row of this tree.
+   *
+   * Its `state` is also the one thing the tree needs from it: whether the
+   * search matched anything down there, which decides what this panel's empty
+   * state may still claim. Passed rather than read here so the request is made
+   * once - see `useEpicSidebarMessageHits`.
+   */
+  readonly messageHits: ChatTreeMessageHits;
 }
 
 type TreeFilterFn = (type: string | null | undefined) => boolean;
@@ -646,7 +660,11 @@ function cloudRowMatchesOwnershipFilter(
 // a stable order; child row complexity is isolated below.
 // eslint-disable-next-line complexity
 export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
-  const { epicId, tabId } = props;
+  const { epicId, messageHits, tabId } = props;
+  // The section found something, or is still looking: either way the search
+  // has not come up empty yet, whatever the tree's own rows say.
+  const messageHitsMatched =
+    messageHits.state === "hits" || messageHits.state === "loading";
   const shouldReduceMotion = useReducedMotion() === true;
   const panelId: RootCreatePanelId = "chats";
   const sort = useChatSort(epicId);
@@ -1265,15 +1283,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     // Search is the narrowing the user is actively driving, so it owns the
     // empty state even when a filter is also on - blaming the filter chips for
     // a query that matches nothing would send them to the wrong control.
-    panelContent = (
+    //
+    // Unless the message hits below have something, or are still fetching it:
+    // the search DID match then, and "No agents match your search." is simply
+    // false. The section is the content in that case, so this renders nothing
+    // rather than falling through to the filter's empty state.
+    panelContent = messageHitsMatched ? null : (
       <SidebarPanelEmptyState
         icon={SearchX}
         title="No agents match your search."
-        description={
-          isChatFilterActive(chatFilter)
-            ? "The current filters may also be hiding matches."
-            : null
-        }
+        description={chatSearchEmptyStateDescription(
+          isChatFilterActive(chatFilter),
+          messageHits.state === "empty",
+        )}
         testId="epic-chat-sidebar-search-empty"
       />
     );
@@ -1307,7 +1329,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         ) : (
           <m.div
             key="tree"
-            className="flex min-h-0 flex-1 flex-col"
+            // The tree fills the panel, which is what puts its empty space
+            // below the rows where a drop un-nests to root. With a section
+            // following it that space would fall BETWEEN the rows and the
+            // section, so the rows shrink to their own height and the hits sit
+            // directly under them.
+            className={cn(
+              "flex min-h-0 flex-col",
+              messageHits.node === null ? "flex-1" : "shrink-0",
+            )}
             exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
             transition={{ duration: shouldReduceMotion ? 0 : 0.16 }}
           >
@@ -1412,6 +1442,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                       data-testid="epic-chat-tree-region"
                     >
                       {panelContent}
+                      {messageHits.node}
                     </SidebarGroupContent>
                   </SidebarGroup>
                 </SidebarContent>

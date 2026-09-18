@@ -1,6 +1,8 @@
 import "./stub-sweep-dialog-host-hooks";
 
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ChatSearchMessageMatch } from "@traycer/protocol/host/chat-search/schemas";
+import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
@@ -187,6 +189,36 @@ const testState = vi.hoisted(() => ({
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
   hostId: "host-test" as string | null,
+  // The message-hit section's two inputs. A `null` client is the no-host-runtime
+  // reading every case in this file predates, under which the section is not
+  // mounted at all - so only the cases that set both see it.
+  chatSearchClient: null as { readonly getActiveHostId: () => string } | null,
+  chatSearchHits: { kind: "absent" } as ChatSearchMessageHitsStatus,
+}));
+
+const stubChatSearchHostClient = { getActiveHostId: () => "host-test" };
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useOptionalHostClient: () => testState.chatSearchClient,
+  };
+});
+
+vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
+  useChatSearchMessageHits: (): ChatSearchMessageHitsStatus =>
+    testState.chatSearchHits,
+}));
+
+// Reads the cloud task list through `useHostClient()`, which this fixture has
+// no provider for; the section's rows do not need a task name here.
+vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
+  useChatSearchTaskTitles: () => new Map<string, string>(),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -280,6 +312,57 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     isPinned: false,
     ...overrides,
   };
+}
+
+function messageMatch(chatId: string): ChatSearchMessageMatch {
+  return {
+    epicId: "epic-from-history",
+    ownerUserId: "user-1",
+    chatId,
+    title: `Chat ${chatId}`,
+    lifecycleState: "active",
+    updatedAt: 1_700_000_000_000,
+    matchCount: 1,
+    best: {
+      messageId: `${chatId}-m1`,
+      tier: "assistant",
+      createdAt: 1_700_000_000_000,
+      interAgent: false,
+      truncated: false,
+      snippet: { text: "a matching line", highlights: [] },
+    },
+    messages: [],
+  };
+}
+
+/**
+ * Everything the message-hit section needs to be on screen: a host runtime to
+ * ask, a query long enough to ask about, and an answer.
+ */
+function seedMessageHits(
+  messages: ReadonlyArray<ChatSearchMessageMatch>,
+): void {
+  testState.chatSearchClient = stubChatSearchHostClient;
+  testState.chatSearchHits = {
+    kind: "ready",
+    messages,
+    indexState: "complete",
+    expansionBase: {
+      query: "matching",
+      scope: { kind: "all-accessible-tasks" },
+      tiers: null,
+      roleFilter: "any",
+      dateRange: null,
+      harness: null,
+      mode: "ranked",
+    },
+    showMore: null,
+    loadingMore: false,
+    loadMoreError: null,
+  };
+  useHistorySearchStore.setState({
+    search: { ...DEFAULT_HISTORY_SEARCH, query: "matching" },
+  });
 }
 
 function resetImportedUnseenStore(): void {
@@ -442,6 +525,8 @@ describe("<EpicsListPanel />", () => {
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.hostId = "host-test";
+    testState.chatSearchClient = null;
+    testState.chatSearchHits = { kind: "absent" };
     testState.activityByEpicId.clear();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     queryClient.clear();
@@ -3250,5 +3335,49 @@ describe("<EpicsListPanel />", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(input);
+  });
+
+  it("carries the arrow sequence off the last task row into the message hits", async () => {
+    // The hits are the TAIL of one list, not a second list beside it: the
+    // section renders inside the same scroll container, so DOM order carries
+    // the traversal straight off the last task row and back.
+    seedMessageHits([messageMatch("chat-hit")]);
+
+    renderPanel("page", "/");
+    const input = await screen.findByRole("searchbox", {
+      name: "Search tasks",
+    });
+    const taskRow = screen.getByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const hitRow = screen.getByRole("button", { name: /Chat chat-hit/ });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(taskRow);
+
+    fireEvent.keyDown(taskRow, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(hitRow);
+
+    fireEvent.keyDown(hitRow, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(taskRow);
+  });
+
+  it("withholds the message hits while tasks are being selected", async () => {
+    // Select acts on tasks. A message row is not one, cannot be checked, and
+    // would sit inside a selection the bulk actions could never include.
+    seedMessageHits([messageMatch("chat-hit")]);
+
+    renderPanel("page", "/");
+    expect(
+      await screen.findByRole("button", { name: /Chat chat-hit/ }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+
+    expect(screen.queryByRole("button", { name: /Chat chat-hit/ })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /In messages/ })).toBeNull();
   });
 });
