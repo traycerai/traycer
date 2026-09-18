@@ -1,5 +1,6 @@
 import {
   alwaysAvailable,
+  isLegacyLayoutAvailable,
   isMobileFooterRowAvailable,
   isStatusBarControlsAvailable,
   isStatusBarPlacementAvailable,
@@ -22,6 +23,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  */
 export const LAYOUT = defineSettingsSection("layout", {
   page: {
+    availableWhen: isLegacyLayoutAvailable,
     label: "Layout",
     description: "Where the app's chrome sits and how much of it shows.",
     keywords: [

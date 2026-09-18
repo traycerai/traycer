@@ -6,7 +6,12 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 /** Groups shaped like the real ones; the section id is incidental. */
 const GROUPS = defineSettingsSection("appearance", {
-  page: { label: "Appearance", description: "Page.", keywords: ["page"] },
+  page: {
+    availableWhen: alwaysAvailable,
+    label: "Appearance",
+    description: "Page.",
+    keywords: ["page"],
+  },
   general: {
     kind: "group",
     search: { contributesTo: "page" },

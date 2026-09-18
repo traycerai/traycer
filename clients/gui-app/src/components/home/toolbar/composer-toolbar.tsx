@@ -250,7 +250,7 @@ function ComposerToolbarContextMenu(props: {
       </ContextMenuTrigger>
       {props.enabled ? (
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+          <ContextMenuItem onSelect={() => customizeLayoutAction("direct_ui")}>
             Customize layout…
           </ContextMenuItem>
         </ContextMenuContent>

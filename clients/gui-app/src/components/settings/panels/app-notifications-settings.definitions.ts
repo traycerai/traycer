@@ -7,6 +7,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Sounds",
     description: "How this app alerts you across hosts.",
     keywords: [

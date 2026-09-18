@@ -9,6 +9,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // instead and their vocabulary lands a search at the top of it.
 export const PERMISSIONS = defineSettingsSection("permissions", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Permissions",
     description:
       "Who reviews what an agent does on this machine under the Auto permission mode.",

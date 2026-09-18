@@ -5,6 +5,8 @@ import { SettingsSetupGuide } from "@/components/settings/settings-setup-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 
@@ -62,7 +64,11 @@ describe("SettingsSetupGuide", () => {
     });
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useSettingsStore.setState({ visualLayoutEditorEnabled: false });
+    useCustomizeStore.setState({ session: null });
+  });
 
   it("keeps the guide running through StrictMode's mount probe", async () => {
     render(
@@ -116,5 +122,88 @@ describe("SettingsSetupGuide", () => {
     expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
       setupGuideLength("appearance"),
     );
+  });
+
+  describe("with the Customize editor available", () => {
+    beforeEach(() => {
+      useSettingsStore.setState({ visualLayoutEditorEnabled: true });
+    });
+
+    it("shows the density step on Appearance, where its twin points", async () => {
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 3 },
+      });
+
+      render(<Harness section="appearance" />);
+
+      expect(await screen.findByTestId("guide-coachmark")).toBeTruthy();
+    });
+
+    it("no longer shows it on Layout, whose rows are withheld", () => {
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 3 },
+      });
+
+      render(<Harness section="layout" />);
+
+      expect(screen.queryByTestId("guide-coachmark")).toBeNull();
+    });
+
+    it("continues from the font step to the density step without navigating", async () => {
+      render(<Harness section="appearance" />);
+      await screen.findByTestId("guide-coachmark");
+
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+      expect(useOnboardingStore.getState().activeSetup).toEqual({
+        id: "appearance",
+        step: 3,
+      });
+      expect(navigateMock).not.toHaveBeenCalled();
+    });
+
+    it("runs to the end on Appearance and finishes at Getting started", async () => {
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 4 },
+      });
+      render(<Harness section="appearance" />);
+      await screen.findByTestId("guide-coachmark");
+      const progress = screen.getByTestId("guide-coachmark-progress");
+      expect(progress.getAttribute("aria-valuenow")).toBe("5");
+      expect(progress.getAttribute("aria-valuemax")).toBe("5");
+
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+      expect(useOnboardingStore.getState().activeSetup).toBeNull();
+      expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
+        setupGuideLength("appearance"),
+      );
+      expect(navigateMock).toHaveBeenCalledWith("getting-started");
+    });
+
+    it("draws nothing while a Customize session is running, and resumes after", async () => {
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 3 },
+      });
+      useCustomizeStore.setState({
+        session: {
+          scene: "in-place",
+          opener: { kind: "none" },
+          startedAt: Date.now(),
+        },
+      });
+
+      const { unmount } = render(<Harness section="appearance" />);
+      expect(screen.queryByTestId("guide-coachmark")).toBeNull();
+      unmount();
+
+      useCustomizeStore.setState({ session: null });
+      render(<Harness section="appearance" />);
+      expect(await screen.findByTestId("guide-coachmark")).toBeTruthy();
+      expect(useOnboardingStore.getState().activeSetup).toEqual({
+        id: "appearance",
+        step: 3,
+      });
+    });
   });
 });

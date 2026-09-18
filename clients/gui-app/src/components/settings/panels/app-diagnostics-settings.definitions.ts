@@ -3,6 +3,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 export const APP_DIAGNOSTICS = defineSettingsSection("app-diagnostics", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Diagnostics",
     description:
       "Logging and memory capture for the Traycer app itself - this window, whichever host it points at.",

@@ -8,6 +8,8 @@ import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { CustomizeCard } from "@/components/settings/panels/appearance/customize-card";
+import { AppearanceLayoutPresets } from "@/components/settings/panels/appearance/layout-presets-group";
 import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
@@ -134,6 +136,12 @@ export function AppearanceSettingsPanel() {
   const setAgentOfficeDefaultView = useSettingsStore(
     (state) => state.setAgentOfficeDefaultView,
   );
+  const visualLayoutEditorEnabled = useSettingsStore(
+    (state) => state.visualLayoutEditorEnabled,
+  );
+  const setVisualLayoutEditorEnabled = useSettingsStore(
+    (state) => state.setVisualLayoutEditorEnabled,
+  );
   const compact = useSettingsDensity() === "compact";
 
   return (
@@ -170,6 +178,30 @@ export function AppearanceSettingsPanel() {
               />
             }
           />
+        </SettingsGroup>
+
+        <SettingsGroup
+          group={APPEARANCE.definitions.layout}
+          showTitle
+          tone="default"
+          dataTestId="appearance-layout-group"
+          fill={false}
+        >
+          <SettingsRow
+            row={APPEARANCE.definitions.visualLayoutEditor}
+            control={
+              <Switch
+                checked={visualLayoutEditorEnabled}
+                onCheckedChange={trackedAppearanceSetter(
+                  "visualLayoutEditorEnabled",
+                  setVisualLayoutEditorEnabled,
+                )}
+                aria-label="Visual layout editor"
+              />
+            }
+          />
+          <CustomizeCard />
+          <AppearanceLayoutPresets />
         </SettingsGroup>
 
         <SettingsGroup

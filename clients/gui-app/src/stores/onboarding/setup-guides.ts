@@ -13,6 +13,10 @@
  * the one the current step points at.
  */
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  isCustomizeAvailable,
+  type SettingsAvailabilityContext,
+} from "@/lib/settings/settings-availability";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 
@@ -38,7 +42,26 @@ export interface SetupGuideStep {
    * having happened.
    */
   readonly completesOn?: SetupGuideEvent;
+  /**
+   * What this step says INSTEAD while the Customize editor exists
+   * (`isCustomizeAvailable`): the same step, pointed at the editor's
+   * successor to whatever it pointed at.
+   *
+   * A twin replaces the step IN PLACE rather than adding to or removing from
+   * the guide, so a guide has the same number of steps in both states. That is
+   * what keeps `activeSetup.step`, the stored progress and "N of M" meaning the
+   * same thing whichever way the switch flips mid-guide, and a guide that
+   * filtered its list per shell would have to translate an index between two
+   * lists to do the same.
+   */
+  readonly customize?: SetupGuideStepTwin;
 }
+
+/** The parts of a step a twin may replace: where it points, and what it says. */
+export type SetupGuideStepTwin = Pick<
+  SetupGuideStep,
+  "section" | "selector" | "title" | "content"
+>;
 
 export interface SetupGuide {
   readonly steps: ReadonlyArray<SetupGuideStep>;
@@ -98,6 +121,16 @@ const SETUP_GUIDES = {
         title: "Choose a density",
         content:
           "Compact trims the chrome, Detailed shows everything. Every group below follows.",
+        // The Layout page's rows are withheld while the editor exists, and its
+        // presets are Appearance's radio group; the group's role there is
+        // `radiogroup`.
+        customize: {
+          section: "appearance",
+          selector: `[data-settings-anchor="${APPEARANCE.definitions.presets.anchor}"] [role="radiogroup"]`,
+          title: "Choose a density",
+          content:
+            "Compact trims the chrome, Detailed shows everything. Each card shows the layout it gives you.",
+        },
       },
       {
         section: "layout",
@@ -105,6 +138,15 @@ const SETUP_GUIDES = {
         title: "Arrange the sidebar",
         content:
           "Drag icons to reorder. Drop one onto another to tab them together.",
+        // The sidebar's rows are withheld too, and the arranging moved into the
+        // editor: this points at the door to it. The card's Customize button is
+        // its first button, ahead of the picture's.
+        customize: {
+          section: "appearance",
+          selector: `[data-settings-anchor="${APPEARANCE.definitions.customizeCard.anchor}"] button`,
+          title: "Open Customize",
+          content: "Drag the rail's tiles to reorder them once you are in.",
+        },
       },
     ],
   },
@@ -153,13 +195,34 @@ export function setupGuideLength(id: SetupGuideId): number {
   return setupGuide(id).steps.length;
 }
 
+/**
+ * The step as THIS shell shows it: its twin's copy and target where the
+ * Customize editor exists and the step has one, the step itself otherwise.
+ * Every reader of a step's `section`, `selector`, `title` or `content` goes
+ * through this; `advanceOn` and `completesOn` are never twinned, so the store
+ * reads them from the raw step.
+ */
+export function resolveSetupGuideStep(
+  step: SetupGuideStep,
+  context: SettingsAvailabilityContext,
+): SetupGuideStep {
+  if (step.customize === undefined || !isCustomizeAvailable(context)) {
+    return step;
+  }
+  return { ...step, ...step.customize };
+}
+
 /** Where a guide's step lives, so a resume lands on the right section. */
 export function setupGuideStepSection(
   id: SetupGuideId,
   step: number,
+  context: SettingsAvailabilityContext,
 ): SettingsSectionId {
   const steps = setupGuide(id).steps;
-  return steps[Math.min(Math.max(step, 0), steps.length - 1)].section;
+  return resolveSetupGuideStep(
+    steps[Math.min(Math.max(step, 0), steps.length - 1)],
+    context,
+  ).section;
 }
 
 /** The guide this event finishes, if any - whether or not it is running. */

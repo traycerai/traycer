@@ -64,7 +64,7 @@ afterEach(() => {
 
 describe("customizeLayoutAction", () => {
   it("enters the editor when the switch is on at desktop width", () => {
-    customizeLayoutAction();
+    customizeLayoutAction("command_palette");
 
     expect(useCustomizeStore.getState().session).not.toBeNull();
   });
@@ -72,7 +72,7 @@ describe("customizeLayoutAction", () => {
   it("does nothing when the switch is off", () => {
     useSettingsStore.setState({ visualLayoutEditorEnabled: false });
 
-    customizeLayoutAction();
+    customizeLayoutAction("command_palette");
 
     expect(useCustomizeStore.getState().session).toBeNull();
   });
@@ -80,7 +80,7 @@ describe("customizeLayoutAction", () => {
   it("does nothing at a mobile viewport width", () => {
     setViewportWidth(500);
 
-    customizeLayoutAction();
+    customizeLayoutAction("command_palette");
 
     expect(useCustomizeStore.getState().session).toBeNull();
   });

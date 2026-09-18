@@ -28,6 +28,7 @@ import { PROVIDERS } from "@/components/settings/panels/providers-settings.defin
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { USAGE } from "@/components/settings/panels/usage-settings.definitions";
 import { WORKTREES } from "@/components/settings/panels/worktrees-settings.definitions";
+import { CUSTOMIZE_LAUNCH_ENTRIES } from "@/lib/customize/customize-search.definitions";
 import {
   assembleSettingsSearchEntries,
   type AnySettingsSectionCollection,
@@ -63,7 +64,11 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
 
 /**
  * Every settings surface a query can land on: each collection's page entry and
- * its entry-owning rows and groups, with every contributor's words folded in.
+ * its entry-owning rows and groups, with every contributor's words folded in -
+ * then the Customize editor's launch results, which land on no element (see
+ * `CUSTOMIZE_LAUNCH_ENTRIES`).
  */
-export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> =
-  assembleSettingsSearchEntries(SETTINGS_SEARCH_COLLECTIONS);
+export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
+  ...assembleSettingsSearchEntries(SETTINGS_SEARCH_COLLECTIONS),
+  ...CUSTOMIZE_LAUNCH_ENTRIES,
+];

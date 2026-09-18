@@ -1,11 +1,13 @@
 import {
   alwaysAvailable,
+  isCustomizeAvailable,
   isZoomRowAvailable,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 export const APPEARANCE = defineSettingsSection("appearance", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Appearance",
     description: "Themes, fonts, and display preferences.",
     keywords: [
@@ -173,6 +175,71 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "Use a hand cursor over buttons, links, and other clickable controls.",
     availableWhen: alwaysAvailable,
     keywords: ["cursor", "mouse", "hand", "hover"],
+  },
+  // Where the Customize editor lives once it is on: the switch that turns it on
+  // (always drawn, so there is a way in AND a way back), then the card that
+  // starts it and the presets, which are drawn only where the editor exists.
+  // The Layout page's rows are withheld in exactly those shells, so a layout
+  // value is configurable in every shell and never in two places at once
+  // (`isCustomizeAvailable` / `isLegacyLayoutAvailable` are complements).
+  layout: {
+    kind: "group",
+    search: { anchor: "appearance-layout" },
+    label: "Layout",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["chrome", "header", "status bar", "composer", "sidebar", "tabs"],
+  },
+  visualLayoutEditor: {
+    kind: "row",
+    group: "layout",
+    search: { anchor: "appearance-visual-layout-editor" },
+    label: "Visual layout editor",
+    description:
+      "Change the app's layout by pointing at it. Turning this on moves the Layout page's controls here; turning it off brings that page back. Windows narrower than a tablet keep the Layout page either way.",
+    availableWhen: alwaysAvailable,
+    keywords: ["customize", "edit layout", "experimental", "drag", "reorder"],
+  },
+  customizeCard: {
+    kind: "row",
+    group: "layout",
+    search: { anchor: "appearance-customize-card" },
+    label: "Customize layout",
+    description:
+      "Edit the real app in place, or practise on a sample workspace that changes nothing of yours.",
+    availableWhen: isCustomizeAvailable,
+    keywords: [
+      "customize",
+      "edit",
+      "arrange",
+      "move",
+      "reorder",
+      "drag",
+      "sample workspace",
+      "studio",
+    ],
+  },
+  presets: {
+    kind: "row",
+    group: "layout",
+    search: { anchor: "appearance-layout-presets" },
+    label: "Layout presets",
+    description:
+      "One click sets how much detail the chrome shows. Custom means your current layout matches none of them.",
+    availableWhen: isCustomizeAvailable,
+    // The Layout page's presets keywords: a reader who remembers the old home
+    // types the words it answered to.
+    keywords: [
+      "preset",
+      "compact",
+      "detailed",
+      "reset",
+      "defaults",
+      "bundle",
+      "density",
+      "custom",
+    ],
   },
   typography: {
     kind: "group",

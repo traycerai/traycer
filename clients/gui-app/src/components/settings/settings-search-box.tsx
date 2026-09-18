@@ -17,6 +17,13 @@ import {
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
+import {
+  captureSettingsOpener,
+  enterCustomize,
+} from "@/lib/customize/enter-exit";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 
 /** Scopes the highlight's scroll query to this list. See `moveHighlight`. */
 const RESULTS_SELECTOR = "[data-settings-search-results]";
@@ -68,6 +75,25 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
 
   const select = (result: SettingsSearchResult): void => {
     const { entry } = result;
+    if (entry.launch !== null) {
+      // A launch result has no element to land on: it starts the editor aimed
+      // at the setting, in place of the page the old row lived on. No section
+      // opens, so no `SettingsOpened` is reported and no reveal is armed -
+      // and where Settings is the modal, entering closes it (the opener is
+      // captured first so Done can bring it back).
+      const started = enterCustomize({
+        scene: "in-place",
+        opener: captureSettingsOpener(),
+        target: entry.launch,
+        source: "direct_ui",
+      });
+      if (started) {
+        onQueryChange("");
+      } else if (useCustomizeStore.getState().lockedBy === "other-window") {
+        toast.info("Customize is open in another window.");
+      }
+      return;
+    }
     Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
       source: "direct_ui",
       section: entry.section,
@@ -293,7 +319,16 @@ function SettingsSearchResultRow(props: {
           : "text-foreground/80 hover:bg-accent/60 hover:text-accent-foreground",
       )}
     >
-      <span className="w-full truncate text-ui-sm">{result.entry.label}</span>
+      <span className="flex w-full min-w-0 items-center gap-2 text-ui-sm">
+        <span className="min-w-0 truncate">{result.entry.label}</span>
+        {result.entry.launch === null ? null : (
+          // Says the result STARTS something rather than navigating to a row,
+          // so the click that follows is not a surprise.
+          <Badge variant="muted" size="xs">
+            Customize
+          </Badge>
+        )}
+      </span>
       <span className="flex w-full min-w-0 items-center gap-1 text-ui-xs text-muted-foreground">
         <Breadcrumb result={result} />
       </span>

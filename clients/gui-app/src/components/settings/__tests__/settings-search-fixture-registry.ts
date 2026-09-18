@@ -22,7 +22,8 @@ import type { DesktopZoomBridge } from "@/lib/windows/types";
  *
  * `mobileFooter` is the one member that is not a bridge or a build flag but a
  * stored preference, so the executor has to WRITE it into `layout-store`
- * before it mounts; see `mountInShell`.
+ * before it mounts; see `mountInShell`. `customizeEditor` is the same kind of
+ * fact (the switch, in `settings-store`, at a desktop-width window).
  */
 export interface SettingsSearchFixtureShell {
   readonly name: string;
@@ -131,6 +132,13 @@ export const SETTINGS_SEARCH_FIXTURES = [
           runnerHost: createFakeRunnerHost({ zoom: DESKTOP_ZOOM }),
         },
       },
+      // The Customize editor on at desktop width: the card and the presets
+      // exist. Every other shell above has it off, so both halves of the
+      // exact-target rule hold for both anchors - one target here, none there.
+      {
+        name: "the Customize editor on",
+        context: { ...NO_BRIDGES, customizeEditor: true },
+      },
     ],
   },
   // Layout's shell-level gates are the BUILD and, in the installed mobile app
@@ -164,6 +172,17 @@ export const SETTINGS_SEARCH_FIXTURES = [
           runnerHost: createFakeRunnerHost({}),
           mobileApp: true,
           mobileFooter: true,
+        },
+      },
+      // The Customize editor on: the page's own gate is off, so every anchor
+      // on it is expected ABSENT here - the whole page, not a subset - while
+      // the three shells above (editor off) hold the rows to one target each.
+      {
+        name: "the Customize editor on",
+        context: {
+          ...NO_BRIDGES,
+          runnerHost: createFakeRunnerHost({}),
+          customizeEditor: true,
         },
       },
     ],

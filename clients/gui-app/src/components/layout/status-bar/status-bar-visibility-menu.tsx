@@ -142,7 +142,9 @@ export function StatusBarVisibilityMenu(
         {showCustomizeEntry ? (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+            <ContextMenuItem
+              onSelect={() => customizeLayoutAction("direct_ui")}
+            >
               Customize layout…
             </ContextMenuItem>
           </>

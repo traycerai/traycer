@@ -2,7 +2,12 @@ import { lazy, Suspense, type RefObject } from "react";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { setupGuide } from "@/stores/onboarding/setup-guides";
+import {
+  resolveSetupGuideStep,
+  setupGuide,
+} from "@/stores/onboarding/setup-guides";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
 
 const Coachmark = lazy(() =>
@@ -17,18 +22,23 @@ export function SettingsSetupGuide(props: {
 }) {
   const active = useOnboardingStore((state) => state.activeSetup);
   const complete = useOnboardingStore((state) => state.completeSetup);
+  const availability = useSettingsAvailabilityContext();
+  // No guide step runs inside a Customize session: the editor owns the screen
+  // and its Escape, and a coachmark pointing into Settings would float over it.
+  // The guide resumes at the same step when the session ends.
+  const customizing = useCustomizeStore((state) => state.session !== null);
   // Nothing on unmount: development roots render under StrictMode, whose mount
   // probe runs every effect's cleanup once, which would clear the guide the
   // moment it started. `activeSetup` is session-local presence, so a closed
   // Settings simply resumes the same step when it reopens - and closing the
   // surface is not a user skip, so it must not finish the card either.
-  if (active === null) return null;
+  if (active === null || customizing) return null;
   const guide = setupGuide(active.id);
-  const step = guide.steps[active.step];
+  const step = resolveSetupGuideStep(guide.steps[active.step], availability);
   if (step.section !== props.section) return null;
   const last = active.step + 1 === guide.steps.length;
   const go = (index: number): void => {
-    const target = guide.steps[index];
+    const target = resolveSetupGuideStep(guide.steps[index], availability);
     if (target.section !== step.section)
       navigateToSettingsSection(target.section);
   };

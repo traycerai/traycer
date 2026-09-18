@@ -271,7 +271,7 @@ function HeaderClusterContextMenu(props: {
       </ContextMenuTrigger>
       {enabled ? (
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+          <ContextMenuItem onSelect={() => customizeLayoutAction("direct_ui")}>
             Customize layout…
           </ContextMenuItem>
         </ContextMenuContent>

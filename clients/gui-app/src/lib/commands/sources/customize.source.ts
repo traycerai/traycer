@@ -64,7 +64,7 @@ export const customizeSource: ReactCommandSource = {
           id: "customize:layout",
           label: "Customize layout",
           description: "Point at the app's controls to change their layout",
-          run: customizeLayoutAction,
+          run: () => customizeLayoutAction("command_palette"),
         },
         {
           ...common,

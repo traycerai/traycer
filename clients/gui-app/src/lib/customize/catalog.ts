@@ -1,25 +1,8 @@
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import type { AnalyticsSetting } from "@/lib/analytics";
+import type { CustomizeSettingId } from "@/lib/customize/customize-setting-id";
 
-export type CustomizeSettingId =
-  | "statusBar.placement"
-  | "statusBar.usage"
-  | "statusBar.provider"
-  | "statusBar.resources"
-  | "header.usage"
-  | "tabs.home"
-  | "composer.attachImage"
-  | "composer.access"
-  | "composer.harness"
-  | "composer.model"
-  | "composer.mic"
-  | "composer.filesChanged"
-  | "composer.activeAgents"
-  | "composer.background"
-  | "chat.context"
-  | "chat.minimapSide"
-  | "sidebar.panel"
-  | "sidebar.resourceChips";
+export type { CustomizeSettingId };
 
 export interface CustomizeSetting {
   readonly id: CustomizeSettingId;

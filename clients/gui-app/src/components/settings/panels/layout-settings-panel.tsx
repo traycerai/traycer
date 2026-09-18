@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -50,6 +51,18 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * hunk.
  */
 export function LayoutSettingsPanel(): ReactNode {
+  const availability = useSettingsAvailabilityContext();
+  // Withheld exactly when the Customize editor takes these rows over: the
+  // page's own gate, so a surface that hosts this panel directly (the modal,
+  // a test) can never draw a second copy of controls the editor now owns.
+  // Where a redirect is possible the route sends the reader on before they
+  // see this null; the switch off, or a window narrower than the editor
+  // supports, is the ordinary full page.
+  if (!LAYOUT.page.availableWhen(availability)) return null;
+  return <LegacyLayoutSettingsPanel />;
+}
+
+function LegacyLayoutSettingsPanel(): ReactNode {
   const compact = useSettingsDensity() === "compact";
   return (
     <SettingsPanelShell

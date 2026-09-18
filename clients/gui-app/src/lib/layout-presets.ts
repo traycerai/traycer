@@ -1,4 +1,5 @@
 import { CONTEXT_USAGE_ROW_KEYS } from "@/components/chat/context-usage";
+import type { LayoutOverride } from "@/lib/layout-overrides";
 import {
   areLeftPanelGroupsEqual,
   DEFAULT_LEFT_PANEL_GROUPS,
@@ -293,6 +294,27 @@ export const LAYOUT_PRESETS: Readonly<
   compact: COMPACT_PRESET,
   detailed: DETAILED_PRESET,
 };
+
+/**
+ * A preset as the override seam's value, so a thumbnail can draw the real
+ * leaves under it (`LayoutOverrideProvider value={...}`) without applying it.
+ * A bundle names exactly the values the seam reads - it carries no order
+ * fields, so an order override never leaks in from the bundle.
+ */
+export function layoutOverrideForPreset(id: LayoutPresetId): LayoutOverride {
+  const bundle = LAYOUT_PRESETS[id];
+  return {
+    statusBar: {
+      rateLimits: bundle.statusBar.rateLimits,
+      resources: bundle.statusBar.resources,
+    },
+    composer: bundle.composer,
+    settings: {
+      ...bundle.chat,
+      navigatorResourceMetrics: bundle.sidebar.navigatorResourceMetrics,
+    },
+  };
+}
 
 export const LAYOUT_PRESET_LABELS: Readonly<Record<LayoutPresetMatch, string>> =
   {

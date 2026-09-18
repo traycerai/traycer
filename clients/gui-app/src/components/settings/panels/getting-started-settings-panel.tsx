@@ -22,6 +22,7 @@ import {
 } from "@/stores/onboarding/setup-guides";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useHostBinding } from "@/lib/host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { cn } from "@/lib/utils";
 import { GETTING_STARTED } from "./getting-started-settings.definitions";
 import "./getting-started-settings.css";
@@ -118,6 +119,7 @@ export function GettingStartedSettingsPanel() {
   const progress = useOnboardingStore((state) => state.setupProgress);
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
   const hostBinding = useHostBinding();
+  const availability = useSettingsAvailabilityContext();
   const shell = { browserView: browserView !== null };
   const complete = useOnboardingStore((state) =>
     onboardingCompletedCount(state, shell),
@@ -177,6 +179,7 @@ export function GettingStartedSettingsPanel() {
                   setupGuideStepSection(
                     card.id,
                     useOnboardingStore.getState().activeSetup?.step ?? 0,
+                    availability,
                   ),
                 );
               }}

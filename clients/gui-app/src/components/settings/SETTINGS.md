@@ -91,6 +91,10 @@ The engine's mount point survives a section change (`SettingsPanelForSection` sw
 
 The three guides: agent selection is three steps on Agents (the editor shell, its Edit/Preview toggle, the Revert button).
 Appearance and layout is five, and it crosses surfaces: theme mode, wallpaper and interface font on Appearance, then the density preset and the sidebar panel arranger on Layout.
+With the Customize editor available (switch on, window at least `md`) its last two steps are TWINNED in place: "Choose a density" points at Appearance's presets radio group, and "Arrange the sidebar" becomes "Open Customize" pointing at the card's Customize button ("Drag the rail's tiles to reorder them once you are in.") - so the guide then stays on Appearance throughout.
+A twin is `SetupGuideStep.customize` and is read through `resolveSetupGuideStep(step, availabilityContext)`; it replaces the step's section, selector and copy and nothing else, so the step COUNT is five in both states and a stored step index means the same step whichever way the switch flips mid-guide (a per-shell filtered list would have had to translate indices).
+`advanceOn` / `completesOn` are never twinned, so the store keeps reading the raw step.
+The runner (`SettingsSetupGuide`) draws nothing while a Customize session is running - the editor owns the screen and its Escape - and resumes at the same step afterwards.
 Browser sign-ins is two steps on Browser: the "Save website sessions" switch, then the "Choose source…" button, which is action-required and is where the guide waits.
 It is also the one guide with a `requiresBrowserView` flag, because without the desktop browser bridge there is no way to finish it.
 
@@ -140,7 +144,7 @@ Six parts:
 | ------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | Definitions  | `components/settings/panels/*.definitions.ts`                                                       | One collection per section: every row, group and page           |
 | Model        | `lib/settings-search/settings-definitions.ts`                                                       | `defineSettingsSection`, folding, the entry type                |
-| Assembly     | `lib/settings-search/settings-search-entries.ts`                                                    | The list of seventeen collections — nothing else                |
+| Assembly     | `lib/settings-search/settings-search-entries.ts`                                                    | The list of collections, then the Customize launch results      |
 | Availability | `lib/settings/settings-availability.ts`                                                             | One predicate per row gate, shared with panels                  |
 | Ranking      | `lib/settings-search/settings-search.ts`                                                            | Fuse pass, field weights, kind tie-break                        |
 | Reveal       | `stores/settings/settings-search-store.ts`, `use-settings-anchor-reveal.ts` + `settings-search.css` | The pending "scroll here" handoff; finding, scrolling, flashing |
@@ -158,7 +162,11 @@ and anchor come from there. `settings-search-entries.ts` only lists the
 collections. A collection module may import the model and the availability
 predicates; it never imports the assembled index or the search consumer.
 
-- `page` is a required member of every input — the section's own entry.
+- `page` is a required member of every input — the section's own entry. Its
+  `availableWhen` is required too and is the gate for the WHOLE page: it is the
+  page entry's own gate and is composed (AND) into every member's, so a row can
+  never be offered by search in a shell where its page is withheld. Every page
+  but Layout's is `alwaysAvailable`; Layout's is `isLegacyLayoutAvailable`.
 - `kind: "row" | "group"`. A row names its group by key (`group: "runningAgents"`,
   compile-checked to be a group-kind member) or `null` for a row that sits in
   no group.
@@ -218,6 +226,32 @@ predicates; it never imports the assembled index or the search consumer.
   row's label and description are built from it there, and the panel imports
   it for the switch's accessible name, so the result and the row print the
   same chord.
+
+**Launch results (Customize).** With the editor available, a query for a
+control the Layout page used to hold offers a result that LAUNCHES the editor
+aimed at that control instead of navigating to a row. They are the catalog's,
+not a section's: `lib/customize/customize-search.definitions.ts` generates one
+`SettingsSearchEntry` per `CUSTOMIZE_CATALOG` setting (its label and keywords -
+which are the Layout definitions' own words - `availableWhen:
+isCustomizeAvailable`, `group` = where the control lives, so the two "Usage
+limits" results are told apart) and `settings-search-entries.ts` appends them
+after every collection's entries. The entry type carries `launch:
+CustomizeSettingId | null`; a launch entry has `anchor: null`, wears the
+Appearance breadcrumb (the card that starts the editor lives there), and its
+result key is `<section>:launch:<id>`. Choosing one calls `enterCustomize({
+scene: "in-place", opener: captureSettingsOpener(), target })` - which closes
+the Settings modal when that is where it was chosen, and remembers where Done
+returns to - clears the query, reports no `settings_opened` and arms no reveal
+(`use-settings-anchor-reveal.ts` never sees a launch). The result row wears a
+"Customize" badge. If another window holds the editor the choice explains that
+in a toast and leaves the query alone. A launch entry is not an anchor, so the
+exact-target invariant does not apply to it; `launch-placement.test.ts` asserts
+instead that each one names an existing catalog id, that all are unavailable
+when `customizeEditor` is false, and that the Layout page's own entries are
+unavailable when it is true. (There is deliberately no third placement form on
+`defineSettingsSection`: nothing hand-writes a launch member - the catalog is
+already the one list - so a form for it would be a second way to say the same
+thing.)
 
 **What is guaranteed, and by what.**
 
@@ -389,7 +423,14 @@ only), mounts each section's panel in each shell, checks that the shell the
 panel resolved through `useSettingsAvailabilityContext()` is the one the
 registry describes, runs the contract, and finally asserts it mounted every
 registered shell. Each shell turns on one gate at a time — every bridge
-absent, each bridge alone, mobile and not. The zero half is the point: a
+absent, each bridge alone, mobile and not, and the Customize editor on (the
+executor writes `visualLayoutEditorEnabled` before it mounts, since
+`customizeEditor` is that switch at a desktop-width window). Appearance and
+Layout each carry a `the Customize editor on` shell beside their editor-off
+ones, so the exact-target rule holds in BOTH switch states: the card and presets
+anchors resolve to one target with the editor on and none without, and every
+Layout anchor resolves to none with it on (the page gate) and one without. The
+zero half is the point: a
 definition wrongly left `alwaysAvailable` while its panel gates it passes a
 fully bridged mount and fails only the shell whose gate is off. The index test
 closes the registry from the other side: every section with an anchored entry
@@ -693,6 +734,11 @@ Supporting pieces, all viewport-agnostic where possible:
   restrained-red card without a separate component.
 - `panels/*.definitions.ts` One section's search collection each - see Search.
 - `panels/*.tsx` Route-mounted settings sections.
+- `panels/appearance/` Appearance ▸ Layout's Customize pieces: the card, the
+  presets radio group and the shared passive `LayoutThumbnail` (see Appearance
+  ▸ Layout / Customize).
+- `src/lib/customize/customize-search.definitions.ts` The Customize launch
+  results, generated from the catalog (see Search ▸ Launch results).
 - `controls/settings-select.tsx` Shared select wrapper used by settings rows.
 - `src/stores/settings/settings-store.ts` Persisted local settings state.
 - `src/providers/settings-density-context.ts` `SettingsDensityContext` /
@@ -1182,9 +1228,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   Browser. `settings-enum-select.tsx` supplies the shared accessible select.
   Existing store keys and their legacy migrations remain unchanged.
 - `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
-  followed by **Start page**, **Interface**, **Fonts and text**, **Motion and
-  readability**, **Terminal**, **Agent office**, and **Icon colors** via
-  `settings-group.tsx`.
+  followed by **Start page**, **Interface**, **Layout**, **Fonts and text**,
+  **Motion and readability**, **Terminal**, **Agent office**, and **Icon
+  colors** via `settings-group.tsx`.
   Each group has an `<h2>` label outside its bordered card. Settings apply
   immediately; the theme editor previews a draft until Save theme or Cancel.
   `themes/appearance-details.tsx` supplies the prompt font and ligature rows
@@ -1204,6 +1250,49 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     renderer flickering; old saved opacity values are ignored when the theme
     library is read. Theme mode and the light/dark selectors retain their
     settings search anchors.
+  - **Layout / Customize** (`appearance/customize-card.tsx`,
+    `appearance/layout-presets-group.tsx`, `appearance/layout-thumbnail.tsx`):
+    the front door to the visual layout editor. The group ALWAYS draws its
+    first row, the **Visual layout editor** switch (`visualLayoutEditorEnabled`,
+    device-local, off by default) - a way in and a way back. The other two rows
+    are drawn only where `isCustomizeAvailable` (switch on AND a window at least
+    `md`; the one `customizeEditor` availability fact):
+    - **Customize layout** - a card. Its picture is the layout as it is NOW
+      (`LayoutThumbnail` under no override), and its two buttons are the command
+      palette's own functions: "Customize layout" is
+      `customizeLayoutAction("direct_ui")` and "Open sample workspace" is
+      `openSampleWorkspaceAction(navigate)`. The card never navigates or enters
+      a session itself - the action captures where Settings was (modal or tab,
+      section, scroll) and the sample tab starts its own session. While another
+      window holds the editor the card says so and disables both buttons (it
+      watches the lease so that stays live).
+    - **Layout presets** - the three presets as a `RadioGroup`, each with its
+      name, a one-line description of what distinguishes it (the text carries the
+      choice) and a thumbnail drawn under `LayoutOverrideProvider value=
+{layoutOverrideForPreset(id)}` (`lib/layout-presets.ts`), plus the
+      `Custom` badge and Reset. It applies the same bundles through the same
+      `applyLayoutPreset` / `useLayoutPresetMatch` / `useLayoutIsFullyDefault`
+      the Layout page's segmented control uses, and reports the same
+      `layout.preset.*` ids under the `layout` section.
+      **Pictures are passive.** `LayoutThumbnail` composes only the NON-registering
+      view leaves that `CustomizeOptionPicture` already uses (tab-strip Home item,
+      dock header / chip, attach / access / model / mic triggers, the usage
+      readings), read through the override seam so the card and each preset are
+      the same drawing under different values. A registering wrapper here would
+      register a hotspot nobody can reach whenever Customize starts from Settings.
+      The picture parts are wrapped `inert aria-hidden`; the buttons and the
+      radios are outside those wrappers and stay live.
+      Rollout, by row:
+
+    | Switch | Window  | Layout page (and rail entry) | Appearance ▸ Layout      |
+    | ------ | ------- | ---------------------------- | ------------------------ |
+    | off    | any     | today's full page            | the switch row only      |
+    | on     | `< md`  | today's full page            | the switch row only      |
+    | on     | `>= md` | withheld; route redirects    | switch, card and presets |
+
+    Turning the switch off, or narrowing the window, puts everything back with
+    no reload: the gates are subscribed (`useSettingsAvailabilityContext`).
+
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
     backdrop. Plain rows only, like every other group here - the start page
     itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
@@ -1372,6 +1461,25 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   room Appearance does not have. Group order is fixed so a control keeps its
   place as groups arrive: **Presets** · **Status bar** · **Tabs** ·
   **Composer** · **Chat** · **Sidebar**.
+  - **Under the visual layout editor the separation rationale above is
+    REVERSED.** "Where does this live" and "what does it look like" were split
+    because a per-window rate-limit list needed room Appearance did not have;
+    the editor removes that room argument by letting a reader point at the thing
+    instead. So with `customizeEditor` (switch on AND window at least `md`) this
+    page's own gate (`isLegacyLayoutAvailable`, the exact complement of
+    `isCustomizeAvailable`) is off: its rows leave search (the page gate
+    composes into every member), its rail entry is skipped (the row is drawn
+    conditionally but keeps its index, so no leader digit moves - the digit left on Layout still
+    lands, on Appearance), the panel draws nothing, `/settings/layout`
+    (`panels/layout-settings-route.tsx`, a component-level redirect because the
+    decision reads a store and the viewport) replaces itself with
+    `/settings/appearance` and arms the reveal for the Customize card, and the modal resolves a remembered `layout` section to Appearance.
+    Nothing is deleted: with the switch off, and in a window narrower than `md`
+    whatever the switch says, this is the full page exactly as documented here.
+    **The narrow page is RETAINED until a scoped narrow replacement exists** -
+    dropping it would delete the only path to those controls in a supported
+    state - and the rows themselves stay in this file until the post-manual-pass
+    follow-up that removes the desktop-width rows.
   - **Ownership.** This page is where a layout control belongs from now on, and
     four rows were relocated onto it from General and one from Appearance.
     Store keys and setters are unchanged (`settings-store`), so there is no
