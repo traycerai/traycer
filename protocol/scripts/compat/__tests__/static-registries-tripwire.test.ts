@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -83,48 +84,50 @@ function isTestFileName(fileName: string): boolean {
   return fileName.endsWith(".test.ts") || fileName.endsWith(".test.tsx");
 }
 
-function collectTypeScriptFiles(
-  root: string,
-  skipAbsolutePaths: ReadonlySet<string>,
-): string[] {
+function shouldSkipListedPath(relative: string): boolean {
+  const posix = relative.split(path.sep).join("/");
+  const segments = posix.split("/");
+  for (const segment of segments) {
+    if (SKIP_DIR_NAMES.has(segment)) {
+      return true;
+    }
+  }
+  const base = segments[segments.length - 1];
+  if (base === undefined) {
+    return true;
+  }
+  return base.endsWith(".d.ts") || isTestFileName(base);
+}
+
+function collectTypeScriptFiles(gitRoot: string): string[] {
+  const listing = execFileSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      "*.ts",
+      "*.tsx",
+    ],
+    { cwd: gitRoot, encoding: "utf8" },
+  );
   const files: string[] = [];
-  const walk = (dir: string): void => {
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
+  for (const relative of listing.split("\0")) {
+    if (relative.length === 0) {
+      continue;
     }
-    for (const entry of entries) {
-      if (SKIP_DIR_NAMES.has(entry)) {
-        continue;
-      }
-      const full = path.join(dir, entry);
-      if (skipAbsolutePaths.has(full)) {
-        continue;
-      }
-      let stats;
-      try {
-        stats = statSync(full);
-      } catch {
-        continue;
-      }
-      if (stats.isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!stats.isFile()) {
-        continue;
-      }
-      if (entry.endsWith(".d.ts") || isTestFileName(entry)) {
-        continue;
-      }
-      if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
-        files.push(full);
-      }
+    if (shouldSkipListedPath(relative)) {
+      continue;
     }
-  };
-  walk(root);
+    const full = path.join(gitRoot, relative);
+    if (!existsSync(full)) {
+      continue;
+    }
+    files.push(full);
+  }
   return files;
 }
 
@@ -161,11 +164,10 @@ function findFactoryCallsInSource(
 }
 
 function scanFactoryCalls(
-  root: string,
+  gitRoot: string,
   relativeTo: string,
-  skipAbsolutePaths: ReadonlySet<string>,
 ): { readonly files: readonly string[]; readonly sites: FactoryCallSite[] } {
-  const files = collectTypeScriptFiles(root, skipAbsolutePaths);
+  const files = collectTypeScriptFiles(gitRoot);
   const sites: FactoryCallSite[] = [];
   for (const filePath of files) {
     const relative = posixRelative(relativeTo, filePath);
@@ -210,7 +212,7 @@ describe("static registry tripwire", () => {
   });
 
   it("the production call-site multiset equals STATIC_REGISTRIES", () => {
-    const scanned = scanFactoryCalls(TRAYCER_ROOT, PROTOCOL_ROOT, new Set());
+    const scanned = scanFactoryCalls(TRAYCER_ROOT, PROTOCOL_ROOT);
     expect(scanned.files.length).toBeGreaterThan(0);
     expect(scanned.sites.length).toBeGreaterThanOrEqual(5);
 
