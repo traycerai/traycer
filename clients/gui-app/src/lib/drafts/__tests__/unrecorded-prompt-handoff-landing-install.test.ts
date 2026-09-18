@@ -31,10 +31,10 @@ import {
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { pngBytesOfSize } from "@/lib/composer/__tests__/image-fixtures";
 import {
-  stripBase64ImageNodes,
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
+import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 
 /**
  * A sha256-shaped hash. `blobHashesFromContent` filters anything that is not

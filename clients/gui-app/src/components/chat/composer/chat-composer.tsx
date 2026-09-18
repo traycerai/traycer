@@ -575,12 +575,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // nodes must keep their positions, so they go in with bytes and flip in
   // place) and every draft that still holds inline bytes - including ones
   // written by a build that had no rewrite at all.
-  const { ingestPastedComposerImages, reingestPendingImages } =
-    useComposerPendingImageIngest({
-      editorRef,
-      runPendingImageJob,
-      draftId: null,
-    });
+  const {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  } = useComposerPendingImageIngest({
+    editorRef,
+    runPendingImageJob,
+    draftId: null,
+  });
   // Restarts the rewrite on editor readiness AND on every host-document
   // replacement; see the hook for why readiness alone left a dead end. Called
   // AFTER `useChatComposerDraft` so the reset bridge has already installed the
@@ -606,8 +609,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     (content: JsonContent, selection: { from: number; to: number }): void => {
       authority.noteEdit();
       handleDocumentChange(content, selection);
+      // The document is the queue, and mount-time re-entry cannot see a node
+      // that did not exist at mount. The browser-preview screenshot the mention
+      // extension appends asynchronously is exactly that node, and it enters
+      // through no paste. Edge-triggered in the hook - a node whose job has
+      // started is never looked at again this mount - so this costs one scan.
+      noteContentImages(content);
     },
-    [authority, handleDocumentChange],
+    [authority, handleDocumentChange, noteContentImages],
   );
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);

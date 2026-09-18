@@ -102,7 +102,7 @@ function recordingClient(handle: FakeHandler): {
     calls.push({ method, params });
     return handle(method, params);
   }) as FakeRequest;
-  return { client: { request }, calls };
+  return { client: { request, requestWithOptions: request }, calls };
 }
 
 async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {

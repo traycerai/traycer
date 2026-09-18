@@ -77,6 +77,13 @@ const OK_CLIENT: DraftBlobClient = {
     Promise.resolve({
       ok: true as const,
     })) as HostRequester<HostRpcRegistry>["request"],
+  // `drafts.putBlob` rides THIS member, never `request` above - a fake without
+  // it is a fake no upload can reach. Options ignored: no case here turns on
+  // the idempotency key or the upload budget.
+  requestWithOptions: ((_method, _params) =>
+    Promise.resolve({
+      ok: true as const,
+    })) as HostRequester<HostRpcRegistry>["requestWithOptions"],
 };
 
 function plainContent(text: string): JsonContent {
