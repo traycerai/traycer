@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory } from "@tanstack/react-router";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
 import {
   act,
@@ -14,6 +15,11 @@ import {
   ElectronTabSurface,
   settleMatchesLatch,
 } from "@/components/browser-tile/agent-browser-tile";
+import { KeybindingProvider } from "@/providers/keybinding-provider";
+import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import type { BrowserTilePlacement } from "@/components/browser-tile/browser-tile-placement";
 import { startPersistentBrowserGuestHost } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
@@ -1435,6 +1441,126 @@ describe("ElectronTabSurface document-committed loader gating", () => {
     const overlay = loaderOverlayElement();
     expect(overlay.className).toContain("opacity-100");
     expect(overlay.getAttribute("aria-hidden")).toBe("false");
+  });
+});
+
+function buildProviderRouterSource(
+  initialPathname: string,
+): KeybindingRouterSource {
+  const history = createMemoryHistory({ initialEntries: [initialPathname] });
+  const navigate: KeybindingRouterSource["navigate"] = () => Promise.resolve();
+  return {
+    get state() {
+      return { location: { pathname: history.location.pathname } };
+    },
+    history,
+    navigate,
+  };
+}
+
+function platformModKeys(): {
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+} {
+  if (isMac()) return { metaKey: true, ctrlKey: false };
+  return { metaKey: false, ctrlKey: true };
+}
+
+/**
+ * Dispatched on the actual focused element (never bare `window`): a real
+ * keydown originates at `document.activeElement` and bubbles up through the
+ * capture phase to the window listener `KeybindingProvider` installs, and
+ * `focusBrowserAddressForShortcut` reads `event.target` / `composedPath()` to
+ * decide whether that origin counts as "inside the tile" or "editable" - a
+ * window-targeted event answers neither question the way a real one would.
+ */
+function dispatchTargetKey(
+  target: EventTarget,
+  type: "keydown" | "keyup",
+  init: KeyboardEventInit,
+): KeyboardEvent {
+  const event = new KeyboardEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function renderTileWithKeybindings(
+  binding: ElectronTabBinding,
+  router: KeybindingRouterSource,
+): RenderResult {
+  return renderWithQueryClient(
+    <KeybindingProvider router={router}>
+      {surfaceElement(NODE, binding)}
+    </KeybindingProvider>,
+  );
+}
+
+/**
+ * The chrome hook stays mocked here (as the rest of this file mocks it), so
+ * these assert the `focusAddress` callback rather than real DOM focus/select
+ * - `browser-address-shortcut-fallback.test.tsx` covers the real-DOM
+ * selection behavior once, against the hook directly. What this suite adds
+ * is the one thing the mock can't stand in for: a real `KeybindingProvider`
+ * actually routing mod+L to the tile's chrome instead of `group.focus-editor`
+ * for a native tile whose guest has never attached - the literal about:blank
+ * bug report, reproduced by simply never calling `mountGuestForTile()`.
+ */
+describe("ElectronTabSurface address shortcut through the real KeybindingProvider", () => {
+  beforeEach(() => {
+    state.visible = true;
+    state.bridge = new TestBridge();
+    state.chromeInputs = [];
+    state.sessions = liveSessions();
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+  });
+
+  afterEach(() => {
+    cleanup();
+    stopGuestHost?.();
+    stopGuestHost = null;
+    resetPrimaryFocusCoordinatorForTests();
+    document.body.innerHTML = "";
+  });
+
+  it("focuses the address bar on mod+L before the native guest has attached", () => {
+    const router = buildProviderRouterSource("/");
+    renderTileWithKeybindings(createRecordingBinding(), router);
+    document.body.focus();
+
+    let event: KeyboardEvent | undefined;
+    act(() => {
+      event = dispatchTargetKey(document.body, "keydown", {
+        code: "KeyL",
+        key: "l",
+        ...platformModKeys(),
+      });
+    });
+
+    expect(state.focusAddress).toHaveBeenCalledOnce();
+    expect(event?.defaultPrevented).toBe(true);
+  });
+
+  it("does not claim mod+L for a tile that is not visible", () => {
+    state.visible = false;
+    const router = buildProviderRouterSource("/");
+    renderTileWithKeybindings(createRecordingBinding(), router);
+    document.body.focus();
+
+    act(() => {
+      dispatchTargetKey(document.body, "keydown", {
+        code: "KeyL",
+        key: "l",
+        ...platformModKeys(),
+      });
+    });
+
+    expect(state.focusAddress).not.toHaveBeenCalled();
   });
 });
 
