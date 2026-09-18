@@ -62,6 +62,44 @@ describe("resolveAbsolutePath", () => {
       "//server/share/x.ts",
     );
   });
+
+  // POSIX paths may legally contain a literal `\` in a filename or directory
+  // name, which must survive untouched rather than being split as a separator.
+  it("preserves a literal backslash in the relative filename under a POSIX base", () => {
+    expect(resolveAbsolutePath("/work/repo", "notes\\draft.txt")).toBe(
+      "/work/repo/notes\\draft.txt",
+    );
+  });
+
+  it("preserves a literal backslash already inside the POSIX workspace root", () => {
+    expect(resolveAbsolutePath("/work/repo\\legacy", "file.txt")).toBe(
+      "/work/repo\\legacy/file.txt",
+    );
+  });
+
+  it("clamps a `..` traversal to one segment across a backslash-containing directory name, without corrupting it", () => {
+    expect(
+      resolveAbsolutePath("/work/repo\\legacy/nested", "../sibling.txt"),
+    ).toBe("/work/repo\\legacy/sibling.txt");
+  });
+
+  // The Windows/UNC gate reads `pathAuthority(basePath).prefix` (matched
+  // against the RAW, un-resolved base) rather than `isWindowsLikePath`
+  // (which normalizes - i.e. resolves `..` - before testing): a base whose
+  // own string still contains unresolved `..` segments must keep its drive
+  // or share authority rather than having that authority erased by an early
+  // resolve pass.
+  it("keeps the drive authority when the base path itself contains unresolved `..` segments", () => {
+    expect(resolveAbsolutePath("D:/repo/../..", "file.txt")).toBe(
+      "D:/file.txt",
+    );
+  });
+
+  it("keeps the UNC share authority when the base path itself contains an unresolved `..` segment", () => {
+    expect(resolveAbsolutePath("//server/share/..", "file.txt")).toBe(
+      "//server/share/file.txt",
+    );
+  });
 });
 
 describe("relativizeToWorkspaceRoot", () => {

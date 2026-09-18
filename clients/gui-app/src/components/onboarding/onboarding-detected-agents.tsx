@@ -13,6 +13,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   providerSignInUnavailableHint,
   providerStartLoginFailureMessage,
+  providerSupportsTerminalLogin,
 } from "@/components/providers/provider-signin-availability";
 import { CodePasteField } from "@/components/settings/panels/code-paste-field";
 import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
@@ -70,6 +71,9 @@ interface AccountLine {
   readonly title: string | null;
 }
 
+const TERMINAL_LOGIN_DISABLED_SUBTEXT =
+  "Turn it on now. The first time you pick it, the model picker will walk you through its terminal setup.";
+
 /** Mirrors `ProviderAuthLine`, restyled for the cinematic copy column. */
 function accountLineFor(state: ProviderCliState): AccountLine {
   if (state.providerId === "traycer") {
@@ -84,6 +88,50 @@ function accountLineFor(state: ProviderCliState): AccountLine {
   const { auth } = state;
   if (state.authPending) {
     return { text: "Checking account…", tone: "muted", title: null };
+  }
+  // A terminal-login provider's row carries no sign-in affordance here (see
+  // `providerNeedsSignInToEnable`), so without this the row's only word about
+  // it would be a status whose remedy cannot be performed on this screen. Say
+  // what the gesture is instead.
+  //
+  // REBASED onto the tours/Getting-started redesign (#1974), which removed this
+  // function's `!state.enabled` early return - the account line is now purely
+  // about the ACCOUNT and a disabled provider falls through to the ladder
+  // below. That moved the defect rather than fixing it: a disabled,
+  // terminal-login, signed-out row now lands on "Not signed in", which is the
+  // same dead status one branch further down. Hence the enabled check survives
+  // here, above the ladder, instead of gating the whole function.
+  //
+  // PROVIDER-AGNOSTIC and deliberately not the word "sign in": this class spans
+  // providers whose terminal flow is not an account sign-in at all (Hermes asks
+  // for an inference provider and its API key), so promising one would be false
+  // for them. Nothing "asks", either - the picker offers a setup card with a
+  // button.
+  //
+  // THREE conditions, and DO NOT unify them with the mount guard's. They answer
+  // different questions that merely agree on most rows. The guard asks "can a
+  // sign-in be performed on this screen" - no, for the whole class, whatever
+  // the account says. This asks "what should THIS user do next", and the answer
+  // genuinely differs: an authenticated account gets no setup walkthrough from
+  // the picker, because there is nothing left to set up, so the sentence would
+  // describe something that will not happen. Collapsing the two because they
+  // coincide today is how `--device-auth` came to encode three properties as
+  // one string match.
+  //
+  // Reading the auth verdict is safe HERE and nowhere near the guard: this is
+  // display only. The prohibition on `providerNeedsSignInToEnable` is about
+  // MOUNTING, where a verdict that flips mid-attempt deletes the row and
+  // strands the enable.
+  if (
+    !state.enabled &&
+    providerSupportsTerminalLogin(state.loginCapability) &&
+    !isProviderAmbientAuthenticated(state)
+  ) {
+    return {
+      text: TERMINAL_LOGIN_DISABLED_SUBTEXT,
+      tone: "muted",
+      title: null,
+    };
   }
   if (auth.status === "authenticated") {
     return {
@@ -212,9 +260,14 @@ function providerStatusLine(
  *
  * The host leaves a provider disabled at first boot when it found no account
  * for it, and onboarding is precisely where a user would fix that. Only for a
- * provider whose sign-in this screen can start, though - terminal-login
- * providers are excluded by the shared hint helper, which is the point of
- * reusing it: onboarding has no epic and no terminal surface to open one into.
+ * provider whose sign-in this screen can start, though - a terminal-login
+ * provider's sign-in happens in a PTY, and onboarding has no epic and no
+ * terminal surface to open one into, so it is excluded HERE by its own guard
+ * below. It used to be excluded downstream instead, by the shared hint
+ * helper, which is not the same thing: that path still MOUNTED the affordance
+ * and rendered its dead "Not signed in" fallback where an action belongs. The
+ * row's description says what the next gesture actually is (see
+ * `accountLineFor`), and the enable switch beside it is unaffected.
  *
  * The INSTALL gate is what keeps this from becoming noise. Seeded defaults
  * leave most of a dozen-plus rows off, and offering to sign a user in to a CLI
@@ -256,6 +309,24 @@ function providerNeedsSignInToEnable(
   // exactly backwards for the one provider that is always signed in.
   if (state.providerId === "traycer") return false;
   if (state.apiKey.configured) return false;
+  // A terminal-login provider DOES have a sign-in to perform, but not here:
+  // it happens in a PTY the host opens, and onboarding has no canvas and no
+  // terminal panel to open one into - a deliberate choice, not a gap. So the
+  // toggle is the whole enable gesture on this screen, exactly as it is for
+  // Traycer above. Without this guard the row would render the sign-in
+  // affordance's "Not signed in" fallback: a dead label, tooltip'd with a
+  // sentence pointing at a model picker the user has not reached yet, sitting
+  // beside a switch that already works.
+  //
+  // `providerSupportsTerminalLogin` reads `terminalLogin` ALONE, so this is a
+  // permanent provider property and safe for a MOUNT decision (see above) -
+  // and it is deliberately NOT narrowed to a signed-out account or to a local
+  // host. Terminal login has no locality gate (the PTY opens on whichever
+  // host the composer runs on), and `authenticatedAwaitingEnable` short-
+  // circuits only on a definitive `authenticated`, so a present-but-
+  // unvalidated credential resolves `configured`, seeds off, and lands here
+  // too.
+  if (providerSupportsTerminalLogin(state.loginCapability)) return false;
   return !state.enabled && installDetected;
 }
 
@@ -386,7 +457,7 @@ function OnboardingLoginWaiting(props: {
   const openLink = useOpenLink();
   const autoOpen = useAutoOpenLoginUrl(
     isLocalHost,
-    userCode,
+    loginCapability,
     loginUrl,
     (url) => {
       void openLink(url, "auth", null);
@@ -757,13 +828,19 @@ function SignInToEnableButton(props: {
   //
   // Not asked at all once the account is signed in, because the question is
   // about starting a LOGIN and there is no longer one to start. Asking anyway
-  // is not a harmless extra gate: the helper is non-null for a remote host, a
-  // terminal-login provider, and any provider with no `oauthArgs`, so its
-  // early return would render a flatly false "Not signed in" over an
-  // authenticated account AND withhold the enable - which is the only action
-  // left, and the one this component exists to perform. It also made the
-  // direct-enable branch below structurally unreachable for exactly those
-  // combinations.
+  // is not a harmless extra gate: the helper is non-null for a remote host and
+  // for any provider with no `oauthArgs`, so its early return would render a
+  // flatly false "Not signed in" over an authenticated account AND withhold
+  // the enable - which is the only action left, and the one this component
+  // exists to perform. It also made the direct-enable branch below
+  // structurally unreachable for exactly those combinations.
+  //
+  // A terminal-login provider used to be the third member of that list and no
+  // longer reaches this component at all: `providerNeedsSignInToEnable` now
+  // refuses to mount it, so the whole class is answered one level up by the
+  // row's description rather than by a fallback label here. Nothing is
+  // withheld by that - the enable switch is this component's SIBLING and
+  // renders unconditionally.
   const unavailableHint = authenticatedAwaitingEnable
     ? null
     : providerSignInUnavailableHint(state, isLocalHost);

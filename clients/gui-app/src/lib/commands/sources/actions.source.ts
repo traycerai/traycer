@@ -71,7 +71,7 @@ function isPaletteEligible(meta: ActionMeta, homeTabEnabled: boolean): boolean {
   // The composer source emits a context-gated "Change model…" entry (with the
   // active model as its subtitle); a second generic row here would duplicate it.
   if (meta.id === "composer.model-picker.toggle") return false;
-  if (meta.id === "composer.stash") return false;
+  if (meta.id === "composer.drafts") return false;
   return true;
 }
 

@@ -63,6 +63,22 @@ describe("FallbackLadderEditor", () => {
     expect(labels[1]).toContain(FALLBACK_RUNG_COPY.notify.label);
   });
 
+  it("states that switching starts a new agent session, unconditionally, above the step list", () => {
+    // This paragraph answers the page's central question - what happens to my
+    // chat - and a user-lens review found nothing on the page said it before:
+    // the switch-back row's "starts a fresh session too" had no antecedent,
+    // since nothing had ever said the OUTBOUND switch started one either.
+    // Falsification: delete the `<p>` above the DndContext in
+    // `fallback-ladder-editor.tsx`. This is the only place that sentence is
+    // said, so nothing else would catch its silent removal.
+    renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
+    expect(
+      screen.getByText(
+        "Switching accounts or models starts a new agent session using this chat's history, and retries the blocked message there. Messages waiting to run use the new account or model too.",
+      ),
+    ).toBeDefined();
+  });
+
   it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - not just `notify`", () => {
     // R4/AX7 rewrite. The handle used to be exposed to AT for movable rows and
     // only withheld from `notify` (the "Reorder <label>" label this cell used
@@ -118,7 +134,7 @@ describe("FallbackLadderEditor", () => {
     const description =
       describedBy === null ? null : document.getElementById(describedBy);
     expect(description?.textContent ?? "").toContain(
-      "Move up and Move down buttons",
+      "Reorder with Move up and Move down",
     );
   });
 

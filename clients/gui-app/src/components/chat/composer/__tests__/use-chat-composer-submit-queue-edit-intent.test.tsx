@@ -255,12 +255,18 @@ describe("F1: queue-edit submit intent invalidation", () => {
   it("positive control: ordinary typing (setSnapshot, no resetEpoch bump) still reaches the live re-read and sends", async () => {
     const taskId = "chat-queue-edit-plain-typing";
     let release: (() => void) | null = null;
-    resolveMocks.resolveDraftImageBytes.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve(IMAGE_BYTES);
-        }),
-    );
+    resolveMocks.resolveDraftImageBytes.mockImplementation(() => {
+      // Only the FIRST read is held open. `setSnapshot` bumps `revision`, which
+      // is the submit generation's carrier, so the keystroke below RE-ENTERS the
+      // submit and resolves the live document from scratch. A mock that held
+      // every read open would leave that second pass pending forever and this
+      // control would read as a send that never goes out - a fact about the
+      // harness driving one handoff, not about the re-read.
+      if (release !== null) return Promise.resolve(IMAGE_BYTES);
+      return new Promise<Uint8Array | null>((resolve) => {
+        release = () => resolve(IMAGE_BYTES);
+      });
+    });
     const editor = mutableFakeEditor(
       docWithHashOnlyImage(IMAGE_HASH, "typing"),
     );

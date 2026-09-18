@@ -251,8 +251,14 @@ export function FallbackTierGroupsEditor(
     >
       <div className="px-5 py-4" ref={containerRef}>
         <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-          Models you consider interchangeable. When one fails, the
-          &ldquo;equivalent model&rdquo; step tries the others in this order.
+          {/* Defines a GROUP, which the rest of the tab then uses freely.
+              "Models you consider interchangeable" defined the feature and left
+              the object unnamed, so "group" arrived later as though the reader
+              already had it. It also never said the try order was within the
+              group rather than across the whole tab. */}
+          Put models you&apos;re happy to use in place of one another into the
+          same group. When one is blocked, Traycer tries the others in that
+          group, from the top down.
         </p>
         {groups.length === 0 ? (
           <EmptyGroups
@@ -488,8 +494,18 @@ function DefaultGroupSelect(props: {
         </SelectContent>
       </Select>
       <span className="basis-full text-ui-xs text-muted-foreground">
-        The group whose models are tried when the failed model is not listed in
-        any group.
+        {/* NO directional word. The first rewrite said "any group above" and
+            that was simply FALSE: `DefaultGroupSelect` renders BEFORE the group
+            cards, so the groups are below this control, not above it. The
+            original text carried no direction and so could not be wrong; the
+            shorter version invented one and was. Directions in copy are a
+            standing hazard on this page - the `tier` step lost its own "below"
+            when that section moved behind a tab.
+            What this owes the reader is the CONSEQUENCE of the choice, which no
+            version of it has ever given: which models actually get tried. */}
+        Traycer tries the models in the group you pick here. Choose &ldquo;None
+        - skip this step&rdquo; to skip model switching only for models not in a
+        group.
       </span>
     </div>
   );
@@ -606,8 +622,8 @@ function EmptyGroups(props: {
       data-testid="fallback-tier-groups-empty"
     >
       <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-        No model groups, so the &ldquo;equivalent model&rdquo; step has nothing
-        to switch to. Add a group, or put the defaults back.
+        No groups yet, so the &ldquo;equivalent model&rdquo; step has nothing to
+        switch to. Add one, or put the defaults back.
       </p>
       <Button
         type="button"

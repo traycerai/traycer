@@ -182,12 +182,21 @@ vi.mock(
   }),
 );
 
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: (selector: (s: unknown) => unknown) =>
-    selector({
-      closeCanvasTab: () => undefined,
-    }),
-}));
+vi.mock("@/stores/epics/canvas/store", () => {
+  // `useEpicCanvasStore` is both a selector hook and a static `.getState()`
+  // accessor (real zustand shape) - the shared setup-terminal driver reads
+  // `.getState().canvasByTabId` directly, which resolves to no owning pane
+  // for every settled binding this suite uses.
+  const canvasStoreState = {
+    closeCanvasTab: () => undefined,
+    canvasByTabId: {},
+  };
+  const useEpicCanvasStore = (
+    selector: (state: typeof canvasStoreState) => unknown,
+  ) => selector(canvasStoreState);
+  useEpicCanvasStore.getState = () => canvasStoreState;
+  return { useEpicCanvasStore };
+});
 
 vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
   useWorktreeGetBinding: () => ({
