@@ -78,7 +78,7 @@ interface HarnessModelPickerPanelProps {
   ) => void;
   readonly onRefreshCatalog: () => Promise<void>;
   readonly hostUnavailableLabel: string | null;
-  readonly onOpenProviderSettings: () => void;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
   /** Closes the picker popover without opening Settings - used by the profile
    *  dropdown's "Create new profile" row, which opens the add-profile flow in
    *  its own global host, not Settings. */

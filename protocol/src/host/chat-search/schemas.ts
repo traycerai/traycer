@@ -50,10 +50,13 @@ export const chatSearchScopeSchema = z.discriminatedUnion("kind", [
 export type ChatSearchScope = z.infer<typeof chatSearchScopeSchema>;
 
 /**
- * Who wrote a `user`-tier document. `human` is text a person typed, `agent`
- * is a message another agent sent into the chat. Other tiers are unaffected.
+ * Whose words a body match may land on. `human` is only the prompts a person
+ * typed (`user` documents not sent by another agent); `assistant` is only the
+ * chat's own replies (`assistant` documents). Notices, cards and prompts
+ * another agent sent into the chat match under `any` alone. Title matches
+ * are unaffected.
  */
-export const chatSearchRoleFilterSchema = z.enum(["any", "human", "agent"]);
+export const chatSearchRoleFilterSchema = z.enum(["any", "human", "assistant"]);
 export type ChatSearchRoleFilter = z.infer<typeof chatSearchRoleFilterSchema>;
 
 /**

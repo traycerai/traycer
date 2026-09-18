@@ -111,6 +111,8 @@ function withTerminalLoginCapability(
       token: null,
       codePaste: null,
       terminalLogin: {},
+      remoteSafe: null,
+      selfOpensBrowser: null,
     },
   };
 }
