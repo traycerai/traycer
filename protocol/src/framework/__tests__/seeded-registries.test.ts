@@ -12,10 +12,11 @@ import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-syn
 
 /**
  * Smoke test that every seeded protocol registry survives the structural
- * + JSON-Schema compatibility validators. `defineVersionedRpcRegistry()`
- * and `defineVersionedRecordRegistry()` run these at module load, so a
- * broken seed would blow up on import - these assertions just pin the
- * guarantee with explicit coverage.
+ * + JSON-Schema compatibility validators. Construction (`define*`) is
+ * structural-only, so a broken seed no longer blows up on import; these
+ * assertions call the full validators explicitly. CI also holds every
+ * static registry to the same pass via
+ * `protocol/scripts/compat/static-registries.ts`.
  *
  * The CloudData RPC registry has moved out of `protocol/` and now lives
  * beside the `CloudDataClient` HTTP client in the cloud data client

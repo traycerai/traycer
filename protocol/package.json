@@ -187,7 +187,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs && bun scripts/compat/validate-static-registries.ts",
     "compile": "tsc --noEmit",
     "prepack": "bun run build",
     "test": "vitest run",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { toStreamFieldJsonSchemaText } from "./json-schema-fingerprint";
 
 /**
  * Versioned **streaming RPC** framework - the long-lived-subscription
@@ -160,19 +161,26 @@ export function defineStreamRpcContract<
 
 /**
  * Preferred authoring path for stream registries declared in source code.
- * Runs `validateVersionedStreamRpcRegistry` at module load so misconfigurations
- * surface immediately with readable errors.
+ * Runs the STRUCTURAL pass at construction so a misplaced slot surfaces
+ * immediately with a readable error. The schema-compatibility walker is not
+ * run here: it serialises every field of all three sub-schemas of every
+ * installed minor, and doing that at construction does it whenever the
+ * declaring module is imported. Every static stream registry is held to
+ * `validateVersionedStreamRpcRegistry` at build time and in CI instead
+ * (`protocol/scripts/compat/static-registries.ts`), and a registry assembled
+ * from dynamic input must be passed through it explicitly.
  */
 export function defineVersionedStreamRpcRegistry<
   const Registry extends UncheckedVersionedStreamRpcRegistry,
 >(registry: Registry): VersionedStreamRpcRegistry<Registry> {
-  validateVersionedStreamRpcRegistry(registry);
+  assertVersionedStreamRpcRegistryStructure(registry);
   return registry;
 }
 
 /**
- * Promotes a raw registry to the validated brand after checking every
- * invariant the stream framework cares about:
+ * The full validation entry point: promotes a raw registry to the validated
+ * brand after checking every invariant the stream framework cares about. It
+ * always runs both passes; there is no structural-only mode.
  *
  * 1. Structural - `latestMinor` points at the highest installed minor in its
  *    line, contracts line up with their slot and registry key.
@@ -188,51 +196,76 @@ export function validateVersionedStreamRpcRegistry<
 ): asserts registry is Registry & VersionedStreamRpcRegistry<Registry> {
   for (const method in registry) {
     const methodRegistry = registry[method];
-    const majorKeys = getSortedNumberKeys(methodRegistry);
+    assertStreamMethodStructure(method, methodRegistry);
+    assertSchemaCompatibility(method, methodRegistry);
+  }
+}
 
-    for (const major of majorKeys) {
-      const line = methodRegistry[major];
+/**
+ * The structural pass over every method. Private on purpose: the only
+ * structural-only caller is construction, and a dynamic registry must not be
+ * able to reach the validated brand through it.
+ */
+function assertVersionedStreamRpcRegistryStructure<
+  Registry extends UncheckedVersionedStreamRpcRegistry,
+>(
+  registry: Registry,
+): asserts registry is Registry & VersionedStreamRpcRegistry<Registry> {
+  for (const method in registry) {
+    assertStreamMethodStructure(method, registry[method]);
+  }
+}
 
-      if (!hasOwnNumberKey(line.versions, line.latestMinor)) {
-        throw new Error(
-          `Latest minor ${line.latestMinor} is not defined for method '${method}' major ${major}`,
-        );
-      }
+/**
+ * The structural pass for one method. It reads slot keys, contract method
+ * names and schema versions, and never touches a sub-schema.
+ */
+function assertStreamMethodStructure(
+  method: string,
+  methodRegistry: UncheckedStreamMethodVersionRegistry,
+): void {
+  const majorKeys = getSortedNumberKeys(methodRegistry);
 
-      const highestInstalledMinor = getHighestInstalledNumber(line.versions);
+  for (const major of majorKeys) {
+    const line = methodRegistry[major];
 
-      if (highestInstalledMinor !== line.latestMinor) {
-        throw new Error(
-          `Latest minor ${line.latestMinor} for method '${method}' major ${major} must be the highest installed minor ${highestInstalledMinor}`,
-        );
-      }
-
-      const minorKeys = getSortedNumberKeys(line.versions);
-
-      for (const minor of minorKeys) {
-        const contract = line.versions[minor].contract;
-
-        if (contract.method !== method) {
-          throw new Error(
-            `Contract method '${contract.method}' does not match registry method '${method}'`,
-          );
-        }
-
-        if (contract.schemaVersion.major !== major) {
-          throw new Error(
-            `Contract for method '${method}' minor ${minor} must declare major ${major}`,
-          );
-        }
-
-        if (contract.schemaVersion.minor !== minor) {
-          throw new Error(
-            `Contract for method '${method}' major ${major} must declare minor ${minor}`,
-          );
-        }
-      }
+    if (!hasOwnNumberKey(line.versions, line.latestMinor)) {
+      throw new Error(
+        `Latest minor ${line.latestMinor} is not defined for method '${method}' major ${major}`,
+      );
     }
 
-    assertSchemaCompatibility(method, methodRegistry);
+    const highestInstalledMinor = getHighestInstalledNumber(line.versions);
+
+    if (highestInstalledMinor !== line.latestMinor) {
+      throw new Error(
+        `Latest minor ${line.latestMinor} for method '${method}' major ${major} must be the highest installed minor ${highestInstalledMinor}`,
+      );
+    }
+
+    const minorKeys = getSortedNumberKeys(line.versions);
+
+    for (const minor of minorKeys) {
+      const contract = line.versions[minor].contract;
+
+      if (contract.method !== method) {
+        throw new Error(
+          `Contract method '${contract.method}' does not match registry method '${method}'`,
+        );
+      }
+
+      if (contract.schemaVersion.major !== major) {
+        throw new Error(
+          `Contract for method '${method}' minor ${minor} must declare major ${major}`,
+        );
+      }
+
+      if (contract.schemaVersion.minor !== minor) {
+        throw new Error(
+          `Contract for method '${method}' major ${major} must declare minor ${minor}`,
+        );
+      }
+    }
   }
 }
 
@@ -381,9 +414,8 @@ function flattenToFieldMap(schema: z.ZodType, context: string): FieldMap {
       }
 
       for (const [field, fieldSchema] of Object.entries(option.shape)) {
-        out[`${discriminatorValue}.${field}`] = JSON.stringify(
-          z.toJSONSchema(fieldSchema),
-        );
+        out[`${discriminatorValue}.${field}`] =
+          toStreamFieldJsonSchemaText(fieldSchema);
       }
     }
 
@@ -403,7 +435,7 @@ function flattenObjectShape(schema: z.ZodObject, context: string): FieldMap {
       throw new Error(`${context}: field '${field}' is not a zod schema`);
     }
 
-    out[field] = JSON.stringify(z.toJSONSchema(fieldSchema));
+    out[field] = toStreamFieldJsonSchemaText(fieldSchema);
   }
 
   return out;

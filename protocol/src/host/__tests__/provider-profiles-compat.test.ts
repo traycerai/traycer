@@ -4,6 +4,7 @@ import {
   downgradeResponseAcrossMajors,
   upgradeRequestToVersion,
   upgradeResponseToVersion,
+  validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -19,10 +20,10 @@ import {
   providersListResponseSchemaV30,
   providersSetEnabledRequestSchemaV21,
 } from "@traycer/protocol/host/provider-schemas";
-// Importing from the registry runs `defineVersionedRpcRegistry` (full
-// structural + schema-compatibility validation) at module load, so this
-// import alone asserts the new `providers.startLogin@1.1` /
-// `providers.setEnabled@2.1` lines and their bridges are well-formed.
+// Construction is structural-only. The full schema-compatibility pass is
+// the explicit `validateVersionedRpcRegistry(hostRpcRegistry)` below, which
+// is what holds `providers.startLogin@1.1` / `providers.setEnabled@2.1` and
+// their bridges.
 import {
   providersAwaitLoginDowngradeV21ToV10,
   providersSetEnabledDowngradeV2ToV1,
@@ -69,6 +70,12 @@ const sessionWorkspaceSnapshot = {
   workspaceKind: "session-snapshot" as const,
   primaryWorkspace: "/repo",
 };
+
+describe("hostRpcRegistry full validation", () => {
+  it("passes schema compatibility for the providers.startLogin@1.1 / providers.setEnabled@2.1 lines", () => {
+    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+  });
+});
 
 describe("legacy (pre-profile) persisted artifacts parse with profile defaults", () => {
   it("chatRunSettingsSchema defaults profileId to null", () => {
