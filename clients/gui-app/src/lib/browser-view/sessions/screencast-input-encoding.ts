@@ -5,6 +5,32 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
 import { hasPlatformModKey, normalizeCode } from "@/lib/keybindings/chord";
+import { isTextHistoryShortcut } from "@traycer-clients/shared/keybindings/text-history-shortcut";
+
+/** Translate only the viewer's history gestures; Mac Control remains literal. */
+export function screencastHistoryKey(
+  event: {
+    readonly key: string;
+    readonly ctrlKey: boolean;
+    readonly metaKey: boolean;
+    readonly altKey: boolean;
+    readonly shiftKey: boolean;
+  },
+  viewerIsMac: boolean,
+  hostIsMac: boolean | null,
+): { readonly key: string; readonly modifiers: number } {
+  if (hostIsMac === null || !isTextHistoryShortcut(event, viewerIsMac)) {
+    return { key: event.key, modifiers: inputModifiers(event) };
+  }
+  const redoY = event.key.toLowerCase() === "y";
+  const useY = redoY && !hostIsMac;
+  const shift = event.shiftKey || (redoY && hostIsMac);
+  const zKey = shift ? "Z" : "z";
+  return {
+    key: useY ? "y" : zKey,
+    modifiers: (hostIsMac ? 4 : 2) | (shift ? 8 : 0),
+  };
+}
 
 const POINTER_CLICK_COUNT_WINDOW_MS = 500;
 const POINTER_CLICK_COUNT_MAX = 8;
