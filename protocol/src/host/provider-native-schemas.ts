@@ -2318,7 +2318,7 @@ export type ProviderSettingsTabV70 = z.infer<
  * `modelProviders`. That limit is not an oversight and not a claim those are
  * safe - it is the same limit that left `managedVersions.sharedWithProviders`
  * live when `providerCliStateSchemaV91` pinned `providerId`. What keeps the
- * rest honest is no longer a promise in a comment: `frozen-lines-reach-no-live-enum.test.ts`
+ * rest honest is no longer a promise in a comment: `__tests__/frozen-lines-reach-no-unreviewed-live-enum.test.ts`
  * enumerates every enum each released row can still reach and fails on any one
  * that is not on its reviewed list, so the next leaf added to this subtree is
  * named by a test rather than found by a reader.

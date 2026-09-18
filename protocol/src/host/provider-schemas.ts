@@ -1859,7 +1859,7 @@ export type ProviderProfileV91 = z.infer<typeof providerProfileSchemaV91>;
 // member from landing on four shipped wires at once.
 //
 // Why these three and not the other fifty-odd leaves these rows can still
-// reach: see `frozen-lines-reach-no-live-enum.test.ts`, which enumerates the
+// reach: see `__tests__/frozen-lines-reach-no-unreviewed-live-enum.test.ts`, which enumerates the
 // remainder as a reviewed list rather than leaving it to a reader to rediscover.
 
 /**
