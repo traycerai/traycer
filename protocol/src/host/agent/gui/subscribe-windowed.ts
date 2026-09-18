@@ -521,6 +521,9 @@ export const setupCardWindowIdentitySchema = z.object({
    * worktree the transcript pins to the top.
    */
   hasCreatingEvent: z.boolean(),
+  /** Whole-log placement: fork-created worktrees belong after inherited history.
+   * Optional for hosts predating this field; a range can omit the fork event. */
+  isGenesisPin: z.boolean().optional(),
 });
 export type SetupCardWindowIdentity = z.infer<
   typeof setupCardWindowIdentitySchema
@@ -653,6 +656,14 @@ export const chatTranscriptDerivedSchema = z.object({
   setupCardWindows: z.array(setupCardWindowIdentitySchema),
 });
 export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
+
+/** Frozen derived shape for chat.subscribe@1.8–1.12, before fork-aware placement. */
+export const chatTranscriptDerivedSchemaPreSetupPlacement =
+  chatTranscriptDerivedSchema.extend({
+    setupCardWindows: z.array(
+      setupCardWindowIdentitySchema.omit({ isGenesisPin: true }),
+    ),
+  });
 
 /**
  * The hydrated rows a snapshot ships inline - the streaming tail.
