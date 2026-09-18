@@ -236,6 +236,16 @@
       "expect": {
         "throwsAtChunk": 1
       }
+    },
+    {
+      "name": "an over-length line poisons the framer until discard()",
+      "maxLineBytes": 8,
+      "chunksBase64": ["MTIzNDU=", "Njc4OTA="],
+      "expect": {
+        "throwsAtChunk": 1,
+        "afterDiscardBase64": "ZnJlc2gK",
+        "afterDiscardLines": ["fresh"]
+      }
     }
   ]
 }

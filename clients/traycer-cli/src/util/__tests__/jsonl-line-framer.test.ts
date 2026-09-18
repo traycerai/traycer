@@ -25,6 +25,8 @@ type FramerCase = {
   readonly linesPerChunk: readonly (readonly string[])[] | null;
   readonly flush: string | null;
   readonly throwsAtChunk: number | null;
+  readonly afterDiscardChunk: Uint8Array | null;
+  readonly afterDiscardLines: readonly string[] | null;
 };
 
 const VECTORS_PATH = join(
@@ -69,8 +71,45 @@ function loadCases(): readonly FramerCase[] {
     const throwsAt = field(expectation, "throwsAtChunk", "a case's expect");
     const perChunk = field(expectation, "linesPerChunk", "a case's expect");
     const flush = field(expectation, "flush", "a case's expect");
+    const name = stringField(entry, "name", "a vector case");
+    const afterDiscardBase64 = field(
+      expectation,
+      "afterDiscardBase64",
+      "a case's expect",
+    );
+    const afterDiscardLines = field(
+      expectation,
+      "afterDiscardLines",
+      "a case's expect",
+    );
+    // A half-specified vector is a bad vector, not a skipped assertion.
+    if (
+      (afterDiscardBase64 === undefined) !==
+      (afterDiscardLines === undefined)
+    ) {
+      throw new Error(
+        `vector "${name}" carries only one of afterDiscardBase64 / afterDiscardLines`,
+      );
+    }
     return {
-      name: stringField(entry, "name", "a vector case"),
+      name,
+      afterDiscardChunk:
+        afterDiscardBase64 === undefined
+          ? null
+          : new Uint8Array(
+              Buffer.from(
+                stringField(
+                  expectation,
+                  "afterDiscardBase64",
+                  "a case's expect",
+                ),
+                "base64",
+              ),
+            ),
+      afterDiscardLines:
+        afterDiscardLines === undefined
+          ? null
+          : stringArray(afterDiscardLines, "a case's afterDiscardLines"),
       maxLineBytes,
       chunks: stringArray(
         field(entry, "chunksBase64", "a vector case"),
@@ -93,7 +132,7 @@ describe("createJsonlLineFramer against the shared vector table", () => {
   it("the table is present and non-trivial", () => {
     // A vector file that lost its cases would turn every test below into a
     // pass over nothing.
-    expect(CASES.length).toBeGreaterThanOrEqual(14);
+    expect(CASES.length).toBeGreaterThanOrEqual(15);
     const separators = CASES.filter((entry) =>
       entry.chunks.some((chunk) =>
         Buffer.from(chunk).includes(Buffer.from([0xe2, 0x80, 0xa8])),
@@ -128,6 +167,22 @@ describe("createJsonlLineFramer against the shared vector table", () => {
           );
         }
         expect(() => framer.push(throwing)).toThrow(JsonlLineTooLongError);
+        // Faulted: the buffered prefix is not a line, and a 0x0a in a later
+        // chunk is not a boundary. The probe is a chunk a HEALTHY framer
+        // would frame into a line, so an un-poisoned framer cannot pass.
+        expect(framer.flush()).toBeNull();
+        expect([
+          ...framer.push(new Uint8Array(Buffer.from("probe\n"))),
+        ]).toEqual([]);
+        framer.discard();
+        if (
+          framerCase.afterDiscardChunk !== null &&
+          framerCase.afterDiscardLines !== null
+        ) {
+          expect([...framer.push(framerCase.afterDiscardChunk)]).toEqual(
+            framerCase.afterDiscardLines,
+          );
+        }
         return;
       }
       const seen = framerCase.chunks.map((chunk) => [...framer.push(chunk)]);

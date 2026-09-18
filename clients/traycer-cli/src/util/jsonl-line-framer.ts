@@ -63,7 +63,8 @@ export type JsonlLineFramer = {
    * The complete lines this chunk finished, in order. A chunk that finishes
    * none returns an empty array; the bytes are held until a `\n` arrives.
    * Throws {@link JsonlLineTooLongError} when the line in progress passes the
-   * bound, before anything is handed back.
+   * bound, before anything is handed back - and the framer is FAULTED from
+   * then on (see below), so a later push returns nothing.
    */
   push(chunk: Uint8Array): readonly string[];
   /**
@@ -76,9 +77,14 @@ export type JsonlLineFramer = {
    * `readline` did instead was hand that fragment to the client's line
    * handler, which failed to parse it and logged a warning about a stream
    * that had simply been cut.
+   *
+   * `null` once the framer has faulted, whatever was buffered.
    */
   flush(): string | null;
-  /** Drops whatever is buffered: a caller that has stopped reading. */
+  /**
+   * Drops whatever is buffered: a caller that has stopped reading. Also the
+   * only way out of the faulted state.
+   */
   discard(): void;
 };
 
@@ -94,6 +100,34 @@ export function createJsonlLineFramer(options: {
   // Tracked in BYTES, not code points: the bound is a memory bound, and the
   // two differ by up to 4x on non-ASCII text.
   let pendingBytes = 0;
+  /**
+   * Set by an over-length line, cleared only by `discard`.
+   *
+   * A line past the bound is not a bad line, it is a bad STREAM: nothing after
+   * it can be located, and what is buffered is the PREFIX of a line whose end
+   * was never seen. Without this, `flush()` after the throw handed that prefix
+   * back as a line - a truncated one, which is the exact silent corruption
+   * this module exists to remove, arriving through its own error path. No
+   * caller in either repo flushes after a fault today; the property is here so
+   * that staying correct does not depend on every future caller knowing that.
+   */
+  let faulted = false;
+
+  /**
+   * Faults the framer and throws. Never returns.
+   *
+   * It deliberately does NOT clear the buffer, and that is not an oversight:
+   * clearing here would make the `faulted` checks in `push` and `flush`
+   * unreachable, and an unreachable guard is one no test can redden. One
+   * mechanism, checked where it is read. The buffer it leaves behind cannot
+   * grow - a faulted `push` accumulates nothing - so it is bounded by
+   * `maxLineBytes` and released by `discard()`, which every caller in both
+   * repos already calls on a fault.
+   */
+  const fail = (lineBytes: number): never => {
+    faulted = true;
+    throw new JsonlLineTooLongError(lineBytes, maxLineBytes);
+  };
 
   const takeLine = (decoded: string): string => {
     const line = pendingText + decoded;
@@ -109,6 +143,10 @@ export function createJsonlLineFramer(options: {
 
   return {
     push(chunk: Uint8Array): readonly string[] {
+      // Faulted: the stream is desynchronised, so these bytes cannot be
+      // located either. They are dropped rather than framed - a `\n` in them
+      // is not a line boundary, it is a byte that happens to be 0x0a.
+      if (faulted) return [];
       const lines: string[] = [];
       let from = 0;
       for (;;) {
@@ -116,7 +154,10 @@ export function createJsonlLineFramer(options: {
         if (newline === -1) break;
         const lineBytes = pendingBytes + (newline - from);
         if (lineBytes > maxLineBytes) {
-          throw new JsonlLineTooLongError(lineBytes, maxLineBytes);
+          // A complete over-length line, and `pendingText` may already hold
+          // the start of it from an earlier chunk: the same prefix, reached
+          // through the other of the two bounds checks.
+          fail(lineBytes);
         }
         // Decoded in stream mode up to the separator. A `\n` byte can never be
         // part of a multi-byte sequence in UTF-8, so a line boundary is always
@@ -134,7 +175,7 @@ export function createJsonlLineFramer(options: {
         if (pendingBytes > maxLineBytes) {
           // Thrown BEFORE the finished lines are returned, so a caller cannot
           // act on half a chunk and then be told the stream is unusable.
-          throw new JsonlLineTooLongError(pendingBytes, maxLineBytes);
+          fail(pendingBytes);
         }
         pendingText += decoder.decode(rest, { stream: true });
       }
@@ -144,15 +185,19 @@ export function createJsonlLineFramer(options: {
     flush(): string | null {
       // The final, non-streaming decode releases an incomplete multi-byte
       // sequence at the end of the stream as U+FFFD rather than dropping it.
+      // It runs even when faulted, to leave the decoder in the same state
+      // either way.
       const tail = pendingText + decoder.decode();
       pendingText = "";
       pendingBytes = 0;
+      if (faulted) return null;
       return tail.length === 0 ? null : tail;
     },
 
     discard(): void {
       pendingText = "";
       pendingBytes = 0;
+      faulted = false;
       decoder.decode();
     },
   };
