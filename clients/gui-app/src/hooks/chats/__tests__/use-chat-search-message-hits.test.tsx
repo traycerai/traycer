@@ -267,6 +267,9 @@ describe("useChatSearchMessageHits: ready shape", () => {
     expect(result.current.indexState).toBe("partial");
     expect(result.current.loadingMore).toBe(false);
     expect(typeof result.current.showMore).toBe("function");
+    // The base a chat-scoped expansion re-asks with is the one these rows were
+    // ranked under, not one the surface rebuilt from the raw query.
+    expect(result.current.expansionBase).toEqual(latestCall().base);
   });
 
   it("has no showMore when there is no next cursor", () => {

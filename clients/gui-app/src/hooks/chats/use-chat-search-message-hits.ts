@@ -61,6 +61,15 @@ export type ChatSearchMessageHitsStatus =
       readonly kind: "ready";
       readonly messages: ReadonlyArray<ChatSearchMessageMatch>;
       readonly indexState: ChatSearchResponse["indexState"];
+      /**
+       * The request these rows came back for, for a chat-scoped follow-up on
+       * one of them - `ChatSearchExpandedRows` re-asks with `scope: chat` and
+       * needs the query and filters the rows were ranked under. Exposed rather
+       * than rebuilt by the surface: this hook owns the trim, the cap and the
+       * debounce, so a caller reconstructing it would ask a question one
+       * keystroke away from the one it is expanding.
+       */
+      readonly expansionBase: ChatSearchBaseRequest;
       /** Loads the next page; `null` when there is none left. */
       readonly showMore: (() => void) | null;
       readonly loadingMore: boolean;
@@ -160,17 +169,23 @@ export function useChatSearchMessageHits(args: {
         return { kind: "loading" };
       case "error":
         return { kind: "error", message: status.message };
-      case "ready":
+      case "ready": {
+        // A `ready` status is the answer to a request, so there is one to
+        // report. Narrowing rather than asserting keeps the unreachable arm
+        // honest: with no request there are no rows to expand either.
+        if (base === null) return { kind: "absent" };
         return {
           kind: "ready",
           messages: status.results.messageMatches,
           indexState: status.results.indexState,
+          expansionBase: base,
           showMore: nextCursor === null ? null : showMore,
           loadingMore: status.loadingMore,
           // Only the message section is paged here, so a load-more failure can
           // only be its own.
           loadMoreError: status.loadMoreError,
         };
+      }
     }
-  }, [nextCursor, showMore, status]);
+  }, [base, nextCursor, showMore, status]);
 }
