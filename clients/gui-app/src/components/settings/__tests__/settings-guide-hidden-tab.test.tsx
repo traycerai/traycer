@@ -10,7 +10,14 @@
  * side by side in a split.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -43,6 +50,7 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { resetSystemTabModalColdLoadForTests } from "@/stores/tabs/use-system-tab-modal";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 vi.mock("@/components/epics/history-modal-content", () => ({
   HistoryModalContent: () => null,
@@ -187,21 +195,40 @@ function seed(): void {
   }));
 }
 
-function seedSplit(focusedSide: "left" | "right"): void {
+// A split of the task or an EMPTY slot beside Settings (on the right). Focus
+// and route-backing are independent on purpose: focusing an empty slot leaves
+// route-backing on the populated side, which is the state under test.
+function seedSplit(shape: {
+  readonly partner: "task" | "empty";
+  readonly focusedSide: "left" | "right";
+  readonly routeBackingSide: "left" | "right";
+}): void {
   seed();
   useTabsStore.setState({
     items: [
       {
         kind: "split",
         id: "pair",
-        left: { kind: "tab", ref: { kind: "epic", id: "epic-a" } },
+        left:
+          shape.partner === "task"
+            ? { kind: "tab", ref: { kind: "epic", id: "epic-a" } }
+            : { kind: "empty" },
         right: { kind: "tab", ref: { kind: "settings", id: "settings" } },
-        focusedSide,
-        routeBackingSide: focusedSide,
+        focusedSide: shape.focusedSide,
+        routeBackingSide: shape.routeBackingSide,
         leftRatio: 0.5,
       },
     ],
     activeItemId: "pair",
+    // The flat projection the coordinator checks the layout against: an empty
+    // slot contributes no ref.
+    stripOrder:
+      shape.partner === "task"
+        ? [
+            { kind: "epic" as const, id: "epic-a" },
+            { kind: "settings" as const, id: "settings" },
+          ]
+        : [{ kind: "settings" as const, id: "settings" }],
   });
 }
 
@@ -351,7 +378,11 @@ describe("Setup guide in a task + Settings split", () => {
 
   it("moves only what Settings shows, and takes no focus, when the task side is focused", async () => {
     useSettingsStore.setState({ visualLayoutEditorEnabled: true });
-    seedSplit("left");
+    seedSplit({
+      partner: "task",
+      focusedSide: "left",
+      routeBackingSide: "left",
+    });
     useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 3 } });
     const router = buildRouter("/home");
     renderApp(router);
@@ -391,7 +422,11 @@ describe("Setup guide in a task + Settings split", () => {
 
   it("still navigates, activating Settings, when Settings owns focus", async () => {
     useSettingsStore.setState({ visualLayoutEditorEnabled: true });
-    seedSplit("right");
+    seedSplit({
+      partner: "task",
+      focusedSide: "right",
+      routeBackingSide: "right",
+    });
     useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 3 } });
     const router = buildRouter("/settings/appearance");
     renderApp(router);
@@ -409,6 +444,76 @@ describe("Setup guide in a task + Settings split", () => {
       ).not.toBeNull(),
     );
     expect(splitState().focusedSide).toBe("right");
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 3,
+    });
+  });
+
+  // The route can stay on Settings while focus is elsewhere: focusing an EMPTY
+  // slot keeps route-backing on the populated side. Settings then still draws
+  // the ROUTE, and any route change re-focuses Settings - so the guide cannot
+  // follow without taking focus, and defers until Settings has it back.
+  it("defers, without taking focus or the route, while an empty slot is focused, and follows once Settings regains focus", async () => {
+    useSettingsStore.setState({ visualLayoutEditorEnabled: true });
+    seedSplit({
+      partner: "empty",
+      focusedSide: "right",
+      routeBackingSide: "right",
+    });
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 3 } });
+    const router = buildRouter("/settings/appearance");
+    renderApp(router);
+    await waitForGuideOnAppearance();
+    // Focus the empty slot through the real slot handler, as a click does.
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId("top-level-fillable-slot-left"));
+    });
+    await waitFor(() => expect(splitState().focusedSide).toBe("left"));
+    // Route-backing stayed with Settings, which is on screen but unfocused.
+    expect(splitState()).toEqual({
+      focusedSide: "left",
+      routeBackingSide: "right",
+    });
+    expect(settingsSurface().dataset.visible).toBe("true");
+    expect(settingsSurface().dataset.focused).toBe("false");
+    const before = splitState();
+
+    narrowWindow();
+
+    // Nothing moved: the empty slot kept focus, the route stayed, and Settings
+    // still shows Appearance (its guide waits, hidden, for its step's section).
+    expect(splitState()).toEqual(before);
+    expect(router.state.location.pathname).toBe("/settings/appearance");
+    expect(
+      settingsSurface().querySelector("[data-testid='layout-presets-group']"),
+    ).toBeNull();
+    expect(
+      settingsSurface().querySelector("[data-testid='guide-coachmark']"),
+    ).toBeNull();
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 3,
+    });
+
+    // Settings regains focus (the coordinator command a click on its side
+    // issues): the deferred follow lands.
+    act(() => {
+      tabCommandCoordinator.focusSplitSide({ splitId: "pair", side: "right" });
+    });
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/settings/layout"),
+    );
+    await waitFor(() =>
+      expect(
+        settingsSurface().querySelector("[data-testid='layout-presets-group']"),
+      ).not.toBeNull(),
+    );
+    await waitFor(() =>
+      expect(
+        settingsSurface().querySelector("[data-testid='guide-coachmark']"),
+      ).not.toBeNull(),
+    );
     expect(useOnboardingStore.getState().activeSetup).toEqual({
       id: "appearance",
       step: 3,

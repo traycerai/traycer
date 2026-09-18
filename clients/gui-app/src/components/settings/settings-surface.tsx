@@ -45,6 +45,18 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
     [routed, router],
   );
   useSettingsSectionSuccessor(section ?? "general", writeSection);
+  // What the setup guide may do while this surface is on screen but not the
+  // focused one. Only the remembered path can be written without activating:
+  // while Settings still owns the ROUTE (a focused empty slot leaves it there)
+  // any route change re-focuses Settings, so the guide is told to defer.
+  const writeSectionWithoutActivating = useCallback(
+    (next: SettingsSectionId): boolean => {
+      if (routed) return false;
+      rememberSettingsTabSection(next);
+      return true;
+    },
+    [routed],
+  );
   // Phone rules, unchanged in intent from when they lived on the route shell:
   // the rail is a pointer-width affordance, so below md the surface stacks and
   // drills down instead - the index lists the sections, a section shows its
@@ -82,7 +94,10 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
         {isMobile && section === null ? (
           <SettingsSidebar mode={{ kind: "route" }} variant="mobile-list" />
         ) : (
-          <SettingsPanelForSection section={section ?? "general"} />
+          <SettingsPanelForSection
+            section={section ?? "general"}
+            writeSection={writeSectionWithoutActivating}
+          />
         )}
       </div>
     </div>

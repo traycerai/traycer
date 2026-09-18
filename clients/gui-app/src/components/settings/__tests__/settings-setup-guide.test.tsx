@@ -15,6 +15,7 @@ import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const navigateMock = vi.hoisted(() => vi.fn());
+const writeSectionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateMock,
@@ -64,7 +65,11 @@ function Harness(props: { readonly section: SettingsSectionId }) {
   const rootRef = useRef<HTMLDivElement>(null);
   return (
     <div ref={rootRef}>
-      <SettingsSetupGuide section={props.section} rootRef={rootRef} />
+      <SettingsSetupGuide
+        section={props.section}
+        rootRef={rootRef}
+        writeSection={writeSectionMock}
+      />
     </div>
   );
 }
@@ -72,6 +77,8 @@ function Harness(props: { readonly section: SettingsSectionId }) {
 describe("SettingsSetupGuide", () => {
   beforeEach(() => {
     navigateMock.mockReset();
+    writeSectionMock.mockReset();
+    writeSectionMock.mockReturnValue(true);
     useOnboardingStore.setState({
       setupProgress: { agents: -1, appearance: 2, cookies: -1 },
       activeSetup: { id: "appearance", step: 2 },
