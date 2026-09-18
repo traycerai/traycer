@@ -102,16 +102,10 @@ const EMPTY_STEP_ENTRIES: MentionStepEntries = {
 };
 const EMPTY_RECENT_PICKS: ReadonlyMap<string, number> = new Map();
 
-/**
- * The last list built while the workspace lane was NOT refetching, kept so a
- * keystroke shows it unchanged until the host answers for the new query. The
- * previous query's rows re-ranked under the live query, then replaced when
- * the reply landed, were two reorders where one will do.
- */
-interface SettledStepEntries {
+/** Which session and step the hook last published a list for. */
+interface PublishedStepIdentity {
   readonly sessionId: number;
   readonly stepKey: string;
-  readonly entries: MentionStepEntries;
 }
 
 function mentionStepKey(step: MentionFlowStep): string {
@@ -556,11 +550,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, resolvedContext, step],
   );
 
-  const stepEntries = useSettledStepEntries({
+  const stepEntries = liveStepEntries;
+  const holdPublishedItems = useHoldWhileWorkspaceRefetches({
     active,
     sessionId,
     step,
-    liveStepEntries,
     // Loading (no rows at all yet) is not held: there is nothing to hold, and
     // the menu's loading state is the honest thing to show.
     workspaceRefetching:
@@ -636,7 +630,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   }, [active, pickerStore, sessionId, step, stepChrome]);
 
   useEffect(() => {
-    if (!active || sessionId === null) return;
+    // While the workspace lane refetches, the store keeps the list it already
+    // has - built for the previous query, and stamped as such, so the store
+    // refuses to commit from it (see `commitActiveItem`) - rather than taking
+    // that list re-ranked under the live query and then the host's answer.
+    if (!active || sessionId === null || holdPublishedItems) return;
     pickerStore.getState().setItems({
       sessionId,
       kind: "mention",
@@ -652,7 +650,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       loadFailed: false,
       retryLoad: null,
     });
-  }, [active, items, loading, pickerStore, query, sessionId, step]);
+  }, [
+    active,
+    holdPublishedItems,
+    items,
+    loading,
+    pickerStore,
+    query,
+    sessionId,
+    step,
+  ]);
 
   useEffect(() => {
     if (!active) return;
@@ -719,49 +726,50 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   }, [dismissForNoMatches, pickerStore, sessionId]);
 }
 
-interface SettledStepEntriesInput {
+interface HoldWhileWorkspaceRefetchesInput {
   readonly active: boolean;
   readonly sessionId: number | null;
   readonly step: MentionFlowStep;
-  readonly liveStepEntries: MentionStepEntries;
   readonly workspaceRefetching: boolean;
 }
 
 /**
- * Holds the previous ranked list while the workspace lane refetches for the
- * live query. `keepPreviousData` leaves the previous query's rows in the
- * workspace entries during that window, and ranking THEM under the new query
- * reorders the menu once before the host's answer reorders it again. Held
- * rows belong to the session and step they were built for; either changing
- * drops them.
+ * True while the store should keep the list it already has instead of taking
+ * a new publish: the workspace lane is refetching for the live query, and
+ * this session and step have published a list before. `keepPreviousData`
+ * leaves the previous query's rows in the workspace entries during that
+ * window, and ranking THEM under the new query reorders the menu once before
+ * the host's answer reorders it again. A first list for a session or step is
+ * never held back: there is nothing on screen to keep.
  *
- * State rather than a ref because the previous render's list is read DURING
+ * State rather than a ref because the previous render's fact is read DURING
  * render (a ref may not be), and the conditional set is React's own pattern
  * for deriving state from the previous render.
  */
-function useSettledStepEntries(
-  input: SettledStepEntriesInput,
-): MentionStepEntries {
-  const { active, sessionId, step, liveStepEntries, workspaceRefetching } =
-    input;
+function useHoldWhileWorkspaceRefetches(
+  input: HoldWhileWorkspaceRefetchesInput,
+): boolean {
+  const { active, sessionId, step, workspaceRefetching } = input;
   const stepKey = mentionStepKey(step);
-  const [settled, setSettled] = useState<SettledStepEntries | null>(null);
-  const held =
+  const [published, setPublished] = useState<PublishedStepIdentity | null>(
+    null,
+  );
+  const hold =
     workspaceRefetching &&
-    settled !== null &&
-    settled.sessionId === sessionId &&
-    settled.stepKey === stepKey
-      ? settled
-      : null;
+    published !== null &&
+    published.sessionId === sessionId &&
+    published.stepKey === stepKey;
   if (
-    held === null &&
+    !hold &&
     active &&
     sessionId !== null &&
-    (settled === null || settled.entries !== liveStepEntries)
+    (published === null ||
+      published.sessionId !== sessionId ||
+      published.stepKey !== stepKey)
   ) {
-    setSettled({ sessionId, stepKey, entries: liveStepEntries });
+    setPublished({ sessionId, stepKey });
   }
-  return held === null ? liveStepEntries : held.entries;
+  return hold;
 }
 
 interface SourcePendingInput {

@@ -51,6 +51,25 @@ describe("mention pick memory store", () => {
     );
   });
 
+  it("keeps a new pick that shares the oldest retained timestamp at a full bucket", () => {
+    for (let index = 0; index < MENTION_PICK_MEMORY_CAP; index += 1) {
+      useMentionPickMemoryStore
+        .getState()
+        .recordPick(HOST_A, `file:${index}`, index);
+    }
+    // Same clock reading as the oldest retained entry: the cap's stable sort
+    // must not let insertion order evict the pick that was just made.
+    useMentionPickMemoryStore.getState().recordPick(HOST_A, "file:new", 0);
+
+    const bucket = selectMentionPickBucket(
+      useMentionPickMemoryStore.getState(),
+      HOST_A,
+    );
+    expect(Object.keys(bucket)).toHaveLength(MENTION_PICK_MEMORY_CAP);
+    expect(bucket["file:new"]).toEqual({ updatedAt: 0 });
+    expect(bucket["file:0"]).toBeUndefined();
+  });
+
   it("caps the bucket at the 200 most recent ids by updatedAt, evicting the oldest", () => {
     for (let index = 0; index < MENTION_PICK_MEMORY_CAP; index += 1) {
       useMentionPickMemoryStore

@@ -68,18 +68,26 @@ export const useMentionPickMemoryStore = create<MentionPickMemoryStore>()(
     byHost: {},
     recordPick: (hostId, entryId, pickedAt) => {
       if (hostId === null) return;
-      set((state) => ({
-        byHost: {
-          ...state.byHost,
-          [hostId]: cappedByUpdatedAt(
-            {
-              ...selectMentionPickBucket(state, hostId),
-              [entryId]: { updatedAt: pickedAt },
-            },
-            MENTION_PICK_MEMORY_CAP,
-          ),
-        },
-      }));
+      set((state) => {
+        const bucket = selectMentionPickBucket(state, hostId);
+        // The new pick goes FIRST. The cap sorts by `updatedAt` and that sort
+        // is stable, so among entries sharing a timestamp insertion order
+        // decides who survives - a pick appended last at a full bucket would
+        // be the one evicted. Re-inserting rather than overwriting in place
+        // moves a repeated pick to the front for the same reason.
+        const others = Object.fromEntries(
+          Object.entries(bucket).filter(([id]) => id !== entryId),
+        );
+        return {
+          byHost: {
+            ...state.byHost,
+            [hostId]: cappedByUpdatedAt(
+              { [entryId]: { updatedAt: pickedAt }, ...others },
+              MENTION_PICK_MEMORY_CAP,
+            ),
+          },
+        };
+      });
     },
     resetForTests: () => {
       set({ byHost: {} });

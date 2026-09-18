@@ -1173,7 +1173,7 @@ describe("root search recency and path ranking", () => {
     const entries = mentionProviderRegistry.entries(
       ROOT_MENTION_STEP,
       context({
-        query: "compos",
+        query: "composer",
         workspaceEntries: [
           {
             kind: "file",

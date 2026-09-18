@@ -612,6 +612,13 @@ export function createComposerPickerStore(): ComposerPickerStore {
     commitActiveItem: () => {
       const state = get();
       if (!state.open || state.commit === null) return false;
+      // Rows built for another query are on screen for continuity only (the
+      // hook keeps them while the host answers the live query) and are never
+      // inserted: the highlighted row is the previous query's best match, not
+      // this one's. Refusing here absorbs the keypress like any other
+      // can't-commit state; the list becomes committable again the moment
+      // the live query's rows are published.
+      if (state.itemsForQuery !== state.query) return false;
       if (state.activeIndex < 0 || state.activeIndex >= state.items.length) {
         return false;
       }

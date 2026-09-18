@@ -303,6 +303,49 @@ describe("composer picker store - onMentionPick observer", () => {
     expect(observed).toHaveLength(0);
   });
 
+  it("refuses to commit rows that were published for a different query", () => {
+    const store = createComposerPickerStore();
+    const observed: MentionMenuEntry[] = [];
+    store.getState().setMentionPickObserver((observedEntry) => {
+      observed.push(observedEntry);
+    });
+    openMention(store, 1, "au");
+    setMentionItems(store, {
+      sessionId: 1,
+      query: "au",
+      step: ROOT_MENTION_STEP,
+      items: [
+        mentionItem("file-a", { kind: "complete", mention: FILE_MENTION }),
+      ],
+    });
+    // The keystroke moves the query; the rows on screen still belong to "au"
+    // until the hook publishes the "aut" list.
+    store.getState().updateRange({
+      sessionId: 1,
+      range: { from: 0, to: 4 },
+      query: "aut",
+      slashScope: null,
+      clientRect: null,
+    });
+
+    expect(store.getState().commitActiveItem()).toBe(false);
+    expect(observed).toHaveLength(0);
+
+    setMentionItems(store, {
+      sessionId: 1,
+      query: "aut",
+      step: ROOT_MENTION_STEP,
+      items: [
+        mentionItem("file-a", { kind: "complete", mention: FILE_MENTION }),
+      ],
+    });
+
+    expect(store.getState().commitActiveItem()).toBe(true);
+    expect(observed.map((observedEntry) => observedEntry.id)).toEqual([
+      "file-a",
+    ]);
+  });
+
   it("keeps the observer registered across close()", () => {
     const store = createComposerPickerStore();
     const observed: MentionMenuEntry[] = [];
