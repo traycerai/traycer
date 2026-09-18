@@ -30,7 +30,7 @@ export function formatAgentListResponse(response: ListAgentsResponse): string {
     agents.length === 0
       ? `No agents found for scope '${response.scope}'.`
       : formatCategorizedAgents(agents, response.caller.agentId, showSend);
-  return `Agents in epic (relative to you):
+  return `${formatAgentListHeading(response)}
 ${body}
 
 ${formatAgentListLegend(
@@ -40,6 +40,30 @@ ${formatAgentListLegend(
   showOwnerHostConnectivity,
   showSessionState,
 )}`;
+}
+
+/**
+ * Names the task the rows were read from, when the listing says which.
+ *
+ * Every row is a bare agent id, so a listing that does not name its task is
+ * not addressable by anyone it is forwarded to - and now that `agent.list` can
+ * be asked about another task, one agent can hold listings from more than one
+ * and has nothing to tell them apart by.
+ *
+ * Read at RUNTIME rather than typed, for the same reason `archived` and
+ * `ownerHostConnectivity` are on the rows: the released
+ * `listAgentsResponseSchema` has no `epicId`, so a response that has been
+ * through it (the CLI path) has had the key stripped and must keep the older
+ * wording rather than print a task it cannot name. The direct host-side A2A
+ * listing carries it.
+ */
+function formatAgentListHeading(response: ListAgentsResponse): string {
+  if (!("epicId" in response)) return "Agents in epic (relative to you):";
+  const epicId = response.epicId;
+  if (typeof epicId !== "string" || epicId.length === 0) {
+    return "Agents in epic (relative to you):";
+  }
+  return `Agents in task '${epicId}' (relative to you):`;
 }
 
 export function formatAgentSelf(agent: AgentSummary | null): string {
