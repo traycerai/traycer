@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
+import { STORE_KEYS, persistKey } from "@/lib/persist";
 import { ONBOARDING_STEPS } from "@/components/onboarding/onboarding-steps";
 import {
   clampOnboardingStep,
   isLastOnboardingStep,
   onboardingCompletedCount,
   onboardingGuideCount,
+  ONBOARDING_PERSIST_VERSION,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 import { setupGuideLength } from "@/stores/onboarding/setup-guides";
@@ -113,15 +114,16 @@ describe("useOnboardingStore", () => {
     ).toBe(completedCount);
   });
 
-  it("starts, pauses, and resumes appearance at its saved step", () => {
+  it("starts appearance and resumes it at its saved step", () => {
     const store = useOnboardingStore.getState();
     store.startSetup("appearance");
     store.advanceSetup();
-    store.pauseSetup();
 
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
     expect(useOnboardingStore.getState().setupProgress.appearance).toBe(1);
 
+    // The settings surface closing leaves `activeSetup` alone, so reopening it
+    // and starting the card again lands on the step it left off at.
+    useOnboardingStore.setState({ activeSetup: null });
     useOnboardingStore.getState().startSetup("appearance");
 
     expect(useOnboardingStore.getState().activeSetup).toEqual({
@@ -407,7 +409,7 @@ describe("useOnboardingStore", () => {
           setupProgress: { agents: 0, appearance: 2, cookies: 1 },
           activeSetup: { id: "appearance", step: 2 },
         },
-        version: CURRENT_PERSIST_VERSION,
+        version: ONBOARDING_PERSIST_VERSION,
       }),
     );
 
@@ -428,7 +430,7 @@ describe("useOnboardingStore", () => {
       PERSIST_KEY,
       JSON.stringify({
         state: { completedAt: null, step: 3 },
-        version: CURRENT_PERSIST_VERSION,
+        version: ONBOARDING_PERSIST_VERSION,
       }),
     );
 
@@ -451,7 +453,7 @@ describe("useOnboardingStore", () => {
           setupProgress: { agents: 10, appearance: "later", cookies: 0 },
           activeSetup: { id: "cookies", step: 0 },
         },
-        version: CURRENT_PERSIST_VERSION,
+        version: ONBOARDING_PERSIST_VERSION,
       }),
     );
 
@@ -463,5 +465,65 @@ describe("useOnboardingStore", () => {
       cookies: 0,
     });
     expect(useOnboardingStore.getState().activeSetup).toBeNull();
+  });
+
+  // v1 predates the checklist, so everyone already using the app landed on
+  // three open cards and a reminder toast for work they were not waiting on.
+  it("settles an untouched checklist for a user who finished the tour before it existed", async () => {
+    const timestamp = 1_600_000_000_000;
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { completedAt: timestamp, setupReminderDismissed: false },
+        version: 1,
+      }),
+    );
+
+    await useOnboardingStore.persist.rehydrate();
+
+    expect(useOnboardingStore.getState().completedAt).toBe(timestamp);
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(onboardingGuideCount(DESKTOP));
+  });
+
+  it("leaves a part-way checklist and an unfinished tour to the user", async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          completedAt: 1_600_000_000_000,
+          setupProgress: { agents: -1, appearance: 2, cookies: -1 },
+        },
+        version: 1,
+      }),
+    );
+
+    await useOnboardingStore.persist.rehydrate();
+
+    expect(useOnboardingStore.getState().setupProgress).toEqual({
+      agents: -1,
+      appearance: 2,
+      cookies: -1,
+    });
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({ state: { completedAt: null }, version: 1 }),
+    );
+
+    await useOnboardingStore.persist.rehydrate();
+
+    expect(useOnboardingStore.getState().setupProgress).toEqual({
+      agents: -1,
+      appearance: -1,
+      cookies: -1,
+    });
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    expect(
+      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
+    ).toBe(0);
   });
 });

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSetupGuide } from "@/components/settings/settings-setup-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -14,6 +15,7 @@ vi.mock("@/lib/settings-navigation", () => ({
 vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
   OnboardingCoachmark: (props: {
     readonly progress: { readonly step: number; readonly total: number } | null;
+    readonly onClose: () => void;
     readonly action: {
       readonly label: string;
       readonly onClick: () => void;
@@ -29,6 +31,10 @@ vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
           data-testid="guide-coachmark-progress"
         />
       )}
+      {/* The real card closes on its X and on Escape; both are this prop. */}
+      <button type="button" onClick={props.onClose}>
+        Dismiss
+      </button>
       {props.action === null ? null : (
         <button type="button" onClick={props.action.onClick}>
           {props.action.label}
@@ -96,5 +102,19 @@ describe("SettingsSetupGuide", () => {
       step: 3,
     });
     expect(navigateMock).toHaveBeenCalledWith("layout");
+  });
+
+  // A skip is a decision, not a pause: the person has been shown the guide and
+  // declined it, so the card must not keep asking.
+  it("completes the guide when the card is dismissed part-way through", async () => {
+    render(<Harness section="appearance" />);
+    await screen.findByTestId("guide-coachmark");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
+      setupGuideLength("appearance"),
+    );
   });
 });

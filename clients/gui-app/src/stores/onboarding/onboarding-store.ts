@@ -7,6 +7,7 @@ import {
   setupGuide,
   setupGuideCompletedBy,
   setupGuideLength,
+  SETUP_GUIDE_IDS,
   type SetupGuideEvent,
   type SetupGuideId,
   type SetupGuideShell,
@@ -23,6 +24,12 @@ const setupProgressSchema = z.object({
   cookies: z.number().int().min(-1).max(setupGuideLength("cookies")).catch(-1),
 });
 const emptySetupProgress = { agents: -1, appearance: -1, cookies: -1 };
+/** Every guide at its own length, which is the value that means complete. */
+const completedSetupProgress = (): Record<SetupGuideId, number> => ({
+  agents: setupGuideLength("agents"),
+  appearance: setupGuideLength("appearance"),
+  cookies: setupGuideLength("cookies"),
+});
 
 const lastStepOf = (stepCount: number): number => Math.max(0, stepCount - 1);
 
@@ -51,7 +58,6 @@ interface OnboardingState {
     readonly step: number;
   } | null;
   readonly startSetup: (id: SetupGuideId) => void;
-  readonly pauseSetup: () => void;
   readonly advanceSetup: () => void;
   readonly retreatSetup: () => void;
   readonly completeSetup: (id: SetupGuideId) => void;
@@ -103,6 +109,8 @@ export function onboardingCompletedCount(
 }
 
 const ONBOARDING_PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
+/** v2 settles the checklist - see `migrateOnboardingPersistedState`. */
+export const ONBOARDING_PERSIST_VERSION = 2;
 
 function persistedCompletedAt(persistedState: unknown): number | null {
   if (typeof persistedState !== "object" || persistedState === null) {
@@ -111,6 +119,63 @@ function persistedCompletedAt(persistedState: unknown): number | null {
   if (!("completedAt" in persistedState)) return null;
   const completedAt = persistedState.completedAt;
   return typeof completedAt === "number" ? completedAt : null;
+}
+
+/** Exactly what this store keeps in localStorage - see `partialize` below. */
+interface OnboardingPersistedState {
+  readonly completedAt: number | null;
+  readonly setupReminderDismissed: boolean;
+  readonly setupProgress: Record<SetupGuideId, number>;
+}
+
+/**
+ * The one reader for a persisted blob, so a rehydration and a migration see
+ * the same sanitized state rather than each making their own guesses about a
+ * shape localStorage is free to hold anything in.
+ */
+function readOnboardingPersistedState(
+  persistedState: unknown,
+): OnboardingPersistedState {
+  return {
+    completedAt: persistedCompletedAt(persistedState),
+    setupReminderDismissed: z
+      .object({ setupReminderDismissed: z.boolean().catch(false) })
+      .catch({ setupReminderDismissed: false })
+      .parse(persistedState).setupReminderDismissed,
+    setupProgress: setupProgressSchema
+      .catch(emptySetupProgress)
+      .parse(
+        typeof persistedState === "object" &&
+          persistedState !== null &&
+          "setupProgress" in persistedState
+          ? (persistedState.setupProgress ?? {})
+          : {},
+      ),
+  };
+}
+
+/**
+ * v2 settles the checklist for anyone who finished onboarding before it
+ * existed: they have been using the app already, so three untouched cards and
+ * a reminder toast are a nag about work they are not waiting on. Only an
+ * untouched checklist is settled - someone part-way through a guide keeps
+ * their progress and is still offered the rest of it. `migrate` runs on the
+ * version bump alone, which is exactly the once this should happen.
+ */
+function migrateOnboardingPersistedState(
+  persistedState: unknown,
+): OnboardingPersistedState {
+  const persisted = readOnboardingPersistedState(persistedState);
+  if (
+    persisted.completedAt === null ||
+    SETUP_GUIDE_IDS.some((id) => persisted.setupProgress[id] !== -1)
+  )
+    return persisted;
+  return {
+    ...persisted,
+    setupProgress: completedSetupProgress(),
+    setupReminderDismissed: true,
+  };
 }
 
 export const useOnboardingStore = create<OnboardingState>()(
@@ -133,7 +198,6 @@ export const useOnboardingStore = create<OnboardingState>()(
           },
         });
       },
-      pauseSetup: () => set({ activeSetup: null }),
       advanceSetup: () => {
         const active = get().activeSetup;
         if (active === null) return;
@@ -211,23 +275,13 @@ export const useOnboardingStore = create<OnboardingState>()(
     }),
     {
       ...basePersistOptions(ONBOARDING_PERSIST_KEY),
+      version: ONBOARDING_PERSIST_VERSION,
       storage: createJSONStorage(() => localStorage),
+      migrate: (persistedState) =>
+        migrateOnboardingPersistedState(persistedState),
       merge: (persistedState, currentState) => ({
         ...currentState,
-        completedAt: persistedCompletedAt(persistedState),
-        setupReminderDismissed: z
-          .object({ setupReminderDismissed: z.boolean().catch(false) })
-          .catch({ setupReminderDismissed: false })
-          .parse(persistedState).setupReminderDismissed,
-        setupProgress: setupProgressSchema
-          .catch(emptySetupProgress)
-          .parse(
-            typeof persistedState === "object" &&
-              persistedState !== null &&
-              "setupProgress" in persistedState
-              ? (persistedState.setupProgress ?? {})
-              : {},
-          ),
+        ...readOnboardingPersistedState(persistedState),
         activeSetup: null,
         step: 0,
       }),
