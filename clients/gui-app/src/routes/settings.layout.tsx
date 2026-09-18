@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { LayoutSettingsRoute } from "@/components/settings/panels/layout-settings-route";
+import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
 
 export const Route = createFileRoute("/settings/layout")({
-  component: LayoutSettingsRoute,
+  component: LayoutSettingsPanel,
 });

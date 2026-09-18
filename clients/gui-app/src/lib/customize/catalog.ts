@@ -34,14 +34,18 @@ const LOCATIONS: Record<
   header: { where: "In the header", needs: "none" },
   tabs: { where: "In the tab strip", needs: "none" },
 };
-function setting(
-  id: CustomizeSettingId,
-  definition: {
+interface SettingInput {
+  readonly definition: {
     readonly label: string;
     readonly keywords: ReadonlyArray<string>;
-  },
-  kind: CustomizeSetting["kind"],
-  analytics: AnalyticsSetting,
+  };
+  readonly kind: CustomizeSetting["kind"];
+  readonly analytics: AnalyticsSetting;
+}
+
+function setting(
+  id: CustomizeSettingId,
+  input: SettingInput,
 ): CustomizeSetting {
   const surfaces: ReadonlyArray<CustomizeSetting["surface"]> = [
     "statusBar",
@@ -56,24 +60,22 @@ function setting(
   return {
     id,
     surface,
-    label: definition.label,
-    keywords: definition.keywords,
-    kind,
-    analytics,
+    label: input.definition.label,
+    keywords: input.definition.keywords,
+    kind: input.kind,
+    analytics: input.analytics,
     absent: LOCATIONS[surface],
   };
 }
 
-export const CUSTOMIZE_CATALOG: ReadonlyArray<CustomizeSetting> = [
-  setting(
-    "statusBar.placement",
-    LAYOUT.definitions.placement,
-    "choice",
-    "layout.statusBar.placement",
-  ),
-  setting(
-    "statusBar.usage",
-    {
+const SETTING_INPUTS = {
+  "statusBar.placement": {
+    definition: LAYOUT.definitions.placement,
+    kind: "choice",
+    analytics: "layout.statusBar.placement",
+  },
+  "statusBar.usage": {
+    definition: {
       label: LAYOUT.definitions.usageLimits.label,
       keywords: [
         ...LAYOUT.definitions.usageLimits.keywords,
@@ -83,24 +85,21 @@ export const CUSTOMIZE_CATALOG: ReadonlyArray<CustomizeSetting> = [
         ...LAYOUT.definitions.miniBar.keywords,
       ],
     },
-    "composite",
-    "layout.statusBar.rateLimits.enabled",
-  ),
-  setting(
-    "statusBar.provider",
-    LAYOUT.definitions.providers,
-    "composite",
-    "layout.statusBar.rateLimits.provider",
-  ),
-  setting(
-    "statusBar.resources",
-    LAYOUT.definitions.resourceMonitor,
-    "composite",
-    "layout.statusBar.resources.enabled",
-  ),
-  setting(
-    "header.usage",
-    {
+    kind: "composite",
+    analytics: "layout.statusBar.rateLimits.enabled",
+  },
+  "statusBar.provider": {
+    definition: LAYOUT.definitions.providers,
+    kind: "composite",
+    analytics: "layout.statusBar.rateLimits.provider",
+  },
+  "statusBar.resources": {
+    definition: LAYOUT.definitions.resourceMonitor,
+    kind: "composite",
+    analytics: "layout.statusBar.resources.enabled",
+  },
+  "header.usage": {
+    definition: {
       label: LAYOUT.definitions.usageLimits.label,
       keywords: [
         ...LAYOUT.definitions.usageLimits.keywords,
@@ -110,70 +109,65 @@ export const CUSTOMIZE_CATALOG: ReadonlyArray<CustomizeSetting> = [
         ...LAYOUT.definitions.miniBar.keywords,
       ],
     },
-    "composite",
-    "layout.statusBar.rateLimits.enabled",
-  ),
-  setting("tabs.home", LAYOUT.definitions.homeTab, "toggle", "homeTabEnabled"),
-  setting(
-    "composer.attachImage",
-    LAYOUT.definitions.composerAttachImage,
-    "choice",
-    "layout.composer.attachImage",
-  ),
-  setting(
-    "composer.access",
-    LAYOUT.definitions.composerAccess,
-    "choice",
-    "layout.composer.access",
-  ),
-  setting(
-    "composer.harness",
-    {
+    kind: "composite",
+    analytics: "layout.statusBar.rateLimits.enabled",
+  },
+  "tabs.home": {
+    definition: LAYOUT.definitions.homeTab,
+    kind: "toggle",
+    analytics: "homeTabEnabled",
+  },
+  "composer.attachImage": {
+    definition: LAYOUT.definitions.composerAttachImage,
+    kind: "choice",
+    analytics: "layout.composer.attachImage",
+  },
+  "composer.access": {
+    definition: LAYOUT.definitions.composerAccess,
+    kind: "choice",
+    analytics: "layout.composer.access",
+  },
+  "composer.harness": {
+    definition: {
       label: "Provider",
       keywords: ["harness", "provider", "toolbar", "order"],
     },
-    "choice",
-    "layout.composer.toolbarOrder",
-  ),
-  setting(
-    "composer.model",
-    {
+    kind: "choice",
+    analytics: "layout.composer.toolbarOrder",
+  },
+  "composer.model": {
+    definition: {
       label: LAYOUT.definitions.composerReasoning.label,
       keywords: [
         ...LAYOUT.definitions.composerReasoning.keywords,
         ...LAYOUT.definitions.composerReasoningControl.keywords,
       ],
     },
-    "composite",
-    "layout.composer.reasoningIndicator",
-  ),
-  setting(
-    "composer.mic",
-    LAYOUT.definitions.composerMic,
-    "choice",
-    "layout.composer.mic",
-  ),
-  setting(
-    "composer.filesChanged",
-    LAYOUT.definitions.composerFilesChanged,
-    "choice",
-    "layout.composer.filesChanged",
-  ),
-  setting(
-    "composer.activeAgents",
-    LAYOUT.definitions.composerActiveAgents,
-    "choice",
-    "layout.composer.activeAgents",
-  ),
-  setting(
-    "composer.background",
-    LAYOUT.definitions.composerBackground,
-    "choice",
-    "layout.composer.background",
-  ),
-  setting(
-    "chat.context",
-    {
+    kind: "composite",
+    analytics: "layout.composer.reasoningIndicator",
+  },
+  "composer.mic": {
+    definition: LAYOUT.definitions.composerMic,
+    kind: "choice",
+    analytics: "layout.composer.mic",
+  },
+  "composer.filesChanged": {
+    definition: LAYOUT.definitions.composerFilesChanged,
+    kind: "choice",
+    analytics: "layout.composer.filesChanged",
+  },
+  "composer.activeAgents": {
+    definition: LAYOUT.definitions.composerActiveAgents,
+    kind: "choice",
+    analytics: "layout.composer.activeAgents",
+  },
+  "composer.background": {
+    definition: LAYOUT.definitions.composerBackground,
+    kind: "choice",
+    analytics: "layout.composer.background",
+  },
+  "chat.context": {
+    definition: {
       label: LAYOUT.definitions.contextIndicator.label,
       keywords: [
         ...LAYOUT.definitions.contextIndicator.keywords,
@@ -181,28 +175,41 @@ export const CUSTOMIZE_CATALOG: ReadonlyArray<CustomizeSetting> = [
         ...LAYOUT.definitions.composerCompactButton.keywords,
       ],
     },
-    "composite",
-    "contextIndicatorStyle",
-  ),
-  setting(
-    "chat.minimapSide",
-    LAYOUT.definitions.minimapSide,
-    "choice",
-    "chatTurnMinimapSide",
-  ),
-  setting(
-    "sidebar.panel",
-    LAYOUT.definitions.sidebarPanels,
-    "toggle",
-    "layout.sidebar.panelVisibility",
-  ),
-  setting(
-    "sidebar.resourceChips",
-    LAYOUT.definitions.sidebarResourceChips,
-    "multi",
-    "layout.sidebar.resourceMetrics",
-  ),
-];
+    kind: "composite",
+    analytics: "contextIndicatorStyle",
+  },
+  "chat.minimapSide": {
+    definition: LAYOUT.definitions.minimapSide,
+    kind: "choice",
+    analytics: "chatTurnMinimapSide",
+  },
+  "sidebar.panel": {
+    definition: LAYOUT.definitions.sidebarPanels,
+    kind: "toggle",
+    analytics: "layout.sidebar.panelVisibility",
+  },
+  "sidebar.resourceChips": {
+    definition: LAYOUT.definitions.sidebarResourceChips,
+    kind: "multi",
+    analytics: "layout.sidebar.resourceMetrics",
+  },
+} satisfies Record<CustomizeSettingId, SettingInput>;
+
+function isCustomizeSettingId(key: string): key is CustomizeSettingId {
+  return key in SETTING_INPUTS;
+}
+
+/**
+ * Every setting, in declaration order. Keyed by the id union above, so a member
+ * of the union with no entry, an entry the union does not name, and (as an
+ * object literal) a duplicated id are each a compile error - the catalog cannot
+ * drift from the ids the rest of the editor addresses settings by.
+ */
+export const CUSTOMIZE_CATALOG: ReadonlyArray<CustomizeSetting> = Object.keys(
+  SETTING_INPUTS,
+)
+  .filter(isCustomizeSettingId)
+  .map((id) => setting(id, SETTING_INPUTS[id]));
 
 export function getCustomizeSetting(id: CustomizeSettingId): CustomizeSetting {
   const entry = CUSTOMIZE_CATALOG.find((item) => item.id === id);

@@ -29,6 +29,11 @@ import type {
  * picture and not a control: callers wrap it `inert aria-hidden`, and it
  * carries no text a reader could not get from the labels beside it.
  *
+ * **Its own container.** The root is a query container, so the responsive
+ * leaves inside it (`@max-lg`, `cqw` caps) measure THIS picture's width and not
+ * the Appearance page's: without it a preset card a fifth of the page wide
+ * would draw the leaves' wide variant inside a small frame.
+ *
  * Drawn from the leaves and not from the real tab strip / toolbar / dock, which
  * would mount the app's chrome a second time (host queries, keyboard handlers,
  * activation registration) to show what a row of icons can.
@@ -38,7 +43,7 @@ export function LayoutThumbnail(): ReactNode {
   const homeTab = useLayoutSetting("homeTabEnabled");
   const usageShown = useStatusBarRateLimitValue("enabled");
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2 overflow-hidden text-ui-sm">
+    <div className="@container flex w-full min-w-0 flex-col gap-2 overflow-hidden text-ui-sm">
       <ThumbnailRow>
         {homeTab ? (
           <CustomizeOptionPicture id="tabs.home" value="visible" />

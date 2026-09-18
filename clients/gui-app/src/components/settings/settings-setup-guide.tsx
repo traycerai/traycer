@@ -1,4 +1,4 @@
-import { lazy, Suspense, type RefObject } from "react";
+import { lazy, Suspense, useEffect, useRef, type RefObject } from "react";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
@@ -27,6 +27,28 @@ export function SettingsSetupGuide(props: {
   // and its Escape, and a coachmark pointing into Settings would float over it.
   // The guide resumes at the same step when the session ends.
   const customizing = useCustomizeStore((state) => state.session !== null);
+  // A step whose twin applies is shown in the twin's section, so when the
+  // editor's availability flips (the switch, or the window crossing `md`) the
+  // step the reader is looking at can move to another section under them. The
+  // guide follows it, the way Continue would - but only from the section the
+  // step was being shown in, so a reader who wandered to another section by
+  // hand is not pulled back, and never on a render that changed nothing.
+  const editor = availability.customizeEditor;
+  const previousEditor = useRef(editor);
+  useEffect(() => {
+    const before = previousEditor.current;
+    previousEditor.current = editor;
+    if (before === editor || active === null || customizing) return;
+    const raw = setupGuide(active.id).steps[active.step];
+    const was = resolveSetupGuideStep(raw, {
+      ...availability,
+      customizeEditor: before,
+    });
+    const now = resolveSetupGuideStep(raw, availability);
+    if (was.section === props.section && now.section !== props.section) {
+      navigateToSettingsSection(now.section);
+    }
+  }, [editor, availability, active, customizing, props.section]);
   // Nothing on unmount: development roots render under StrictMode, whose mount
   // probe runs every effect's cleanup once, which would clear the guide the
   // moment it started. `activeSetup` is session-local presence, so a closed

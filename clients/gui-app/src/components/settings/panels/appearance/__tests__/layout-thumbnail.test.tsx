@@ -27,6 +27,17 @@ afterEach(() => {
 const MIC = "Start voice input";
 
 describe("<LayoutThumbnail />", () => {
+  // The composer's own `@sm:` / `@md:` breakpoints size against the nearest
+  // container. Without one of its own the picture would size against Settings'
+  // pane and draw a layout the real composer never has at that width.
+  it("is its own size container", () => {
+    const { container } = render(<LayoutThumbnail />);
+
+    expect(container.firstElementChild?.classList.contains("@container")).toBe(
+      true,
+    );
+  });
+
   it("draws the stored layout when nothing overrides it", () => {
     render(<LayoutThumbnail />);
 

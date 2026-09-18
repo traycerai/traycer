@@ -28,8 +28,7 @@ import { PermissionsSettingsPanel } from "@/components/settings/panels/permissio
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isCustomizeAvailable } from "@/lib/settings/settings-availability";
+import { useSettingsSectionSuccessor } from "@/hooks/settings/use-settings-section-successor";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 import "./settings-search.css";
@@ -52,18 +51,13 @@ export function SettingsModalContent(
   props: SettingsModalContentProps,
 ): ReactNode {
   const { setSection } = useSystemTabModalActions();
-  const availability = useSettingsAvailabilityContext();
   const requested: SettingsSectionId = props.section ?? "general";
-  const offered: SettingsSectionId = isSettingsSectionVisible(requested)
+  const section: SettingsSectionId = isSettingsSectionVisible(requested)
     ? requested
     : "general";
-  // The Layout page's successor: a remembered `layout` section opens the
-  // Appearance page the editor's card lives on, the modal's counterpart of the
-  // route's redirect (the modal has no route to redirect).
-  const section: SettingsSectionId =
-    offered === "layout" && isCustomizeAvailable(availability)
-      ? "appearance"
-      : offered;
+  // A section that has moved (Layout, once the editor exists) is rewritten in
+  // the modal's own store, so the state the modal keeps says where it is.
+  useSettingsSectionSuccessor(section, setSection);
   return (
     <SettingsDensityContext.Provider value="compact">
       <div className="flex min-h-0 min-w-0 flex-1">

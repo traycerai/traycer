@@ -1,4 +1,5 @@
-import { useRouterState } from "@tanstack/react-router";
+import { useCallback } from "react";
+import { useRouter, useRouterState } from "@tanstack/react-router";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { SettingsPanelForSection } from "@/components/settings/settings-modal-content";
 import {
@@ -6,11 +7,19 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useSettingsSectionSuccessor } from "@/hooks/settings/use-settings-section-successor";
+import { activateTabIntent, settingsTabIntent } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
+import { settingsSectionPath } from "@/stores/tabs/kinds/settings";
+import { useTabsStore } from "@/stores/tabs/store";
 import "./settings-touch-targets.css";
 
 /** Route-independent Settings body. The current route selects its section. */
 export function SettingsSurface(props: { readonly lastPath: string | null }) {
+  const router = useRouter();
+  const routed = useRouterState({
+    select: (state) => state.location.pathname.startsWith("/settings"),
+  });
   const sectionPath = useRouterState({
     select: (state) =>
       state.location.pathname.startsWith("/settings")
@@ -20,6 +29,25 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
   // `null` at `/settings` itself - the index, which is depth 0 of the phone
   // drill-down and NOT a section.
   const section = settingsSectionFromPath(sectionPath);
+  // A section that has moved (Layout, once the editor exists) is rewritten in
+  // this tab's own state: the route while Settings owns it - REPLACED, so Back
+  // never lands on a path that would only be moved again - and the remembered
+  // path while a split partner owns the route.
+  const writeSection = useCallback(
+    (successor: SettingsSectionId): void => {
+      if (routed) {
+        activateTabIntent(router.navigate, settingsTabIntent(successor), {
+          replace: true,
+        });
+        return;
+      }
+      useTabsStore
+        .getState()
+        .rememberSystemTabPath("settings", settingsSectionPath(successor));
+    },
+    [routed, router],
+  );
+  useSettingsSectionSuccessor(section ?? "general", writeSection);
   // Phone rules, unchanged in intent from when they lived on the route shell:
   // the rail is a pointer-width affordance, so below md the surface stacks and
   // drills down instead - the index lists the sections, a section shows its

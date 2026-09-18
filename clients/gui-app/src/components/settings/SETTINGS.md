@@ -1471,9 +1471,16 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     composes into every member), its rail entry is skipped (the row is drawn
     conditionally but keeps its index, so no leader digit moves - the digit left on Layout still
     lands, on Appearance), the panel draws nothing, `/settings/layout`
-    (`panels/layout-settings-route.tsx`, a component-level redirect because the
-    decision reads a store and the viewport) replaces itself with
-    `/settings/appearance` and arms the reveal for the Customize card, and the modal resolves a remembered `layout` section to Appearance.
+    (the route's component is never mounted in production - the Settings tab
+    and modal host the panels themselves) is answered by ONE hook,
+    `useSettingsSectionSuccessor` (`hooks/settings/use-settings-section-successor.ts`),
+    which both presentations call with their own writer: the modal writes the
+    successor into `useSettingsSectionStore`, the tab replaces the route with
+    `/settings/appearance` (or, when a split partner owns the route, rewrites the
+    tab's remembered path). It writes the STATE - never a render-only alias - and
+    arms the reveal for the Customize card. The setup guide follows its step the
+    same way when availability flips mid-guide, but only from the section it was
+    being shown in.
     Nothing is deleted: with the switch off, and in a window narrower than `md`
     whatever the switch says, this is the full page exactly as documented here.
     **The narrow page is RETAINED until a scoped narrow replacement exists** -

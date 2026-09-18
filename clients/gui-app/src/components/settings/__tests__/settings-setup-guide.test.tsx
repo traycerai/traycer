@@ -1,5 +1,11 @@
 import { StrictMode, useRef } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSetupGuide } from "@/components/settings/settings-setup-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
@@ -46,6 +52,14 @@ vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
   ),
 }));
 
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    value: width,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function Harness(props: { readonly section: SettingsSectionId }) {
   const rootRef = useRef<HTMLDivElement>(null);
   return (
@@ -68,6 +82,7 @@ describe("SettingsSetupGuide", () => {
     cleanup();
     useSettingsStore.setState({ visualLayoutEditorEnabled: false });
     useCustomizeStore.setState({ session: null });
+    setViewportWidth(1024);
   });
 
   it("keeps the guide running through StrictMode's mount probe", async () => {
@@ -179,6 +194,113 @@ describe("SettingsSetupGuide", () => {
         setupGuideLength("appearance"),
       );
       expect(navigateMock).toHaveBeenCalledWith("getting-started");
+    });
+
+    // The step is shown in the twin's section, so the switch moving under a
+    // reader parks the coachmark in a section that no longer shows it. The guide
+    // follows its step, and only from the section it was being shown in.
+    it("follows a density step to Layout when the switch goes off mid-guide", () => {
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 3 },
+      });
+      render(<Harness section="appearance" />);
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      act(() => {
+        useSettingsStore.setState({ visualLayoutEditorEnabled: false });
+      });
+
+      expect(navigateMock).toHaveBeenCalledTimes(1);
+      expect(navigateMock).toHaveBeenCalledWith("layout");
+      // Progress is the guide's, not the section's.
+      expect(useOnboardingStore.getState().activeSetup).toEqual({
+        id: "appearance",
+        step: 3,
+      });
+    });
+
+    it("follows a density step to Appearance when the switch goes on mid-guide", () => {
+      useSettingsStore.setState({ visualLayoutEditorEnabled: false });
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 3 },
+      });
+      render(<Harness section="layout" />);
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      act(() => {
+        useSettingsStore.setState({ visualLayoutEditorEnabled: true });
+      });
+
+      expect(navigateMock).toHaveBeenCalledTimes(1);
+      expect(navigateMock).toHaveBeenCalledWith("appearance");
+      expect(useOnboardingStore.getState().activeSetup).toEqual({
+        id: "appearance",
+        step: 3,
+      });
+    });
+
+    it("follows the step when the window narrows below md", () => {
+      // The viewport hook listens to the media query, so the test owns that
+      // listener and fires it the way the browser does on a resize.
+      const listeners = new Set<() => void>();
+      const original = window.matchMedia;
+      window.matchMedia = (query: string): MediaQueryList => {
+        const list = original.call(window, query);
+        list.addEventListener = (
+          _type: string,
+          listener: EventListenerOrEventListenerObject,
+        ): void => {
+          listeners.add(() => {
+            if (typeof listener === "function") listener(new Event("change"));
+            else listener.handleEvent(new Event("change"));
+          });
+        };
+        return list;
+      };
+      try {
+        setViewportWidth(1280);
+        useOnboardingStore.setState({
+          activeSetup: { id: "appearance", step: 3 },
+        });
+        render(<Harness section="appearance" />);
+
+        act(() => {
+          setViewportWidth(500);
+          for (const listener of listeners) listener();
+        });
+
+        expect(navigateMock).toHaveBeenCalledTimes(1);
+        expect(navigateMock).toHaveBeenCalledWith("layout");
+      } finally {
+        window.matchMedia = original;
+      }
+    });
+
+    it("does not pull back a reader who wandered to another section", () => {
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 3 },
+      });
+      // Mounted on a section that never showed the step.
+      render(<Harness section="general" />);
+
+      act(() => {
+        useSettingsStore.setState({ visualLayoutEditorEnabled: false });
+      });
+
+      expect(navigateMock).not.toHaveBeenCalled();
+    });
+
+    it("does not navigate for a step that lives in the same section either way", () => {
+      useOnboardingStore.setState({
+        activeSetup: { id: "appearance", step: 2 },
+      });
+      render(<Harness section="appearance" />);
+
+      act(() => {
+        useSettingsStore.setState({ visualLayoutEditorEnabled: false });
+      });
+
+      expect(navigateMock).not.toHaveBeenCalled();
     });
 
     it("draws nothing while a Customize session is running, and resumes after", async () => {
