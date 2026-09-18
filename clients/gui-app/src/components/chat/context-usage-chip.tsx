@@ -25,7 +25,10 @@ import {
   type ContextUsageRow,
   type EffectiveContextUsage,
 } from "@/components/chat/context-usage";
-import { useComposerLayout, useLayoutSetting } from "@/lib/layout-overrides";
+import {
+  useComposerLayoutValue,
+  useLayoutSetting,
+} from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import {
   useSettingsStore,
@@ -326,7 +329,7 @@ interface CompactActionProps {
  * the same compaction.
  */
 function CompactAction({ onCompact }: CompactActionProps) {
-  const compactButton = useComposerLayout().compactButton;
+  const compactButton = useComposerLayoutValue("compactButton");
   if (compactButton === "hidden") return null;
   return (
     <TooltipWrapper

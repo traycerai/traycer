@@ -2,7 +2,7 @@ import { useCallback, useRef, type ChangeEvent } from "react";
 import { ImagePlus } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useComposerLayout } from "@/lib/layout-overrides";
+import { useComposerLayoutValue } from "@/lib/layout-overrides";
 
 interface ComposerAttachImageButtonProps {
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
@@ -27,7 +27,7 @@ export function ComposerAttachImageButton(
 ) {
   const { onAttachImages } = props;
   const inputRef = useRef<HTMLInputElement>(null);
-  const attachImage = useComposerLayout().attachImage;
+  const attachImage = useComposerLayoutValue("attachImage");
 
   const handleOpenImagePicker = useCallback(() => {
     const input = inputRef.current;

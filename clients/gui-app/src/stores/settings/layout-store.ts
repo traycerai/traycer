@@ -377,8 +377,14 @@ const RESOURCE_METRIC_ORDER: ReadonlyArray<ResourceMetric> = [
   "ramShare",
 ];
 
-/** What a provider draws until told otherwise: its tightest limit, and only that. */
-const AUTOMATIC_LIMIT_SELECTION: StatusBarProviderLimitSelection = {
+/**
+ * What a provider draws until told otherwise: its tightest limit, and only that.
+ *
+ * Exported for the override seam (`lib/layout-overrides.ts`), which resolves a
+ * partial override of a provider that has no stored entry against this same
+ * floor rather than restating it.
+ */
+export const AUTOMATIC_LIMIT_SELECTION: StatusBarProviderLimitSelection = {
   automatic: true,
   limitKeys: [],
 };

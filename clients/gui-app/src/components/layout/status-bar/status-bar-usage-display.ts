@@ -4,7 +4,7 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
-import { useStatusBarLayout } from "@/lib/layout-overrides";
+import { useStatusBarRateLimitValue } from "@/lib/layout-overrides";
 import type { PercentMode } from "@/stores/settings/layout-store";
 
 /**
@@ -113,19 +113,22 @@ export function statusBarUsageParts(
 }
 
 /**
- * Read through the override seam (`lib/layout-overrides.tsx`), so a Customize
- * popover can draw the real readings under a different answer.
+ * Field by field, through the override seam (`lib/layout-overrides.ts`) so a
+ * Customize popover can draw the real readings under a different answer.
  *
- * `useStatusBarLayout()` selects the whole `statusBar` SLICE, which is a stable
- * reference in the store and memoized against the override - not a fresh object
- * per call. That distinction is what this hook used to spell out as four
- * separate selectors: a selector that BUILDS an object each call makes
+ * Four leaf hooks rather than one slice read, for two independent reasons that
+ * both point the same way. A selector that BUILDS an object each call makes
  * `useSyncExternalStore` see a new snapshot on every read and re-render
- * forever. Selecting an existing slice has never had that problem.
+ * forever - the original reason these were four selectors. And a hook that
+ * subscribes to the whole slice re-renders every reading whenever an unrelated
+ * status-bar preference changes, which is what briefly happened when this moved
+ * onto `useStatusBarLayout()`.
  */
 export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
-  const { percentMode, showModeWord, showBar, showTimer } =
-    useStatusBarLayout().rateLimits;
+  const percentMode = useStatusBarRateLimitValue("percentMode");
+  const showModeWord = useStatusBarRateLimitValue("showModeWord");
+  const showBar = useStatusBarRateLimitValue("showBar");
+  const showTimer = useStatusBarRateLimitValue("showTimer");
   return { percentMode, showModeWord, showBar, showTimer };
 }
 

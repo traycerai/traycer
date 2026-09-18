@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Every layout preference a component DRAWS from must be read through
- * `lib/layout-overrides.tsx`, never selected straight out of the store.
+ * `lib/layout-overrides.ts`, never selected straight out of the store.
  *
  * The seam is what lets a Customize popover or a preset thumbnail wrap the
  * real component and get the real drawing under a different value. A file that
@@ -45,12 +45,12 @@ const MIGRATED_READS: ReadonlyArray<{
 }> = [
   {
     selector: /\bstate\s*\.\s*composer\b|\bs\s*\.\s*composer\b/,
-    hook: "useComposerLayout()",
+    hook: "useComposerLayoutValue(key), or useComposerLayout() for a whole-slice reader",
   },
   {
     selector:
       /\bstate\s*\.\s*statusBar\s*\.\s*(?:rateLimits\s*\.\s*(?:percentMode|showModeWord|showBar|showTimer)|resources\s*\.\s*(?:scope|metrics))\b/,
-    hook: "useStatusBarLayout()",
+    hook: "useStatusBarRateLimitValue(key) / useStatusBarResourceValue(key)",
   },
   {
     selector:

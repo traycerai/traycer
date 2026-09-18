@@ -11,7 +11,7 @@ import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { cn } from "@/lib/utils";
-import { useComposerLayout } from "@/lib/layout-overrides";
+import { useComposerLayoutValue } from "@/lib/layout-overrides";
 import {
   AUTO_MID_TURN_NOTICE,
   PERMISSION_OPTIONS,
@@ -119,7 +119,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // the permission the next send will run under, so `compact` takes it to the
   // shape a narrow composer already puts it in - icon alone, name on hover -
   // and no further.
-  const compact = useComposerLayout().access === "compact";
+  const compact = useComposerLayoutValue("access") === "compact";
 
   // No tooltip of its own: the wrapper below already renders one (both branches
   // ARE a `TooltipWrapper`), and the label is VISIBLE on this pill until the

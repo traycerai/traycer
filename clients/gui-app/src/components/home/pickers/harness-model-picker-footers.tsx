@@ -33,7 +33,7 @@ import {
   SliderTrack,
 } from "@/components/ui/slider";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useComposerLayout } from "@/lib/layout-overrides";
+import { useComposerLayoutValue } from "@/lib/layout-overrides";
 
 /**
  * Whether the selected level is the catalog's LAST one, read off the full
@@ -102,7 +102,8 @@ interface ModelSettingsFooterProps {
 
 function ModelSettingsFooter(props: ModelSettingsFooterProps) {
   const { reasoning, serviceTier, pickerOpen } = props;
-  const sliderControl = useComposerLayout().reasoningFooterControl === "slider";
+  const sliderControl =
+    useComposerLayoutValue("reasoningFooterControl") === "slider";
   const sliderLayout = sliderControl && (reasoning?.options.length ?? 0) > 1;
   const upgradeServiceTier =
     serviceTier === null

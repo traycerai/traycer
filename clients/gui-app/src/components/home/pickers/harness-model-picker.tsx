@@ -83,7 +83,7 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
-import { useComposerLayout } from "@/lib/layout-overrides";
+import { useComposerLayoutValue } from "@/lib/layout-overrides";
 import type { ComposerReasoningIndicator } from "@/stores/settings/layout-store";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
@@ -1005,7 +1005,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // Layout ▸ Composer ▸ Reasoning level. Read here rather than in the trigger
   // so the chip stays a pure function of its props, and both surfaces that
   // mount this picker (the chat composer, the terminal launcher) follow it.
-  const reasoningIndicator = useComposerLayout().reasoningIndicator;
+  const reasoningIndicator = useComposerLayoutValue("reasoningIndicator");
   const tooltipLabel = (
     <HarnessModelPickerTooltip
       harnessLabel={selectedHarnessLabel}
