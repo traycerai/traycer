@@ -496,11 +496,16 @@ function applyGroupSelectionSet(
   // shares one), and its checkbox governs all of them.
   const groups = groupsForViewKey(state, groupKey);
   if (groups.length === 0) return state;
+  // Only the rows the header is sitting above: the header's counts read the
+  // searched slice, so its checkbox has to move exactly that slice - the same
+  // contract the toolbar's master checkbox keeps.
+  const needle = state.query.trim().toLowerCase();
   const selected = new Set(state.selected);
   for (const group of groups) {
     for (const candidate of group.sessions) {
       if (!isImportable(candidate)) continue;
       if (state.disabledHarnesses.has(candidate.harness)) continue;
+      if (!matchesQuery(candidate, group.location.path, needle)) continue;
       const key = sessionImportSelectionKey(
         candidate.harness,
         candidate.nativeSessionId,
@@ -556,8 +561,8 @@ export interface SessionImportRowView {
   readonly title: string;
   /**
    * The folder this session ran in, as the scan spelled it. Every row carries
-   * it; the list shows it only inside the Deleted Folders group, where the
-   * header no longer names one folder.
+   * it; task view and Deleted Folders show it because no project header
+   * supplies that context.
    */
   readonly folderPath: string;
   readonly selected: boolean;
@@ -587,6 +592,7 @@ export interface SessionImportGroupView {
   readonly rows: ReadonlyArray<SessionImportRowView>;
   /** Rows displayed in this folder, selectable or not. */
   readonly totalCount: number;
+  /** Of those displayed rows, how many can be ticked - what the header moves. */
   readonly selectableCount: number;
   readonly selectedCount: number;
   readonly selectionState: SessionImportGroupSelectionState;
@@ -615,7 +621,7 @@ export interface SessionImportWizardView {
   readonly visibleSelectedCount: number;
 }
 
-const UNTITLED_SESSION = "Untitled session";
+const UNTITLED_SESSION = "Untitled task";
 const FIRST_PROMPT_PREVIEW_LENGTH = 140;
 
 /** Native title first, then the opening prompt, then a neutral placeholder. */
@@ -708,7 +714,7 @@ export function sessionImportNotImportedLine(
     (total, group) => total + group.entries.length,
     0,
   );
-  const noun = count === 1 ? "session" : "sessions";
+  const noun = count === 1 ? "task" : "tasks";
   const only = groups.length === 1 ? groups[0] : undefined;
   if (only === undefined) return `Not imported: ${count} ${noun}`;
   return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;
@@ -723,7 +729,7 @@ function failureCause(reason: SessionImportFailureReason): string {
     case "workspace_bind_failed":
       return "with no matching folder on this machine";
     case "creation_failed":
-      return "whose task could not be created";
+      return "that could not be created";
     case "internal_error":
       return "that hit an unexpected error";
   }
@@ -833,12 +839,12 @@ export function selectionStateFor(
 /**
  * Projects state into what the list renders.
  *
- * The counts on a group header describe the whole IN-SCOPE group, not the
- * searched slice: the header's checkbox toggles exactly those rows (that is the
- * only way to clear a folder without expanding it), so a header claiming "2"
- * while ticking 40 would be lying about its own control. Scope is a different
- * matter - a provider the user switched off is not part of this import at all,
- * so it leaves the counts as well as the list.
+ * A group header's counts describe the rows UNDER it - the searched slice, not
+ * the whole in-scope group: the header's checkbox toggles exactly the rows it
+ * counts, so a header claiming "2" while ticking 40 would be lying about its
+ * own control. That is the same contract the toolbar's master checkbox keeps.
+ * Scope drops out the same way - a provider the user switched off is not part
+ * of this import at all, so it leaves the counts as well as the list.
  */
 export function buildSessionImportView(
   state: SessionImportWizardState,
@@ -857,8 +863,8 @@ export function buildSessionImportView(
   let matchedSessions = 0;
   let visibleSelectedCount = 0;
   let hiddenImportedCount = 0;
-  // Missing folders share a rendered group. Selection covers their full
-  // provider scope; the displayed count covers only the matching rows.
+  // Missing folders share a rendered group, so its counts accumulate across
+  // every one of them - over the matching rows, as any other header's do.
   const deletedRows: SessionImportRowView[] = [];
   const deleted = {
     folders: 0,
@@ -898,17 +904,18 @@ export function buildSessionImportView(
     const rows = matching.map((candidate) =>
       rowView(candidate, path, state.selected),
     );
+    let rowSelectableCount = 0;
+    let rowSelectedCount = 0;
     for (const row of rows) {
       if (!row.selectable) continue;
+      rowSelectableCount += 1;
       visibleSelectionKeys.push(row.selectionKey);
-      if (row.selected) visibleSelectedCount += 1;
+      if (row.selected) {
+        rowSelectedCount += 1;
+        visibleSelectedCount += 1;
+      }
     }
 
-    const selectedCount = selectable.filter((candidate) =>
-      state.selected.has(
-        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
-      ),
-    ).length;
     const latest = Math.max(
       0,
       ...providerScope.map((candidate) => candidate.updatedAt),
@@ -918,8 +925,8 @@ export function buildSessionImportView(
       if (inScope.length > 0) deleted.folders += 1;
       deletedRows.push(...rows);
       deleted.inScope += inScope.length;
-      deleted.selectable += selectable.length;
-      deleted.selected += selectedCount;
+      deleted.selectable += rowSelectableCount;
+      deleted.selected += rowSelectedCount;
       deleted.latest = Math.max(deleted.latest, latest);
       continue;
     }
@@ -935,9 +942,9 @@ export function buildSessionImportView(
         expanded: state.expandedGroups.has(groupKey),
         rows,
         totalCount: rows.length,
-        selectableCount: selectable.length,
-        selectedCount,
-        selectionState: selectionStateFor(selectable.length, selectedCount),
+        selectableCount: rowSelectableCount,
+        selectedCount: rowSelectedCount,
+        selectionState: selectionStateFor(rowSelectableCount, rowSelectedCount),
       },
       tier: groupSortTier(false, group.gitBacked),
       count: providerScope.length,

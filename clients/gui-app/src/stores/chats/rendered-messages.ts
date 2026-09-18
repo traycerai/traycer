@@ -335,6 +335,12 @@ function errorBlockContentVersion(
 function textBlockContentVersion(
   block: Extract<ContentBlock, { type: "text" }>,
 ): number {
+  if (block.browserSession !== undefined) {
+    return hashStringField(
+      TURN_SIGNATURE_HASH_OFFSET,
+      JSON.stringify(block.browserSession),
+    );
+  }
   const notice = block.providerNotice;
   if (notice === null) return block.text.length;
   let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, notice.noticeKind);
@@ -1199,7 +1205,7 @@ export function useRenderedMessages(
         // card compute a row id the skeleton never published.
         message: buildSetupCardMessage(row, ownerId, viewTabId),
         anchorId: row.triggeringMessageId,
-        hasCreatingEvent: row.hasCreatingEvent,
+        isGenesisPin: row.isGenesisPin,
       })),
     [setupCardRows, ownerId, viewTabId],
   );
@@ -1523,14 +1529,10 @@ export function useRenderedMessages(
       );
     }
 
-    // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is
-    // genuinely the initial worktree, not a creation that happened mid-chat. The
-    // discriminator is `hasCreatingEvent`: a window with a `setup.creating` event
-    // was announced LIVE during a conversation send. A window with NO creating
-    // event is the back-filled genesis worktree (epic-create / catch-up at
-    // chat-attach), whose `createdAt` can be stamped late, so it pins to the top
-    // where the genesis belongs.
-    const pinGenesisCard = !setupCardEntries[0].hasCreatingEvent;
+    // Only the initial worktree of an unforked chat pins above its history.
+    // A fork's own setup belongs after the inherited conversation; the shared
+    // whole-log partition supplies that decision even for a cold range.
+    const pinGenesisCard = setupCardEntries[0].isGenesisPin;
 
     // Every OTHER (mid-chat) setup card anchors DIRECTLY above the user message
     // whose send created it - by message id (`anchorId`), NOT `createdAt`. The
@@ -1654,11 +1656,8 @@ function buildSetupCardMessage(
         kind: "setup-card",
         model: row.model,
         viewTabId,
-        // Ticket 13 (decision #28): same predicate the merge below uses for
-        // `pinGenesisCard` (`!setupCardEntries[0].hasCreatingEvent`) - only
-        // window 0 can ever be genesis-pinned, so this is exact, not a guess.
         anchorMessageId: row.triggeringMessageId,
-        isGenesisPin: row.windowIndex === 0 && !row.hasCreatingEvent,
+        isGenesisPin: row.isGenesisPin,
       },
     ],
     structuredContent: null,
@@ -4447,6 +4446,9 @@ const BLOCK_HANDLERS: {
       : {
           kind: "text",
           markdown: block.text,
+          ...(block.browserSession === undefined
+            ? {}
+            : { browserSession: block.browserSession }),
           isStreaming: block.status === "streaming",
         };
   },

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
   CreateEpicChatSeed,
   CreateEpicResponse,
@@ -545,6 +546,7 @@ export function useLandingComposerActions(
           }
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
+          useFirstTaskGuideStore.getState().dismiss();
           clearConsumedLandingWorktreeIntent(workspaceContext);
           // Re-anchor the create-race window on COMPLETION - see the terminal
           // flow's copy for why. This flow needs it most: the tab is opened

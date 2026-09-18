@@ -6,11 +6,7 @@ import {
   type StatusBarResourceMetricView,
 } from "@/lib/resources/status-bar-resource-reading";
 import { useGlobalResourceProjection } from "@/stores/resources/resources-registry";
-import {
-  useLayoutStore,
-  type ResourceMetric,
-} from "@/stores/settings/layout-store";
-import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar-density";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 
 /**
  * The resource segment's readings, as a hook two surfaces can ask for.
@@ -30,7 +26,6 @@ import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar
  * the preload injected.
  */
 export function useStatusBarResourceMetricViews(input: {
-  readonly density: StatusBarDensity;
   /** The watched host, for the "too old to stream" verdict and its copy. */
   readonly hostId: string | null;
   readonly hostLabel: string;
@@ -66,7 +61,7 @@ export function useStatusBarResourceMetricViews(input: {
   const globalStreamUnsupported = useGlobalResourcesUnsupported(input.hostId);
   return statusBarResourceMetricViews({
     scope,
-    metrics: visibleMetrics(metrics, input.density),
+    metrics,
     projection,
     watchedHostId: input.hostId,
     hasExplicitPick: input.hasExplicitPick,
@@ -75,23 +70,4 @@ export function useStatusBarResourceMetricViews(input: {
     globalStreamUnsupported,
     hostLabel: input.hostLabel,
   });
-}
-
-/**
- * `icon-only` keeps memory because it is the reading a glance is usually for,
- * and it is the one metric whose absence would make the segment read as broken
- * rather than as compact.
- *
- * A user who turned memory OFF keeps their first selected metric instead of an
- * empty segment: the density is the app narrowing its own chrome, and it has no
- * business emptying a control the user configured. `compact` drops labels, not
- * metrics, so it takes the selection whole.
- */
-function visibleMetrics(
-  metrics: ReadonlyArray<ResourceMetric>,
-  density: StatusBarDensity,
-): ReadonlyArray<ResourceMetric> {
-  if (density !== "icon-only") return metrics;
-  if (metrics.includes("memory")) return ["memory"];
-  return metrics.slice(0, 1);
 }

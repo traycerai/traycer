@@ -3,11 +3,10 @@ import { TriangleAlert } from "lucide-react";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini-bar";
-import { statusBarSegmentTooltip } from "@/components/layout/status-bar/status-bar-usage-display";
 import {
-  statusBarUsageDetailParts,
-  type StatusBarUsageDetail,
-} from "@/components/layout/status-bar/status-bar-usage-ladder";
+  statusBarSegmentTooltip,
+  type StatusBarUsageParts,
+} from "@/components/layout/status-bar/status-bar-usage-display";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitWindow,
@@ -31,23 +30,24 @@ import type { PercentMode } from "@/stores/settings/layout-store";
 
 export interface StatusBarProviderSegmentProps {
   readonly segment: StatusBarProviderSegmentModel;
-  /** Which rung of the cluster's collapse ladder this is being drawn at. */
-  readonly detail: StatusBarUsageDetail;
+  /** Which of the reading's optional parts the preferences switched on. */
+  readonly parts: StatusBarUsageParts;
   readonly percentMode: PercentMode;
-  readonly showModeWord: boolean;
-  readonly showTimer: boolean;
-  readonly showBar: boolean;
 }
 
 /**
- * One account's usage, at whatever length the strip currently has room for.
+ * One account's usage, at the detail the preferences ask for.
+ *
+ * Always the whole reading: the cluster this sits in scrolls when its
+ * segments outgrow the strip, so nothing here is shortened to make room, and
+ * the width of the window never changes what a segment says. What CAN vary is
+ * what the user switched on - the mode word, the mini bar, the countdown -
+ * which arrives as `parts`.
  *
  * A provider with several accounts checked draws one of these per account,
  * and what tells them apart is the profile's accent dot after the provider
- * icon - present at every rung, `icon-only` included, because it is the only
- * mark short enough to survive there. The account's NAME joins it on the
- * rungs that still print words (`parts.label`), so a wide strip reads
- * `Codex · Work 57% used 4h` and a narrow one `[icon][dot] 57%`. Neither is
+ * icon and the account's NAME before the reading, so the strip reads
+ * `Codex · Work 57% used 4h` beside `Codex · Personal 12% used 4h`. Neither is
  * drawn for a provider with fewer than two profiles, where there is nothing
  * to tell the one account apart from.
  *
@@ -143,36 +143,25 @@ export function StatusBarProviderSegment(
 }
 
 /**
- * What survives at this rung.
- *
- * A preference that already switched something off is honoured on top of the
- * rung rather than instead of it: the ladder skips a rung that would take away
- * something invisible, and this AND-s the two so a rung reached from a
- * shorter ladder still cannot resurrect what Settings hid.
- *
- * The window list narrows for two different reasons, and only one of them is a
- * preference. The segment's `shown` list is the user's selection - the tightest
- * limit by default, which is the one that decides whether the panel is worth
- * opening. `percent-only` narrows to the tightest of those whatever the
- * selection says, because several bare percentages under one icon name which
- * limits exist without naming which is which.
+ * The reading itself: the account's name where there is one, then one entry
+ * per window the user selected (`segment.shown` - the tightest limit by
+ * default, which is the one that decides whether the panel is worth opening),
+ * each at the detail `parts` asks for.
  */
 function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
-  const { segment } = props;
-  const parts = statusBarUsageDetailParts(props.detail);
-  if (!parts.percent) return null;
-  // The account's name, on the rungs that print words. Before the reading
-  // rather than after, so `Work 57%` and `Personal 12%` read as two labelled
-  // figures rather than one figure with two trailing words.
+  const { segment, parts } = props;
+  // The account's name before the reading rather than after, so `Work 57%`
+  // and `Personal 12%` read as two labelled figures rather than one figure
+  // with two trailing words.
   const accountName =
-    parts.label && segment.account !== null ? (
+    segment.account === null ? null : (
       <span
         data-testid="status-bar-provider-account"
         className="whitespace-nowrap"
       >
         {segment.account.label}
       </span>
-    ) : null;
+    );
   if (segment.state === "unavailable") {
     return (
       <>
@@ -195,17 +184,10 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
       </>
     );
   }
-  const windows = windowsToDraw(segment, parts.label);
-  // The rung and the preference have to agree before anything is drawn: a rung
-  // cannot bring back what Settings hid, and a preference cannot keep what the
-  // strip has run out of room for.
-  const showModeWord = props.showModeWord && parts.modeWord;
-  const showTimer = props.showTimer && parts.timer;
-  const showBar = props.showBar && parts.bar;
   return (
     <>
       {accountName}
-      {windows.map((window, index) => (
+      {segment.shown.map((window, index) => (
         <Fragment key={window.windowKey}>
           {index === 0 ? null : (
             <span aria-hidden className="text-muted-foreground/60">
@@ -216,10 +198,9 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
             A provider showing several limits is showing several independent
             gauges, and a single bar in front of them would be a fourth
             severity colour with nothing on the row saying which limit it is
-            about. Gated as ONE decision for the whole segment (`showBar`), so
-            a rung that drops bars drops all of them at once rather than
-            thinning them one at a time. */}
-          {showBar ? (
+            about. Gated as ONE decision for the whole segment, so the switch
+            takes every bar away at once rather than thinning them. */}
+          {parts.bar ? (
             <StatusBarMiniBar
               windowKey={window.windowKey}
               usedPercent={window.usedPercent}
@@ -229,11 +210,10 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
           <StatusBarWindowText
             window={window}
             percentMode={props.percentMode}
-            showModeWord={showModeWord}
-            showTimer={showTimer}
-            showLabel={parts.label}
-            // The provider's live windows, not the ones this rung draws: a
-            // provider drawing its tightest alone still has to say which of
+            showModeWord={parts.modeWord}
+            showTimer={parts.timer}
+            // The provider's live windows, not the ones the selection draws:
+            // a provider drawing its tightest alone still has to say which of
             // several that one is.
             visibleWindowCount={segment.windows.length}
           />
@@ -243,17 +223,9 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
   );
 }
 
-function windowsToDraw(
-  segment: StatusBarProviderSegmentModel,
-  labelled: boolean,
-): ReadonlyArray<StatusBarRateLimitWindow> {
-  if (labelled) return segment.shown;
-  return segment.tightest === null ? [] : [segment.tightest];
-}
-
 /**
- * One window, as `33% used 4h 15m` — or as much of that as the rung allows,
- * down to `33%` alone.
+ * One window, as `33% used 4h 15m` — or `33% 5h` with the mode word and the
+ * countdown switched off.
  *
  * A leaf of its own because the countdown subscribes to the shared 60s clock,
  * the idiom every other countdown in the app follows. It is not what keeps the
@@ -262,16 +234,15 @@ function windowsToDraw(
  * the only thing that has to, in every future where that stops being true.
  *
  * The percentage is its own span, and the only tinted one. Severity is a fact
- * about the reading rather than about how much room the strip has, so it
- * survives every rung of the ladder — including the ones that took the mini bar
- * away, which is the only other place this colour appears.
+ * about the reading rather than a preference about it, so it survives every
+ * switch — including the one that takes the mini bar away, which is the only
+ * other place this colour appears.
  */
 function StatusBarWindowText(props: {
   readonly window: StatusBarRateLimitWindow;
   readonly percentMode: PercentMode;
   readonly showModeWord: boolean;
   readonly showTimer: boolean;
-  readonly showLabel: boolean;
   readonly visibleWindowCount: number;
 }): ReactNode {
   const { window } = props;
@@ -280,16 +251,12 @@ function StatusBarWindowText(props: {
   const countdown = useResetCountdown(props.showTimer ? window.resetsAt : null);
   const suffix = [
     ...(props.showModeWord ? [props.percentMode] : []),
-    ...(props.showLabel
-      ? [
-          windowLabelText({
-            label: window.label,
-            labelIsDuration: window.labelIsDuration,
-            countdown,
-            visibleWindowCount: props.visibleWindowCount,
-          }),
-        ]
-      : []),
+    windowLabelText({
+      label: window.label,
+      labelIsDuration: window.labelIsDuration,
+      countdown,
+      visibleWindowCount: props.visibleWindowCount,
+    }),
   ].join(" ");
   return (
     <span
@@ -302,7 +269,7 @@ function StatusBarWindowText(props: {
       >
         {windowPercentValueText(window.usedPercent, props.percentMode)}
       </span>
-      {suffix === "" ? null : ` ${suffix}`}
+      {` ${suffix}`}
     </span>
   );
 }

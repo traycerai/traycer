@@ -62,13 +62,21 @@ const RETURN_TO_PREFERRED_COPY: Record<
   },
   auto: {
     label: "Switch back automatically",
-    // Both consequences, because each surprises someone: the fresh session is
-    // what a provider switch always costs, and the queued messages moving back
-    // is the half a user is most likely not to expect.
-    description: "Starts a fresh session and moves queued messages back.",
+    // The queued messages moving back is the half a user is least likely to
+    // expect, and it is the half this arm alone is responsible for. The fresh
+    // session is NOT repeated here: the ladder editor states it once for every
+    // switch, and the note beside this radio group says it again for the way
+    // back, so a third copy on one option would be the page naming one cost
+    // three times.
+    description:
+      "Messages waiting to run move back to the original account or model.",
   },
   stay: {
-    label: "Stay on the fallback",
+    // NOT "Stay on the fallback". "Fallback" is the name this page no longer
+    // uses, and it was jargon for the thing anyway - the reader has to know
+    // that "the fallback" means wherever the chat was moved to. Naming the
+    // destination by what happened to it needs no glossary.
+    label: "Stay where it switched to",
     description: null,
   },
 };
@@ -105,7 +113,7 @@ export function FallbackBehaviorGroup(
         row={FALLBACK.definitions.graceWindow}
         control={
           <NumberSelect
-            ariaLabel="Time to cancel before switching"
+            ariaLabel="Time to cancel a switch"
             options={withStoredNumber(
               GRACE_WINDOW_SECONDS,
               policy.graceWindowSeconds,
@@ -122,7 +130,7 @@ export function FallbackBehaviorGroup(
         row={FALLBACK.definitions.maxWait}
         control={
           <NumberSelect
-            ariaLabel="Longest wait for a reset"
+            ariaLabel="Longest wait for a usage limit to reset"
             options={withStoredNumber(MAX_WAIT_MINUTES, policy.maxWaitMinutes)}
             value={policy.maxWaitMinutes}
             format={waitLabel}
@@ -176,14 +184,18 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
           id={descriptionId}
           className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
         >
-          Switching back costs a fresh session too, so this is a choice rather
-          than a default.
+          {/* "too" had no antecedent: nothing earlier on the page had said
+              the OUTBOUND switch starts a session either, so the word pointed
+              at a fact the reader had never been given. The ladder editor now
+              states it once, up front, which is what earns the "also" here. */}
+          Switching back also starts a new agent session using this chat&apos;s
+          history.
         </p>
       </div>
       <div className={cn("ml-auto", SETTINGS_ROW_STACK.control)}>
         {/* The radio group carries the SETTING's name and its caveat. Without
             these two the group had no name at all: each radio said "Ask me" or
-            "Stay on the fallback" with nothing to say what question it was
+            "Stay where it switched to" with nothing to say what question it was
             answering, which for the keyboard is three unexplained choices in
             the middle of a page of switches. */}
         <RadioGroup

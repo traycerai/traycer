@@ -680,9 +680,10 @@ describe("leader digit dispatch (global scope)", () => {
       lastPath: "/settings/general",
     });
     const { router, calls } = buildRouter("/settings/general");
+    // Getting started leads the list and owns digit 1, so 2 is General.
     expect(fireDigit(router, 2, "alt")).toBe(true);
     expect(calls[0].kind).toBe("section");
-    expect(calls[0].sectionId).toBe("appearance");
+    expect(calls[0].sectionId).toBe("general");
   });
 
   it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {

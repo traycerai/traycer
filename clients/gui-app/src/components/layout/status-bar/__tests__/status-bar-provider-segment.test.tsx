@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
-import type { StatusBarUsageDetail } from "@/components/layout/status-bar/status-bar-usage-ladder";
+import type { StatusBarUsageParts } from "@/components/layout/status-bar/status-bar-usage-display";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarProviderSegmentState,
@@ -65,7 +65,7 @@ function windowFixture(overrides: {
  * fixture asserting a name has to state the sibling that earns it. It is not
  * drawn - `shown` defaults to the tightest alone, which defaults to the first
  * window - which is exactly the case the rule is about: the count is what the
- * provider HAS, not what this rung draws.
+ * provider HAS, not what the selection draws.
  */
 function siblingWindow(): StatusBarRateLimitWindow {
   return windowFixture({ windowKey: "sibling:other", label: "wk" });
@@ -99,21 +99,22 @@ function segmentFixture(overrides: {
 
 function renderSegment(props: {
   readonly segment: StatusBarProviderSegmentModel;
-  readonly detail?: StatusBarUsageDetail;
   readonly percentMode?: PercentMode;
   readonly showModeWord?: boolean;
   readonly showTimer?: boolean;
   readonly showBar?: boolean;
 }) {
+  const parts: StatusBarUsageParts = {
+    modeWord: props.showModeWord ?? true,
+    timer: props.showTimer ?? false,
+    bar: props.showBar ?? true,
+  };
   return render(
     <TooltipProvider>
       <StatusBarProviderSegment
         segment={props.segment}
-        detail={props.detail ?? "full"}
+        parts={parts}
         percentMode={props.percentMode ?? "used"}
-        showModeWord={props.showModeWord ?? true}
-        showTimer={props.showTimer ?? false}
-        showBar={props.showBar ?? true}
       />
     </TooltipProvider>,
   );
@@ -571,7 +572,7 @@ describe("<StatusBarProviderSegment />", () => {
         severity: "limited",
       });
       const segment = segmentFixture({ windows: [tightest], tightest });
-      renderSegment({ segment, detail: "full", showBar: true });
+      renderSegment({ segment, showBar: true });
 
       const fill = screen.getByTestId("status-bar-provider-mini-bar-fill");
       expect(fill.className).toContain("bg-destructive");
@@ -581,7 +582,7 @@ describe("<StatusBarProviderSegment />", () => {
     it("disappears when showBar is false", () => {
       const tightest = windowFixture({ windowKey: "codex:primary" });
       const segment = segmentFixture({ windows: [tightest], tightest });
-      renderSegment({ segment, detail: "full", showBar: false });
+      renderSegment({ segment, showBar: false });
 
       expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
     });
@@ -589,7 +590,7 @@ describe("<StatusBarProviderSegment />", () => {
     it("draws exactly one bar for a provider drawing one limit", () => {
       const tightest = windowFixture({ windowKey: "codex:primary" });
       const segment = segmentFixture({ windows: [tightest], tightest });
-      renderSegment({ segment, detail: "full", showBar: true });
+      renderSegment({ segment, showBar: true });
 
       expect(
         screen.getAllByTestId("status-bar-provider-mini-bar"),
@@ -620,7 +621,6 @@ describe("<StatusBarProviderSegment />", () => {
       it("gives each drawn limit its own bar, filled and coloured from that window", () => {
         renderSegment({
           segment: twoLimitSegment(),
-          detail: "full",
           showBar: true,
         });
 
@@ -642,7 +642,6 @@ describe("<StatusBarProviderSegment />", () => {
       it("puts each bar immediately before the reading it measures", () => {
         renderSegment({
           segment: twoLimitSegment(),
-          detail: "full",
           showBar: true,
         });
 
@@ -659,7 +658,6 @@ describe("<StatusBarProviderSegment />", () => {
       it("drops every bar when the switch is off, however many limits are drawn", () => {
         renderSegment({
           segment: twoLimitSegment(),
-          detail: "full",
           showBar: false,
         });
 
@@ -698,7 +696,7 @@ describe("<StatusBarProviderSegment />", () => {
           tightest: extra,
         });
 
-        renderSegment({ segment, detail: "full", showBar: true });
+        renderSegment({ segment, showBar: true });
 
         expect(
           screen
@@ -716,12 +714,12 @@ describe("<StatusBarProviderSegment />", () => {
         ).toEqual(["30%", "60%", "92%"]);
       });
 
-      // The rung above `no-bars` takes the mode word and nothing else, so the
-      // bars are all still there - one per reading, as at `full`.
-      it("keeps one bar per limit on the no-mode-word rung", () => {
+      // The mode word switch takes the word and nothing else, so the bars
+      // are all still there - one per reading.
+      it("keeps one bar per limit with the mode word switched off", () => {
         renderSegment({
           segment: twoLimitSegment(),
-          detail: "no-mode-word",
+          showModeWord: false,
           showBar: true,
         });
 
@@ -735,52 +733,12 @@ describe("<StatusBarProviderSegment />", () => {
         ).toBe("30% 5h");
       });
 
-      it("drops every bar at once on the no-bars rung, keeping both readings", () => {
-        renderSegment({
-          segment: twoLimitSegment(),
-          detail: "no-bars",
-          showBar: true,
-        });
-
-        expect(screen.queryAllByTestId("status-bar-provider-mini-bar")).toEqual(
-          [],
-        );
-        expect(
-          screen.getByTestId("status-bar-window-codex:primary"),
-        ).not.toBeNull();
-        expect(
-          screen.getByTestId("status-bar-window-codex:secondary"),
-        ).not.toBeNull();
-      });
-
-      // `percent-only` narrows to the tightest whatever is selected, so at most
-      // one bar could ever be drawn there - and in fact none is, because the
-      // ladder took the bars away two rungs earlier.
-      it("narrows to the tightest reading alone at percent-only, with no bar", () => {
-        renderSegment({
-          segment: twoLimitSegment(),
-          detail: "percent-only",
-          showBar: true,
-        });
-
-        expect(screen.queryAllByTestId("status-bar-provider-mini-bar")).toEqual(
-          [],
-        );
-        expect(
-          screen.queryByTestId("status-bar-window-codex:primary"),
-        ).toBeNull();
-        expect(
-          screen.getByTestId("status-bar-window-codex:secondary").textContent,
-        ).toBe("92%");
-      });
-
       // The bars are gauges, not readings: the segment's accessible content is
       // the provider icon's tooltip and the percentages, and adding one bar
       // per limit must not add anything a screen reader has to walk past.
       it("keeps every bar out of the accessible tree", () => {
         renderSegment({
           segment: twoLimitSegment(),
-          detail: "full",
           showBar: true,
         });
 
@@ -856,13 +814,15 @@ describe("<StatusBarProviderSegment />", () => {
     });
   });
 
-  // The collapse ladder's own rungs: each one takes away exactly one thing
-  // from the reading, down to nothing at all. `resetsAt` sits comfortably
-  // inside the hour band `formatResetCountdown` renders as `Xh Ym`, far
-  // enough from any minute boundary that the render itself cannot flip the
-  // string mid-assertion - and re-sampled per case (`resetsAtIn`), so the
-  // cushion is not spent on the suite's own runtime before the case starts.
-  describe("the collapse ladder", () => {
+  // The three display switches, each taking away exactly one thing from the
+  // reading and nothing else - the percentage and the window's label survive
+  // every combination, since the strip scrolls rather than shortening a
+  // reading. `resetsAt` sits comfortably inside the hour band
+  // `formatResetCountdown` renders as `Xh Ym`, far enough from any minute
+  // boundary that the render itself cannot flip the string mid-assertion -
+  // and re-sampled per case (`resetsAtIn`), so the cushion is not spent on the
+  // suite's own runtime before the case starts.
+  describe("the display switches", () => {
     let resetsAt = 0;
     beforeEach(() => {
       resetsAt = resetsAtIn(4, 15);
@@ -879,45 +839,63 @@ describe("<StatusBarProviderSegment />", () => {
     }
 
     it.each<{
-      readonly detail: StatusBarUsageDetail;
-      readonly text: string | null;
-      readonly bar: boolean;
+      readonly name: string;
+      readonly showModeWord: boolean;
+      readonly showBar: boolean;
+      readonly showTimer: boolean;
+      readonly text: string;
     }>([
-      { detail: "full", text: "57% used 4h 15m", bar: true },
-      { detail: "no-mode-word", text: "57% 4h 15m", bar: true },
-      { detail: "no-bars", text: "57% 4h 15m", bar: false },
-      { detail: "no-timers", text: "57% 5h", bar: false },
-      { detail: "percent-only", text: "57%", bar: false },
-      { detail: "icon-only", text: null, bar: false },
+      {
+        name: "everything on",
+        showModeWord: true,
+        showBar: true,
+        showTimer: true,
+        text: "57% used 4h 15m",
+      },
+      {
+        name: "no mode word",
+        showModeWord: false,
+        showBar: true,
+        showTimer: true,
+        text: "57% 4h 15m",
+      },
+      {
+        name: "no mode word, no bar",
+        showModeWord: false,
+        showBar: false,
+        showTimer: true,
+        text: "57% 4h 15m",
+      },
+      {
+        name: "no mode word, no bar, no timer",
+        showModeWord: false,
+        showBar: false,
+        showTimer: false,
+        text: "57% 5h",
+      },
+      {
+        name: "timer off alone",
+        showModeWord: true,
+        showBar: true,
+        showTimer: false,
+        text: "57% used 5h",
+      },
     ])(
-      "renders '$text' at $detail, with its own bar presence",
-      ({ detail, text, bar }) => {
+      "renders '$text' with $name, with the bar's own presence",
+      ({ showModeWord, showBar, showTimer, text }) => {
         const window = stableWindow();
         const segment = segmentFixture({ windows: [window], tightest: window });
-        renderSegment({ segment, detail, showTimer: true });
+        renderSegment({ segment, showModeWord, showBar, showTimer });
 
-        if (text === null) {
-          expect(
-            screen.queryByTestId("status-bar-window-codex:primary"),
-          ).toBeNull();
-        } else {
-          expect(
-            screen.getByTestId("status-bar-window-codex:primary").textContent,
-          ).toBe(text);
-        }
+        expect(
+          screen.getByTestId("status-bar-window-codex:primary").textContent,
+        ).toBe(text);
         expect(
           screen.queryByTestId("status-bar-provider-mini-bar") !== null,
-        ).toBe(bar);
+        ).toBe(showBar);
       },
     );
 
-    const PERCENT_BEARING_RUNGS: ReadonlyArray<StatusBarUsageDetail> = [
-      "full",
-      "no-mode-word",
-      "no-bars",
-      "no-timers",
-      "percent-only",
-    ];
     const SEVERITIES: ReadonlyArray<RateLimitWindowSeverity> = [
       "healthy",
       "running_low",
@@ -925,19 +903,19 @@ describe("<StatusBarProviderSegment />", () => {
     ];
 
     it.each(
-      PERCENT_BEARING_RUNGS.flatMap((detail) =>
-        SEVERITIES.map((severity) => ({ detail, severity })),
+      SEVERITIES.flatMap((severity) =>
+        [true, false].map((showBar) => ({ severity, showBar })),
       ),
     )(
-      "carries the $severity severity class on the percentage at $detail",
-      ({ detail, severity }) => {
+      "carries the $severity severity class on the percentage with showBar: $showBar",
+      ({ severity, showBar }) => {
         const window = windowFixture({
           windowKey: "codex:primary",
           usedPercent: 57,
           severity,
         });
         const segment = segmentFixture({ windows: [window], tightest: window });
-        renderSegment({ segment, detail });
+        renderSegment({ segment, showBar });
 
         const percentSpan = screen.getByTestId(
           "status-bar-window-percent-codex:primary",
@@ -947,117 +925,6 @@ describe("<StatusBarProviderSegment />", () => {
         );
       },
     );
-
-    it("icon-only never renders a percentage span, for any severity", () => {
-      const window = windowFixture({
-        windowKey: "codex:primary",
-        usedPercent: 57,
-        severity: "limited",
-      });
-      const segment = segmentFixture({ windows: [window], tightest: window });
-      renderSegment({ segment, detail: "icon-only" });
-
-      expect(
-        screen.queryByTestId("status-bar-window-percent-codex:primary"),
-      ).toBeNull();
-    });
-
-    it("showModeWord: false makes no-mode-word a no-op level, rendering identically to full", () => {
-      const window = stableWindow();
-      const segment = segmentFixture({ windows: [window], tightest: window });
-
-      renderSegment({
-        segment,
-        detail: "full",
-        showTimer: true,
-        showModeWord: false,
-      });
-      const fullText = screen.getByTestId(
-        "status-bar-window-codex:primary",
-      ).textContent;
-      cleanup();
-
-      renderSegment({
-        segment,
-        detail: "no-mode-word",
-        showTimer: true,
-        showModeWord: false,
-      });
-      const noModeWordText = screen.getByTestId(
-        "status-bar-window-codex:primary",
-      ).textContent;
-
-      expect(noModeWordText).toBe(fullText);
-      expect(noModeWordText).toBe("57% 4h 15m");
-    });
-
-    it("showBar: false makes no-bars a no-op step down from no-mode-word", () => {
-      // no-bars only additionally removes the bar beyond no-mode-word - both
-      // already have the mode word off by rung, so with the bar preference
-      // already off, stepping onto no-bars changes nothing on screen.
-      const window = stableWindow();
-      const segment = segmentFixture({ windows: [window], tightest: window });
-
-      renderSegment({
-        segment,
-        detail: "no-mode-word",
-        showTimer: true,
-        showBar: false,
-      });
-      const noModeWordText = screen.getByTestId(
-        "status-bar-window-codex:primary",
-      ).textContent;
-      const noModeWordHasBar = screen.queryByTestId(
-        "status-bar-provider-mini-bar",
-      );
-      cleanup();
-
-      renderSegment({
-        segment,
-        detail: "no-bars",
-        showTimer: true,
-        showBar: false,
-      });
-      const noBarsText = screen.getByTestId(
-        "status-bar-window-codex:primary",
-      ).textContent;
-      const noBarsHasBar = screen.queryByTestId("status-bar-provider-mini-bar");
-
-      expect(noBarsText).toBe(noModeWordText);
-      expect(noBarsText).toBe("57% 4h 15m");
-      expect(noModeWordHasBar).toBeNull();
-      expect(noBarsHasBar).toBeNull();
-    });
-
-    it("showTimer: false makes no-timers a no-op step down from no-bars", () => {
-      // no-timers only additionally removes the countdown beyond no-bars -
-      // with the timer preference already off, both already fall back to the
-      // static label, so stepping onto no-timers changes nothing on screen.
-      const window = stableWindow();
-      const segment = segmentFixture({ windows: [window], tightest: window });
-
-      renderSegment({
-        segment,
-        detail: "no-bars",
-        showTimer: false,
-      });
-      const noBarsText = screen.getByTestId(
-        "status-bar-window-codex:primary",
-      ).textContent;
-      cleanup();
-
-      renderSegment({
-        segment,
-        detail: "no-timers",
-        showTimer: false,
-      });
-      const noTimersText = screen.getByTestId(
-        "status-bar-window-codex:primary",
-      ).textContent;
-
-      expect(noTimersText).toBe(noBarsText);
-      expect(noTimersText).toBe("57% 5h");
-    });
   });
 
   describe("account", () => {
@@ -1092,42 +959,31 @@ describe("<StatusBarProviderSegment />", () => {
       ).not.toBe(0);
     });
 
-    it("names the account on every rung that prints words, and only there", () => {
-      const named: ReadonlyArray<StatusBarUsageDetail> = [
-        "full",
-        "no-mode-word",
-        "no-bars",
-        "no-timers",
-      ];
-      for (const detail of named) {
-        renderSegment({
-          segment: segmentFixture({
-            account: ACCOUNT,
-            windows: [windowFixture({ windowKey: "codex:primary" })],
-          }),
-          detail,
-        });
-        expect(screen.getByTestId("status-bar-provider-account")).toBeTruthy();
-        expect(
-          screen.getByTestId("status-bar-provider-account-dot"),
-        ).toBeTruthy();
-        cleanup();
-      }
-      for (const detail of ["percent-only", "icon-only"] as const) {
-        renderSegment({
-          segment: segmentFixture({
-            account: ACCOUNT,
-            windows: [windowFixture({ windowKey: "codex:primary" })],
-          }),
-          detail,
-        });
-        expect(screen.queryByTestId("status-bar-provider-account")).toBeNull();
-        // The dot survives every rung: at icon-only it is the only thing
-        // telling two accounts of one provider apart.
-        expect(
-          screen.getByTestId("status-bar-provider-account-dot"),
-        ).toBeTruthy();
-        cleanup();
+    it("names the account and draws the dot whatever the display switches say", () => {
+      // The name is what tells two accounts of one provider apart, and no
+      // switch on the Layout page is about it - so there is no combination
+      // that drops it.
+      for (const showModeWord of [true, false]) {
+        for (const showBar of [true, false]) {
+          for (const showTimer of [true, false]) {
+            renderSegment({
+              segment: segmentFixture({
+                account: ACCOUNT,
+                windows: [windowFixture({ windowKey: "codex:primary" })],
+              }),
+              showModeWord,
+              showBar,
+              showTimer,
+            });
+            expect(
+              screen.getByTestId("status-bar-provider-account"),
+            ).toBeTruthy();
+            expect(
+              screen.getByTestId("status-bar-provider-account-dot"),
+            ).toBeTruthy();
+            cleanup();
+          }
+        }
       }
     });
 
@@ -1189,7 +1045,7 @@ describe("<StatusBarProviderSegment />", () => {
     }
 
     it("renders every window the selection resolved to", () => {
-      renderSegment({ segment: twoWindowSegment("both"), detail: "full" });
+      renderSegment({ segment: twoWindowSegment("both") });
 
       expect(
         screen.getByTestId("status-bar-window-codex:primary"),
@@ -1200,7 +1056,7 @@ describe("<StatusBarProviderSegment />", () => {
     });
 
     it("renders only the tightest when that is all the selection resolved to", () => {
-      renderSegment({ segment: twoWindowSegment("tightest"), detail: "full" });
+      renderSegment({ segment: twoWindowSegment("tightest") });
 
       expect(
         screen.queryByTestId("status-bar-window-codex:primary"),
@@ -1210,17 +1066,17 @@ describe("<StatusBarProviderSegment />", () => {
       ).not.toBeNull();
     });
 
-    it("stays on the tightest window however many are selected, once the rung is percent-only", () => {
-      // Several bare percentages under one icon would say which limits exist
-      // without saying which is which, so the rung overrides the selection.
+    it("renders every selected window with every display switch off, since nothing narrows the selection", () => {
       renderSegment({
         segment: twoWindowSegment("both"),
-        detail: "percent-only",
+        showModeWord: false,
+        showBar: false,
+        showTimer: false,
       });
 
       expect(
-        screen.queryByTestId("status-bar-window-codex:primary"),
-      ).toBeNull();
+        screen.getByTestId("status-bar-window-codex:primary"),
+      ).not.toBeNull();
       expect(
         screen.getByTestId("status-bar-window-codex:secondary"),
       ).not.toBeNull();

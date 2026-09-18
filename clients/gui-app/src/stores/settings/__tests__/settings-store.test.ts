@@ -882,6 +882,24 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().agentTabSurfacing).toBe("off");
   });
 
+  it("defaults the browser search engine to google", () => {
+    expect(useSettingsStore.getState().browserSearchEngine).toBe("google");
+  });
+
+  it("falls back an invalid persisted browser search engine to google", async () => {
+    useSettingsStore.setState({ browserSearchEngine: "kagi" });
+    await rehydrateFrom({ browserSearchEngine: "altavista" });
+
+    expect(useSettingsStore.getState().browserSearchEngine).toBe("google");
+  });
+
+  it("falls back a missing persisted browser search engine to google", async () => {
+    useSettingsStore.setState({ browserSearchEngine: "bing" });
+    await rehydrateFrom({});
+
+    expect(useSettingsStore.getState().browserSearchEngine).toBe("google");
+  });
+
   it("migrates the legacy pip surfacing mode to surface, leaving placement alone", async () => {
     await rehydrateFrom({ agentTabSurfacingMode: "pip" });
 

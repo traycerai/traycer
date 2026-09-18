@@ -55,7 +55,32 @@ describe("FallbackDangerZone - confirm dialog scope", () => {
     // Positive control: the dialog still rendered its (host-independent)
     // description, so the absence above is the clause missing, not the
     // dialog failing to open.
-    expect(screen.getByText(/Turns automatic fallback off/)).not.toBeNull();
+    expect(screen.getByText(/Turns automatic routing off/)).not.toBeNull();
+  });
+
+  it("names the second in-flight consequence: an armed chat can still hop to the restored default groups", () => {
+    // The dialog used to stop at the reassuring half - chats already
+    // switching or waiting keep their steps and timings - which reads as the
+    // WHOLE truth. It is not: the tier step re-reads the groups live, so a
+    // reset does change where an already-armed chat can hop to next.
+    // Withholding that known second half on a confirm dialog leaves the
+    // reader confidently wrong, not neutral.
+    render(
+      <FallbackDangerZone
+        hostLabel={null}
+        isPending={false}
+        onConfirm={vi.fn()}
+        focusResetOnMount={false}
+        onFocusApplied={vi.fn()}
+        status={null}
+      />,
+    );
+    openConfirmDialog();
+    expect(
+      screen.getByText(
+        /Chats already waiting or switching keep their original steps and timings\. If they still need another model, they'll use the restored default groups\./,
+      ),
+    ).not.toBeNull();
   });
 
   it("invokes onConfirm only after the destructive action is confirmed, not on opening the dialog", () => {

@@ -3430,6 +3430,36 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "browserSession": {
+                                  "type": "object",
+                                  "properties": {
+                                    "hostId": {
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "tabId": {
+                                      "type": "string"
+                                    },
+                                    "profile": {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "isolated"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "hostId",
+                                    "sessionId",
+                                    "tabId",
+                                    "profile"
+                                  ]
                                 }
                               },
                               "required": [
@@ -12180,6 +12210,37 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "browserSession": {
+                                  "type": "object",
+                                  "properties": {
+                                    "hostId": {
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "tabId": {
+                                      "type": "string"
+                                    },
+                                    "profile": {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "isolated"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "hostId",
+                                    "sessionId",
+                                    "tabId",
+                                    "profile"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               },
                               "required": [

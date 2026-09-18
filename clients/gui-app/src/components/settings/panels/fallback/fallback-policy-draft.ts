@@ -1103,7 +1103,7 @@ function draftIssueMessage(
     // Reachable only through a stored policy or a race the editor does not
     // produce: the editor carries the marker through a rename and clears it
     // on a delete, so the id names a group in every draft it builds.
-    return "The default group must be one of the groups below.";
+    return 'Choose an existing group under "For a model not in any group".';
   }
   if (head === "tierGroups") {
     if (fifth === "modelFamily") {
@@ -1207,7 +1207,7 @@ function groupListIssueMessage(draft: FallbackPolicy): string {
     if (seen.has(id)) return `Two model groups are both called “${id}”.`;
     seen.add(id);
   }
-  return "Two model groups have the same name.";
+  return "Two groups have the same name.";
 }
 
 export function createFallbackPolicyDraftState(

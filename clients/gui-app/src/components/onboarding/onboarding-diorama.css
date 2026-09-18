@@ -1,0 +1,826 @@
+/* Act 1 — the workspace diorama.
+   A real DOM window on a tilted stage, four timed chapters, one numbered
+   callout per chapter. The shell owns the easing tokens; the fallbacks here
+   only matter if this ever renders outside `.onboarding-shell`. */
+
+.onboarding-workspace {
+  --diorama-ease: var(--onboarding-ease, cubic-bezier(0.23, 1, 0.32, 1));
+  --diorama-ease-in-out: var(
+    --onboarding-ease-in-out,
+    cubic-bezier(0.77, 0, 0.175, 1)
+  );
+  /* The gutter the outside label cards live in. The chapter strip reads it too,
+     so the strip lines up with the window instead of with the panel. */
+  --diorama-gutter: clamp(0rem, 15vw, 13.5rem);
+  /* One spotlight recipe, shared by the ringed region and the active chapter
+     segment - the two are the same gesture in two places. */
+  --diorama-ring:
+    0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.5rem, 1.4vh, 1rem);
+  color: var(--foreground);
+}
+
+.diorama-scene {
+  container: diorama-scene / inline-size;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.5rem, 1.4vh, 1rem);
+}
+
+/* The stage reserves the gutters the outside label cards live in. */
+.diorama-stage {
+  position: relative;
+  display: grid;
+  /* Explicit tracks, not auto: the frame's `max-height: 100%` only resolves
+     against a grid area whose size does not come from the frame itself. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  /* Top room for the chapter-1 label, which sits above the window: the card
+     (two lines) plus its connector needs ~6rem, and the panel clips anything
+     shorter on a 949px-tall window. */
+  padding: clamp(6rem, 11vh, 6.5rem) var(--diorama-gutter) 0;
+  perspective: 1600px;
+}
+
+/* The frame is the window's box without its clipping, so the callouts can
+   anchor to the window edges and still draw outside it. */
+.diorama-frame {
+  position: relative;
+  width: min(100%, 72rem);
+  /* ponytail: when the panel is shorter than the ratio wants, the window goes
+     wide-and-short rather than shrinking. A JS fit would keep the ratio. */
+  max-height: 100%;
+  aspect-ratio: 16 / 9.4;
+}
+
+.diorama-window {
+  container: diorama-window / size;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0.875rem;
+  background: var(--background);
+  box-shadow:
+    0 40px 80px -40px #000c,
+    0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 10%, transparent);
+  animation: diorama-window-in 700ms var(--diorama-ease) both;
+  will-change: transform;
+}
+.diorama-window[data-entered="true"] {
+  will-change: auto;
+}
+
+@keyframes diorama-window-in {
+  from {
+    opacity: 0;
+    transform: rotateX(10deg) translateY(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ------------------------------------------------------------- spotlight */
+
+.diorama-window [data-region] {
+  transition:
+    opacity 220ms var(--diorama-ease),
+    box-shadow 220ms var(--diorama-ease);
+}
+.diorama-window [data-dim="true"] {
+  opacity: 0.6;
+}
+/* Every chapter wears the same ring, on the region's own radius, with ~3px of
+   padding inside it so the line never lands on something the region drew. No
+   inset variant: a region that would have touched the window's overflow clip
+   (the canvas, the browser tile) is inset from it in the markup instead, which
+   is the gutter the real app has between tiles anyway. */
+.diorama-window [data-ring="true"] {
+  box-shadow: var(--diorama-ring);
+}
+
+/* --------------------------------------------------------- pins + labels */
+
+.diorama-callout {
+  position: absolute;
+  left: var(--diorama-pin-x);
+  top: var(--diorama-pin-y);
+  z-index: 5;
+  opacity: 0;
+  transform: translate(var(--diorama-enter-x, 0), var(--diorama-enter-y, 0));
+  transition:
+    opacity 120ms var(--diorama-ease),
+    transform 120ms var(--diorama-ease);
+  pointer-events: none;
+}
+.diorama-callout[data-active="true"] {
+  opacity: 1;
+  transform: none;
+  transition-duration: 200ms;
+}
+.diorama-callout[data-place="top"] {
+  --diorama-enter-y: 6px;
+}
+.diorama-callout[data-place="left"] {
+  --diorama-enter-x: 6px;
+}
+.diorama-callout[data-place="right"] {
+  --diorama-enter-x: -6px;
+}
+
+.diorama-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  translate: -50% -50%;
+  display: inline-flex;
+  width: 1.375rem;
+  height: 1.375rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.diorama-connector {
+  position: absolute;
+  background: color-mix(in srgb, var(--foreground) 25%, transparent);
+}
+.diorama-callout[data-place="top"] .diorama-connector {
+  left: 0;
+  bottom: 0.6875rem;
+  width: 1px;
+  height: 1.3125rem;
+}
+.diorama-callout[data-place="left"] .diorama-connector {
+  top: 0;
+  right: 0.6875rem;
+  height: 1px;
+  width: 1.75rem;
+}
+.diorama-callout[data-place="right"] .diorama-connector {
+  top: 0;
+  left: 0.6875rem;
+  height: 1px;
+  width: 1.75rem;
+}
+
+.diorama-label {
+  position: absolute;
+  display: flex;
+  width: max-content;
+  max-width: 10.5rem;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.75rem;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 12px 32px -20px #000a;
+  text-align: start;
+}
+.diorama-label-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.diorama-label-line {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+}
+.diorama-callout[data-place="top"] .diorama-label {
+  left: 0;
+  bottom: 2rem;
+  translate: -50% 0;
+  max-width: 22rem;
+}
+.diorama-callout[data-place="left"] .diorama-label {
+  top: 0;
+  right: 2.4375rem;
+  translate: 0 -50%;
+}
+.diorama-callout[data-place="right"] .diorama-label {
+  top: 0;
+  left: 2.4375rem;
+  translate: 0 -50%;
+}
+
+/* Narrow panel: no room outside the window, so the card moves in beside the
+   pin and stops being a floating white tooltip. */
+@container diorama-scene (width < 1100px) {
+  .diorama-stage,
+  .diorama-chapters {
+    --diorama-gutter: 0rem;
+  }
+  .diorama-stage {
+    padding: 0;
+  }
+  .diorama-connector {
+    display: none;
+  }
+  .diorama-label {
+    background: color-mix(in srgb, var(--background) 86%, transparent);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+  }
+  .diorama-callout[data-place="top"] .diorama-label {
+    bottom: auto;
+    top: 1.375rem;
+    left: 0.75rem;
+    translate: 0 0;
+    max-width: 15rem;
+  }
+  .diorama-callout[data-place="left"] .diorama-label {
+    right: auto;
+    left: 1.375rem;
+  }
+  .diorama-callout[data-place="right"] .diorama-label {
+    left: auto;
+    right: 1.375rem;
+  }
+}
+
+/* --------------------------------------------------------- chapter strip */
+
+/* Four equal segments under the window, one per chapter, each labelled and
+   captioned with the same line its label card leads with. */
+.diorama-chapters {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: clamp(0.375rem, 1vw, 0.75rem);
+  width: 100%;
+  max-width: calc(72rem + 2 * var(--diorama-gutter));
+  /* The active segment's ring is 1px of line and 5px of halo, and the panel
+     clips at its own padding edge: 6px below and 8px above draw all of it, and
+     keep the top of the strip off the window's shadow. */
+  padding: 0.5rem var(--diorama-gutter) 0.375rem;
+}
+/* Wrapped rather than stacked: the track takes a whole line, the label and
+   caption share the next one. Two text rows would cost the window ~20px of
+   height on a 949px-tall display, and the window is what the page is about. */
+.diorama-chapter {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4375rem 0.375rem;
+  padding: 0.375rem 0.5rem 0.4375rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: none;
+  color: var(--muted-foreground);
+  text-align: start;
+  cursor: pointer;
+  transition:
+    color 200ms var(--diorama-ease),
+    background-color 200ms var(--diorama-ease),
+    box-shadow 220ms var(--diorama-ease),
+    transform 120ms var(--diorama-ease);
+}
+.diorama-chapter[data-active="true"] {
+  color: var(--foreground);
+  box-shadow: var(--diorama-ring);
+}
+.diorama-chapter:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.diorama-chapter:active:not(:focus-visible) {
+  transform: scale(0.98);
+}
+@media (hover: hover) and (pointer: fine) {
+  .diorama-chapter:hover {
+    color: var(--foreground);
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  }
+}
+
+/* The header rail's fill, segment by segment: same clip-path wipe, same
+   colours. The clip is written per frame from the tour's own clock rather
+   than transitioned, because it has to stop mid-wipe when the tour pauses. */
+.diorama-chapter-track {
+  flex: 0 0 100%;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.diorama-chapter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  clip-path: inset(0 100% 0 0);
+}
+.diorama-chapter-label {
+  flex: 0 0 auto;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+.diorama-chapter-caption {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Below this the caption is an ellipsis with a word in front of it. */
+@container diorama-scene (width < 720px) {
+  .diorama-chapter-caption {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------ mockup bits */
+
+/* The mock conversation is bottom-anchored, so a pane too short for the whole
+   exchange reads as a chat resting at its latest message. What it cannot hold
+   leaves a whole row at a time, at heights measured against the window itself
+   - a line cut through the middle by the composer is the one thing that reads
+   as a bug rather than as a scroll position. Below ~430cqh even the trimmed
+   set overflows, and at that size the window is past legible anyway. */
+@container diorama-window (height < 560px) {
+  .diorama-chat-prompt {
+    display: none;
+  }
+}
+@container diorama-window (height < 480px) {
+  .diorama-chat-reply {
+    display: none;
+  }
+}
+
+.diorama-sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+}
+.diorama-task-tabs {
+  position: relative;
+}
+
+/* The split is the scene's STATE, carried by `data-stage` off the beat model,
+   not a keyframe that happens to fire late in chapter 2. A delayed keyframe
+   cannot hold a state that has to survive the chapters after it: every replay
+   and every chapter switch rewinds it, and chapters 3 and 4 then need their own
+   copy of the answer - two sources of truth, which is how this drifted. */
+.diorama-tiled {
+  opacity: 0;
+  transition: opacity 250ms var(--diorama-ease);
+}
+.diorama-scene[data-stage="tiled"] .diorama-tiled,
+.diorama-scene[data-stage="browsing"] .diorama-tiled {
+  opacity: 1;
+}
+.diorama-scene[data-stage="tiled"] .diorama-unsplit,
+.diorama-scene[data-stage="browsing"] .diorama-unsplit {
+  opacity: 0;
+  visibility: hidden;
+}
+/* The drop settles the tile once, in the chapter where the drop happens. */
+.diorama-scene[data-chapter="2"][data-stage="tiled"] .diorama-tiled-drop {
+  animation: diorama-settle 420ms var(--diorama-ease) both;
+}
+
+.diorama-drop-target,
+.diorama-drag,
+.diorama-cursor {
+  opacity: 0;
+}
+
+/* Two faces in one grid cell: a switch is a crossfade in place, with no mount,
+   no unmount and no layout shift. */
+.diorama-face-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.diorama-face {
+  grid-area: 1 / 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--diorama-ease),
+    transform 200ms var(--diorama-ease);
+}
+.diorama-face[data-active="true"] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* A pane tab: the active one wears the surface and the primary bar. The tab
+   the click adds has nowhere to slide in from, so it just arrives. */
+.diorama-pane-tab {
+  color: var(--muted-foreground);
+  animation: diorama-fade-in 160ms var(--diorama-ease) both;
+  transition:
+    background-color 200ms var(--diorama-ease),
+    color 200ms var(--diorama-ease);
+}
+.diorama-pane-tab[data-active="true"] {
+  background: var(--background);
+  color: var(--foreground);
+}
+.diorama-pane-tab-bar {
+  opacity: 0;
+  transition: opacity 200ms var(--diorama-ease);
+}
+.diorama-pane-tab[data-active="true"] .diorama-pane-tab-bar {
+  opacity: 1;
+}
+/* The row is selected for exactly as long as the browser is open. */
+.diorama-browser-row {
+  transition: background-color 160ms var(--diorama-ease);
+}
+.diorama-scene[data-stage="browsing"] .diorama-browser-row {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.diorama-drag {
+  left: 8cqw;
+  top: 68cqh;
+}
+.diorama-cursor--open {
+  left: 16cqw;
+  top: 41cqh;
+}
+
+/* ---------------------------------------------------- chapter 1 — tabs */
+
+.diorama-scene[data-chapter="1"] .diorama-active-tab {
+  animation: diorama-tab-pulse 420ms var(--diorama-ease) 260ms both;
+}
+@keyframes diorama-tab-pulse {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  45% {
+    transform: translateY(-2px);
+  }
+}
+
+/* ------------------------------------- chapter 2 — open (drag, then click) */
+
+.diorama-scene[data-chapter="2"] .diorama-drag {
+  animation: diorama-drag-travel 2400ms var(--diorama-ease-in-out) 300ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-drag-card {
+  animation: diorama-fade-in 120ms var(--diorama-ease) 1200ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-source-row {
+  animation: diorama-press 240ms var(--diorama-ease) 1200ms both;
+}
+.diorama-scene[data-chapter="2"] .diorama-drop-target {
+  animation: diorama-target 1100ms linear 1400ms both;
+}
+
+/* The tile has settled; now the same cursor goes back for the browser. The
+   spotlight moves to the sidebar 600ms before the cursor arrives (the chapter's
+   third beat), so the eye is already where the click is going to land; the
+   fourth beat, at 3900ms, is the click itself. */
+.diorama-scene[data-chapter="2"] .diorama-cursor--open {
+  animation: diorama-cursor-in 1500ms var(--diorama-ease-in-out) 3200ms both;
+}
+
+@keyframes diorama-drag-travel {
+  0% {
+    opacity: 0;
+    transform: translate(-5cqw, 7cqh);
+  }
+  10% {
+    opacity: 1;
+  }
+  25%,
+  37% {
+    transform: translate(0, 0);
+  }
+  /* a 2cqw overshoot on a 64cqw travel — bounce well under .15 */
+  78% {
+    transform: translate(66cqw, -23cqh);
+  }
+  88% {
+    opacity: 1;
+    transform: translate(64cqw, -21cqh);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(64cqw, -21cqh);
+  }
+}
+@keyframes diorama-press {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.98);
+  }
+}
+@keyframes diorama-target {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  20%,
+  85% {
+    opacity: 1;
+  }
+}
+@keyframes diorama-settle {
+  from {
+    transform: translateY(6px) scale(0.985);
+  }
+  62% {
+    transform: translateY(-1px) scale(1.004);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* -------------------------------------------------- chapter 3 — panels */
+
+/* The app's horizontal rail marks its tab with the foreground colour and a
+   primary underline - no pill; the pill is the vertical rail's treatment. One
+   underline for the rail, sliding a slot at a time. */
+.diorama-rail-item {
+  color: var(--muted-foreground);
+  transition: color 200ms var(--diorama-ease);
+}
+.diorama-rail-item[data-active="true"] {
+  color: var(--foreground);
+}
+.diorama-rail-underline {
+  transform: translateX(calc(var(--diorama-rail-slot, 0) * 100%));
+  transition: transform 200ms var(--diorama-ease);
+}
+
+/* One 100% step is one icon, because the slot is a fifth of the rail. The
+   stops are the chapter's beats: 0, 800, 1600, 2400, 3200, then back to the
+   first at 4400 so the sidebar hands "Browse" the panel it started from. */
+.diorama-scene[data-chapter="3"] .diorama-rail-cursor {
+  animation: diorama-rail-walk 5000ms var(--diorama-ease-in-out) both;
+}
+@keyframes diorama-rail-walk {
+  0% {
+    opacity: 0;
+    transform: translate(-40%, 4px);
+  }
+  4.4% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  14% {
+    transform: translate(0, 0);
+  }
+  16% {
+    transform: translate(100%, 0);
+  }
+  30% {
+    transform: translate(100%, 0);
+  }
+  32% {
+    transform: translate(200%, 0);
+  }
+  46% {
+    transform: translate(200%, 0);
+  }
+  48% {
+    transform: translate(300%, 0);
+  }
+  62% {
+    transform: translate(300%, 0);
+  }
+  64% {
+    transform: translate(400%, 0);
+  }
+  82% {
+    transform: translate(400%, 0);
+  }
+  88% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes diorama-cursor-in {
+  0% {
+    opacity: 0;
+    transform: translate(5cqw, 6cqh);
+  }
+  12%,
+  40% {
+    opacity: 1;
+  }
+  40% {
+    transform: translate(0, 0);
+  }
+  46% {
+    transform: translate(0, 0) scale(0.86);
+  }
+  54% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+}
+@keyframes diorama-row-select {
+  from {
+    background: transparent;
+  }
+  to {
+    background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  }
+}
+
+/* -------------------------------------------------- chapter 4 — browse */
+
+.diorama-browser-page {
+  --background: #f5f2eb;
+  --foreground: #25352c;
+  --muted-foreground: #5d6b62;
+  --primary: #426b55;
+  --primary-foreground: #fff;
+}
+.diorama-browser-cursor {
+  opacity: 0;
+}
+.diorama-browser-cursor--claude {
+  left: calc(100% - 11cqw);
+  top: 6cqh;
+}
+.diorama-browser-cursor--codex {
+  left: calc(100% - 14cqw);
+  top: auto;
+  bottom: 7cqh;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-cursor--claude {
+  animation: diorama-browser-cursor 3200ms var(--diorama-ease) 200ms both;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-cursor--codex {
+  animation: diorama-browser-cursor 3200ms var(--diorama-ease) 500ms both;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-work {
+  animation: diorama-row-select 180ms var(--diorama-ease) 1700ms both;
+}
+.diorama-scene[data-chapter="4"] .diorama-browser-project {
+  animation: diorama-press 240ms var(--diorama-ease) 2100ms both;
+}
+@keyframes diorama-browser-cursor {
+  0% {
+    opacity: 0;
+    transform: translate(-7cqw, 5cqh);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-7cqw, 5cqh);
+  }
+  40%,
+  92% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-1cqw, 2cqh);
+  }
+}
+
+/* ------------------------------------------------------------- shared */
+
+@keyframes diorama-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* ------------------------------------------------------------- mobile */
+
+.onboarding-workspace--mobile {
+  justify-content: center;
+}
+.diorama-mobile {
+  width: min(100%, 24rem);
+  max-height: 100%;
+  aspect-ratio: 390 / 620;
+  margin-inline: auto;
+}
+.diorama-mobile .diorama-pane-tabs {
+  display: none;
+}
+.diorama-mobile-sheet {
+  animation: diorama-sheet 350ms var(--diorama-ease) 900ms both;
+}
+@keyframes diorama-sheet {
+  from {
+    opacity: 0;
+    transform: translateY(12%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------------------------------------------------- reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .diorama-stage {
+    perspective: none;
+  }
+  /* Nothing advances on its own here - the strip is the only way through the
+     tour - so the scene holds on chapter 1 until someone picks another. */
+  .diorama-window {
+    animation-name: diorama-fade-in;
+    will-change: auto;
+  }
+  .diorama-chapter {
+    transition:
+      color 200ms ease,
+      background-color 200ms ease;
+  }
+  .diorama-chapter:active:not(:focus-visible) {
+    transform: none;
+  }
+  .diorama-callout {
+    transform: none;
+  }
+  .diorama-drag,
+  .diorama-cursor,
+  .diorama-drop-target,
+  .diorama-browser-cursor {
+    display: none;
+  }
+  .diorama-scene[data-chapter="1"] .diorama-active-tab,
+  .diorama-scene[data-chapter="2"] .diorama-source-row,
+  .diorama-scene[data-chapter="4"] .diorama-browser-project {
+    animation: none;
+  }
+  .diorama-scene[data-chapter="2"][data-stage="tiled"] .diorama-tiled-drop {
+    animation-name: diorama-fade-in;
+  }
+  .diorama-face {
+    transform: none;
+    transition: opacity 200ms ease;
+  }
+  .diorama-rail-underline {
+    transition: none;
+  }
+  .diorama-tiled {
+    transition: none;
+  }
+  .diorama-mobile-sheet {
+    animation-name: diorama-fade-in;
+  }
+}
