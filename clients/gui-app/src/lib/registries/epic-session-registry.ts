@@ -413,7 +413,7 @@ export function useLiveChatEpicIdsForEpics(
  * already something the host said, never a pre-connect default.
  *
  * `promoting` counts as local for the same reason it does in
- * `useEpicHomeCacheSync`: the epic has no cloud row to carry a preference yet.
+ * the session's home write-through: the epic has no cloud row to carry a preference yet.
  * Matching that classifier rather than reasoning independently is deliberate -
  * two answers to "is this epic local-homed" that can disagree is the defect
  * shape, not the fix.

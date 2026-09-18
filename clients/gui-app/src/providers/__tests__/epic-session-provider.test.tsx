@@ -214,6 +214,7 @@ vi.mock(
 import {
   closeTestEpicTab,
   setTestEpicSessionHostClientResolver,
+  TEST_EPIC_TAB_NAME,
 } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
@@ -3542,6 +3543,89 @@ describe("<TestEpicSessionTab />", () => {
       });
       expect(streams).toHaveLength(3);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
+
+    it("a re-point MOVES the write-throughs: the OLD handle writes nothing, the NEW handle writes both", async () => {
+      const queryClient = new QueryClient();
+      const cloudTasksUserId = "alice@example.com";
+      const queryKey = cloudEpicTasksQueryKey(
+        "host-a",
+        cloudTasksUserId,
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      queryClient.setQueryData<ListTasksResponse>(queryKey, {
+        tasks: [makeHistoryTask("epic-session-test", "", cloudTasksUserId)],
+        hasMore: false,
+      });
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          {providerBody((handle) => seenHandles.push(handle))}
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            {providerBody((handle) => seenHandles.push(handle))}
+          </QueryClientProvider>,
+        );
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-b");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      const secondHandle = seenHandles.at(-1);
+      if (secondHandle === undefined) {
+        throw new Error("expected a replacement handle after the re-point");
+      }
+      await act(() => Promise.resolve());
+
+      // A title landing on the OLD handle after the commit reaches neither
+      // the tab record nor the History row: the re-point MOVED the
+      // subscriptions to the replacement, and the old handle's store is no
+      // longer observed by anything this module attached.
+      act(() => {
+        firstHandle.store.setState((state) => ({
+          epic: { ...state.epic, title: "Old Handle Title" },
+        }));
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(
+        useEpicCanvasStore.getState().tabsById["epic-session-test"]?.name,
+      ).toBe(TEST_EPIC_TAB_NAME);
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("");
+
+      // The NEW handle's title reaches both.
+      act(() => {
+        secondHandle.store.setState((state) => ({
+          epic: { ...state.epic, title: "New Handle Title" },
+        }));
+      });
+      expect(
+        useEpicCanvasStore.getState().tabsById["epic-session-test"]?.name,
+      ).toBe("New Handle Title");
+      await waitFor(() => {
+        expect(
+          queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+            ?.light?.title,
+        ).toBe("New Handle Title");
+      });
     });
   });
 

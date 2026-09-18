@@ -69,6 +69,19 @@
  * callbacks: passing the provider's closures in would have preserved the mount
  * coupling this module exists to remove.
  *
+ * ## Write-throughs
+ *
+ * A live session also owns the three things it knows that are read from
+ * somewhere else: the tab record's name, the History / task-context title,
+ * and the History home marker (`lib/registries/epic-session-write-throughs.ts`).
+ * They were React effects - one in the mounted epic route, two in the
+ * provider - so a title that landed on a never-activated tab reached the
+ * strip through the registry but was persisted nowhere. One set is attached
+ * per handle the entry HOLDS, for as long as it holds it (a warm, suspended
+ * session is still live and still writes), moved on a re-point, and dropped
+ * with the handle and at every auth boundary. The metadata hold only
+ * OBSERVES the title now; the tab-name write-through is the one writer.
+ *
  * ## Publish channels
  *
  * Two, and both are kept from the provider. An ACQUISITION publishes on a
@@ -134,6 +147,12 @@ import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
 import { sessionCreatedEpicHostId } from "@/lib/epics/session-created-epics";
 import { isRealEpicTitle } from "@/lib/display-title";
+import type { QueryClient } from "@tanstack/react-query";
+import {
+  attachEpicSessionWriteThroughs,
+  readEpicSessionTitle,
+  type EpicSessionWriteThroughs,
+} from "@/lib/registries/epic-session-write-throughs";
 
 /**
  * The failure card's Retry forcing a re-dial on a transport that reports
@@ -175,6 +194,12 @@ export interface EpicSessionControllerEnvironment {
    * live RequestContext; single-flight and idempotent.
    */
   readonly revalidateAuth: () => void;
+  /**
+   * The app's Query client, for the History / task-context / home
+   * write-throughs a live session owns. App-lifetime, like the rest of this
+   * port. `null` makes those write-throughs a no-op; the tab name needs none.
+   */
+  readonly queryClient: QueryClient | null;
 }
 
 /**
@@ -314,7 +339,7 @@ function requireConstructionHostStamp(handle: OpenEpicStoreHandle): string {
  * host-synthesized placeholder cannot end a hold the tab record still needs.
  */
 function sessionHasRealTitle(handle: OpenEpicStoreHandle): boolean {
-  return isRealEpicTitle(handle.store.getState().epic.title);
+  return isRealEpicTitle(readEpicSessionTitle(handle));
 }
 
 interface MetadataHold {
@@ -422,6 +447,24 @@ interface ControllerEntry {
    * surface attach acquires as usual.
    */
   metadataDemandSpent: boolean;
+  /**
+   * The write-throughs attached to the handle this entry HOLDS, and what they
+   * were attached for. One set per live session; see `syncWriteThroughs`.
+   */
+  writeThroughs: AttachedWriteThroughs | null;
+}
+
+interface AttachedWriteThroughs {
+  readonly handle: OpenEpicStoreHandle;
+  readonly queryClient: QueryClient | null;
+  readonly cacheUserId: string | null;
+  readonly authEpoch: number;
+  /**
+   * `null` only for the instant between this record being set and the
+   * attachment existing: attaching writes at once, and that first write has
+   * to find itself current.
+   */
+  attachment: EpicSessionWriteThroughs | null;
 }
 
 /** Diagnostic view of one entry, for the suites that pin residency. */
@@ -549,8 +592,96 @@ function createEpicSessionController(): EpicSessionController {
   // ── Snapshots ─────────────────────────────────────────────────────────────
 
   function publishSnapshots(entry: ControllerEntry): void {
+    // Every change to an entry ends here, so this is where the write-throughs
+    // are brought back in line with the handle it holds.
+    syncWriteThroughs(entry);
     entry.tabSnapshots = new Map();
     emit();
+  }
+
+  // ── Write-throughs ────────────────────────────────────────────────────────
+
+  /** The handle this entry's write-throughs belong on right now, if any. */
+  function writeThroughHandleFor(
+    entry: ControllerEntry,
+  ): OpenEpicStoreHandle | null {
+    if (entries.get(entry.epicId) !== entry || signedOutFence) return null;
+    const handle = entry.session?.handle ?? null;
+    // A session built under another identity is on its way out (the run's
+    // identity arm discards it); it writes nothing into this one's caches.
+    if (handle === null || handle.userId !== readUserId()) return null;
+    return handle;
+  }
+
+  function detachWriteThroughs(entry: ControllerEntry): void {
+    const attached = entry.writeThroughs;
+    if (attached === null) return;
+    entry.writeThroughs = null;
+    attached.attachment?.detach();
+  }
+
+  /**
+   * ONE set of write-throughs per live session, for as long as the entry
+   * holds it - not only while a pane shows it, and not only during the
+   * metadata hold.
+   *
+   * Reconciled rather than attached-and-detached at each site: the target is
+   * a pure function of the entry (the handle it holds, the Query client, the
+   * cache user, the auth epoch), so every path that drops or replaces the
+   * handle - suspend, park, cap eviction, a re-point's replacement, sign-out,
+   * a failed construction, the last tab closing - tears them down by making
+   * the target change, and none can forget to. A re-point MOVES them: the
+   * replacement is a different handle.
+   *
+   * Keyed on the handle the entry HOLDS (`session`), which leads the
+   * published one by a microtask. That lead is load-bearing: a warm handle
+   * that already carries its title ends the metadata hold in the same tick it
+   * is acquired, and the tab record has to be written before that hold lets
+   * the session go.
+   */
+  function syncWriteThroughs(entry: ControllerEntry): void {
+    const wanted = writeThroughHandleFor(entry);
+    const queryClient = environment?.queryClient ?? null;
+    const cacheUserId = useAuthStore.getState().contextMetadata?.userId ?? null;
+    const attached = entry.writeThroughs;
+    if (
+      attached !== null &&
+      attached.handle === wanted &&
+      attached.queryClient === queryClient &&
+      attached.cacheUserId === cacheUserId &&
+      attached.authEpoch === authEpoch
+    ) {
+      // Same session: membership may have grown (a duplicate, a tab opened in
+      // this window for an epic already live), so seed the newcomers.
+      attached.attachment?.refreshTabNames();
+      return;
+    }
+    detachWriteThroughs(entry);
+    if (wanted === null) return;
+    const record: AttachedWriteThroughs = {
+      handle: wanted,
+      queryClient,
+      cacheUserId,
+      authEpoch,
+      attachment: null,
+    };
+    // Set BEFORE attaching: attaching writes at once, and `isCurrent` has to
+    // find this record installed for that first write.
+    entry.writeThroughs = record;
+    record.attachment = attachEpicSessionWriteThroughs({
+      epicId: entry.epicId,
+      handle: wanted,
+      readTabIds: () => Array.from(entry.tabs.keys()),
+      queryClient,
+      cacheUserId,
+      // Re-checked at WRITE time: a notification already in flight when the
+      // handle is dropped or the identity ends must not write.
+      isCurrent: () =>
+        entry.writeThroughs === record &&
+        record.authEpoch === authEpoch &&
+        !signedOutFence &&
+        entry.session?.handle === wanted,
+    });
   }
 
   function tabSnapshotFor(
@@ -806,6 +937,9 @@ function createEpicSessionController(): EpicSessionController {
     for (const entry of Array.from(entries.values())) {
       cancelRun(entry);
       cancelGapDeadline(entry);
+      // Nothing writes after the identity ends - the Query-cache subscription
+      // above all, which would otherwise outlive the sign-out.
+      detachWriteThroughs(entry);
       entry.backoff.cancel();
       entry.requestedHostId = null;
       entry.seededCreateHost = false;
@@ -858,6 +992,7 @@ function createEpicSessionController(): EpicSessionController {
       lastTabSnapshots: new Map(),
       suspendedInputKey: null,
       metadataDemandSpent: false,
+      writeThroughs: null,
     };
   }
 
@@ -987,6 +1122,7 @@ function createEpicSessionController(): EpicSessionController {
   /** The last tab left: release the session and forget the entry. */
   function leave(entry: ControllerEntry): void {
     entries.delete(entry.epicId);
+    detachWriteThroughs(entry);
     // Decided from the tabs that are leaving NOW, not remembered on the entry:
     // a denial of one tab must not turn a later, confirmed close of another
     // into a "keep".
@@ -1042,24 +1178,6 @@ function createEpicSessionController(): EpicSessionController {
     registry.releaseMounted(entry.epicId);
   }
 
-  /**
-   * Write the title the hold just observed into the tab records that still
-   * have no real name - and only those; a real name is never overwritten.
-   *
-   * This is what CLOSES the metadata demand. The demand is "the tab record
-   * has no real name", so observing the title without recording it would
-   * leave the predicate true: the strip would fall back to the empty record
-   * the moment the warm session was pruned or parked, and the entry would
-   * acquire and hold again on every boot. The wider title write-throughs
-   * (History, the cloud task caches) stay with mounted code.
-   */
-  function recordObservedTitle(entry: ControllerEntry, title: string): void {
-    for (const tabId of entry.tabs.keys()) {
-      if (tabHasRealName(tabId)) continue;
-      useEpicCanvasStore.getState().renameTab(tabId, title);
-    }
-  }
-
   function needsMetadataHold(entry: ControllerEntry): boolean {
     if (entry.metadataDemandSpent) return false;
     return Array.from(entry.tabs.keys()).some(
@@ -1097,8 +1215,11 @@ function createEpicSessionController(): EpicSessionController {
       publishSnapshots(entry);
     };
     const observe = (): void => {
+      // Observed only. The title is WRITTEN by the session's tab-name
+      // write-through, which was attached before this hold and so runs first
+      // on the same notification: one writer, and the record is real by the
+      // time the hold lets the session go.
       if (!sessionHasRealTitle(handle)) return;
-      recordObservedTitle(entry, handle.store.getState().epic.title);
       end();
     };
     const unsubscribe = handle.store.subscribe(observe);
@@ -1361,6 +1482,8 @@ function createEpicSessionController(): EpicSessionController {
     entry.published = null;
     entry.demandHeld = false;
     cancelMetadataHold(entry);
+    // At once, not at the next publish: the handle is no longer this entry's.
+    detachWriteThroughs(entry);
   }
 
   /**
@@ -1558,6 +1681,9 @@ function createEpicSessionController(): EpicSessionController {
     // this session actually served - for a warm adoption, the handle's
     // bound host rather than wherever the window moved meanwhile.
     entry.originalHostId ??= nextSession.hostId;
+    // BEFORE the hold: a warm handle that already carries its title ends the
+    // hold in its first observation, and the tab record must be real by then.
+    syncWriteThroughs(entry);
     // Unobserved metadata is its OWN demand source, not a property of being
     // hidden: a session acquired while a pane happens to be showing an unnamed
     // tab still has a title to observe, and the pane can leave first. So the
@@ -2058,9 +2184,11 @@ function createEpicSessionController(): EpicSessionController {
       state.status === "signed-out" && previous.status !== "signed-out";
     const identityEnded = previousUserId !== null && previousUserId !== userId;
     const boundary = signedOutNow || identityEnded;
-    if (boundary) onAuthBoundary();
+    // The fence FIRST: the boundary republishes every entry, and that must
+    // not re-attach a write-through under a sign-out.
     signedOutFence =
       state.status === "signed-out" && (signedOutFence || boundary);
+    if (boundary) onAuthBoundary();
     const emailMoved = state.profile?.email !== previous.profile?.email;
     if (boundary || userId !== previousUserId || emailMoved) {
       requestReconcileAll();
@@ -2126,6 +2254,7 @@ function createEpicSessionController(): EpicSessionController {
         cancelRun(entry);
         cancelGapDeadline(entry);
         cancelMetadataHold(entry);
+        detachWriteThroughs(entry);
         entry.backoff.cancel();
       }
       entries.clear();
