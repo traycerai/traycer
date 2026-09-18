@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONTEXT_USAGE_ROW_KEYS } from "@/components/chat/context-usage";
 import {
   applyLayoutPreset,
@@ -6,6 +7,7 @@ import {
   LAYOUT_PRESETS,
   matchLayoutPreset,
   resetLayoutToDefaults,
+  useLayoutIsFullyDefault,
   type LayoutPresetBundle,
   type LayoutPresetId,
 } from "@/lib/layout-presets";
@@ -24,6 +26,7 @@ import {
   DEFAULT_MINIMAP_SIDE,
   DEFAULT_NAVIGATOR_RESOURCE_METRICS,
   DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+  DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
   DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
@@ -85,12 +88,14 @@ function resetStores(): void {
     contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
     chatTurnMinimapSide: DEFAULT_MINIMAP_SIDE,
     navigatorResourceMetrics: DEFAULT_NAVIGATOR_RESOURCE_METRICS,
+    pinnedContextBreakdownOrder: DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
   });
   useLeftPanelStore.getState().applyPanelGroups(DEFAULT_LEFT_PANEL_GROUPS);
   useLeftPanelStore.getState().clearPanelVisibilityOverrides();
 }
 
 beforeEach(resetStores);
+afterEach(cleanup);
 
 describe("layout presets", () => {
   it("applies each bundle and then matches itself", () => {
@@ -613,5 +618,103 @@ describe("layout presets", () => {
     expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual(
       DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
     );
+  });
+
+  // The five ORDER fields, which are structural exactly as placement and the
+  // rail are: no bundle carries one, the match ignores them, and Reset is the
+  // one gesture that puts an arrangement back.
+  describe("element order", () => {
+    /** A page where every one of the five orders has been rearranged. */
+    function rearrangeEverything(): void {
+      const layout = useLayoutStore.getState();
+      layout.setComposerToolbarOrder({
+        left: ["harness", "access"],
+        right: ["model", "mic", "attachImage"],
+      });
+      layout.setComposerDockOrder([
+        "background",
+        "filesChanged",
+        "activeAgents",
+      ]);
+      layout.setStatusBarSegmentOrder(["codex", "claude-code"]);
+      layout.setStatusBarResourceSide("left");
+      const [first, second] = CONTEXT_USAGE_ROW_KEYS;
+      useSettingsStore
+        .getState()
+        .setPinnedContextBreakdownOrder([second, first]);
+    }
+
+    it("leaves every order alone for every preset, and matches on none of them", () => {
+      for (const id of LAYOUT_PRESET_IDS) {
+        resetStores();
+        rearrangeEverything();
+        const rearranged = {
+          toolbar: useLayoutStore.getState().composer.toolbar,
+          dockOrder: useLayoutStore.getState().composer.dockOrder,
+          segmentOrder: useLayoutStore.getState().statusBar.segmentOrder,
+          resourceSide: useLayoutStore.getState().statusBar.resourceSide,
+          pinnedOrder: useSettingsStore.getState().pinnedContextBreakdownOrder,
+        };
+
+        applyLayoutPreset(id);
+
+        expect(useLayoutStore.getState().composer.toolbar).toEqual(
+          rearranged.toolbar,
+        );
+        expect(useLayoutStore.getState().composer.dockOrder).toEqual(
+          rearranged.dockOrder,
+        );
+        expect(useLayoutStore.getState().statusBar.segmentOrder).toEqual(
+          rearranged.segmentOrder,
+        );
+        expect(useLayoutStore.getState().statusBar.resourceSide).toBe(
+          rearranged.resourceSide,
+        );
+        expect(useSettingsStore.getState().pinnedContextBreakdownOrder).toEqual(
+          rearranged.pinnedOrder,
+        );
+        // An order-only change never costs a page its preset verdict.
+        expect(matchLayoutPreset(currentSnapshot())).toBe(id);
+      }
+    });
+
+    it("restores all five on Reset", () => {
+      rearrangeEverything();
+
+      resetLayoutToDefaults();
+
+      expect(useLayoutStore.getState().composer.toolbar).toEqual(
+        DEFAULT_COMPOSER_LAYOUT.toolbar,
+      );
+      expect(useLayoutStore.getState().composer.dockOrder).toEqual(
+        DEFAULT_COMPOSER_LAYOUT.dockOrder,
+      );
+      expect(useLayoutStore.getState().statusBar.segmentOrder).toEqual(
+        DEFAULT_STATUS_BAR_LAYOUT.segmentOrder,
+      );
+      expect(useLayoutStore.getState().statusBar.resourceSide).toBe(
+        DEFAULT_STATUS_BAR_LAYOUT.resourceSide,
+      );
+      expect(useSettingsStore.getState().pinnedContextBreakdownOrder).toEqual(
+        DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
+      );
+    });
+
+    it("keeps Reset enabled after an order-only change", () => {
+      // The dead-button failure this exists to prevent: the verdict stays
+      // `default`, so without the order comparisons Reset would be disabled on
+      // the one thing it would have put back.
+      expect(
+        renderHook(() => useLayoutIsFullyDefault("default")).result.current,
+      ).toBe(true);
+      cleanup();
+
+      rearrangeEverything();
+
+      expect(matchLayoutPreset(currentSnapshot())).toBe("default");
+      expect(
+        renderHook(() => useLayoutIsFullyDefault("default")).result.current,
+      ).toBe(false);
+    });
   });
 });

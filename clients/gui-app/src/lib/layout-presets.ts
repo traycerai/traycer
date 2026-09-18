@@ -1,5 +1,6 @@
 import { CONTEXT_USAGE_ROW_KEYS } from "@/components/chat/context-usage";
 import {
+  areLeftPanelGroupsEqual,
   DEFAULT_LEFT_PANEL_GROUPS,
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
@@ -21,6 +22,7 @@ import {
   DEFAULT_MINIMAP_SIDE,
   DEFAULT_NAVIGATOR_RESOURCE_METRICS,
   DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+  DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
   DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
   NAVIGATOR_RESOURCE_METRICS,
   useSettingsStore,
@@ -329,6 +331,10 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
     // whether a phone draws the strip at all is which surface hosts it on that
     // device, not how much detail the strip spells out.
     mobileFooter: layout.statusBar.mobileFooter,
+    // Order is carried over for that same reason once more: an arrangement is
+    // not an amount of detail, so a density leaves the user's one alone.
+    segmentOrder: layout.statusBar.segmentOrder,
+    resourceSide: layout.statusBar.resourceSide,
     rateLimits: {
       ...bundle.statusBar.rateLimits,
       // Carried over too: which accounts the strip reads is a per-host choice
@@ -342,6 +348,8 @@ export function applyLayoutPreset(id: LayoutPresetId): void {
     // Carried over for the same reason `placement` is: no bundle has an
     // opinion about which control the picker's footer offers.
     reasoningFooterControl: layout.composer.reasoningFooterControl,
+    toolbar: layout.composer.toolbar,
+    dockOrder: layout.composer.dockOrder,
   });
   const settings = useSettingsStore.getState();
   settings.setPinContextUsageBreakdown(bundle.chat.pinContextUsageBreakdown);
@@ -381,6 +389,16 @@ export function resetLayoutToDefaults(): void {
   layout.setComposerReasoningFooterControl(
     DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl,
   );
+  // The five order fields, structural like everything else in this block: the
+  // bundles carry none of them, so this is the one gesture that puts an
+  // arrangement back.
+  layout.setStatusBarSegmentOrder(DEFAULT_STATUS_BAR_LAYOUT.segmentOrder);
+  layout.setStatusBarResourceSide(DEFAULT_STATUS_BAR_LAYOUT.resourceSide);
+  layout.setComposerToolbarOrder(DEFAULT_COMPOSER_LAYOUT.toolbar);
+  layout.setComposerDockOrder(DEFAULT_COMPOSER_LAYOUT.dockOrder);
+  useSettingsStore
+    .getState()
+    .setPinnedContextBreakdownOrder(DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER);
   const panels = useLeftPanelStore.getState();
   panels.applyPanelGroups(DEFAULT_LEFT_PANEL_GROUPS);
   panels.clearPanelVisibilityOverrides();
@@ -507,6 +525,75 @@ function chatEqual(
       bundle.pinnedContextBreakdownFields,
       snapshot.pinnedContextBreakdownFields,
     )
+  );
+}
+
+/**
+ * Whether Reset has anything left to do: the Default densities AND every
+ * structural setting the bundles do not carry.
+ *
+ * Read here rather than folded into `matchLayoutPreset`, because the two answer
+ * different questions - the preset verdict says which density bundle the page
+ * is on, and this says whether the page as a whole is already the default one.
+ * A page can read `Default` and still have plenty for Reset to undo.
+ *
+ * Lives beside the presets rather than in the Settings group that first needed
+ * it, because the Customize bar's Reset asks the same question and the two must
+ * not drift into two answers.
+ *
+ * Subscribed SLICE BY SLICE rather than through one selector returning an
+ * object, for the reason `useLayoutPresetMatch` documents: a selector that
+ * builds a fresh object each call makes `useSyncExternalStore` see a new
+ * snapshot on every read and re-render forever.
+ */
+export function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
+  const placement = useLayoutStore((state) => state.statusBar.placement);
+  // Its own slice, because the bundles do not carry it and `matchLayoutPreset`
+  // does not read it - so a page whose ONLY change is the mobile footer still
+  // matches `default`, and Reset would go dead on the one setting it would
+  // have restored.
+  const mobileFooter = useLayoutStore((state) => state.statusBar.mobileFooter);
+  const reasoningFooterControl = useLayoutStore(
+    (state) => state.composer.reasoningFooterControl,
+  );
+  // The strip's checked accounts: carried by no bundle, cleared by Reset -
+  // the same shape as `mobileFooter`, and the same dead-button failure if
+  // left out. The resolver drops emptied entries, so "nothing checked" IS
+  // an empty map rather than a map of empty lists.
+  const shownProfiles = useLayoutStore(
+    (state) => state.statusBar.rateLimits.shownProfiles,
+  );
+  // The five order fields, here for exactly that dead-button reason: an
+  // order-only change leaves the verdict at `Default`, so without these Reset
+  // would be disabled on the one thing it would have put back.
+  const segmentOrder = useLayoutStore((state) => state.statusBar.segmentOrder);
+  const resourceSide = useLayoutStore((state) => state.statusBar.resourceSide);
+  const toolbar = useLayoutStore((state) => state.composer.toolbar);
+  const dockOrder = useLayoutStore((state) => state.composer.dockOrder);
+  const pinnedContextBreakdownOrder = useSettingsStore(
+    (state) => state.pinnedContextBreakdownOrder,
+  );
+  const panelGroups = useLeftPanelStore((state) => state.panelGroups);
+  const visibilityOverrides = useLeftPanelStore(
+    (state) => state.panelVisibilityOverrideById,
+  );
+  return (
+    match === "default" &&
+    placement === DEFAULT_STATUS_BAR_LAYOUT.placement &&
+    mobileFooter === DEFAULT_STATUS_BAR_LAYOUT.mobileFooter &&
+    reasoningFooterControl === DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl &&
+    Object.keys(shownProfiles).length === 0 &&
+    listsEqual(segmentOrder, DEFAULT_STATUS_BAR_LAYOUT.segmentOrder) &&
+    resourceSide === DEFAULT_STATUS_BAR_LAYOUT.resourceSide &&
+    listsEqual(toolbar.left, DEFAULT_COMPOSER_LAYOUT.toolbar.left) &&
+    listsEqual(toolbar.right, DEFAULT_COMPOSER_LAYOUT.toolbar.right) &&
+    listsEqual(dockOrder, DEFAULT_COMPOSER_LAYOUT.dockOrder) &&
+    listsEqual(
+      pinnedContextBreakdownOrder,
+      DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
+    ) &&
+    areLeftPanelGroupsEqual(panelGroups, DEFAULT_LEFT_PANEL_GROUPS) &&
+    Object.keys(visibilityOverrides).length === 0
   );
 }
 

@@ -36,6 +36,8 @@ describe("useLayoutStore", () => {
       expect(useLayoutStore.getState().statusBar).toEqual({
         placement: "status-bar",
         mobileFooter: false,
+        segmentOrder: [],
+        resourceSide: "right",
         rateLimits: {
           enabled: true,
           hiddenProviders: [],
@@ -150,6 +152,10 @@ describe("useLayoutStore", () => {
       expect(useLayoutStore.getState().statusBar).toEqual({
         placement: "status-bar",
         mobileFooter: true,
+        // Absent from the persisted blob above, so both resolve to their
+        // defaults - the empty segment order means "canonical".
+        segmentOrder: [],
+        resourceSide: "right",
         rateLimits: {
           enabled: false,
           hiddenProviders: ["codex"],
@@ -197,6 +203,8 @@ describe("useLayoutStore", () => {
       expect(useLayoutStore.getState().statusBar).toEqual({
         placement: "status-bar",
         mobileFooter: false,
+        segmentOrder: [],
+        resourceSide: "right",
         rateLimits: {
           enabled: true,
           hiddenProviders: [],
@@ -824,6 +832,9 @@ describe("useLayoutStore", () => {
         compactButton: "hidden",
         reasoningIndicator: "bars",
         reasoningFooterControl: "list",
+        // The visibility setters do not touch the arrangement.
+        toolbar: DEFAULT_COMPOSER_LAYOUT.toolbar,
+        dockOrder: DEFAULT_COMPOSER_LAYOUT.dockOrder,
       });
     });
 
@@ -861,6 +872,9 @@ describe("useLayoutStore", () => {
         compactButton: "hidden",
         reasoningIndicator: "bars-text",
         reasoningFooterControl: "list",
+        // Absent from the blob, so the resolver supplies the defaults.
+        toolbar: DEFAULT_COMPOSER_LAYOUT.toolbar,
+        dockOrder: DEFAULT_COMPOSER_LAYOUT.dockOrder,
       });
     });
 
@@ -904,6 +918,8 @@ describe("useLayoutStore", () => {
         compactButton: "hidden",
         reasoningIndicator: "text",
         reasoningFooterControl: "slider",
+        toolbar: DEFAULT_COMPOSER_LAYOUT.toolbar,
+        dockOrder: DEFAULT_COMPOSER_LAYOUT.dockOrder,
       });
     });
 
@@ -1022,6 +1038,214 @@ describe("useLayoutStore", () => {
   // setting is gone (the two spacings were barely distinguishable, user ruling
   // 2026-09-12), so the slice went with it rather than staying behind as an
   // empty object nothing reads.
+  // The four STRUCTURAL order fields. No density preset carries one, so every
+  // assertion here is about the resolver and the setters rather than about a
+  // bundle.
+  describe("order fields", () => {
+    it("starts on today's render order", () => {
+      const state = useLayoutStore.getState();
+
+      expect(state.composer.toolbar).toEqual({
+        left: ["attachImage", "access", "harness"],
+        right: ["model", "mic"],
+      });
+      expect(state.composer.dockOrder).toEqual([
+        "filesChanged",
+        "activeAgents",
+        "background",
+      ]);
+      // Empty means canonical: the strip orders providers itself.
+      expect(state.statusBar.segmentOrder).toEqual([]);
+      expect(state.statusBar.resourceSide).toBe("right");
+    });
+
+    it("persists the order fields under their slices", async () => {
+      useLayoutStore.getState().setStatusBarResourceSide("left");
+      useLayoutStore
+        .getState()
+        .setComposerDockOrder(["background", "filesChanged", "activeAgents"]);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      const persisted: unknown = JSON.parse(
+        window.localStorage.getItem(PERSIST_KEY) ?? "{}",
+      );
+      expect(persisted).toMatchObject({
+        state: {
+          statusBar: { resourceSide: "left", segmentOrder: [] },
+          composer: {
+            dockOrder: ["background", "filesChanged", "activeAgents"],
+            toolbar: DEFAULT_COMPOSER_LAYOUT.toolbar,
+          },
+        },
+      });
+    });
+
+    it("moves a persisted model chip back into the right cluster", async () => {
+      // The picker anchors the footer controls that hang off it, so `model` in
+      // `left` is not a shape the toolbar has - and it comes back at its
+      // canonical position rather than appended.
+      await rehydrateFrom({
+        composer: {
+          toolbar: {
+            left: ["attachImage", "model", "access", "harness"],
+            right: ["mic"],
+          },
+        },
+      });
+
+      expect(useLayoutStore.getState().composer.toolbar).toEqual({
+        left: ["attachImage", "access", "harness"],
+        right: ["model", "mic"],
+      });
+    });
+
+    it("re-inserts a missing toolbar item beside its canonical neighbour", async () => {
+      await rehydrateFrom({
+        composer: {
+          toolbar: { left: ["attachImage", "access", "harness"], right: [] },
+        },
+      });
+
+      // `model` and `mic` are both absent and both default to the right
+      // cluster, so they arrive there in canonical order.
+      expect(useLayoutStore.getState().composer.toolbar.right).toEqual([
+        "model",
+        "mic",
+      ]);
+    });
+
+    it("leaves a moved item where the user put it instead of restoring it", async () => {
+      // `mic` on the left is a legitimate arrangement, NOT a missing id - the
+      // resolver must not helpfully put it back in the right cluster.
+      await rehydrateFrom({
+        composer: {
+          toolbar: {
+            left: ["mic", "attachImage", "access", "harness"],
+            right: ["model"],
+          },
+        },
+      });
+
+      expect(useLayoutStore.getState().composer.toolbar).toEqual({
+        left: ["mic", "attachImage", "access", "harness"],
+        right: ["model"],
+      });
+    });
+
+    it("drops an unknown toolbar id and collapses a duplicate", async () => {
+      await rehydrateFrom({
+        composer: {
+          toolbar: {
+            left: ["attachImage", "wormhole", "access", "access", "harness"],
+            right: ["model", "attachImage", "mic"],
+          },
+        },
+      });
+
+      expect(useLayoutStore.getState().composer.toolbar).toEqual({
+        // `attachImage` is claimed by the left cluster first, so the right
+        // cluster's copy of it disappears rather than drawing it twice.
+        left: ["attachImage", "access", "harness"],
+        right: ["model", "mic"],
+      });
+    });
+
+    it("repairs an impossible order handed to the setter, not only a persisted one", () => {
+      useLayoutStore
+        .getState()
+        .setComposerToolbarOrder({ left: ["model", "access"], right: ["mic"] });
+
+      expect(useLayoutStore.getState().composer.toolbar).toEqual({
+        left: ["attachImage", "access", "harness"],
+        right: ["model", "mic"],
+      });
+    });
+
+    it("drops an unknown provider from the segment order", async () => {
+      await rehydrateFrom({
+        statusBar: { segmentOrder: ["codex", "not-a-provider", "claude-code"] },
+      });
+
+      expect(useLayoutStore.getState().statusBar.segmentOrder).toEqual([
+        "codex",
+        "claude-code",
+      ]);
+    });
+
+    it("falls back to the default side for a garbage resourceSide", async () => {
+      await rehydrateFrom({ statusBar: { resourceSide: "middle" } });
+
+      expect(useLayoutStore.getState().statusBar.resourceSide).toBe("right");
+    });
+
+    it("leaves state untouched when an order setter is handed the order already held", () => {
+      const before = useLayoutStore.getState().composer;
+
+      useLayoutStore
+        .getState()
+        .setComposerDockOrder([...DEFAULT_COMPOSER_LAYOUT.dockOrder]);
+
+      expect(useLayoutStore.getState().composer).toBe(before);
+    });
+  });
+
+  // Another window writing Layout has to reach this one live: the Customize
+  // editor autosaves, and a second window holding its start-up hydration would
+  // show chrome the store no longer says.
+  describe("cross-window rehydrate", () => {
+    it("rehydrates on a storage event for the layout key", async () => {
+      window.localStorage.setItem(
+        PERSIST_KEY,
+        JSON.stringify({
+          state: { composer: { mic: "hidden" } },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      );
+
+      window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+      // The listener's rehydrate is fire-and-forget.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(useLayoutStore.getState().composer.mic).toBe("hidden");
+    });
+
+    it("treats a null key (localStorage.clear()) as a rehydrate signal", async () => {
+      window.localStorage.setItem(
+        PERSIST_KEY,
+        JSON.stringify({
+          state: { statusBar: { placement: "header" } },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      );
+
+      window.dispatchEvent(new StorageEvent("storage", { key: null }));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+    });
+
+    it("ignores a storage event for an unrelated key", async () => {
+      window.localStorage.setItem(
+        PERSIST_KEY,
+        JSON.stringify({
+          state: { composer: { mic: "hidden" } },
+          version: CURRENT_PERSIST_VERSION,
+        }),
+      );
+
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "some-other-app:layout" }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(useLayoutStore.getState().composer.mic).toBe("visible");
+    });
+  });
+
   describe("the removed home slice", () => {
     it("holds no home slice at all", () => {
       expect(useLayoutStore.getState()).not.toHaveProperty("home");

@@ -13,21 +13,13 @@ import {
   LAYOUT_PRESET_LABELS,
   matchLayoutPreset,
   resetLayoutToDefaults,
+  useLayoutIsFullyDefault,
   type LayoutPresetId,
   type LayoutPresetMatch,
 } from "@/lib/layout-presets";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
-import {
-  areLeftPanelGroupsEqual,
-  DEFAULT_LEFT_PANEL_GROUPS,
-  useLeftPanelStore,
-} from "@/stores/epics/left-panel-store";
-import {
-  DEFAULT_COMPOSER_LAYOUT,
-  DEFAULT_STATUS_BAR_LAYOUT,
-  useLayoutStore,
-} from "@/stores/settings/layout-store";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const PRESET_OPTIONS: ReadonlyArray<SettingsSegmentedOption<LayoutPresetId>> = [
@@ -166,46 +158,6 @@ const PRESET_ANALYTICS_SETTINGS: Readonly<
   compact: "layout.preset.compact",
   detailed: "layout.preset.detailed",
 };
-
-/**
- * Whether Reset has anything left to do: the Default densities AND the
- * structural settings the bundles do not carry.
- *
- * Read here rather than folded into `matchLayoutPreset`, because the two
- * answer different questions - the segment says which density bundle the page
- * is on, and this says whether the page as a whole is already the default one.
- */
-function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
-  const placement = useLayoutStore((state) => state.statusBar.placement);
-  // Its own slice, because the bundles do not carry it and `matchLayoutPreset`
-  // does not read it - so a page whose ONLY change is the mobile footer still
-  // matches `default`, and Reset would go dead on the one setting it would
-  // have restored.
-  const mobileFooter = useLayoutStore((state) => state.statusBar.mobileFooter);
-  const reasoningFooterControl = useLayoutStore(
-    (state) => state.composer.reasoningFooterControl,
-  );
-  // The strip's checked accounts: carried by no bundle, cleared by Reset -
-  // the same shape as `mobileFooter`, and the same dead-button failure if
-  // left out. The resolver drops emptied entries, so "nothing checked" IS
-  // an empty map rather than a map of empty lists.
-  const shownProfiles = useLayoutStore(
-    (state) => state.statusBar.rateLimits.shownProfiles,
-  );
-  const panelGroups = useLeftPanelStore((state) => state.panelGroups);
-  const visibilityOverrides = useLeftPanelStore(
-    (state) => state.panelVisibilityOverrideById,
-  );
-  return (
-    match === "default" &&
-    placement === DEFAULT_STATUS_BAR_LAYOUT.placement &&
-    mobileFooter === DEFAULT_STATUS_BAR_LAYOUT.mobileFooter &&
-    reasoningFooterControl === DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl &&
-    Object.keys(shownProfiles).length === 0 &&
-    areLeftPanelGroupsEqual(panelGroups, DEFAULT_LEFT_PANEL_GROUPS) &&
-    Object.keys(visibilityOverrides).length === 0
-  );
-}
 
 /**
  * The verdict, recomputed from the stores on every render.
