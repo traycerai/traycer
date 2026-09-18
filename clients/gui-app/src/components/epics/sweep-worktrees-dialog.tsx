@@ -1154,11 +1154,8 @@ function SweepAutoCleanupDiscoveryPolicy(props: {
 /**
  * The line itself, mounted only when the offer actually stands.
  *
- * It owns the deep link, and therefore `useNavigate`, rather than taking a
- * pre-built handler from the dialog: a Sweep dialog rendered outside a router
- * (every direct-render suite) must not depend on TanStack warning and carrying
- * on. Reaching the router is now a consequence of this line rendering, which
- * only happens where a router exists.
+ * It owns the automatic-cleanup deep link and navigates only when clicked.
+ * The dialog separately prepares navigation for its parked-sweep toast.
  *
  * The copy describes the POLICY, never these rows: manual Sweep's green rows
  * are examples of what stays proven safe, not a promise that automatic cleanup
