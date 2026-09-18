@@ -24,6 +24,32 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s
+ * identical double for the full rationale and `fallback-model-labels.test.tsx`
+ * for the resolver's own rules. `null` (every existing case here) degrades to
+ * the raw slug, matching the no-catalogue behaviour every literal below was
+ * written against.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
     mutate: mocks.mutate,
@@ -70,6 +96,7 @@ describe("FallbackWaitingCard", () => {
   beforeEach(() => {
     mocks.mutate.mockReset();
     mocks.openSettings.mockReset();
+    modelLabelOverride.value = null;
     useSettingsHostScopeStore.getState().setScopedHostId("app-host-a");
   });
 
