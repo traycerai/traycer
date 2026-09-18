@@ -2,7 +2,7 @@
  * Canonical owner of landing-composer image capacity: the byte budget, live-root
  * / measured-referenced-byte accounting, and the in-flight reservation ledger.
  * Both normal landing paste (`use-landing-composer-paste.ts`,
- * `landing-composer.tsx`) and prompt-stash import (`landing-stash-import.ts`)
+ * `landing-composer.tsx`) and image import (`landing-image-import.ts`)
  * admit work through the single `reserveLandingImageBudget` below - there is no
  * second budget authority.
  *

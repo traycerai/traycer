@@ -24,7 +24,6 @@ import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { PromptStashSnapshot } from "@/lib/composer/prompt-stash-codec";
 
 import {
   createChatSessionStore,
@@ -34,7 +33,8 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
 import {
   putDraftBlobs,
   resetDraftBlobTransportForTests,
@@ -42,32 +42,14 @@ import {
 } from "@/lib/drafts/draft-blob-transport";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
-import { pngBytesOfSize } from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/image-fixtures";
+import {
+  resetHandedOffDrafts,
+  waitForHandedOffDraft,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
-}));
-
-const promptStashMocks = vi.hoisted(() => ({
-  save: vi.fn<(snapshot: PromptStashSnapshot) => Promise<void>>(),
-}));
-vi.mock("@/stores/composer/prompt-stash-store", () => ({
-  usePromptStashStore: {
-    getState: () => ({
-      save: promptStashMocks.save,
-      // The handoff calls `saveWhile`, not `save`. Routed through the same
-      // mock so these assertions keep observing it - but HONOURING the
-      // predicate, so a stale-generation write is skipped here exactly as the
-      // real store skips it.
-      saveWhile: (
-        snapshot: PromptStashSnapshot,
-        stillCurrent: () => boolean,
-      ) =>
-        stillCurrent()
-          ? promptStashMocks.save(snapshot)
-          : Promise.resolve(undefined),
-    }),
-  },
 }));
 
 const originalCreateImageBitmap = globalThis.createImageBitmap;
@@ -94,7 +76,18 @@ const OK_CLIENT: DraftBlobClient = {
     })) as HostRequester<HostRpcRegistry>["request"],
 };
 
-function hashOnlyContent(hash: string, text: string): JsonContent {
+/**
+ * `byteLength` is the REAL length of the seeded bytes, not a round number.
+ * `importImagesIntoLanding` verifies the node's declared `mimeType`/`size`
+ * against the blob it resolves and calls a disagreement corruption, so a
+ * fixture that lies about its size takes the text-only path and quietly stops
+ * exercising the image leg at all.
+ */
+function hashOnlyContent(
+  hash: string,
+  text: string,
+  byteLength: number,
+): JsonContent {
   return {
     type: "doc",
     content: [
@@ -104,7 +97,7 @@ function hashOnlyContent(hash: string, text: string): JsonContent {
           id: "image-1",
           fileName: "screenshot.png",
           mimeType: "image/png",
-          size: 128,
+          size: byteLength,
           hash,
         },
       },
@@ -292,8 +285,7 @@ let harness: Harness | null = null;
 
 beforeEach(() => {
   installFreshIndexedDb();
-  promptStashMocks.save.mockReset();
-  promptStashMocks.save.mockResolvedValue(undefined);
+  resetHandedOffDrafts();
   Object.defineProperty(globalThis, "createImageBitmap", {
     configurable: true,
     writable: true,
@@ -323,14 +315,14 @@ describe("R6F4(a): a lastCopyPrompts entry roots its own image hash", () => {
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
 
-    const a = sendMessageWithContent(harness, hashOnlyContent(hashA, "A"));
+    const a = sendMessageWithContent(harness, hashOnlyContent(hashA, "A", 32));
     rejectPlain(harness, a.clientActionId, "A not accepted.");
     expect(
       harness.handle.store.getState().failedSendRestoration?.clientActionId,
     ).toBe(a.clientActionId);
 
     // B loses the slot race - displaced into lastCopyPrompts, not disposed.
-    const b = sendMessageWithContent(harness, hashOnlyContent(hashB, "B"));
+    const b = sendMessageWithContent(harness, hashOnlyContent(hashB, "B", 40));
     rejectPlain(harness, b.clientActionId, "B not accepted.");
     expect(
       Object.hasOwn(
@@ -359,7 +351,7 @@ describe("R8: a notice shows the words, so it cannot take custody of a sidecar",
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
 
-    const a = sendMessageWithContent(harness, hashOnlyContent(hashA, "A"));
+    const a = sendMessageWithContent(harness, hashOnlyContent(hashA, "A", 32));
     rejectPlain(harness, a.clientActionId, "A not accepted.");
 
     // B carries an annotation sidecar and loses the single restoration slot.
@@ -393,59 +385,6 @@ describe("R8: a notice shows the words, so it cannot take custody of a sidecar",
   });
 });
 
-/**
- * DELIBERATE DIVERGENCE, reviewed and accepted: this asserts ROOT MEMBERSHIP
- * at the moment the window is open, rather than racing a real
- * `landing-image-gc` sweep against the capture.
- *
- * The real-race version was tried and is genuinely nondeterministic - the
- * sweep's own IndexedDB round trip is comparable in cost to the handoff chain,
- * so which one wins varies run to run. Making it deterministic would mean
- * adding an injectable delay to production purely so a test could interleave
- * with it, which is a worse trade than asserting the guarantee directly.
- *
- * The guarantee IS membership: the sweep deletes exactly what the root sources
- * do not name, so "the hash is named while the capture is in flight" is the
- * property, and a flaky race would only ever observe it indirectly.
- */
-describe("R7F2: handoffCaptureRoots is released as soon as the snapshot exists, not when the save settles", () => {
-  it("the hash is NO LONGER a root once the snapshot has been handed to a STALLED save (DRIVE RED on finally-only release)", async () => {
-    // The save never settles - a promise that is never going to resolve or
-    // reject. If release only happened in the `.finally`, the root would
-    // stay held for as long as this test runs; if release happens as soon
-    // as the snapshot exists (before `save` is even called), the root is
-    // gone well before that.
-    promptStashMocks.save.mockImplementation(
-      () => new Promise(() => undefined),
-    );
-
-    const hash = await seedConfirmedImage(pngBytesOfSize(56));
-    harness = createHarness();
-    emitOwnerSnapshot(harness.callbacks());
-    const { clientActionId } = sendMessageWithContent(
-      harness,
-      hashOnlyContent(hash, "stalled-save capture prompt"),
-    );
-    rejectPlain(harness, clientActionId, "Not accepted.");
-    expect(
-      harness.handle.store.getState().failedSendRestoration?.clientActionId,
-    ).toBe(clientActionId);
-
-    harness.handle.dispose();
-
-    // Wait for the snapshot to exist: `save` is called right after release,
-    // in the same `.then`, so "save was called" is the signal that the
-    // snapshot is built and release (on the current, fixed code) has
-    // already run - even though `save` itself is stalled forever.
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-
-    const roots = landingLiveImageRootHashes();
-    expect(roots.has(hash)).toBe(false);
-  });
-});
-
 describe("R6F4(b): handoffCaptureRoots protects an in-flight capture from a concurrent sweep", () => {
   it("the hash is a live root at the exact instant dispose() has removed the store from liveChatSessionStores but the async capture has not resolved (DRIVE RED)", async () => {
     const hash = await seedConfirmedImage(pngBytesOfSize(48));
@@ -453,7 +392,7 @@ describe("R6F4(b): handoffCaptureRoots protects an in-flight capture from a conc
     emitOwnerSnapshot(harness.callbacks());
     const { clientActionId } = sendMessageWithContent(
       harness,
-      hashOnlyContent(hash, "in-flight capture prompt"),
+      hashOnlyContent(hash, "in-flight capture prompt", 48),
     );
     rejectPlain(harness, clientActionId, "Not accepted.");
     expect(
@@ -474,19 +413,14 @@ describe("R6F4(b): handoffCaptureRoots protects an in-flight capture from a conc
 
     // End-to-end confirmation that the ordinary (uninterrupted) path still
     // resolves the image successfully once the capture completes.
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const saved = promptStashMocks.save.mock.calls.map(
-      ([snapshot]) => snapshot,
+    const installed = await waitForHandedOffDraft(
+      "in-flight capture prompt",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
     );
-    const match = saved.find((snapshot) =>
-      JSON.stringify(snapshot.entry.content).includes(
-        "in-flight capture prompt",
-      ),
-    );
-    expect(match).toBeDefined();
-    if (match === undefined) throw new Error("expected the prompt's snapshot");
-    expect(match.entry.blobHashes.length).toBeGreaterThan(0);
+    // The image survived into the installed draft, which is only possible if
+    // its bytes were still there for `importImagesIntoLanding` to read when
+    // the capture ran - an unresolvable hash takes the text-only path and
+    // strips every image node.
+    expect(installed).toContain("imageAttachment");
   });
 });

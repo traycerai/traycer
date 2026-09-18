@@ -22,7 +22,7 @@ import {
   resetLandingImageBudgetReservationsForTesting,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 // F3 needs to see whether `reserveLandingImageBudget` was called at all (the
 // non-storable path must take no reservation) and, for the mixed-batch case,

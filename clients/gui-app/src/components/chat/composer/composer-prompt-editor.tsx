@@ -97,8 +97,8 @@ export interface ComposerPromptEditorHandle {
   /**
    * Replace the document and notify the owner via the normal `onDocumentChange`
    * signal (a real editor-level document mutation). The landing and new-
-   * conversation prompt-stash destinations use this path; chat records its
-   * canonical replacement first and then uses {@link syncContent}.
+   * conversation composers use this path; chat records its canonical
+   * replacement first and then uses {@link syncContent}.
    */
   readonly setContent: (
     content: JsonContent,

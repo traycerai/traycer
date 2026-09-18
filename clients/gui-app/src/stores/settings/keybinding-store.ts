@@ -102,6 +102,16 @@ function readPersistedBindings(
       persistedBindings[actionId] = value;
     }
   }
+  // Renamed ids must be carried here, BEFORE the `ACTION_IDS` filter above
+  // drops every key that is no longer an action: a user who rebound the old
+  // id would otherwise silently fall back to the new id's default.
+  const legacyStash = bindings["composer.stash"];
+  if (
+    persistedBindings["composer.drafts"] === undefined &&
+    isPersistedBindingValue(legacyStash)
+  ) {
+    persistedBindings["composer.drafts"] = legacyStash;
+  }
   return persistedBindings;
 }
 

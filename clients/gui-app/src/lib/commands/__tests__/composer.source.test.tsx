@@ -333,18 +333,18 @@ describe("composerSource", () => {
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
-  it("emits a context-gated Stash prompt row bound to composer.stash", () => {
+  it("emits a context-gated Drafts row bound to composer.drafts", () => {
     registerFocusedComposerControls(
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
     );
     const item = captureItems(null, "landing").find(
-      (row) => row.id === "composer:stash-prompt",
+      (row) => row.id === "composer:drafts",
     );
     expect(item).toBeDefined();
-    expect(item?.actionId).toBe("composer.stash");
-    expect(item?.label).toBe("Stash prompt");
+    expect(item?.actionId).toBe("composer.drafts");
+    expect(item?.label).toBe("Drafts");
     expect(item?.shortcut).toBe("mod+s");
   });
 

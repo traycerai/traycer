@@ -103,7 +103,6 @@ import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
-import { HistoryDraftsList } from "@/components/epics/history-drafts-list";
 import {
   HistoryMessageHits,
   type HistoryMessageHitsProps,
@@ -813,46 +812,41 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          <>
-            {variant === "picker" ? null : (
-              <HistoryDraftsList hostId={hostId} onBeforeOpen={onSelectEpic} />
-            )}
-            <HistoryListBody
-              variant={variant}
-              error={error}
-              isPending={isPending}
-              isFetching={isFetching}
-              hasActiveFilters={hasActiveFilters}
-              chatHostFilterUnsupported={chatHostFilterUnsupported}
-              hostRequiresCloudToList={hostRequiresCloudToList}
-              items={items}
-              onRetry={handleRetry}
-              selectionMode={selectionMode}
-              selectionEnabled={selectionEnabled}
-              selectedIds={selectedIds}
-              onToggleSelection={toggleSelection}
-              onRequestDelete={requestDelete}
-              onRequestSweep={requestSweep}
-              onSetPinned={handleSetPinned}
-              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-              hasNextPage={hasNextPage}
-              isFetchingNextPage={isFetchingNextPage}
-              onLoadMore={fetchNextPage}
-              onSelectEpic={onSelectEpic}
-              onOpenItem={onOpenItem}
-              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-              worktreesByEpicId={worktreesByEpicId}
-              surfaceHostId={hostId}
-              openEpicIds={openEpicIdSet}
-              completeness={view.completeness}
-              cloudPagePending={cloudPagePending}
-              rowsScopeRef={rowsScopeRef}
-              onRowKeyDown={keyboardNav.onRowKeyDown}
-              messageHits={messageHits}
-              onRefresh={refreshHistory}
-            />
-          </>
+          <HistoryListBody
+            variant={variant}
+            error={error}
+            isPending={isPending}
+            isFetching={isFetching}
+            hasActiveFilters={hasActiveFilters}
+            chatHostFilterUnsupported={chatHostFilterUnsupported}
+            hostRequiresCloudToList={hostRequiresCloudToList}
+            items={items}
+            onRetry={handleRetry}
+            selectionMode={selectionMode}
+            selectionEnabled={selectionEnabled}
+            selectedIds={selectedIds}
+            onToggleSelection={toggleSelection}
+            onRequestDelete={requestDelete}
+            onRequestSweep={requestSweep}
+            onSetPinned={handleSetPinned}
+            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            onLoadMore={fetchNextPage}
+            onSelectEpic={onSelectEpic}
+            onOpenItem={onOpenItem}
+            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+            worktreesByEpicId={worktreesByEpicId}
+            surfaceHostId={hostId}
+            openEpicIds={openEpicIdSet}
+            completeness={view.completeness}
+            cloudPagePending={cloudPagePending}
+            rowsScopeRef={rowsScopeRef}
+            onRowKeyDown={keyboardNav.onRowKeyDown}
+            messageHits={messageHits}
+            onRefresh={refreshHistory}
+          />
         </NotificationIndicatorsProvider>
       </section>
       <DeleteTasksDialog

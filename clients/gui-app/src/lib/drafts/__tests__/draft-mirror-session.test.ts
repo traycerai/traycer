@@ -54,7 +54,7 @@ import {
 } from "@/lib/drafts/draft-blob-transport";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -1364,6 +1364,8 @@ describe("DraftMirrorSession", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -1511,6 +1513,8 @@ describe("DraftMirrorSession", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
