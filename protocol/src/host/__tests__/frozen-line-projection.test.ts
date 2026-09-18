@@ -4,6 +4,9 @@ import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/index
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { projectOntoFrozenLine } from "@traycer/protocol/host/frozen-line-projection";
 import {
+  downgradeProviderCliStateListToV70,
+  downgradeProviderCliStateListToV80,
+  providerCliStateSchema,
   providerCliStateSchemaV70,
   providerCliStateSchemaV80,
   providersListResponseSchema,
@@ -376,6 +379,55 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
     if (!downgraded.ok) return;
     expect(
       downgraded.value.providers[0]?.managedVersions?.sharedWithProviders,
+    ).toEqual(["claude-code"]);
+  });
+
+  it("survives the v7.0 enabled-profiles PRE-PASS, which parses live first", () => {
+    // Raised in review, and a reasonable-looking reading: the v7.0 bridge runs
+    // `parseProviderStateWithEnabledProfiles` BEFORE the projection, that
+    // pre-pass parses with a schema whose `sharedWithProviders` is
+    // `z.array(providerIdSchema).catch([])`, and a `.catch([])` upstream of the
+    // projection would hand it an already-emptied array - nothing left to keep.
+    //
+    // It does not happen, and the reason is worth stating because the reading
+    // error is the easy one to make: the pre-pass parses with the LIVE schema,
+    // and "newer than v7.0" is not "unknown to live". `antigravity` is in the
+    // live enum, so the live `.catch([])` never fires; only the frozen v7.0
+    // enum refuses it, and by then the projection is the thing doing the
+    // refusing. The pre-pass is inert here BY CONSTRUCTION - it shares its
+    // schema with the head parse that already gated this value.
+    //
+    // v8.0 is the control: same assertion, no pre-pass at all. If the pre-pass
+    // were the hazard, these two would disagree.
+    const shared = ["claude-code", "antigravity"];
+    const state = {
+      ...providerState("claude-code"),
+      packId: "pack-a",
+      managedVersions: {
+        autoDownload: true,
+        pinnedVersion: null,
+        updateAvailable: null,
+        sharedWithProviders: shared,
+        totalSizeBytes: null,
+        available: [],
+      },
+    };
+
+    // The precondition the whole argument rests on: live accepts BOTH ids, so
+    // the pre-pass has nothing to catch. Asserted, not assumed - if a future
+    // edit narrows the live enum this test must fail loudly rather than pass
+    // for a new reason.
+    expect(
+      providerCliStateSchema.parse(state).managedVersions?.sharedWithProviders,
+    ).toEqual(shared);
+
+    expect(
+      downgradeProviderCliStateListToV70([state])[0]?.managedVersions
+        ?.sharedWithProviders,
+    ).toEqual(["claude-code"]);
+    expect(
+      downgradeProviderCliStateListToV80([state])[0]?.managedVersions
+        ?.sharedWithProviders,
     ).toEqual(["claude-code"]);
   });
 
