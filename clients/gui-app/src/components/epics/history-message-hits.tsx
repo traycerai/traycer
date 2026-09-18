@@ -204,6 +204,7 @@ function HistoryMessageHitsSection(props: {
       </div>
       <HistoryMessageHitsBody
         status={status}
+        hostId={hostId}
         onOpen={openTarget}
         onRowKeyDown={onRowKeyDown}
         renderExpansion={renderExpansion}
@@ -237,12 +238,15 @@ function HeaderDetail(props: {
 
 function HistoryMessageHitsBody(props: {
   readonly status: ChatSearchMessageHitsStatus;
+  /** Keys the list; see the `key` below. */
+  readonly hostId: string | null;
   readonly onOpen: (target: ChatSearchOpenTarget) => void;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   readonly renderExpansion: (target: ChatSearchExpansionTarget) => ReactNode;
   readonly taskTitles: ReadonlyMap<string, string>;
 }): ReactNode {
-  const { onOpen, onRowKeyDown, renderExpansion, status, taskTitles } = props;
+  const { hostId, onOpen, onRowKeyDown, renderExpansion, status, taskTitles } =
+    props;
   if (status.kind === "loading") {
     return (
       <div className="flex px-3 py-1.5">
@@ -295,7 +299,14 @@ function HistoryMessageHitsBody(props: {
   // the first task row. See `use-history-list-keyboard-nav.ts`.
   return (
     <ChatSearchNavProvider value={onRowKeyDown}>
+      {/* The host, because the list keys itself by the REQUEST and a host
+          switch under an unchanged query produces a byte-identical one - so
+          the expansion state and its collected page cursors would carry over
+          onto rows from a different machine's index, whose chat ids the
+          previous host's cursors mean nothing against. The two keys compose
+          into the (hostId, base) identity the hook already pages by. */}
       <ChatSearchMessageHitList
+        key={hostId}
         status={status}
         onOpen={onOpen}
         renderExpansion={renderExpansion}

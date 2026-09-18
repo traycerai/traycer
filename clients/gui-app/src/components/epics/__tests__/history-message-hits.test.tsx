@@ -80,6 +80,18 @@ vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
 vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
   useChatSearchTaskTitles: () => new Map([["epic-1", "Listed task"]]),
 }));
+// Expanding a group renders this, and the real one issues a chat-scoped query
+// that needs a QueryClient and a live host. The section's contract with it is
+// which chat it is handed, so that is what the stand-in reports.
+vi.mock("@/components/chat-search/chat-search-expanded-rows", () => ({
+  ChatSearchExpandedRows: (props: {
+    readonly client: unknown;
+    readonly base: ChatSearchBaseRequest;
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly onOpenMessage: (messageId: string) => void;
+  }) => <div data-testid={`expanded-${props.chatId}`} />,
+}));
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicTitle: () => null,
 }));
@@ -122,7 +134,12 @@ function messageHit(messageId: string): ChatSearchMessageHit {
   };
 }
 
-function messageMatch(chatId: string): ChatSearchMessageMatch {
+function messageMatch(
+  chatId: string,
+  // More than one match is what earns the row its expand toggle, which is the
+  // only place this list keeps state a stale key could carry over.
+  matchCount: number,
+): ChatSearchMessageMatch {
   return {
     epicId: "epic-1",
     ownerUserId: "user-1",
@@ -130,7 +147,7 @@ function messageMatch(chatId: string): ChatSearchMessageMatch {
     title: `Chat ${chatId}`,
     lifecycleState: "active",
     updatedAt: 1_700_000_000_000,
-    matchCount: 1,
+    matchCount,
     best: messageHit(`${chatId}-m1`),
     messages: [],
   };
@@ -165,17 +182,33 @@ function renderSection(overrides: {
   readonly query?: string;
   readonly filtersActive?: boolean;
   readonly taskListSettled?: boolean;
-}): { readonly container: HTMLElement; readonly onRowKeyDown: () => void } {
+}): {
+  readonly container: HTMLElement;
+  readonly onRowKeyDown: () => void;
+  /** Re-renders the same props, so a changed `testState` is picked up. */
+  readonly rerender: () => void;
+} {
   const onRowKeyDown = vi.fn<() => void>();
-  const { container } = render(
+  // A FRESH element each time, not one held in a variable: React bails out of
+  // a subtree whose element is reference-identical to the last render's, so
+  // re-rendering the same object would do nothing at all and every assertion
+  // after it would pass vacuously.
+  const element = () => (
     <HistoryMessageHits
       query={overrides.query ?? "browser"}
       filtersActive={overrides.filtersActive ?? false}
       taskListSettled={overrides.taskListSettled ?? true}
       onRowKeyDown={onRowKeyDown}
-    />,
+    />
   );
-  return { container, onRowKeyDown };
+  const view = render(element());
+  return {
+    container: view.container,
+    onRowKeyDown,
+    rerender: () => {
+      view.rerender(element());
+    },
+  };
 }
 
 beforeEach(() => {
@@ -197,7 +230,7 @@ afterEach(() => {
 
 describe("HistoryMessageHits: when the question cannot be asked", () => {
   it("renders nothing, and asks nothing, below the body-search minimum", () => {
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     const { container } = renderSection({ query: " b " });
 
@@ -209,7 +242,7 @@ describe("HistoryMessageHits: when the question cannot be asked", () => {
 
   it("renders nothing with no host runtime above it", () => {
     testState.hostPresent = false;
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     const { container } = renderSection({});
 
@@ -224,7 +257,7 @@ describe("HistoryMessageHits: when the question cannot be asked", () => {
   });
 
   it("searches every accessible task on the effective host", () => {
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     renderSection({ query: "browser" });
 
@@ -246,7 +279,7 @@ describe("HistoryMessageHits: the header", () => {
       version: null,
       transportDialability: "dialable",
     };
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     renderSection({});
 
@@ -257,7 +290,7 @@ describe("HistoryMessageHits: the header", () => {
 
   it("says the hits are unfiltered only while a task filter is active", () => {
     testState.status = readyStatus(
-      [messageMatch("chat-1"), messageMatch("chat-2")],
+      [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
       "complete",
     );
 
@@ -331,7 +364,7 @@ describe("HistoryMessageHits: loading and failure", () => {
   it("keeps the caveat on a partial index that DID find something", () => {
     // The other half of the pair, so the note cannot regress to only ever
     // appearing on the empty branch: here the shared list draws it.
-    testState.status = readyStatus([messageMatch("chat-1")], "partial");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "partial");
 
     renderSection({});
 
@@ -344,7 +377,7 @@ describe("HistoryMessageHits: loading and failure", () => {
 
 describe("HistoryMessageHits: the two ways out", () => {
   it("opens a hit on the host that answered the search", () => {
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -362,7 +395,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
   it("dismisses the History overlay when a hit opens from the modal form", () => {
     testState.historyOverlayActive = true;
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -371,7 +404,7 @@ describe("HistoryMessageHits: the two ways out", () => {
   });
 
   it("leaves the overlay alone when History is a tab", () => {
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -381,7 +414,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
   it("hands the trimmed query to the dialog, scoped to every task", () => {
     testState.historyOverlayActive = true;
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     renderSection({ query: "  browser  " });
     fireEvent.click(
@@ -398,7 +431,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
 describe("HistoryMessageHits: keyboard", () => {
   it("binds History's traversal to every hit control", () => {
-    testState.status = readyStatus([messageMatch("chat-1")], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     const { container, onRowKeyDown } = renderSection({});
     const row = screen.getByRole("button", { name: /Chat chat-1/ });
@@ -409,5 +442,52 @@ describe("HistoryMessageHits: keyboard", () => {
     // shared row - History's hook matches both. See
     // `use-history-list-keyboard-nav.ts`.
     expect(container.querySelectorAll("[data-chat-search-nav]").length).toBe(1);
+  });
+});
+
+describe("HistoryMessageHits: a host switch is a different index", () => {
+  it("drops the expansion when the effective host changes under one query", () => {
+    // The list keys itself by the REQUEST, and the request carries no host, so
+    // an unchanged query across a host switch is byte-identical. Without the
+    // host in the key the expanded group and the page cursors under it would
+    // survive onto rows from another machine's index, where those cursors and
+    // that chat id mean nothing.
+    testState.status = readyStatus([messageMatch("chat-1", 2)], "complete");
+
+    const { rerender } = renderSection({});
+    const toggle = screen.getByRole("button", { name: /Show all 2 matches/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(
+      screen
+        .getByRole("button", { name: /Show all 2 matches/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    testState.hostId = "host-other";
+    rerender();
+
+    expect(
+      screen
+        .getByRole("button", { name: /Show all 2 matches/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  it("keeps the expansion when nothing about the request moved", () => {
+    // The other side of the key, so it cannot regress into remounting on every
+    // render and silently collapsing a group the reader just opened.
+    testState.status = readyStatus([messageMatch("chat-1", 2)], "complete");
+
+    const { rerender } = renderSection({});
+    fireEvent.click(screen.getByRole("button", { name: /Show all 2 matches/ }));
+    rerender();
+
+    expect(
+      screen
+        .getByRole("button", { name: /Show all 2 matches/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 });
