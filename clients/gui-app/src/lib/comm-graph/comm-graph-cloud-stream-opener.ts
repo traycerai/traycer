@@ -1,4 +1,4 @@
-import { hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/communication-graph";
+import { hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/communication-graph";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -36,7 +36,7 @@ function openCommGraphCloudSubscription(
     session.onServerFrame((envelope) => {
       if (closed) return;
       const parsed =
-        hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10.safeParse(
+        hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV11.safeParse(
           envelope,
         );
       if (!parsed.success) {

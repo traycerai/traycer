@@ -1151,13 +1151,6 @@ describe("CommGraphTile", () => {
       });
       expect(decideSpy).toHaveBeenCalled();
       expect(storedView()?.officeAutoView).toBe("floor");
-
-      // The catching-up chip reads the same settled signal Auto's gate
-      // does, so a hostless feed - which has nothing to send - must not
-      // leave it stuck showing "catching up".
-      expect(
-        screen.queryByTestId("comm-graph-office-catching-up-chip"),
-      ).toBeNull();
     });
 
     it("keeps the saved camera when Auto's first outcome is Floor", async () => {
@@ -3581,6 +3574,7 @@ describe("CommGraphTile", () => {
         originKind: null,
         originChatId: null,
         originRefId: null,
+        peerEpicId: null,
       };
       act(() => {
         openedByHost.get(HOST_A)?.onSnapshot([event], 1);
@@ -3675,6 +3669,7 @@ describe("CommGraphTile", () => {
         originKind: null,
         originChatId: null,
         originRefId: null,
+        peerEpicId: null,
       };
       act(() => {
         openedByHost.get(HOST_A)?.onSnapshot([event], 1);
@@ -3799,48 +3794,37 @@ describe("CommGraphTile", () => {
       });
     });
 
-    it("shows the catching-up chip while the explicit Towers tile draws behind the feed, and clears it once caught up", async () => {
-      // The population between "who is here" and "who is busy" is real, and
-      // this is where a person is told about it: not a spinner over an
-      // office that is already drawn, just a line that goes away once the
-      // feed says the statuses on screen are settled.
+    it("letters a drawn office that is still behind its feed with no status line at all", async () => {
+      // THE CHIP THIS USED TO PIN IS GONE, asked for by name in feedback
+      // round 2: "why do we still have this Catching up label above the zoom
+      // buttons? We were supposed to remove all those labels!". The wait it
+      // described is real - the floor draws from the agent list and fills in
+      // who is BUSY as the feed replays - and the ruling is that it is not
+      // worth a sentence of chrome over a drawing that is already on screen
+      // and already settling.
+      //
+      // Kept as a case rather than deleted with the chip, from the state that
+      // WOULD have shown it (a drawn Towers tile, feed still replaying): the
+      // absence is the decision, and an absence nothing asserts is an
+      // invitation to put it back.
       await renderSeededOffice({
         ...DEFAULT_COMM_GRAPH_VIEW,
         officeView: "towers",
       });
       setIntersecting(true);
       setOfficeCanvasSize(OFFICE_CANVAS);
-      expect(
-        screen.getByTestId("comm-graph-office-catching-up-chip").textContent,
-      ).toContain("Catching up");
 
+      expect(
+        screen.queryByTestId("comm-graph-office-catching-up-chip"),
+      ).toBeNull();
+      expect(screen.queryByText(/catching up/i)).toBeNull();
+      // ANTI-VACUITY: the office really mounted, so "no chip" is a fact about
+      // this tile and not about a render that never got there.
+      expect(screen.getByTestId("comm-graph-office-zoom-in")).toBeDefined();
+
+      // And it stays absent through the transition it used to be cleared by.
       caughtUp();
-      expect(
-        screen.queryByTestId("comm-graph-office-catching-up-chip"),
-      ).toBeNull();
-    });
-
-    it("does not show the catching-up chip while Auto is only measuring - one chip for one wait", async () => {
-      // Auto's own wait already has its own chip (`Auto · measuring…`,
-      // pinned above); the catching-up chip is about a DRAWN office whose
-      // statuses may lag, which is not what an undecided Auto tile is
-      // showing at all. Two chips claiming the same wait would be
-      // confusing even if neither were wrong on its own.
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize(OFFICE_CANVAS);
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(
-        screen.queryByTestId("comm-graph-office-catching-up-chip"),
-      ).toBeNull();
+      expect(screen.queryByText(/catching up/i)).toBeNull();
     });
   });
 

@@ -184,6 +184,7 @@ describe("useScreencastTileChrome", () => {
       back: true,
       forward: true,
       reload: true,
+      stop: false,
       zoom: false,
       devtools: false,
       find: false,

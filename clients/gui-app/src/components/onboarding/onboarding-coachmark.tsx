@@ -22,6 +22,12 @@ import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { cn } from "@/lib/utils";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { focusGuideTarget, interactWithGuideTarget } from "./guide-target";
+import {
+  escapeOwnedElsewhere,
+  OPEN_OVERLAY_SELECTOR,
+  OVERLAY_SELECTOR,
+  CLOSING_OVERLAY_SELECTOR,
+} from "./guide-overlays";
 // The card wears the acts' own button. `.onboarding-button` is global, but it
 // ships in the onboarding page's chunk - which never loads when the app starts
 // straight into the first-task guide, so the import has to be here too.
@@ -49,38 +55,6 @@ interface CoachmarkProps {
   } | null;
 }
 
-/** The surfaces that own attention while they are open. */
-const OVERLAY_SLOTS = [
-  "dialog-content",
-  "popover-content",
-  "dropdown-menu-content",
-  "sheet-content",
-] as const;
-const OVERLAY_SELECTOR = OVERLAY_SLOTS.map(
-  (slot) => `[data-slot="${slot}"]`,
-).join(", ");
-const OPEN_OVERLAY_SELECTOR = OVERLAY_SLOTS.map(
-  (slot) => `[data-slot="${slot}"][data-state="open"]`,
-).join(", ");
-const CLOSING_OVERLAY_SELECTOR = OVERLAY_SLOTS.map(
-  (slot) => `[data-slot="${slot}"][data-state="closed"]`,
-).join(", ");
-
-/**
- * The surfaces that answer Escape for themselves. Wider than the overlay slots
- * above, which are about who owns the SCREEN: the composer's mention/slash
- * picker sits over the composer without obscuring it, mounts only while it is
- * open, and closes on the very Escape this card used to swallow - which
- * finished the guide for the session. The rest is the shape every Radix
- * dismissable layer shares (`select`, `context-menu`, `drawer`, and the four
- * slots above), so a new one is covered the day it ships.
- */
-const ESCAPE_OWNER_SELECTOR = [
-  OPEN_OVERLAY_SELECTOR,
-  '[data-slot="composer-menu"]',
-  '[data-state="open"]:is([role="menu"], [role="listbox"], [role="dialog"])',
-].join(", ");
-
 function cardOf(node: EventTarget | null): Element | null {
   return node instanceof Element ? node.closest(".first-task-coachmark") : null;
 }
@@ -93,36 +67,6 @@ function hasModifier(event: KeyboardEvent): boolean {
     event.altKey,
     event.shiftKey,
   ].includes(true);
-}
-
-/**
- * Escape belongs to the surface the user is in. The guide takes it only when
- * it was aimed at the card or at the step's own target, and only when no other
- * dismissable surface is open to answer it - a surface the card or the target
- * LIVES in is not another one, so a step inside a settings dialog still
- * dismisses on Escape.
- */
-function guideOwnsEscape(
-  event: KeyboardEvent,
-  target: HTMLElement,
-  card: Element | null,
-  cardElement: HTMLElement | null,
-): boolean {
-  const aimedAtTarget =
-    event.target instanceof Node && target.contains(event.target);
-  if (card === null && !aimedAtTarget) return false;
-  return !escapeOwnedElsewhere(target, cardElement);
-}
-
-/** An open dismissable surface that holds neither the target nor the card. */
-function escapeOwnedElsewhere(
-  target: HTMLElement,
-  card: HTMLElement | null,
-): boolean {
-  return Array.from(document.querySelectorAll(ESCAPE_OWNER_SELECTOR)).some(
-    (surface) =>
-      !surface.contains(target) && (card === null || !surface.contains(card)),
-  );
 }
 
 /** The card's exit, the text crossfade's first half, and the anchor glide. */
@@ -156,7 +100,11 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
     if (target === null || event.defaultPrevented || event.isComposing) return;
     const card = cardOf(event.target);
     if (event.key === "Escape") {
-      if (!guideOwnsEscape(event, target, card, cardRef.current)) return;
+      // Escape closes the guide from anywhere on the surface: the person
+      // pressing it wants out of the guidance, not out of whatever happens
+      // to hold focus. Only a dismissable surface that is genuinely
+      // elsewhere answers it first.
+      if (escapeOwnedElsewhere([target, cardRef.current])) return;
       event.preventDefault();
       if (card) focusGuideTarget(target);
       onClose();

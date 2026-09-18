@@ -14,7 +14,12 @@ import {
   __setHostAgentActivityHealthForTests,
   TEST_LOCAL_ACTIVITY_HOST_ID,
 } from "@/stores/agent-activity-store";
-import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
+import {
+  OpenEpicSessionRegistry,
+  trackEpicSessionHandleLiveness,
+  trackEpicSessionTransportCloseAttribution,
+  type EpicSessionTransportCloseTrigger,
+} from "@/stores/epics/open-epic/session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
@@ -191,6 +196,14 @@ afterEach(() => {
   resetAgentActivity();
 });
 
+// This block (and "cap eviction defers to the activity plane's own health"
+// below it) drives every case through `acquire`, the non-mounted path with
+// ZERO production callers today - kept rather than deleted or rewritten so
+// `acquire`'s own contract stays pinned for the day a controller reaches for
+// it deliberately. `acquireMounted` is "THE SEAM" production actually uses;
+// its cap/eviction/warm-overflow twin of every case here lives further down,
+// in "OpenEpicSessionRegistry (rebased onto acquireMounted + releaseMounted)"
+// and its "cap eviction defers..." twin.
 describe("OpenEpicSessionRegistry", () => {
   it("evicts the LRU clean entry when adding a sixth session", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
@@ -691,6 +704,686 @@ describe("cap eviction defers to the activity plane's own health", () => {
     // No acquire follows: the flip fires through
     // `subscribeAgentActivityPlaneHealth`, which every session subscribes to
     // independently of the working-set subscription.
+    __setAgentActivityPlaneAnsweringForTests();
+
+    expect(registry.size()).toBe(5);
+    expect(handles[0].disposed).toBe(true);
+  });
+});
+
+// ── acquireMounted / releaseMounted: the mount-reference contract ────────────
+// Oracle for the seam the risk review names untested: "releaseMounted on
+// unmount... a demand-0 release is a no-op." Provider-level coverage already
+// pins that an unmount leaves a warm handle adoptable by a later remount
+// (`epic-session-provider.test.tsx`, "retryRepoint forces reconnectAll on a
+// WARM handle re-acquired after a provider remount"); these fixtures pin the
+// narrower, registry-only claim that release drops exactly one reference and
+// that releasing past zero is safe.
+describe("acquireMounted / releaseMounted mount-reference counting", () => {
+  it("drops exactly one mount reference on release, keeping the entry warm while another reference remains", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e0", false);
+    // Two mounted references to the same epic - e.g. two tabs on it, or a
+    // provider remount racing its predecessor's unmount effect.
+    registry.acquireMounted("e0", () => h(th));
+    registry.acquireMounted("e0", () => h(th));
+
+    registry.releaseMounted("e0");
+
+    expect(th.disposed).toBe(false);
+    expect(registry.get("e0")).not.toBeNull();
+
+    registry.releaseMounted("e0");
+
+    // Demand is now zero, but the entry is WARM, not disposed - the cap
+    // decides its fate from here, not this call.
+    expect(th.disposed).toBe(false);
+    expect(registry.get("e0")).not.toBeNull();
+  });
+
+  it("releasing an already demand-zero mounted entry is a no-op", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(th));
+    registry.releaseMounted("e0");
+    expect(th.disposed).toBe(false);
+
+    // A stray extra release - two unmount effects racing, or a cleanup that
+    // fires twice - must not underflow demand or force a dispose.
+    expect(() => registry.releaseMounted("e0")).not.toThrow();
+    expect(th.disposed).toBe(false);
+    expect(registry.get("e0")).not.toBeNull();
+  });
+});
+
+// ── retireIfDead: acquireMounted's own guard, on the NEXT acquisition ────────
+// Oracle for "retireIfDead retiring a FATAL-marked handle on the next
+// acquisition." The INTEGRATION shape of this (a worker fatal, then a Retry
+// or a fresh surface rebuilding through the real provider) is already pinned
+// by `epic-session-provider.test.tsx`'s "retires the handle a worker fatal
+// killed..." and "hands a FRESH surface a new handle during the corpse
+// window...". What is untested anywhere is the narrower registry-only claim
+// the risk review calls out by name: `acquire` has NO such guard, so the
+// non-mounted path a future controller might reach for would adopt the
+// corpse instead of rebuilding it.
+describe("retireIfDead runs only from acquireMounted, on the next acquisition", () => {
+  it("acquireMounted retires a FATAL-marked handle and builds a fresh one via the factory", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const dead = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(dead));
+    trackEpicSessionHandleLiveness(h(dead), { dead: true });
+
+    const replacement = buildTestHandle("e0", false);
+    const handle = registry.acquireMounted("e0", () => h(replacement));
+
+    expect(handle).toBe(h(replacement));
+    expect(dead.disposed).toBe(true);
+    expect(registry.get("e0")).toBe(h(replacement));
+  });
+
+  it("acquire (the non-mounted path) does not retire a dead handle, and hands back the corpse", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const dead = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(dead));
+    registry.releaseMounted("e0");
+    trackEpicSessionHandleLiveness(h(dead), { dead: true });
+
+    const wouldBeReplacement = buildTestHandle("e0", false);
+    const handle = registry.acquire("e0", () => h(wouldBeReplacement));
+
+    // `acquire` has no `retireIfDead` guard: the corpse is handed back and
+    // the factory that would have replaced it never runs. Pinned as a KNOWN
+    // gap - `acquire` has zero production callers today - so a controller
+    // that later reaches for it inherits this unless it adds the same guard.
+    expect(handle).toBe(h(dead));
+    expect(dead.disposed).toBe(false);
+    expect(wouldBeReplacement.disposed).toBe(false);
+  });
+});
+
+// ── Desktop-ownership release listener: pendingPark / "replaced" exemptions ──
+// Oracle for "pendingPark and 'replaced' ownership-release exemptions;
+// setReleaseListener has no test caller" - the risk review's own words for
+// this gap. Ownership belongs to the tab/Epic, not to one transient
+// transport, so a park (tab stays open) and a re-point (tab stays open, new
+// transport) must NOT tell the desktop layer this window gave the epic up -
+// only a real tab-close may say that.
+describe('desktop-ownership release listener: pendingPark and "replaced" exemptions', () => {
+  it("an ordinary tab-close release announces a desktop ownership release", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const released: string[] = [];
+    registry.setReleaseListener((epicId) => released.push(epicId));
+    const th = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(th));
+
+    registry.release("e0", "discard", null);
+
+    expect(released).toEqual(["e0"]);
+  });
+
+  it("park does not announce a desktop ownership release", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const released: string[] = [];
+    registry.setReleaseListener((epicId) => released.push(epicId));
+    const th = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(th));
+
+    const parked = registry.park("e0");
+
+    expect(parked).toBe(true);
+    expect(released).toEqual([]);
+    expect(th.disposed).toBe(true);
+  });
+
+  it('replaceMounted ("replaced") disposes the outgoing handle without announcing a release', () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const released: string[] = [];
+    registry.setReleaseListener((epicId) => released.push(epicId));
+    const outgoing = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(outgoing));
+    const next = buildTestHandle("e0", false);
+
+    const replaced = registry.replaceMounted("e0", h(outgoing), h(next), {
+      hostStamp: "host-a",
+      ownerIdentityKey: "owner-a",
+      editsTransferredToReplacement: false,
+    });
+
+    expect(replaced).toBe(true);
+    expect(released).toEqual([]);
+    expect(outgoing.disposed).toBe(true);
+  });
+});
+
+// ── Transport-close attribution: cause -> trigger mapping, and first-wins ────
+// Oracle for "Transport-close attribution mapping and first-wins override;
+// construction-failed has no producer" and "park attributed before discard."
+// The registry side of "first-wins" is that `park` / `retireIfDead` record
+// their SPECIFIC trigger explicitly, and `onBeforeDispose`'s generic
+// cause->trigger fallback then ALSO fires for the very same teardown - two
+// real calls, not a test artefact. The provider is what turns that into
+// "first-wins" (`pendingTransportCloseTrigger`, set only once); these
+// fixtures pin the ORDER the registry hands a first-wins consumer, since
+// nothing today asserts it and a reordering would silently invert whose
+// trigger survives.
+describe("transport-close attribution: cause -> trigger mapping and first-wins ordering", () => {
+  function attributionRecorder(
+    handle: OpenedStoreForTest,
+  ): EpicSessionTransportCloseTrigger[] {
+    const seen: EpicSessionTransportCloseTrigger[] = [];
+    trackEpicSessionTransportCloseAttribution(handle, (trigger) => {
+      seen.push(trigger);
+    });
+    return seen;
+  }
+
+  it('maps a plain tab-close release to "tab-close"', () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(th));
+    const seen = attributionRecorder(h(th));
+
+    registry.release("e0", "discard", null);
+
+    // Two real calls here too: `release` attributes its own "tab-close"
+    // explicitly before discarding, and onBeforeDispose's generic
+    // released->"tab-close" fallback then fires for the same teardown - they
+    // just happen to agree, unlike park/retireIfDead below.
+    expect(seen).toEqual(["tab-close", "tab-close"]);
+  });
+
+  it('maps a cap eviction (warm-overflow) to "prune"', () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const evictee = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(evictee));
+    registry.releaseMounted("e0");
+    const seen = attributionRecorder(h(evictee));
+
+    const other = buildTestHandle("e1", false);
+    registry.acquireMounted("e1", () => h(other));
+
+    expect(seen).toEqual(["prune"]);
+  });
+
+  it('maps sign-out (disposeAll) to "sign-out"', () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(th));
+    const seen = attributionRecorder(h(th));
+
+    registry.disposeAll();
+
+    expect(seen).toEqual(["sign-out"]);
+  });
+
+  it('maps a re-point\'s outgoing handle to "repoint"', () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const outgoing = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(outgoing));
+    const seen = attributionRecorder(h(outgoing));
+    const next = buildTestHandle("e0", false);
+
+    registry.replaceMounted("e0", h(outgoing), h(next), {
+      hostStamp: "host-a",
+      ownerIdentityKey: "owner-a",
+      editsTransferredToReplacement: false,
+    });
+
+    expect(seen).toEqual(["repoint"]);
+  });
+
+  it('park attributes "park" explicitly before the generic discard fallback', () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(th));
+    const seen = attributionRecorder(h(th));
+
+    const parked = registry.park("e0");
+
+    expect(parked).toBe(true);
+    // Two real calls: park's own explicit "park", then onBeforeDispose's
+    // generic released->"tab-close" fallback for the same teardown. A
+    // first-wins consumer keeps the first; this fixture is what would redden
+    // if the two ever fired in the other order.
+    expect(seen).toEqual(["park", "tab-close"]);
+  });
+
+  it('retireIfDead attributes "retry-rebuild" explicitly before the generic discard fallback', () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const dead = buildTestHandle("e0", false);
+    registry.acquireMounted("e0", () => h(dead));
+    trackEpicSessionHandleLiveness(h(dead), { dead: true });
+    const seen = attributionRecorder(h(dead));
+
+    registry.acquireMounted("e0", () => h(buildTestHandle("e0-2", false)));
+
+    expect(seen).toEqual(["retry-rebuild", "tab-close"]);
+  });
+});
+
+// ── Rebasing the cap/eviction/warm-overflow suite onto the mounted seam ──────
+// The block above (`describe("OpenEpicSessionRegistry", ...)`) and
+// `describe("cap eviction defers to the activity plane's own health", ...)`
+// drive every case through `acquire`, which has ZERO production callers -
+// `acquireMounted` is "THE SEAM" production actually uses (see the class doc
+// on `OpenEpicSessionRegistry.acquireMounted`). Those two blocks are KEPT
+// rather than deleted: they still pin `acquire`'s own contract for the day a
+// controller reaches for it deliberately (`session-registry.ts`'s risk
+// review, "Keep the acquire tests only where the later controller is
+// expected to call acquire"). Every one of them gets a twin here, driven
+// through `acquireMounted` + `releaseMounted` - immediately releasing back to
+// demand zero mirrors a provider's mount-then-unmount and leaves the entry on
+// the exact same warm/demand-0 footing `acquire` used to produce directly, so
+// the cap assertions below are the SAME assertions, exercised through the
+// seam production actually uses.
+describe("OpenEpicSessionRegistry (rebased onto acquireMounted + releaseMounted)", () => {
+  function acquireWarm(
+    registry: OpenEpicSessionRegistry,
+    epicId: string,
+    factory: () => OpenedStoreForTest,
+  ): void {
+    registry.acquireMounted(epicId, factory);
+    registry.releaseMounted(epicId);
+  }
+
+  it("evicts the LRU clean entry when adding a sixth session", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+
+    registry.get("e0");
+
+    const th5 = buildTestHandle("e5", false);
+    acquireWarm(registry, "e5", () => h(th5));
+
+    expect(registry.size()).toBe(5);
+    expect(handles[1].disposed).toBe(true);
+    expect(registry.get("e5")).not.toBeNull();
+  });
+
+  it("does not evict clean sessions with active agent work", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
+    const active = buildTestHandle("active", false);
+    const inactiveA = buildTestHandle("inactive-a", false);
+    const inactiveB = buildTestHandle("inactive-b", false);
+
+    markAgentWorking(active, "chat-active");
+    acquireWarm(registry, "active", () => h(active));
+    acquireWarm(registry, "inactive-a", () => h(inactiveA));
+    acquireWarm(registry, "inactive-b", () => h(inactiveB));
+
+    expect(registry.size()).toBe(2);
+    expect(active.disposed).toBe(false);
+    expect(inactiveA.disposed).toBe(true);
+    expect(inactiveB.disposed).toBe(false);
+    expect(registry.get("active")).not.toBeNull();
+  });
+
+  it("auto-prunes overflow when active agent work clears", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const activeA = buildTestHandle("active-a", false);
+    const activeB = buildTestHandle("active-b", false);
+
+    markAgentWorking(activeA, "chat-a");
+    markAgentWorking(activeB, "chat-b");
+    acquireWarm(registry, "active-a", () => h(activeA));
+    acquireWarm(registry, "active-b", () => h(activeB));
+
+    expect(registry.size()).toBe(2);
+    expect(activeA.disposed).toBe(false);
+    expect(activeB.disposed).toBe(false);
+
+    clearAgentWorking(activeA);
+
+    expect(registry.size()).toBe(1);
+    expect(activeA.disposed).toBe(true);
+    expect(activeB.disposed).toBe(false);
+  });
+
+  it("does not evict dirty entries even when above the cap (soft-cap overflow)", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const th = buildTestHandle(`e${i}`, true);
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+
+    const th5 = buildTestHandle("e5", true);
+    acquireWarm(registry, "e5", () => h(th5));
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+
+    handles[0].handle.store.setState({ isDirty: false });
+    registry.prune();
+    expect(registry.size()).toBe(5);
+    expect(handles[0].disposed).toBe(true);
+  });
+
+  it("evicts a clean, loaded, unmounted session whose transport is reconnecting", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const reconnecting = buildTestHandle("e0", false);
+    reconnecting.handle.store.setState({
+      hostTransportStatus: "reconnecting",
+      snapshotLoaded: true,
+    });
+    acquireWarm(registry, "e0", () => h(reconnecting));
+
+    const handles: TestHandle[] = [reconnecting];
+    for (let i = 1; i < 5; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+
+    const th5 = buildTestHandle("e5", false);
+    acquireWarm(registry, "e5", () => h(th5));
+
+    expect(registry.size()).toBe(5);
+    expect(reconnecting.disposed).toBe(true);
+  });
+
+  it("keeps a session on another host while the union is narrow, even with an open transport", () => {
+    __resetAgentActivityStoreForTests();
+    __setHostAgentActivityHealthForTests("host-serving", {
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const elsewhere = withHostId(
+      buildTestHandle("e0", false),
+      "host-elsewhere",
+    );
+    acquireWarm(registry, "e0", () => h(elsewhere));
+    const onServingHost: TestHandle[] = [];
+    for (let i = 1; i < 5; i += 1) {
+      const th = withHostId(buildTestHandle(`e${i}`, false), "host-serving");
+      onServingHost.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+    acquireWarm(registry, "e5", () =>
+      h(withHostId(buildTestHandle("e5", false), "host-serving")),
+    );
+
+    expect(elsewhere.disposed).toBe(false);
+    expect(registry.size()).toBe(5);
+    expect(onServingHost[0].disposed).toBe(true);
+  });
+
+  it("still evicts a session on the union's own serving host while the union stays narrow", () => {
+    __resetAgentActivityStoreForTests();
+    __setHostAgentActivityHealthForTests("host-serving", {
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const th = withHostId(buildTestHandle(`e${i}`, false), "host-serving");
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+    acquireWarm(registry, "e5", () =>
+      h(withHostId(buildTestHandle("e5", false), "host-serving")),
+    );
+
+    expect(registry.size()).toBe(5);
+    expect(handles[0].disposed).toBe(true);
+  });
+
+  it("keeps overflow while every session stays dirty and no subscription fires a clean state", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const th = buildTestHandle(`e${i}`, true);
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+
+    expect(registry.size()).toBe(6);
+
+    for (const th of handles) th.notify();
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("auto-prunes overflow when a dirty session later becomes clean (no new acquire)", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const th = buildTestHandle(`e${i}`, true);
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+
+    expect(registry.size()).toBe(6);
+
+    handles[0].handle.store.setState({ isDirty: false });
+    handles[0].notify();
+
+    expect(registry.size()).toBe(5);
+    expect(handles[0].disposed).toBe(true);
+    for (let i = 1; i < 6; i += 1) {
+      expect(handles[i].disposed).toBe(false);
+    }
+  });
+
+  it("does not evict dirty queue-zero sessions during prune", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const dirty = buildTestHandle("dirty", true);
+    const clean = buildTestHandle("clean", false);
+
+    acquireWarm(registry, "dirty", () => h(dirty));
+    acquireWarm(registry, "clean", () => h(clean));
+
+    expect(registry.size()).toBe(1);
+    expect(dirty.disposed).toBe(false);
+    expect(clean.disposed).toBe(true);
+    expect(registry.get("dirty")).not.toBeNull();
+  });
+
+  it("does not evict anything on subscription emit while already at or below the cap", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+
+    for (const th of handles) th.notify();
+
+    expect(registry.size()).toBe(3);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("release forcibly disposes regardless of cap or cleanliness", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const th = buildTestHandle("e0", true);
+    acquireWarm(registry, "e0", () => h(th));
+    registry.release("e0", "discard", null);
+    expect(th.disposed).toBe(true);
+    expect(registry.get("e0")).toBeNull();
+  });
+
+  it("does not evict a dirty session even while its transport is reconnecting", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const dirty = buildTestHandle("dirty", true);
+    dirty.handle.store.setState({ hostTransportStatus: "reconnecting" });
+    const clean = buildTestHandle("clean", false);
+
+    acquireWarm(registry, "dirty", () => h(dirty));
+    acquireWarm(registry, "clean", () => h(clean));
+
+    expect(registry.size()).toBe(1);
+    expect(dirty.disposed).toBe(false);
+    expect(clean.disposed).toBe(true);
+  });
+
+  it("does not evict a session with a nonzero unsynced queue, even on a clean transport", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const queued = buildTestHandle("queued", false);
+    queued.handle.store.setState({
+      hostTransportStatus: "open",
+      unsyncedQueueSize: 1,
+    });
+    const clean = buildTestHandle("clean", false);
+
+    acquireWarm(registry, "queued", () => h(queued));
+    acquireWarm(registry, "clean", () => h(clean));
+
+    expect(registry.size()).toBe(1);
+    expect(queued.disposed).toBe(false);
+    expect(clean.disposed).toBe(true);
+  });
+
+  it("does not evict a session with a pending write command", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const pendingWrite = buildTestHandle("pending-write", false);
+    const record: CommandRecord<EpicWriteCommandIntent> = {
+      commandId: "cmd-1",
+      intent: {
+        kind: "update-epic-title",
+        title: "New title",
+        updatedAt: 0,
+      },
+      state: "pending",
+      delivery: "queued",
+      issuedAtMs: 0,
+      attempts: 0,
+      expectedEntityVersion: null,
+      resolution: null,
+    };
+    pendingWrite.handle.store.setState({ writeCommands: [record] });
+    const clean = buildTestHandle("clean", false);
+
+    acquireWarm(registry, "pending-write", () => h(pendingWrite));
+    acquireWarm(registry, "clean", () => h(clean));
+
+    expect(registry.size()).toBe(1);
+    expect(pendingWrite.disposed).toBe(false);
+    expect(clean.disposed).toBe(true);
+  });
+
+  it("evicts a never-loaded, unmounted, empty session", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const neverLoaded = buildTestHandle("never-loaded", false);
+    const other = buildTestHandle("other", false);
+
+    acquireWarm(registry, "never-loaded", () => h(neverLoaded));
+    acquireWarm(registry, "other", () => h(other));
+
+    expect(registry.size()).toBe(1);
+    expect(neverLoaded.disposed).toBe(true);
+  });
+
+  it("re-reads maxLive on every cap walk when given as a function", () => {
+    let cap = 2;
+    const registry = new OpenEpicSessionRegistry({ maxLive: () => cap });
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      acquireWarm(registry, `e${i}`, () => h(th));
+    }
+
+    expect(registry.size()).toBe(2);
+    expect(handles[0].disposed).toBe(true);
+
+    cap = 3;
+    const th3 = buildTestHandle("e3", false);
+    acquireWarm(registry, "e3", () => h(th3));
+
+    expect(registry.size()).toBe(3);
+    expect(handles[1].disposed).toBe(false);
+    expect(handles[2].disposed).toBe(false);
+    expect(th3.disposed).toBe(false);
+  });
+});
+
+describe("cap eviction defers to the activity plane's own health (rebased onto acquireMounted + releaseMounted)", () => {
+  function acquireOverflowingWarm(
+    registry: OpenEpicSessionRegistry,
+    count: number,
+  ): TestHandle[] {
+    const handles: TestHandle[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const th = buildTestHandle(`e${i}`, false);
+      handles.push(th);
+      registry.acquireMounted(`e${i}`, () => h(th));
+      registry.releaseMounted(`e${i}`);
+    }
+    return handles;
+  }
+
+  it("evicts nothing while the activity plane's stream is closed, even though every entry is clean", () => {
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "closed",
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowingWarm(registry, 6);
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("evicts nothing while the stream is open but has not yet delivered a state frame of its OWN", () => {
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "open",
+      servedBy: "cloud",
+      stateFrameSeenThisEpoch: false,
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowingWarm(registry, 6);
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("evicts nothing while the host's cloud link is reconnecting", () => {
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "open",
+      servedBy: "cloud",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: "reconnecting",
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowingWarm(registry, 6);
+
+    expect(registry.size()).toBe(6);
+    for (const th of handles) {
+      expect(th.disposed).toBe(false);
+    }
+  });
+
+  it("prunes overflow the moment the plane starts answering again, with no new acquire", () => {
+    __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+      connectionStatus: "closed",
+    });
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const handles = acquireOverflowingWarm(registry, 6);
+    expect(registry.size()).toBe(6);
+
     __setAgentActivityPlaneAnsweringForTests();
 
     expect(registry.size()).toBe(5);

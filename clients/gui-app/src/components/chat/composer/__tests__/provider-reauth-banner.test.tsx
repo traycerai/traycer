@@ -221,6 +221,8 @@ const CLAUDE_CAP: ProviderLoginCapability = {
   token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
   codePaste: null,
   terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 // Droid has no headless login subcommand (bare `droid` is an interactive TUI
@@ -231,6 +233,8 @@ const DROID_CAP: ProviderLoginCapability = {
   token: { vars: ["FACTORY_API_KEY"] },
   codePaste: null,
   terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 const CODE_PASTE_CLAUDE_CAP: ProviderLoginCapability = {
@@ -238,6 +242,8 @@ const CODE_PASTE_CLAUDE_CAP: ProviderLoginCapability = {
   token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
   codePaste: {},
   terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 // Copilot's device-code login cannot be driven headlessly, so its capability
@@ -248,6 +254,8 @@ const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
   token: null,
   codePaste: null,
   terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 // Reasonix is also a terminal-login provider (its own credential wizard, not
@@ -260,6 +268,8 @@ const REASONIX_CAP: ProviderLoginCapability = {
   token: null,
   codePaste: null,
   terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 // Antigravity is an ACP-authenticate provider: the host spawns
@@ -271,6 +281,8 @@ const ANTIGRAVITY_ACP_AUTH_CAP: ProviderLoginCapability = {
   token: null,
   codePaste: null,
   terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 // The unreachable case this used to model: an old host's payload cannot
@@ -581,6 +593,8 @@ describe("<ProviderReauthBanner />", () => {
             token: null,
             codePaste: null,
             terminalLogin: {},
+            remoteSafe: null,
+            selfOpensBrowser: null,
           }),
           providerId: "qwen",
         }}
@@ -685,6 +699,8 @@ describe("<ProviderReauthBanner />", () => {
               token: null,
               codePaste: null,
               terminalLogin: {},
+              remoteSafe: null,
+              selfOpensBrowser: null,
             }),
             providerId: "qwen",
           }}
@@ -980,6 +996,8 @@ describe("<ProviderReauthBanner />", () => {
           token: null,
           codePaste: null,
           terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
         })}
         reason="provider_unauthenticated"
         profileId={null}
@@ -1540,6 +1558,8 @@ describe("<ProviderReauthBanner />", () => {
           token: null,
           codePaste: null,
           terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
         })}
         reason="provider_unauthenticated"
         profileId={null}

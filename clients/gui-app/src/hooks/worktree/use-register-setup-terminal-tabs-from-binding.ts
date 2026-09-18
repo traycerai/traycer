@@ -9,6 +9,8 @@ import {
   setupTerminalTitle,
 } from "@/lib/setup-terminal-tab-descriptor";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 /**
@@ -50,8 +52,9 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 export function useRegisterSetupTerminalTabsFromBinding(options: {
   binding: WorktreeBinding | null;
   viewTabId: string;
+  owningTileInstanceId: string;
 }): void {
-  const { binding, viewTabId } = options;
+  const { binding, viewTabId, owningTileInstanceId } = options;
   const hostId = useTabHostId();
   const { openTile } = useEpicTileNavigation();
   const registerSetupTerminalOnce = useSetupTerminalRegistrationStore(
@@ -60,6 +63,12 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
 
   useEffect(() => {
     if (binding === null) return;
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    const pane = collectPanes(canvas?.root ?? null).find((candidate) =>
+      candidate.tabInstanceIds.includes(owningTileInstanceId),
+    );
+    // Never consume registration against an unrelated active pane.
+    if (pane === undefined) return;
     binding.entries.forEach((entry) => {
       // Only consider an actively-running setup, never a settled or historical
       // entry whose `setupTerminalSessionId` the binding still carries.
@@ -81,8 +90,8 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
       // would alias handles when the same session opens in multiple views.
       // Dedup/convergence with the setup card's "Open terminal" is by
       // content `id`, not instance.
-      openTile(
-        tileIntent(
+      openTile({
+        ...tileIntent(
           {
             id: sessionId,
             instanceId: uuidv4(),
@@ -94,12 +103,19 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
             origin: "setup",
           },
           { tabId: viewTabId },
-          // The host pushed this at us; there was no gesture behind it, so it
-          // lands as a background tab and never steals focus (C4).
+          // Keep the owner visible while setup runs in its background tab.
           "host",
           "direct_ui",
         ),
-      );
+        placement: { kind: "tab", paneId: pane.id, index: null },
+      });
     });
-  }, [binding, viewTabId, hostId, openTile, registerSetupTerminalOnce]);
+  }, [
+    binding,
+    viewTabId,
+    owningTileInstanceId,
+    hostId,
+    openTile,
+    registerSetupTerminalOnce,
+  ]);
 }

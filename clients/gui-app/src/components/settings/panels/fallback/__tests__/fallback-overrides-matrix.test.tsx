@@ -64,7 +64,7 @@ describe("FallbackOverridesMatrix - the 'off' third state", () => {
     renderMatrix(policy({ reasonOverrides: { auth: "off" } }), onChange);
     const label = FALLBACK_REASON_LABELS.auth;
     fireEvent.click(
-      screen.getByRole("button", { name: `other profile for ${label}` }),
+      screen.getByRole("button", { name: `other account for ${label}` }),
     );
     expect(onChange).toHaveBeenCalledTimes(1);
     const next = onChange.mock.calls[0]?.[0] as FallbackPolicy;
@@ -96,14 +96,14 @@ describe("FallbackOverridesMatrix - ineligible chips are not buttons", () => {
     const label = FALLBACK_REASON_LABELS.provider_unavailable;
 
     // The chip's own why-text is part of its visible content.
-    expect(screen.getByText(/same servers/)).not.toBeNull();
+    expect(screen.getByText(/same outage/)).not.toBeNull();
 
     // A disabled <button> still exposes role="button" to accessibility
     // queries - this is the assertion that would go red if OverrideChip
     // rendered the impossible state as `<button disabled>` instead of a
     // plain `<span>`.
     expect(
-      screen.queryByRole("button", { name: `other profile for ${label}` }),
+      screen.queryByRole("button", { name: `other account for ${label}` }),
     ).toBeNull();
 
     // Positive control: the SAME row's eligible chip ("tier") IS a real,
