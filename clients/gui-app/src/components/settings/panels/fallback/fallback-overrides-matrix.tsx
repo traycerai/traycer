@@ -73,10 +73,19 @@ export function FallbackOverridesMatrix(
       <div className="px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-            Which steps may run for each kind of failure. Where you change a
-            row, those steps replace your main order for that failure - so a
-            step can run here while it is off on the Plan tab. Dashed steps
-            can&apos;t help with that failure, whatever you prefer.
+            {/* The "including a step that is off on Plan" clause was cut once
+                as redundant and RESTORED after a user-lens review: it is the
+                only place the page says an override can turn something ON that
+                the reader deliberately turned off elsewhere. Without it,
+                "overrides your plan" is read as narrowing - the reader assumes
+                a row can only take steps away - and the surprise arrives later,
+                as a switch they thought they had disabled. A consequence the
+                user cannot predict from the rest of the page is exactly what a
+                description is for. */}
+            Choose which steps Traycer can try for each problem. A row you
+            change replaces your choices on the Plan tab for that problem -
+            including allowing a step that is turned off there. Dashed steps
+            aren&apos;t available for that problem.
           </p>
           <Button
             size="inline"
@@ -237,9 +246,12 @@ function ExcludedReasonsRow(): ReactNode {
       className="mt-3 max-w-[68ch] text-ui-xs text-muted-foreground"
       data-testid="fallback-override-excluded-row"
     >
-      {labels.length} more - {labels.join(", ")} - never switch or wait. Either
-      the same request would fail the same way on any provider, or what failed
-      was the run itself rather than the provider.
+      {/* The old second sentence gave BOTH reasons for a mixed list and left
+          the reader to work out which applied to which failure - an either/or
+          about causes, to explain an absence. One reason that covers every row
+          is more useful than two that each cover some. */}
+      {labels.length} more - {labels.join(", ")} - never switch or wait, because
+      routing somewhere else would not help them.
     </p>
   );
 }

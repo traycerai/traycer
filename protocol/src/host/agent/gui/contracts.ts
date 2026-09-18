@@ -557,7 +557,8 @@ export const agentGuiListHarnessesUpgradeV71ToV80 = defineUpgradePath<
 
 /**
  * `agent.gui.listHarnesses@9.1` - the `auto` permission mode and the
- * `nativeAutoJudge` row field.
+ * `nativeAutoJudge` row field. The unreleased head also carries the typed
+ * `unavailableReason`; older rows never grow it through a live leaf.
  *
  * A MINOR rather than a major, for the reason 7.1 was: both changes are
  * additive to the row, and `versioned-rpc.ts` rejects a major bump that carries
@@ -587,8 +588,8 @@ export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
   from: { major: 9, minor: 0 },
   to: { major: 9, minor: 1 },
   upgradeRequest: (request) => request,
-  // A pre-`auto` mode array is already a valid 9.1 array, so only the new key
-  // needs filling. `false` is the pre-feature reading, not a guess: a host that
+  // A pre-`auto` mode array is already a valid 9.1 array. `false` is the
+  // pre-feature reading, not a guess: a host that
   // predates 9.1 has no native-judge concept at all, so no row it returns has
   // one. Filled explicitly rather than left to the schema default - an upgrade
   // path returns the OUTPUT type, where a defaulted key is required.
@@ -596,6 +597,9 @@ export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
     harnesses: response.harnesses.map((harness) => ({
       ...harness,
       nativeAutoJudge: false,
+      // This is the first bridge targeting the live row. Older decoded rows
+      // have no reason; neither `requiresApiKey` nor error text can supply it.
+      unavailableReason: null,
     })),
   }),
 });
@@ -617,7 +621,11 @@ export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
 function projectHarnessRowPreAuto(
   harness: GuiHarnessOption,
 ): Record<string, unknown> {
-  const { nativeAutoJudge: _nativeAutoJudge, ...rest } = harness;
+  const {
+    nativeAutoJudge: _nativeAutoJudge,
+    unavailableReason: _unavailableReason,
+    ...rest
+  } = harness;
   return {
     ...rest,
     supportedPermissionModes: harness.supportedPermissionModes.filter(

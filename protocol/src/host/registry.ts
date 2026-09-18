@@ -992,6 +992,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
+  providersListResponseSchemaV91,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -1075,6 +1076,7 @@ import {
   type ProviderLoginCapability,
   type ProviderLoginCapabilityV10,
   type ProviderLoginCapabilityV40,
+  type ProviderLoginCapabilityV70,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -1919,12 +1921,81 @@ function upgradeLoginCapabilityFromV10(
 // provider whose whole `loginCapability` is null makes the optional chain
 // yield `undefined` - not because an old host's payload reaches them with the
 // key missing. It does not.
+//
+// The return type is `ProviderLoginCapabilityV70`, NOT the live capability,
+// and that is not a tidy-up: this helper's only hop lands on
+// `providersListResponseSchemaV70Preimage`, whose capability leaf is the
+// hand-frozen four-key v7.0 snapshot. It could be annotated live only while
+// `providerCliStateBaseShapeV70` still pointed at the live schema, which made
+// the two types the same object. Pinning that base shape for `remoteSafe`
+// separated them, and the honest type is the one the target actually models -
+// filling a fifth key here would be dropped by that target anyway (these
+// callbacks are chained BY CAST, with no re-parse to apply `.catch(null)`).
 function upgradeLoginCapabilityFromV40(
   loginCapability: ProviderLoginCapabilityV40 | null,
-): ProviderLoginCapability | null {
+): ProviderLoginCapabilityV70 | null {
   return loginCapability === null
     ? null
     : { ...loginCapability, terminalLogin: null };
+}
+
+// Fills the login-capability markers that a frozen pre-9.2 state never
+// carries - the third and fourth repetitions of the same "old host never had
+// this feature" fill, after `codePaste` and `terminalLogin` above.
+//
+// One function for both because they ride the same line and the same hop, not
+// because they mean related things: `remoteSafe` is "this flow needs no
+// loopback callback on the host" and `selfOpensBrowser` is "the child opens a
+// browser itself". Kimi is the only provider that is both, which is the
+// concrete reason they are two keys.
+//
+// The two keys are NOT filled the same way, because the old line carries a
+// sound proxy for one of them and none for the other.
+//
+// `remoteSafe` gets that proxy: `--device-auth` in the legacy `oauthArgs`
+// means the flow prints a device code instead of listening on a loopback
+// callback, which is exactly what remote-safety asks about. It is also the
+// literal predicate the GUI used to evaluate itself before this marker
+// existed, so projecting it here reproduces an old host's previous behaviour
+// key for key. Dropping it to `null` instead would REGRESS those hosts: a
+// signed-out user on a remote pre-9.2 host would lose in-app Codex recovery
+// and be told to use a local host, for a flow that has always worked. A
+// compatibility bridge exists to carry old behaviour forward, not to withhold
+// it - and the honest projection of "this old host ran a device-auth flow" is
+// `remoteSafe`, not silence. Anything without that flag stays `null` and
+// fail-closed, so the widening is bounded by the legacy signal.
+//
+// `selfOpensBrowser` has no such proxy - `--device-auth` says nothing about
+// whether the child opens a browser, which is the whole reason these are two
+// keys rather than one - so it stays `null`. That is also its safe direction:
+// a null `selfOpensBrowser` makes the GUI open the browser itself, which costs
+// a duplicate tab at worst and never strands a user at a waiting step with
+// nothing opened.
+//
+// This sits on the 9.1 -> 9.2 hop and NOT on the v8 -> v9 one, even though the
+// older lines are equally marker-less. Every peer below 9.2 is upgraded along
+// the chain, so an 8.0 host's payload reaches this fill by passing through
+// 9.0 and 9.1 first - one fill covers them all, and putting a second copy on
+// the earlier hop would be filling a key those target shapes do not model.
+//
+// Filling them MATTERS on the client, not just for type completeness - the same
+// argument `upgradeLoginCapabilityFromV40` spells out one function up. A client
+// decodes an old host's payload through the NEGOTIATED FROZEN schema, so the
+// live `.catch(null)` never runs and the keys come out of the decode absent;
+// this bridge is what turns that into a real value before any GUI code sees
+// it. A test that exercises only the live schema passes while that bug ships.
+function upgradeLoginCapabilityFromV91(
+  loginCapability: ProviderLoginCapabilityV70 | null,
+): ProviderLoginCapability | null {
+  if (loginCapability === null) return null;
+  const legacyDeviceAuth =
+    loginCapability.oauthArgs !== null &&
+    loginCapability.oauthArgs.includes("--device-auth");
+  return {
+    ...loginCapability,
+    remoteSafe: legacyDeviceAuth ? {} : null,
+    selfOpensBrowser: null,
+  };
 }
 function downgradeProviderRequestForV10<T>(
   schema: {
@@ -2281,6 +2352,20 @@ export const providersListUpgradeV80ToV90 = defineUpgradePath<
   // `.optional()` precisely so "this host has no per-profile key method" stays
   // distinguishable from a concrete state, and a v8.0 host IS such a host.
   upgradeRequest: (request) => request,
+  // The response IS identity. 9.0 is pinned to the four-key
+  // `providerLoginCapabilitySchemaV70` exactly as 7.0 and 8.0 are, so this
+  // target does not model the login-capability markers and a fill here would
+  // be silently dropped. They are filled on the 9.1 -> 9.2 hop, the first
+  // whose target models them, and an 8.0 peer reaches that fill by being
+  // upgraded along the chain rather than by a second copy of it here.
+  //
+  // The fill's home MOVES as shapes are re-pointed; re-derive it from which
+  // target models the key rather than from an analogy. Filling on the wrong
+  // hop is not cosmetic: `upgradeResponseToVersion` chains these callbacks by
+  // cast with no re-parse, so a fill onto a frozen target is simply dropped -
+  // and a fill that never happens leaves the key genuinely ABSENT in a client
+  // that decoded an old host through the frozen schema, where `.catch(null)`
+  // never ran.
   upgradeResponse: (response) => response,
 });
 
@@ -2304,7 +2389,10 @@ export const providersListV91 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 9, minor: 1 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  // Frozen at the pre-marker capability when 9.2 opened. NOT the live response
+  // schema: 9.1 is released, and pointing a released line at a live nested
+  // schema is what grew the markers onto it in the first place.
+  responseSchema: providersListResponseSchemaV91,
 });
 
 export const providersListUpgradeV90ToV91 = defineUpgradePath<
@@ -2319,6 +2407,49 @@ export const providersListUpgradeV90ToV91 = defineUpgradePath<
   // `?? "traycer"` supplies the documented default - which is the whole reason
   // the field is `.optional()` rather than defaulted.
   upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.list@9.2` - the login-capability markers `remoteSafe` and
+ * `selfOpensBrowser`.
+ *
+ * A MINOR, because both are new KEYS: a within-major re-parse strips an
+ * unknown key for a 9.0/9.1 peer, so no `responseGrowthProjectionGated` is
+ * needed (that is for a new ENUM MEMBER).
+ *
+ * This line exists because the markers were first added to 9.1 IN PLACE, and
+ * 9.1 was already released - `host-v1.3.2-staging.39.g3a73077` publishes a
+ * protocol surface advertising canonical 9.1 with the four-key capability. A
+ * client and such a host both negotiate 9.1, and the response decoders skip
+ * the parse entirely when the peers agree on the major and the client's minor
+ * is not ahead (`clientCanonical.minor <= hostCanonical.minor`), returning the
+ * payload BY CAST. So on that pairing no schema and no bridge ever ran, the
+ * keys arrived absent, and a reader that trusted the declared type was reading
+ * a promise the wire did not keep. Giving the markers their own minor is what
+ * makes the client's minor ahead of that host's, which is what puts the
+ * payload back through 9.1's schema and then through the fill below.
+ */
+export const providersListV92 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 9, minor: 2 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV91ToV92 = defineUpgradePath<
+  typeof providersListV91,
+  typeof providersListV92
+>({
+  from: { major: 9, minor: 1 },
+  to: { major: 9, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      loginCapability: upgradeLoginCapabilityFromV91(provider.loginCapability),
+    })),
+  }),
 });
 
 export const providersListUpgradeV70ToV80 = defineUpgradePath<
@@ -2677,9 +2808,27 @@ export const providersListDowngradeV7ToV1 = defineDowngradePath<
   }),
 });
 
-function enabledProviderProfilesOnly(
-  providers: readonly ProviderCliState[],
-): ProviderCliState[] {
+// Generic over the row shape, and that is a correction rather than a
+// generalization for its own sake. It was declared `readonly ProviderCliState[]
+// -> ProviderCliState[]`, which compiled for the SIX `providers.list@8.0`
+// downgrade sources below only because `ProviderCliStateV80` happened to be
+// structurally assignable to the live state - so those v8.0 rows were LAUNDERED
+// into the live type on the way through, and `providersListDowngradeV8ToV1`
+// then handed `downgradeProviderCliStateToV10` a row whose real type is not in
+// its accepted union.
+//
+// Pinning the v8.0 capability leaf for `remoteSafe` ends that coincidence: a
+// frozen four-key capability is not a live five-key one, so the laundering
+// stops type-checking. Preserving the caller's row type is the honest fix, and
+// it is what makes the v8->v1 hop declare the shape it actually downgrades (see
+// `ProviderCliStateV80` in `DowngradableToV10ProviderState`). The constraint is
+// deliberately the minimum this function touches - `isProfileEnabled` reads one
+// optional boolean - so no future row shape has to be added here.
+function enabledProviderProfilesOnly<
+  TProvider extends {
+    readonly profiles: readonly { readonly enabled?: boolean }[];
+  },
+>(providers: readonly TProvider[]): TProvider[] {
   return providers.map((provider) => ({
     ...provider,
     profiles: provider.profiles.filter(isProfileEnabled),
@@ -2687,10 +2836,10 @@ function enabledProviderProfilesOnly(
 }
 
 export const providersListDowngradeV9ToV8 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV80
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2707,10 +2856,10 @@ export const providersListDowngradeV9ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV7 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV70
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2726,10 +2875,10 @@ export const providersListDowngradeV9ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV6 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV60
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2746,10 +2895,10 @@ export const providersListDowngradeV9ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV5 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV50
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2766,10 +2915,10 @@ export const providersListDowngradeV9ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV4 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV40
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2786,10 +2935,10 @@ export const providersListDowngradeV9ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV3 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV30
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2806,10 +2955,10 @@ export const providersListDowngradeV9ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV2 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV20
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2826,10 +2975,10 @@ export const providersListDowngradeV9ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV9ToV1 = defineDowngradePath<
-  typeof providersListV91,
+  typeof providersListV92,
   typeof providersListV10
 >({
-  from: { major: 9, minor: 1 },
+  from: { major: 9, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -6052,9 +6201,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // normally decided by shared state and would poison every 9.0 peer's
           // projection with no opt-out. Here it is genuinely emission-gated:
           // the host resolves the catalog against the negotiated minor and
-          // serves a 9.0 peer the pre-`auto` array. The row's other addition,
-          // `nativeAutoJudge`, needs no annotation - a new KEY is stripped by
-          // the within-major re-parse.
+          // serves a 9.0 peer the pre-`auto` array. `nativeAutoJudge` and
+          // `unavailableReason` need no annotation - each new KEY is stripped
+          // by the within-major re-parse. The reason widens this unreleased
+          // 9.1 head in place; the 9.0 -> 9.1 bridge fills null for old hosts.
           responseGrowthProjectionGated: true,
         },
       },
@@ -9761,7 +9911,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
     },
     9: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersListV90,
@@ -9770,6 +9920,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         1: {
           contract: providersListV91,
           upgradeFromPreviousVersion: providersListUpgradeV90ToV91,
+        },
+        2: {
+          contract: providersListV92,
+          upgradeFromPreviousVersion: providersListUpgradeV91ToV92,
         },
       },
       downgradePathsFromLatest: {

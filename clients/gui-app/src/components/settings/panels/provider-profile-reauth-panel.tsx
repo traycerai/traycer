@@ -172,6 +172,7 @@ export function ProviderProfileReauthPanel({
 
       <ProviderProfileReauthState
         flow={flow}
+        loginCapability={state.loginCapability}
         entryProfile={entryProfile}
         showWaiting={showWaiting}
         showIdentity={showIdentityCard}
@@ -193,6 +194,7 @@ export function ProviderProfileReauthPanel({
 
 function ProviderProfileReauthState({
   flow,
+  loginCapability,
   entryProfile,
   showWaiting,
   showIdentity,
@@ -207,6 +209,7 @@ function ProviderProfileReauthState({
   onDone,
 }: {
   readonly flow: ProviderProfileLoginFlow;
+  readonly loginCapability: ProviderCliState["loginCapability"] | null;
   /** The row as it was when the panel mounted - see the freeze at the call
    *  site. The live prop describes the account that just signed in, so it
    *  cannot narrate what this profile "was". */
@@ -229,6 +232,7 @@ function ProviderProfileReauthState({
         <AddProfileWaitingStep
           loginUrl={flow.state.kind === "waiting" ? flow.state.url : null}
           userCode={flow.state.kind === "waiting" ? flow.state.userCode : null}
+          loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={flow.startPending}
           cancelRequested={

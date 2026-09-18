@@ -1,3 +1,4 @@
+import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import { useRef, useState, type ReactNode } from "react";
 import {
   useIsMutating,
@@ -291,6 +292,7 @@ function ForceOnlyRestartFlow(props: LocalHostRestartFlowProps): ReactNode {
   const { forceRestart } = useForceHostRespawn(props.onClose, () => undefined);
   return (
     <RestartHostConfirmDialog
+      hostId={null}
       open={props.requested}
       onOpenChange={(open) => {
         if (!open) props.onClose();
@@ -480,6 +482,7 @@ function CooperativeFirstRestartFlow(
   return (
     <>
       <RestartHostConfirmDialog
+        hostId={localHostId}
         open={confirmOpen}
         onOpenChange={(open) => {
           if (!open) close();
@@ -527,7 +530,15 @@ function CooperativeFirstRestartFlow(
           forceRestart.mutate();
         }}
         onDefer={close}
-      />
+      >
+        {busyOpen ? (
+          <HostRestartSessions
+            hostId={forceOffer.hostId}
+            disabled={forceRestart.isPending || respawnInFlight}
+            onNavigate={close}
+          />
+        ) : null}
+      </HostBusyForceDeferDialog>
     </>
   );
 }

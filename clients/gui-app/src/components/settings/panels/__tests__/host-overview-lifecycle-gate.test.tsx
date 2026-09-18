@@ -19,11 +19,28 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
-);
+// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+// `HostBusyForceDeferDialog`, both reachable from this suite's restart
+// confirms) calls `useFocusModel()` -> `useConnectableHostIds()` ->
+// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
+// at render time and subscribes via `directory.onChange` in an effect. A
+// binding mock with no `directory` throws ("Invalid value used as weak map
+// key" / "directory.onChange is not a function") the moment the confirm
+// dialog opens, so every fixture below needs one even though this suite
+// never reads its answer.
+interface HostBindingMock {
+  readonly hostClient: unknown;
+  readonly directory: {
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
+    readonly getLocalEntry: () => null;
+  };
+}
+const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
+  current: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -139,6 +156,23 @@ function scopeFrom(
     hostId,
     status: "ready",
     client: fixture.client,
+  };
+}
+
+/**
+ * A host binding whose `directory` answers with an empty listing and inert
+ * change subscription — this suite never asserts on the directory itself,
+ * only on the fact that `HostRestartSessions` can mount beneath it without
+ * throwing.
+ */
+function bindingWith(hostClient: unknown): HostBindingMock {
+  return {
+    hostClient,
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalEntry: () => null,
+    },
   };
 }
 
@@ -299,7 +333,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -348,7 +382,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel(undefined);
 
@@ -373,7 +407,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -412,7 +446,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -449,7 +483,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -530,7 +564,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -594,7 +628,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -649,7 +683,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const management = buildOverviewManagement({
       getHostControllerStatus: vi.fn(() =>
@@ -692,7 +726,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const management = buildOverviewManagement({
       getHostControllerStatus: vi.fn(() =>
@@ -751,7 +785,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = {
         ...scopeFrom("host-a", fixture),
         status: "unreachable",
@@ -842,7 +876,7 @@ describe("HostOverviewPanel — the WIRE leg's freshness is its own read's insta
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel(undefined);
 

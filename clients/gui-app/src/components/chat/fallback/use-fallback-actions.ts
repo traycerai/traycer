@@ -155,7 +155,10 @@ export function useFallbackCancel(
   return useHostScopedMutationForClient(client, {
     method: "chat.fallback.cancel",
     mutationKey: chatFallbackMutationKeys.cancel(chatId),
-    errorMessage: "Couldn't stop the fallback.",
+    // Neutral on purpose: this one mutation backs BOTH "Don't switch" and
+    // "Stop waiting", so naming either action here would be wrong half the
+    // time.
+    errorMessage: "Couldn't stop model routing.",
     invalidateMethods: [],
     onSuccess: (data) => {
       toastFallbackOutcome(data);
