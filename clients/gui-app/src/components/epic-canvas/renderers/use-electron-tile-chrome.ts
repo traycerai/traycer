@@ -151,9 +151,24 @@ export function useElectronTabChrome(
     };
   }, [surfaceServices, tileKey]);
 
+  const reload = (): void => {
+    setCertificateError(null);
+    setCertificateProceeding(false);
+    void control({ kind: "reload" }).catch(ignoreError);
+  };
+
   const navigateToUrl = (nextUrl: string): void => {
     draft.onAddressSubmitted(nextUrl);
-    if (nextUrl === liveUrl) return;
+    if (
+      nextUrl ===
+      normalizeBrowserAddressInput(
+        liveUrl,
+        useSettingsStore.getState().browserSearchEngine,
+      )
+    ) {
+      reload();
+      return;
+    }
     onAttemptedUrl(nextUrl);
     setCertificateError(null);
     setCertificateProceeding(false);
@@ -170,12 +185,6 @@ export function useElectronTabChrome(
         useSettingsStore.getState().browserSearchEngine,
       ),
     );
-  };
-
-  const reload = (): void => {
-    setCertificateError(null);
-    setCertificateProceeding(false);
-    void control({ kind: "reload" }).catch(ignoreError);
   };
 
   const stop = (): void => {
