@@ -228,8 +228,8 @@ function AppShellBody(props: AppShellProps) {
                     were copied from. Inside the column rather than portalled,
                     because they are this screen leaving rather than a layer
                     over the app. */}
-                  <DesktopHistorySwipes />
                   {historySwipeTransition}
+                  <DesktopHistorySwipes />
                 </>
               }
             />

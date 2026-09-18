@@ -1,4 +1,6 @@
-import { modalLayerCoversApp } from "@/components/layout/shell/shell-gestures";
+import { desktopHistoryLayerBlocksNavigation } from "./desktop-history-gesture-ownership";
+import { ownsDesktopHorizontalWheel } from "./desktop-history-gesture-ownership";
+export { ownsDesktopHorizontalWheel } from "./desktop-history-gesture-ownership";
 
 export type DesktopHistoryDirection = "back" | "forward";
 
@@ -53,7 +55,7 @@ function blocksNavigation(event: WheelEvent): boolean {
     // Only earlier native capture listeners can have canceled at this point;
     // React/element wheel handlers run later and must declare an owner marker.
     event.defaultPrevented ||
-    modalLayerCoversApp()
+    desktopHistoryLayerBlocksNavigation()
   );
 }
 
@@ -93,32 +95,6 @@ function advanceSequence(
   return true;
 }
 
-/**
- * Inspect the ORIGINAL wheel target once per sequence. An overflowing surface
- * owns the whole scroll, even at either boundary. Touch-action alone is not a
- * wheel claim: xterm and tab strips use it even when they cannot scroll across.
- */
-export function ownsDesktopHorizontalWheel(
-  target: EventTarget | null,
-): boolean {
-  let node = target instanceof Element ? target : null;
-  while (node !== null) {
-    if (
-      node.matches("[data-history-gesture-owner], .react-flow, webview, iframe")
-    ) {
-      return true;
-    }
-    if (node.scrollWidth > node.clientWidth + 1) {
-      const overflow = window.getComputedStyle(node).overflowX;
-      if (overflow === "auto" || overflow === "scroll") return true;
-      // Single-line inputs scroll their text without an overflow:auto box.
-      if (node instanceof HTMLInputElement) return true;
-    }
-    node = node.parentElement;
-  }
-  return false;
-}
-
 /** One window's wheel recognizer; the renderer owns the history semantics. */
 export function installDesktopHistoryGesture(
   options: DesktopHistoryGestureOptions,
@@ -145,7 +121,9 @@ export function installDesktopHistoryGesture(
     sequence.ownership = "draining";
     options.render({
       direction,
-      progress: commit ? 1 : 0,
+      progress: commit
+        ? 1
+        : Math.min(1, sequence.travel / DESKTOP_HISTORY_GESTURE.commitPx),
       phase: commit ? "committed" : "canceling",
     });
     settleTimer = window.setTimeout(
@@ -168,7 +146,7 @@ export function installDesktopHistoryGesture(
     }
     settle(
       sequence.travel >= DESKTOP_HISTORY_GESTURE.commitPx &&
-        !modalLayerCoversApp() &&
+        !desktopHistoryLayerBlocksNavigation() &&
         sequence.origin === options.currentEntry() &&
         sequence.destination === options.destination(sequence.direction),
     );
@@ -207,7 +185,8 @@ export function installDesktopHistoryGesture(
     if (sequence === null) {
       sequence = {
         ownership:
-          blocked || ownsDesktopHorizontalWheel(event.target)
+          blocked ||
+          ownsDesktopHorizontalWheel(event.composedPath()[0] ?? event.target)
             ? "content"
             : "pending",
         x: 0,
@@ -232,7 +211,13 @@ export function installDesktopHistoryGesture(
     updateView();
   };
   const onKey = (event: KeyboardEvent): void => {
-    if (event.key === "Escape") cancel();
+    if (sequence?.ownership !== "navigation") return;
+    // Escape cancels the preview only, not the Settings route underneath it.
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+    cancel();
   };
   const onVisibility = (): void => {
     if (document.hidden) cancel();
