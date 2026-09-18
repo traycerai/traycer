@@ -20,6 +20,7 @@ import type { ToolbarItemId } from "@/stores/settings/layout-store";
  * clusters existed.
  */
 export interface ComposerToolbarItemsProps {
+  readonly presentation?: boolean;
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
   readonly permission: PermissionMode;
   readonly onPermissionChange: (next: PermissionMode) => void;
@@ -75,7 +76,8 @@ export function renderToolbarItem(
           tuiOnly={false}
           lockedHarnessId={null}
           disabled={props.settingsLocked}
-          registerActivation
+          registerActivation={!props.presentation}
+          presentation={props.presentation}
           createProfileHostId={props.createProfileHostId}
           runTargetHostId={props.runTargetHostId}
           terminalLoginSurface={props.terminalLoginSurface}

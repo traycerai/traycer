@@ -152,7 +152,13 @@ export function CustomizeSearch({
     if (intent) {
       exitCustomize("tab-switch");
       activateTabIntent(navigate, intent, undefined);
-    } else ensureSampleWorkspaceTab();
+    } else {
+      const opener = useCustomizeStore.getState().session?.opener ?? {
+        kind: "none",
+      };
+      exitCustomize("tab-switch");
+      activateTabIntent(navigate, ensureSampleWorkspaceTab(opener), undefined);
+    }
   };
   return (
     <div className="relative min-w-0 flex-1 basis-1/4">

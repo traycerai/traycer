@@ -193,3 +193,16 @@ function MentionChipIcon({
   }
   return <File className={MENTION_ICON_CLASS} aria-hidden />;
 }
+
+/** The message bubble shared by live turns and passive sample scenes. */
+export function UserMessageBubble({
+  children,
+}: {
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+      {children}
+    </div>
+  );
+}

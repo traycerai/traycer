@@ -1,3 +1,4 @@
+import { sampleWorkspaceTabModule } from "./kinds/sample-workspace";
 import type { NavigateOptions } from "@tanstack/react-router";
 import { epicTabModule } from "@/stores/tabs/kinds/epic";
 import { draftTabModule } from "@/stores/tabs/kinds/draft";
@@ -38,6 +39,7 @@ export const TAB_KINDS = {
   history: historyTabModule,
   settings: settingsTabModule,
   home: homeTabModule,
+  "sample-workspace": sampleWorkspaceTabModule,
 } as const;
 
 /**
@@ -78,6 +80,9 @@ export function tabSurfaceDescriptor(
   kind: "settings",
 ): TabSurfaceDescriptor<"settings">;
 export function tabSurfaceDescriptor(
+  kind: "sample-workspace",
+): TabSurfaceDescriptor<"sample-workspace">;
+export function tabSurfaceDescriptor(
   kind: "home",
 ): TabSurfaceDescriptor<"home">;
 export function tabSurfaceDescriptor(
@@ -87,6 +92,7 @@ export function tabSurfaceDescriptor(
   | TabSurfaceDescriptor<"draft">
   | TabSurfaceDescriptor<"history">
   | TabSurfaceDescriptor<"settings">
+  | TabSurfaceDescriptor<"sample-workspace">
   | TabSurfaceDescriptor<"home">;
 export function tabSurfaceDescriptor(
   kind: HeaderTabKind,
@@ -95,6 +101,7 @@ export function tabSurfaceDescriptor(
   | TabSurfaceDescriptor<"draft">
   | TabSurfaceDescriptor<"history">
   | TabSurfaceDescriptor<"settings">
+  | TabSurfaceDescriptor<"sample-workspace">
   | TabSurfaceDescriptor<"home"> {
   switch (kind) {
     case "epic":
@@ -105,6 +112,8 @@ export function tabSurfaceDescriptor(
       return TAB_KINDS.history.descriptor.surface;
     case "settings":
       return TAB_KINDS.settings.descriptor.surface;
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.surface;
     case "home":
       return TAB_KINDS.home.descriptor.surface;
   }
@@ -128,6 +137,8 @@ export function tabRequestClose(tab: HeaderTab): void {
       return TAB_KINDS.history.descriptor.requestClose(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.requestClose(tab);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.requestClose(tab);
     case "home":
       return TAB_KINDS.home.descriptor.requestClose(tab);
   }
@@ -147,6 +158,8 @@ export function tabDuplicate(tab: HeaderTab): TabNavigationIntent | null {
       return TAB_KINDS.history.descriptor.duplicate(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.duplicate(tab);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.duplicate(tab);
     case "home":
       return TAB_KINDS.home.descriptor.duplicate(tab);
   }
@@ -166,6 +179,8 @@ export function tabResolveIntent(tab: HeaderTab): TabNavigationIntent {
       return TAB_KINDS.history.descriptor.resolveIntent(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.resolveIntent(tab);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.resolveIntent(tab);
     case "home":
       return TAB_KINDS.home.descriptor.resolveIntent(tab);
   }
@@ -185,6 +200,8 @@ export function tabRouteOptions(intent: TabNavigationIntent): NavigateOptions {
       return TAB_KINDS.history.descriptor.routeOptions(intent);
     case "settings":
       return TAB_KINDS.settings.descriptor.routeOptions(intent);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.routeOptions(intent);
     case "home":
       return TAB_KINDS.home.descriptor.routeOptions(intent);
   }
@@ -204,6 +221,8 @@ export function tabActivate(intent: TabNavigationIntent): void {
       return TAB_KINDS.history.descriptor.activate(intent);
     case "settings":
       return TAB_KINDS.settings.descriptor.activate(intent);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.activate(intent);
     case "home":
       return TAB_KINDS.home.descriptor.activate(intent);
   }
@@ -225,6 +244,8 @@ export function tabRequiresCloseConfirm(tab: HeaderTab): boolean {
       return TAB_KINDS.history.descriptor.requiresCloseConfirm(tab);
     case "settings":
       return TAB_KINDS.settings.descriptor.requiresCloseConfirm(tab);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.requiresCloseConfirm(tab);
     case "home":
       return TAB_KINDS.home.descriptor.requiresCloseConfirm(tab);
   }
@@ -243,6 +264,7 @@ export function tabEpicId(tab: HeaderTab): string | null {
     case "history":
     case "settings":
     case "home":
+    case "sample-workspace":
       return null;
   }
 }
@@ -270,6 +292,11 @@ export function tabOpenInNewWindow(
       return TAB_KINDS.history.descriptor.openInNewWindow(tab, deps);
     case "settings":
       return TAB_KINDS.settings.descriptor.openInNewWindow(tab, deps);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.openInNewWindow(
+        tab,
+        deps,
+      );
     case "home":
       return TAB_KINDS.home.descriptor.openInNewWindow(tab, deps);
   }
@@ -290,6 +317,11 @@ export function tabMatchesPath(tab: HeaderTab, pathname: string): boolean {
       return TAB_KINDS.history.descriptor.matchesPath(tab, pathname);
     case "settings":
       return TAB_KINDS.settings.descriptor.matchesPath(tab, pathname);
+    case "sample-workspace":
+      return TAB_KINDS["sample-workspace"].descriptor.matchesPath(
+        tab,
+        pathname,
+      );
     case "home":
       return TAB_KINDS.home.descriptor.matchesPath(tab, pathname);
   }

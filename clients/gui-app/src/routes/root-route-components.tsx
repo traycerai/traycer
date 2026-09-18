@@ -1,3 +1,4 @@
+import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { CustomizeOverlay } from "@/components/customize/customize-overlay";
 import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
@@ -179,19 +180,21 @@ function RootSurface(props: {
 }) {
   if (!props.isStandalone) {
     return (
-      <AppShell>
-        {/*
-         * Mounted HERE and not inside AppShell or RootDndProvider, on purpose.
-         * It owns the tear-off flow, which reaches `useRouterState` and so
-         * throws without a router. This is a route component - it renders under
-         * `<Outlet />` and cannot exist outside `RouterProvider` - which makes
-         * the router requirement structural rather than a runtime check.
-         * Rendered by the provider instead, it would mount wherever the
-         * provider mounts, which is the provider-light case the move fixes.
-         */}
-        <TabDetachOwner />
-        <Outlet />
-      </AppShell>
+      <SampleSceneProvider>
+        <AppShell>
+          {/*
+           * Mounted HERE and not inside AppShell or RootDndProvider, on purpose.
+           * It owns the tear-off flow, which reaches `useRouterState` and so
+           * throws without a router. This is a route component - it renders under
+           * `<Outlet />` and cannot exist outside `RouterProvider` - which makes
+           * the router requirement structural rather than a runtime check.
+           * Rendered by the provider instead, it would mount wherever the
+           * provider mounts, which is the provider-light case the move fixes.
+           */}
+          <TabDetachOwner />
+          <Outlet />
+        </AppShell>
+      </SampleSceneProvider>
     );
   }
   // Sign-in and the onboarding tour render without AppShell, so they lose the

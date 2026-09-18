@@ -88,6 +88,15 @@ export type HeaderTab = { readonly appearance?: HeaderTabAppearance | null } & (
       readonly canOpenInNewWindow: boolean;
     }
   | {
+      readonly kind: "sample-workspace";
+      readonly id: string;
+      readonly route: string;
+      readonly name: string;
+      readonly icon: TabIcon | null;
+      readonly canDuplicate: boolean;
+      readonly canOpenInNewWindow: boolean;
+    }
+  | {
       readonly kind: "history";
       readonly id: "history";
       readonly route: string;
@@ -170,7 +179,7 @@ export interface TabSurfaceCapabilities {
   readonly newWindow: "copy" | "move" | "none";
   readonly readinessScope: "none" | "default-host" | "tab-host";
   readonly durableState: {
-    readonly owner: "epic-canvas" | "landing-draft" | "tabs-store";
+    readonly owner: "epic-canvas" | "landing-draft" | "tabs-store" | "none";
     readonly eviction: "reconstruct";
   };
 }

@@ -588,6 +588,8 @@ function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
   switch (props.tab.kind) {
     case "epic":
       return <EpicTabSurface tab={props.tab} />;
+    case "sample-workspace":
+      return tabSurfaceDescriptor("sample-workspace").render(props.tab);
     case "draft":
       return tabSurfaceDescriptor("draft").render(props.tab);
     case "history":

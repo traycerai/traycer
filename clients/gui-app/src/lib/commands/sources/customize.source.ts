@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
@@ -13,6 +14,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 export const customizeSource: ReactCommandSource = {
   id: "customize",
   useItems: () => {
+    const navigate = useNavigate();
     const enabled = useSettingsStore(
       (state) => state.visualLayoutEditorEnabled,
     );
@@ -69,9 +71,9 @@ export const customizeSource: ReactCommandSource = {
           id: "customize:sample",
           label: "Open sample workspace",
           description: "Customize with a populated example",
-          run: openSampleWorkspaceAction,
+          run: () => openSampleWorkspaceAction(navigate),
         },
       ];
-    }, [enabled, mobile, locked, bridge]);
+    }, [enabled, mobile, locked, bridge, navigate]);
   },
 };

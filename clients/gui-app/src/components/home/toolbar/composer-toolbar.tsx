@@ -1,3 +1,4 @@
+import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
 import { memo, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
 
@@ -27,6 +28,8 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 
 interface ComposerToolbarProps {
+  /** Passive sample chrome: no host hooks, activation slots or send action. */
+  readonly presentation?: boolean;
   /** Per-composer toolbar store; this component subscribes to the slices the
    *  left group renders, leaves stay presentational. */
   store: ComposerToolbarStore;
@@ -68,7 +71,45 @@ interface ComposerToolbarProps {
   readonly chatLineCarriesAutoMode: boolean | null;
 }
 
+function ComposerToolbarLive(props: ComposerToolbarProps) {
+  const listHarnessesLine = useHostMethodSchemaVersion(
+    props.runTargetHostId,
+    "agent.gui.listHarnesses",
+  );
+  const hostKnowsAutoMode =
+    props.runTargetHostId === null
+      ? null
+      : autoModeOfferableHere(listHarnessesLine, props.chatLineCarriesAutoMode);
+  const runHarnessId = useStore(
+    props.store,
+    (state) => state.selection.harnessId,
+  );
+  const judgeBilling = useAutoJudgeBilling(props.runTargetHostId, runHarnessId);
+  return (
+    <ComposerToolbarView
+      {...props}
+      hostKnowsAutoMode={hostKnowsAutoMode}
+      judgeBilling={judgeBilling}
+    />
+  );
+}
 function ComposerToolbarImpl(props: ComposerToolbarProps) {
+  return props.presentation ? (
+    <ComposerToolbarView
+      {...props}
+      hostKnowsAutoMode={null}
+      judgeBilling={null}
+    />
+  ) : (
+    <ComposerToolbarLive {...props} />
+  );
+}
+function ComposerToolbarView(
+  props: ComposerToolbarProps & {
+    readonly hostKnowsAutoMode: boolean | null;
+    readonly judgeBilling: AutoJudgeBilling | null;
+  },
+) {
   const {
     store,
     onAttachImages,
@@ -85,7 +126,8 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
-    chatLineCarriesAutoMode,
+    hostKnowsAutoMode,
+    judgeBilling,
   } = props;
 
   // Left-group slices. The store is the single source for harness-level
@@ -95,7 +137,10 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     store,
     (s) => s.supportedPermissionModes,
   );
-  const harnessLabel = useStore(store, (s) => s.harnessLabel);
+  const storedHarnessLabel = useStore(store, (s) => s.harnessLabel);
+  const harnessLabel = props.presentation
+    ? "Sample provider"
+    : storedHarnessLabel;
   const setPermission = useStore(store, (s) => s.setPermission);
   // The union across the WHOLE catalog, so the picker can tell "this host
   // predates `auto`" from "this provider declines it". Memoized on the
@@ -107,39 +152,10 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     () => catalogSupportedPermissionModes(harnesses),
     [harnesses],
   );
-  // The HOST capability the union cannot express: a catalog of unconstrained
-  // rows names no modes at all, and even a fully constrained one cannot tell
-  // "this machine predates `auto`" from "every provider here declines it".
-  // The negotiated catalog line answers the first question directly, and the
-  // picker's unsupported copy uses it to decide who to blame.
-  // `null` when no host is named: that is "no host in scope", not "the host
-  // cannot spell `auto`", and the two are different claims. A named host whose
-  // line is unreadable still answers `false` - the composer is about to send on
-  // it - which is what `catalogLineKnowsAutoMode(null)` gives.
-  //
-  // ANDed with this chat's own `chat.subscribe` line, because the catalog line
-  // is evidence about what the host can OFFER and the frame that CARRIES the
-  // value is a different method - see `autoModeOfferableHere`. On the landing
-  // composer that second half is `null` (no chat yet) and the catalog line
-  // decides alone, which is all this surface can know.
-  const listHarnessesLine = useHostMethodSchemaVersion(
-    runTargetHostId,
-    "agent.gui.listHarnesses",
-  );
-  const hostKnowsAutoMode =
-    runTargetHostId === null
-      ? null
-      : autoModeOfferableHere(listHarnessesLine, chatLineCarriesAutoMode);
-  // The harness this composer will RUN, which decides the disclosure alongside
-  // the host's stored judge: a provider set to its own classifier bypasses
-  // Traycer's judge entirely. Read off the same store slice the picker shows,
-  // so the row and the trigger can never name different providers.
-  const runHarnessId = useStore(store, (s) => s.selection.harnessId);
-  const judgeBilling = useAutoJudgeBilling(runTargetHostId, runHarnessId);
-
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.
   const recordingDictation =
+    !props.presentation &&
     dictation !== null &&
     (dictation.state === "recording" || dictation.state === "transcribing")
       ? dictation
@@ -150,12 +166,14 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
   const featureEnabled = useSettingsStore(
     (state) => state.visualLayoutEditorEnabled,
   );
-  const showCustomizeEntry = featureEnabled && !editing && !narrowViewport;
+  const showCustomizeEntry =
+    featureEnabled && !editing && !narrowViewport && !props.presentation;
 
   // Both clusters render through the same `renderToolbarItem` map now that an
   // item may move between them, so both need the full prop set - what used to
   // be split into "left's props" and "right's props" is one shared object.
   const itemProps = {
+    presentation: props.presentation === true,
     onAttachImages,
     permission,
     onPermissionChange: setPermission,
@@ -180,7 +198,10 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
 
   return (
     <ComposerToolbarContextMenu enabled={showCustomizeEntry}>
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 px-2.5 pb-2.5 pt-1">
+      <div
+        inert={props.presentation}
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 px-2.5 pb-2.5 pt-1"
+      >
         {recordingDictation !== null ? (
           <div className="col-span-2 min-w-0">
             <DictationRecordingBar
@@ -195,12 +216,12 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             <ComposerToolbarLeft {...itemProps} />
             <ComposerToolbarRight
               {...itemProps}
-              canSubmit={canSubmit}
+              canSubmit={props.presentation ? false : canSubmit}
               attachmentPending={attachmentPending}
               onSubmit={onSubmit}
-              activeTurnStatus={activeTurnStatus}
+              activeTurnStatus={props.presentation ? null : activeTurnStatus}
               stopDisabled={stopDisabled}
-              onStopTurn={onStopTurn}
+              onStopTurn={props.presentation ? null : onStopTurn}
               composerDisabledHint={composerDisabledHint}
             />
           </>

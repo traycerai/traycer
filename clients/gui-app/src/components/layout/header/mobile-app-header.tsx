@@ -231,6 +231,7 @@ function useMobileHeaderSurface(): MobileHeaderSurface {
             kind: "settings",
             path: state.systemTabs.settings?.lastPath ?? null,
           };
+        case "sample-workspace":
         case "draft":
           return COMPOSER_SURFACE;
       }

@@ -1,9 +1,25 @@
 import type { CommandContext } from "@/lib/commands/types";
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NavigateFn } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
+import { openSampleWorkspaceAction } from "@/lib/commands/actions/customize-layout";
 import { customizeSource } from "@/lib/commands/sources/customize.source";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+
+// `useItems` now calls `useNavigate()`; the hook needs no router in these tests.
+const navigateMock: NavigateFn = vi.fn();
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: vi.fn(() => navigateMock),
+}));
+vi.mock("@/lib/commands/actions/customize-layout", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/commands/actions/customize-layout")
+  >()),
+  openSampleWorkspaceAction: vi.fn(),
+}));
 
 function ctx(): CommandContext {
   return {
@@ -101,5 +117,17 @@ describe("customizeSource", () => {
       "customize:layout",
       "customize:sample",
     ]);
+  });
+
+  it("the sample row runs openSampleWorkspaceAction with the router navigate", () => {
+    const { result } = renderHook(() => customizeSource.useItems(ctx()));
+    const sample = result.current.find(
+      (item) => item.id === "customize:sample",
+    );
+
+    void sample?.run(ctx());
+
+    expect(useNavigate).toHaveBeenCalled();
+    expect(openSampleWorkspaceAction).toHaveBeenCalledWith(navigateMock);
   });
 });

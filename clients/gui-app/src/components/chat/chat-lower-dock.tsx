@@ -31,7 +31,7 @@ export interface DockRowHotspot {
   readonly editing: boolean;
 }
 
-export interface ChatLowerDockProps {
+interface LiveChatLowerDockProps {
   readonly snapshotLoaded: boolean;
   readonly epicId: string;
   /** The chat this dock belongs to - the strip's managed-command join key. */
@@ -105,6 +105,17 @@ interface DockRowPlan {
   readonly showRow: boolean;
 }
 
+interface PresentationChatLowerDockProps {
+  readonly presentationRows: Readonly<Record<DockSection, ReactNode>>;
+  readonly folded: ReadonlySet<ChatDockSection>;
+  readonly dockOrder: ReadonlyArray<DockSection>;
+  readonly hotspots: Readonly<Record<DockSection, DockRowHotspot>>;
+  readonly topSpacing: ChatPinnedStackTopSpacing;
+}
+export type ChatLowerDockProps =
+  | LiveChatLowerDockProps
+  | PresentationChatLowerDockProps;
+
 function planDockRow(
   section: DockSection,
   hotspot: DockRowHotspot,
@@ -119,8 +130,10 @@ function planDockRow(
 }
 
 export function ChatLowerDock(props: ChatLowerDockProps) {
-  const todoVisible = props.snapshotLoaded && props.todo !== null;
-  const queueVisible = props.queue.items.length > 0;
+  const live = "presentationRows" in props ? null : props;
+  const todoVisible =
+    live !== null && live.snapshotLoaded && live.todo !== null;
+  const queueVisible = live !== null && live.queue.items.length > 0;
   const rows = props.dockOrder.map((section) =>
     planDockRow(section, props.hotspots[section], props.folded),
   );
@@ -141,11 +154,11 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
         )}
       >
         <div className="@container mx-3 -mb-px overflow-hidden rounded-t-lg border border-b-0 border-border bg-muted/30">
-          <QueueSection visible={queueVisible} dock={props} />
+          {live ? <QueueSection visible={queueVisible} dock={live} /> : null}
           {todoVisible ? (
             <PinnedTodoPanel
-              todo={props.todo}
-              scrollRegionMaxHeightClass={props.scrollRegionMaxHeightClass}
+              todo={live.todo}
+              scrollRegionMaxHeightClass={live.scrollRegionMaxHeightClass}
               separated={queueVisible}
             />
           ) : null}
@@ -238,6 +251,19 @@ function dockRow(props: {
   readonly dock: ChatLowerDockProps;
 }): ReactNode {
   const { dock } = props;
+  if ("presentationRows" in dock)
+    return (
+      <div
+        key={props.key}
+        ref={props.hotspotRef}
+        className={cn(
+          "min-w-0",
+          props.separated && "border-t border-border/50",
+        )}
+      >
+        {dock.presentationRows[props.section]}
+      </div>
+    );
   if (props.section === "filesChanged") {
     return (
       <span
@@ -305,7 +331,7 @@ function dockRow(props: {
 
 function QueueSection(props: {
   readonly visible: boolean;
-  readonly dock: ChatLowerDockProps;
+  readonly dock: LiveChatLowerDockProps;
 }) {
   if (!props.visible) return null;
   const { dock } = props;

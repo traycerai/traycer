@@ -804,6 +804,7 @@ function validRef(ref: TabRef, isKnownTabKind: IsKnownTabKind): boolean {
   // it here is what keeps a persisted or hand-edited payload from materializing
   // one as an ordinary, closable, draggable tab.
   if (ref.kind === "home") return false;
+  if (ref.kind === "sample-workspace") return ref.id === "sample-workspace";
   return true;
 }
 
@@ -874,4 +875,15 @@ function repairSystemTabs(systemTabs: SystemTabs): SystemTabs {
         ? { ...systemTabs.settings, id: "settings", kind: "settings" }
         : null,
   };
+}
+
+/** Ephemeral editor tabs never survive a renderer restart. */
+export function withoutSampleWorkspace(
+  layout: PersistedTabStripLayout,
+): PersistedTabStripLayout {
+  const next = removeLayoutRef(layout, {
+    kind: "sample-workspace",
+    id: "sample-workspace",
+  });
+  return next === layout ? layout : repairTabGroups(next);
 }

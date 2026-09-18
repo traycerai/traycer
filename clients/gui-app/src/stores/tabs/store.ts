@@ -20,6 +20,7 @@ import {
 } from "@/stores/tabs/registry";
 import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import {
+  withoutSampleWorkspace,
   createEmptySplit,
   DEFAULT_LEFT_RATIO,
   createLayoutItem,
@@ -349,7 +350,7 @@ function parseTabRef(value: unknown): ReadonlyArray<TabRef> {
   if (value.kind === "settings" && value.id !== "settings") return [];
   // Home is never persisted as a strip ref; `repairLayout` would drop one
   // anyway, but refusing it here keeps the parsed layout honest.
-  if (value.kind === "home") return [];
+  if (value.kind === "home" || value.kind === "sample-workspace") return [];
   return [{ kind: value.kind, id: value.id }];
 }
 
@@ -733,7 +734,7 @@ export const useTabsStore = create<TabsStoreState>()(
       version: 2,
       storage: createJSONStorage(() => tabsStorage),
       partialize: (state): PersistedTabsStoreState =>
-        committedLayout(layoutFromState(state)),
+        committedLayout(withoutSampleWorkspace(layoutFromState(state))),
       migrate: (persisted) => migrateTabsPersistedStorageState(persisted),
       merge: (persisted, current) => ({
         ...current,

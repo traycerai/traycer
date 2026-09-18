@@ -1,3 +1,6 @@
+import { createLayoutItem, flattenLayoutRefs } from "@/stores/tabs/layout";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { toast } from "sonner";
 import { OPEN_OVERLAY_SELECTOR } from "@/components/onboarding/guide-overlays";
@@ -202,13 +205,38 @@ export function exitCustomize(reason: ExitReason): void {
     search: { query: "", activeIndex: -1 },
   });
   releaseCustomizeLease();
+  if (
+    session.scene === "sample" &&
+    reason !== "tab-switch" &&
+    reason !== "lease-lost" &&
+    reason !== "studio-closed"
+  ) {
+    tabCommandCoordinator.closeRefAfterConfirmed({
+      kind: "sample-workspace",
+      id: "sample-workspace",
+    });
+  }
   if (reason === "done" || reason === "escape") restoreOpener(session.opener);
   if (reason === "lease-lost")
     toast.info("Customize moved to another window. Your layout is saved.");
 }
 
-/** Wave 4 supplies the real tab lifecycle at this one seam. */
-export function ensureSampleWorkspaceTab(): null {
-  toast.info("Sample workspace is arriving");
-  return null;
+let sampleOpener: Opener = { kind: "none" };
+export function getSampleWorkspaceOpener(): Opener {
+  return sampleOpener;
+}
+
+/** Returns an intent; the caller uses the normal tab navigation controller. */
+export function ensureSampleWorkspaceTab(
+  opener: Opener,
+): Extract<TabNavigationIntent, { kind: "sample-workspace" }> {
+  sampleOpener = opener;
+  useTabsStore.setState((state) => {
+    const layout = createLayoutItem(state, {
+      kind: "sample-workspace",
+      id: "sample-workspace",
+    });
+    return { items: layout.items, stripOrder: flattenLayoutRefs(layout) };
+  });
+  return { kind: "sample-workspace" };
 }

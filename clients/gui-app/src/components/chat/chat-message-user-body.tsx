@@ -86,7 +86,10 @@ import type {
   ChatMessageUserActions,
 } from "./chat-message";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
-import { ChatUserMessageContent } from "./chat-user-message-content";
+import {
+  ChatUserMessageContent,
+  UserMessageBubble,
+} from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
@@ -457,7 +460,7 @@ function UserMessageDisplayView({
         </div>
       ) : null}
       <div className="relative min-w-0 max-w-full">
-        <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+        <UserMessageBubble>
           <UserMessageAttachmentGallery
             attachments={message.attachments}
             browserAnnotations={message.browserAnnotations}
@@ -483,7 +486,7 @@ function UserMessageDisplayView({
           {isOverflowing ? (
             <ShowMoreToggle expanded={expanded} onToggle={toggleExpanded} />
           ) : null}
-        </div>
+        </UserMessageBubble>
         {/* The action chip floats over the bubble's bottom-right border instead
             of reserving a row beneath it, so the assistant reply sits close
             under the user message rather than after a tall hover gap. The copy

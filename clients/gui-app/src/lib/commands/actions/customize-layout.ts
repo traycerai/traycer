@@ -1,3 +1,5 @@
+import type { NavigateFn } from "@tanstack/react-router";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import {
   captureSettingsOpener,
   ensureSampleWorkspaceTab,
@@ -14,7 +16,11 @@ export function customizeLayoutAction(): void {
     source: "command_palette",
   });
 }
-export function openSampleWorkspaceAction(): void {
+export function openSampleWorkspaceAction(navigate: NavigateFn): void {
   if (isVisualLayoutEditorEnabled() && !isMobileViewport())
-    ensureSampleWorkspaceTab();
+    activateTabIntent(
+      navigate,
+      ensureSampleWorkspaceTab(captureSettingsOpener()),
+      undefined,
+    );
 }

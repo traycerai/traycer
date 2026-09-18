@@ -1,12 +1,28 @@
-import { toast } from "sonner";
+import type { NavigateFn } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   customizeLayoutAction,
   openSampleWorkspaceAction,
 } from "@/lib/commands/actions/customize-layout";
-import { exitCustomize } from "@/lib/customize/enter-exit";
+import { activateTabIntent } from "@/lib/tab-navigation";
+import {
+  exitCustomize,
+  getSampleWorkspaceOpener,
+} from "@/lib/customize/enter-exit";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { emptyTabStripLayout } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+
+// Only the navigation entry point is replaced; every other export of the
+// module stays real so `enter-exit` and the stores keep working.
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+  activateTabIntent: vi.fn(() => true),
+}));
+
+const navigate: NavigateFn = vi.fn();
 
 function setViewportWidth(width: number): void {
   Object.defineProperty(window, "innerWidth", {
@@ -14,6 +30,14 @@ function setViewportWidth(width: number): void {
     configurable: true,
     writable: true,
   });
+}
+
+function sampleItemCount(): number {
+  return useTabsStore
+    .getState()
+    .items.filter(
+      (item) => item.kind === "tab" && item.ref.kind === "sample-workspace",
+    ).length;
 }
 
 beforeEach(() => {
@@ -25,10 +49,14 @@ beforeEach(() => {
     instances: new Map(),
     history: { past: [], future: [] },
   });
+  useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+  vi.mocked(activateTabIntent).mockClear();
 });
 
 afterEach(() => {
   if (useCustomizeStore.getState().session) exitCustomize("done");
+  setSystemTabModalApi(null);
+  useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
   setViewportWidth(1280);
   localStorage.clear();
   vi.restoreAllMocks();
@@ -59,29 +87,60 @@ describe("customizeLayoutAction", () => {
 });
 
 describe("openSampleWorkspaceAction", () => {
-  it("shows the arriving stub when the switch is on at desktop width", () => {
-    const info = vi.spyOn(toast, "info");
+  it("opens the sample tab and activates its intent when the switch is on at desktop width", () => {
+    openSampleWorkspaceAction(navigate);
 
-    openSampleWorkspaceAction();
+    expect(sampleItemCount()).toBe(1);
+    expect(activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(activateTabIntent).toHaveBeenCalledWith(
+      navigate,
+      { kind: "sample-workspace" },
+      undefined,
+    );
+  });
 
-    expect(info).toHaveBeenCalledWith("Sample workspace is arriving");
+  it("hands the captured opener to the sample workspace", () => {
+    setSystemTabModalApi({
+      active: { kind: "settings", section: "layout" },
+      openSettings: vi.fn(),
+      openHistory: vi.fn(),
+      close: vi.fn(),
+      setSection: vi.fn(),
+      promoteToTab: vi.fn(),
+      isOverlayActive: () => false,
+    });
+
+    openSampleWorkspaceAction(navigate);
+
+    expect(getSampleWorkspaceOpener()).toMatchObject({
+      kind: "settings-modal",
+      section: "layout",
+    });
+  });
+
+  it("opening twice still yields one tab", () => {
+    openSampleWorkspaceAction(navigate);
+    openSampleWorkspaceAction(navigate);
+
+    expect(sampleItemCount()).toBe(1);
+    expect(activateTabIntent).toHaveBeenCalledTimes(2);
   });
 
   it("is gated off when the switch is off", () => {
     useSettingsStore.setState({ visualLayoutEditorEnabled: false });
-    const info = vi.spyOn(toast, "info");
 
-    openSampleWorkspaceAction();
+    openSampleWorkspaceAction(navigate);
 
-    expect(info).not.toHaveBeenCalled();
+    expect(sampleItemCount()).toBe(0);
+    expect(activateTabIntent).not.toHaveBeenCalled();
   });
 
   it("is gated off at a mobile viewport width", () => {
     setViewportWidth(500);
-    const info = vi.spyOn(toast, "info");
 
-    openSampleWorkspaceAction();
+    openSampleWorkspaceAction(navigate);
 
-    expect(info).not.toHaveBeenCalled();
+    expect(sampleItemCount()).toBe(0);
+    expect(activateTabIntent).not.toHaveBeenCalled();
   });
 });

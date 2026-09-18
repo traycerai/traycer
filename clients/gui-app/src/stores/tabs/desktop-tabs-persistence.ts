@@ -1,3 +1,4 @@
+import { withoutSampleWorkspace } from "./layout";
 import type {
   DesktopJsonValue,
   DesktopPerWindowSnapshot,
@@ -238,8 +239,17 @@ function createDesktopTabsPersistenceController(
     }
     pending = false;
     const sequence = latestSequence;
-    const route = activeRoute;
-    const layout = currentLayout();
+    const layout = withoutSampleWorkspace(currentLayout());
+    const activeItem = layout.items.find(
+      (item) => item.id === layout.activeItemId,
+    );
+    const backing =
+      activeItem === undefined ? null : routeBackingRef(activeItem);
+    let route = activeRoute;
+    if (routePath(activeRoute) === "/sample-workspace") {
+      route = backing === null ? "/" : routeForRef(layout, backing);
+      if (layoutHomeIsActive(layout)) route = "/home";
+    }
     if (!isProjectionCoherent(route, layout)) {
       return Promise.reject(
         new Error("Desktop tab projection lost route/layout coherence"),
@@ -547,6 +557,7 @@ function refIsRestorable(
   ref: TabRef,
   systemTabs: PersistedTabStripLayout["systemTabs"],
 ): boolean {
+  if (ref.kind === "sample-workspace") return false;
   if (ref.kind === "history" || ref.kind === "settings") {
     return systemTabs[ref.kind] !== null;
   }
@@ -561,6 +572,7 @@ function routeBackingRef(item: StripItem): TabRef | null {
 }
 
 function routeForRef(layout: PersistedTabStripLayout, ref: TabRef): string {
+  if (ref.kind === "sample-workspace") return "/";
   if (ref.kind === "epic") {
     const tab = useEpicCanvasStore.getState().tabsById[ref.id];
     return tab === undefined
@@ -586,6 +598,8 @@ function routeForRef(layout: PersistedTabStripLayout, ref: TabRef): string {
 function routeRef(route: string | null): TabRef | null {
   if (route === null) return null;
   const pathname = routePath(route);
+  if (pathname === "/sample-workspace")
+    return { kind: "sample-workspace", id: "sample-workspace" };
   if (pathname === "/epics" || pathname === "/epics/") {
     return { kind: "history", id: "history" };
   }
@@ -614,6 +628,7 @@ function routeMatchesHydratedRef(route: string, ref: TabRef): boolean {
     const tab = useEpicCanvasStore.getState().tabsById[ref.id];
     return tab !== undefined && tabId === ref.id && epicId === tab.epicId;
   }
+  if (ref.kind === "sample-workspace") return pathname === "/sample-workspace";
   if (ref.kind === "draft")
     return pathname === `/draft/${encodeURIComponent(ref.id)}`;
   if (ref.kind === "history")

@@ -365,6 +365,8 @@ function sourceHasRef(ref: TabRef): boolean {
   // Home owns no source record and no strip item, so it is never a placement
   // this reconciles - `resolveHomeActivation` is its only entry point.
   if (ref.kind === "home") return false;
+  if (ref.kind === "sample-workspace")
+    return findStripItemForRef(currentLayout(), ref) !== null;
   return currentLayout().systemTabs[ref.kind] !== null;
 }
 
@@ -1276,6 +1278,8 @@ export class TabCommandCoordinator {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
+    if (ref.kind === "sample-workspace")
+      return this.activationForRef(layout, ref, () => undefined);
     if (ref.kind === "home") return this.resolveHomeActivation(layout);
     if (layout.systemTabs[ref.kind] === null) return null;
     return this.activationForRef(layout, ref, () => undefined);

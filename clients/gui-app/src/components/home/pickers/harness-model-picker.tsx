@@ -138,6 +138,7 @@ const EMPTY_PROFILES_BY_HARNESS_ID: ReadonlyMap<
 > = new Map();
 
 interface HarnessModelPickerProps {
+  readonly presentation?: boolean;
   /** Per-composer toolbar store; the picker subscribes to the selection /
    *  reasoning / service-tier slices and dispatches through its actions. */
   store: ComposerToolbarStore;
@@ -1147,7 +1148,44 @@ function hasNoReasoningLevels(
   return selectedModel !== null && options.length === 0;
 }
 
-export const HarnessModelPicker = memo(HarnessModelPickerImpl);
+function HarnessModelPickerSurface(props: HarnessModelPickerProps) {
+  return props.presentation ? (
+    <PresentationHarnessModelPicker {...props} />
+  ) : (
+    <HarnessModelPickerImpl {...props} />
+  );
+}
+export const HarnessModelPicker = memo(HarnessModelPickerSurface);
+
+/** The same trigger, with no catalog queries, activation registration or writes. */
+function PresentationHarnessModelPicker(props: HarnessModelPickerProps) {
+  const selection = useStore(props.store, (state) => state.selection);
+  const tileId = useComposerTileId();
+  const { ref } = useLayoutHotspot({
+    settingId: "composer.model",
+    tileId,
+    ghost: false,
+    condition: "",
+  });
+  const reasoningIndicator = useComposerLayoutValue("reasoningIndicator");
+  return (
+    <HarnessModelTrigger
+      ref={ref}
+      selection={selection}
+      label="Sample model"
+      reasoningLabel="Medium"
+      reasoningStep={{ index: 1, count: 3 }}
+      reasoningIndicator={reasoningIndicator}
+      serviceTierLabel={null}
+      serviceTierActive={false}
+      profileLabel={null}
+      profileAccentDot={null}
+      isLoading={false}
+      disabled={false}
+      labelDisplay={props.labelDisplay}
+    />
+  );
+}
 
 function HarnessModelPickerTooltip({
   harnessLabel,

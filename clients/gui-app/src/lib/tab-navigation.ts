@@ -291,6 +291,8 @@ function intentRef(intent: TabNavigationIntent): TabRef {
       return { kind: "history", id: "history" };
     case "settings":
       return { kind: "settings", id: "settings" };
+    case "sample-workspace":
+      return { kind: "sample-workspace", id: "sample-workspace" };
     case "home":
       return HOME_TAB_REF;
   }
@@ -412,6 +414,11 @@ export function settingsSectionFromPath(
 }
 
 function routedTabTarget(pathname: string): RoutedTabTarget | null {
+  if (pathname === "/sample-workspace")
+    return {
+      ref: { kind: "sample-workspace", id: "sample-workspace" },
+      epicId: null,
+    };
   const epicId = readActiveEpicIdFromPath(pathname);
   const epicTabId = readActiveEpicTabIdFromPath(pathname);
   if (epicId !== null && epicTabId !== null) {
@@ -468,6 +475,7 @@ function intentForRef(
     return isOpenLandingDraftId(ref.id) ? draftTabIntent(ref.id) : null;
   }
   if (ref.kind === "history") return historyTabIntent();
+  if (ref.kind === "sample-workspace") return { kind: "sample-workspace" };
   if (ref.kind === "home") return homeTabIntent();
   return settingsTabIntent(settingsSectionFromPath(pathname));
 }
@@ -524,6 +532,8 @@ function refIsMaterialized(ref: TabRef): boolean {
     return isOpenLandingDraftId(ref.id);
   }
   // Home has no source record to materialize: the flag is the whole condition.
+  if (ref.kind === "sample-workspace")
+    return findStripItemForRef(currentLayout(), ref) !== null;
   if (ref.kind === "home") return isHomeTabEnabled();
   return useTabsStore.getState().systemTabs[ref.kind] !== null;
 }
@@ -1575,6 +1585,11 @@ export class TabNavigationController {
       case "history":
       case "settings":
         this.resolveExternalSystem(location, ref.kind, navigate);
+        return;
+      case "sample-workspace":
+        if (refIsMaterialized(ref))
+          this.activateExternalTarget({ kind: "ref", ref });
+        else this.issueLandingCorrection(location, navigate);
         return;
       case "home":
         this.resolveExternalHome(location, navigate);

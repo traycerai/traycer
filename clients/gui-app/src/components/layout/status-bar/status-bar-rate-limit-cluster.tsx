@@ -1,3 +1,7 @@
+import { SAMPLE_USAGE_USED_PERCENT } from "@/components/sample-workspace/sample-workspace-scene";
+import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
+import { statusBarPreviewSample } from "@/components/sample-workspace/sample-rate-limit-readings";
+import { useSampledNow } from "@/lib/relative-time";
 import type { ReactNode } from "react";
 import { PopoverTrigger } from "@/components/ui/popover";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
@@ -59,6 +63,8 @@ export function StatusBarRateLimitCluster(props: {
   readonly editing: boolean;
 }): ReactNode {
   const display = useStatusBarUsageDisplay();
+  const sampleCold = useSampleScene();
+  const now = useSampledNow();
   const requestRevealProfile = useRateLimitPopoverStore(
     (state) => state.requestRevealProfile,
   );
@@ -72,6 +78,8 @@ export function StatusBarRateLimitCluster(props: {
     editing: props.editing,
   });
 
+  const sample = sampleCold ? statusBarPreviewSample(cluster, now) : null;
+  const displayed = sample?.cluster ?? cluster;
   return (
     <>
       {/*
@@ -86,11 +94,14 @@ export function StatusBarRateLimitCluster(props: {
       */}
       <StatusBarUsageScroller
         hostId={props.hostId}
-        cluster={cluster}
+        cluster={displayed}
         testId="status-bar-rate-limit-scroller"
       >
         <StatusBarUsageTrigger
-          cluster={cluster}
+          cluster={displayed}
+          sampleLabel={
+            sample !== null || (sampleCold && cluster.kind === "no-providers")
+          }
           display={display}
           onRevealProfile={requestRevealProfile}
         />
@@ -132,6 +143,7 @@ export function StatusBarRateLimitCluster(props: {
  * It must sit inside a `Popover`: `PopoverTrigger` throws outside one.
  */
 export function StatusBarUsageTrigger(props: {
+  readonly sampleLabel?: boolean;
   readonly cluster: StatusBarRateLimitClusterModel;
   readonly display: StatusBarUsageDisplay;
   readonly onRevealProfile: (target: RateLimitPopoverRevealTarget) => void;
@@ -146,7 +158,11 @@ export function StatusBarUsageTrigger(props: {
         // they are not reachable at all. Kept to one reading per segment:
         // the whole window list is what the panel this opens is for, and
         // a segment scrolled out of view is still in the name.
-        aria-label={triggerAccessibleName(cluster, display.percentMode)}
+        aria-label={
+          props.sampleLabel && cluster.kind === "no-providers"
+            ? `Sample usage · ${SAMPLE_USAGE_USED_PERCENT}% used, ${100 - SAMPLE_USAGE_USED_PERCENT}% remaining`
+            : `${props.sampleLabel ? "Sample readings · " : ""}${triggerAccessibleName(cluster, display.percentMode)}`
+        }
         data-testid="status-bar-rate-limit-trigger"
         // The bar's own right-click menu stands down over a control that is
         // itself a way into the surface the menu summarises.
@@ -170,11 +186,23 @@ export function StatusBarUsageTrigger(props: {
           data-testid="status-bar-rate-limit-content"
           className={STATUS_BAR_USAGE_CONTENT_CLASS}
         >
-          <StatusBarUsageReadings
-            cluster={cluster}
-            display={display}
-            interactive
-          />
+          {props.sampleLabel ? (
+            <span className="text-ui-xs">Sample</span>
+          ) : null}
+          {props.sampleLabel && cluster.kind === "no-providers" ? (
+            <span>
+              Usage ·{" "}
+              {display.percentMode === "remaining"
+                ? `${100 - SAMPLE_USAGE_USED_PERCENT}% left`
+                : `${SAMPLE_USAGE_USED_PERCENT}% used`}
+            </span>
+          ) : (
+            <StatusBarUsageReadings
+              cluster={cluster}
+              display={display}
+              interactive
+            />
+          )}
         </span>
       </button>
     </PopoverTrigger>
