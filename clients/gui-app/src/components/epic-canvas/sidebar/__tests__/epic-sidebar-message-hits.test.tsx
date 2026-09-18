@@ -10,6 +10,7 @@
  */
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatSearchMessageHit,
@@ -31,6 +32,10 @@ import type {
 import type { ChatSearchBaseRequest } from "@/hooks/chats/use-chat-search-query";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
 import { useChatSearchStore } from "@/stores/chat-search/chat-search-store";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 
 const EPIC_ID = "epic-1";
@@ -49,8 +54,11 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
+// Mutable: whether the app is pointed at the host serving this task decides
+// who parks the transcript jump.
+const effectiveHostId = vi.hoisted(() => ({ current: "" }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: (): string | null => EFFECTIVE_HOST_ID,
+  useEffectiveHostId: (): string | null => effectiveHostId.current,
 }));
 
 const navigateMock = vi.hoisted(() => vi.fn<(options: unknown) => void>());
@@ -102,7 +110,10 @@ function messageHit(messageId: string): ChatSearchMessageHit {
   };
 }
 
-function messageMatch(chatId: string): ChatSearchMessageMatch {
+function messageMatch(
+  chatId: string,
+  matchCount: number,
+): ChatSearchMessageMatch {
   return {
     epicId: EPIC_ID,
     ownerUserId: "user-1",
@@ -110,7 +121,7 @@ function messageMatch(chatId: string): ChatSearchMessageMatch {
     title: `title-${chatId}`,
     lifecycleState: "active",
     updatedAt: Date.now(),
-    matchCount: 1,
+    matchCount,
     best: messageHit(`${chatId}-m1`),
     messages: [],
   };
@@ -126,6 +137,21 @@ function readyStatus(
     indexState: "complete",
     expansionBase: EXPANSION_BASE,
     showMore,
+    loadingMore: false,
+    loadMoreError: null,
+  };
+}
+
+/** The same answer from a host whose startup sweep has not finished. */
+function partialReadyStatus(
+  messages: ReadonlyArray<ChatSearchMessageMatch>,
+): ChatSearchMessageHitsStatus {
+  return {
+    kind: "ready",
+    messages,
+    indexState: "partial",
+    expansionBase: EXPANSION_BASE,
+    showMore: null,
     loadingMore: false,
     loadMoreError: null,
   };
@@ -164,6 +190,25 @@ function bulkSelection(selectionMode: boolean): SidebarBulkSelectionValue {
   };
 }
 
+/**
+ * The section with one multi-hit chat, on a named host - a NEW element each
+ * call, which is what makes a `rerender` with it reach the subtree.
+ */
+function sectionOnHost(hostId: string) {
+  return (
+    <QueryClientProvider client={new QueryClient()}>
+      <EpicSidebarMessageHits
+        state={{
+          status: readyStatus([messageMatch("c1", 3)], null),
+          query: " webview ",
+          client: null,
+          hostId,
+        }}
+      />
+    </QueryClientProvider>
+  );
+}
+
 function renderHits(selectionMode: boolean) {
   selection.current = selectionMode ? bulkSelection(true) : null;
   return renderHook(() =>
@@ -179,6 +224,7 @@ function lastQueryAsked(): string {
 
 beforeEach(() => {
   hitsMock.mockReturnValue({ kind: "absent" });
+  effectiveHostId.current = EFFECTIVE_HOST_ID;
   usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "webview");
   useChatSearchStore.getState().resetForTests();
 });
@@ -189,6 +235,7 @@ afterEach(() => {
   navigateMock.mockReset();
   openResultMock.mockReset();
   usePanelHeaderSearchStore.getState().closeSearch(TAB_ID, "chats");
+  useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
 });
 
 describe("useEpicSidebarMessageHits: what it asks", () => {
@@ -227,6 +274,11 @@ describe("messageHitsTreeState: what the tree is told", () => {
     expect(showsMessageHitsSection("empty")).toBe(false);
   });
 
+  it("keeps a section for an empty answer from a half-built index", () => {
+    expect(messageHitsTreeState(partialReadyStatus([]))).toBe("indexing");
+    expect(showsMessageHitsSection("indexing")).toBe(true);
+  });
+
   it("keeps a section for an empty page that still has somewhere to page to", () => {
     const status = readyStatus([], () => undefined);
 
@@ -249,7 +301,7 @@ describe("EpicSidebarMessageHits", () => {
     render(
       <EpicSidebarMessageHits
         state={sectionState(
-          readyStatus([messageMatch("c1"), messageMatch("c2")], null),
+          readyStatus([messageMatch("c1", 1), messageMatch("c2", 1)], null),
         )}
       />,
     );
@@ -262,7 +314,7 @@ describe("EpicSidebarMessageHits", () => {
     const user = userEvent.setup();
     render(
       <EpicSidebarMessageHits
-        state={sectionState(readyStatus([messageMatch("c1")], null))}
+        state={sectionState(readyStatus([messageMatch("c1", 1)], null))}
       />,
     );
 
@@ -283,7 +335,7 @@ describe("EpicSidebarMessageHits", () => {
     const user = userEvent.setup();
     render(
       <EpicSidebarMessageHits
-        state={sectionState(readyStatus([messageMatch("c1")], null))}
+        state={sectionState(readyStatus([messageMatch("c1", 1)], null))}
       />,
     );
 
@@ -293,6 +345,91 @@ describe("EpicSidebarMessageHits", () => {
     expect(store.open).toBe(true);
     expect(store.initialQuery).toBe("webview");
     expect(store.scope).toBe("all-accessible-tasks");
+  });
+
+  it("keeps the still-indexing caveat when a half-built index found nothing", () => {
+    render(
+      <EpicSidebarMessageHits state={sectionState(partialReadyStatus([]))} />,
+    );
+
+    expect(screen.getByLabelText("In messages")).not.toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Still indexing chats on this host. Some results may be missing.",
+    );
+    expect(screen.queryByText("· 0 agents", { exact: false })).toBeNull();
+  });
+
+  it("parks the jump on the searched host when the app is pointed elsewhere", async () => {
+    const user = userEvent.setup();
+    render(
+      <EpicSidebarMessageHits
+        state={sectionState(readyStatus([messageMatch("c1", 1)], null))}
+      />,
+    );
+
+    await user.click(screen.getByText("title-c1"));
+
+    // The route declines to park for a tile it may have to open fresh, because
+    // from a notification that tile could be on any host. From here it is this
+    // tab, on the session host - so the section parks it there itself, under a
+    // key no tile on the effective host can read.
+    const parked =
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(SESSION_HOST_ID, "c1")
+      ];
+    expect(parked?.target).toEqual({ kind: "message", messageId: "c1-m1" });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(EFFECTIVE_HOST_ID, "c1")
+      ],
+    ).toBeUndefined();
+  });
+
+  it("leaves the jump to the route when the searched host is the effective one", async () => {
+    effectiveHostId.current = SESSION_HOST_ID;
+    const user = userEvent.setup();
+    render(
+      <EpicSidebarMessageHits
+        state={sectionState(readyStatus([messageMatch("c1", 1)], null))}
+      />,
+    );
+
+    await user.click(screen.getByText("title-c1"));
+
+    expect(openResultMock).toHaveBeenCalledTimes(1);
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(SESSION_HOST_ID, "c1")
+      ],
+    ).toBeUndefined();
+  });
+
+  it("keeps expansions across a rerender and drops them when the host changes", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(sectionOnHost(SESSION_HOST_ID));
+    await user.click(screen.getByRole("button", { name: /Show all/ }));
+    expect(
+      screen
+        .getByRole("button", { name: /Show all/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    // A fresh element every time: handing `rerender` the same object makes
+    // React bail out of the subtree, and both halves of this would then pass
+    // for that reason rather than for the key's.
+    rerender(sectionOnHost(SESSION_HOST_ID));
+    expect(
+      screen
+        .getByRole("button", { name: /Show all/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    rerender(sectionOnHost("other-host"));
+    expect(
+      screen
+        .getByRole("button", { name: /Show all/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
   });
 
   it("reports an error in the section rather than on the tree", () => {

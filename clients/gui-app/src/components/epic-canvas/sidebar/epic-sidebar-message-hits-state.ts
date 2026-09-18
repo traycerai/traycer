@@ -45,12 +45,21 @@ export interface EpicSidebarMessageHitsState {
  * - `absent` - nothing was asked (short query, selection mode, no host).
  * - `loading` / `hits` - the search DID match, or may yet: no empty state.
  * - `empty` - it settled with nothing, and the tree's empty state says so too.
+ * - `indexing` - it settled with nothing on a PARTIAL index, which cannot
+ *   support "there are none": the section stays for its caveat, and the tree's
+ *   empty state keeps quiet about messages.
  * - `error` - the section reports it; the tree's empty state stands unchanged.
  */
 export interface ChatTreeMessageHits {
   /** Rendered after the tree, inside its scroll container. */
   readonly node: ReactNode;
-  readonly state: "absent" | "loading" | "hits" | "empty" | "error";
+  readonly state:
+    | "absent"
+    | "loading"
+    | "hits"
+    | "empty"
+    | "indexing"
+    | "error";
 }
 
 /** For a chat tree mounted somewhere this section does not follow it. */
@@ -103,6 +112,12 @@ export function useEpicSidebarMessageHits(args: {
  * news belongs in the tree's empty state, which is already saying the search
  * matched nothing, instead of a second header below it saying it again.
  *
+ * Unless the index is still building. Then "no messages match" is not a fact
+ * the host is in a position to assert, and the one place the caveat can be
+ * read - "Still indexing chats on this host" - would be collapsed away at
+ * exactly the moment it explains the result. `indexing` keeps the section for
+ * it, with no rows under it, which is what the dialog shows at zero matches.
+ *
  * A page that ranked matches and showed none of them - every one in a task
  * this requester cannot read - still carries a cursor, and the accessible hit
  * sits on the next page. That is `hits`, so the section keeps its continuation
@@ -118,16 +133,23 @@ export function messageHitsTreeState(
       return "loading";
     case "error":
       return "error";
-    case "ready":
-      return status.messages.length === 0 &&
+    case "ready": {
+      const settledEmpty =
+        status.messages.length === 0 &&
         status.showMore === null &&
-        status.loadMoreError === null
-        ? "empty"
-        : "hits";
+        status.loadMoreError === null;
+      if (!settledEmpty) return "hits";
+      return status.indexState === "partial" ? "indexing" : "empty";
+    }
   }
 }
 
-/** Whether the section is drawn at all: it owns `loading`, `hits` and `error`. */
+/**
+ * Whether the section is drawn at all. `absent` was never asked and `empty` is
+ * a settled nothing the tree's own empty state reports; everything else has
+ * something of its own to say - rows, a spinner, an error, or the
+ * still-indexing caveat.
+ */
 export function showsMessageHitsSection(
   state: ChatTreeMessageHits["state"],
 ): boolean {

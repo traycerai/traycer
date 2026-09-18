@@ -32,6 +32,7 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useChatSearchStore } from "@/stores/chat-search/chat-search-store";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 
 /**
@@ -53,14 +54,30 @@ export function EpicSidebarMessageHits(props: {
     (target: ChatSearchOpenTarget) => {
       if (hostId === null) return;
       // The session host answered, so that is the tile the jump is parked for.
-      // The effective host is context: a selection move between the search and
-      // the click opens the task without parking a jump another host's tile
-      // could take.
+      // The effective host is context, reported honestly: the route uses it to
+      // decide whether the chat tile it may have to open FRESH would be bound
+      // to the searched host, and claiming an agreement that does not hold
+      // would let a tile on the other host consume this jump.
       openChatSearchResult(
         navigate,
         { ...target, hostId },
         { effectiveHostId, now: Date.now() },
       );
+      // Which leaves the case the route is right to decline and this surface
+      // can answer for itself. Its fresh-tile fallback is a HOSTLESS epic
+      // intent, so from a notification it may land on any host and it parks
+      // nothing unless the two agree. From here it cannot: every hit is scoped
+      // to this task, and `openOrFocusEpicIntent` carries `tabId: null`, which
+      // `resolveTabIdForEpic` answers with the tab already showing this epic -
+      // THIS tab, the one this sidebar is rendered in, bound to the host that
+      // served the search. So park the jump for that host when the app is
+      // pointed elsewhere. The store is keyed by (host, chat), so no tile on
+      // the effective host can take it.
+      if (effectiveHostId === hostId || target.messageId === null) return;
+      useChatTranscriptJumpStore.getState().requestJump(hostId, target.chatId, {
+        kind: "message",
+        messageId: target.messageId,
+      });
     },
     [effectiveHostId, hostId, navigate],
   );
@@ -112,6 +129,7 @@ export function EpicSidebarMessageHits(props: {
       </div>
       <MessageHitsBody
         status={status}
+        hostId={hostId}
         onOpen={openTarget}
         renderExpansion={renderExpansion}
       />
@@ -121,10 +139,12 @@ export function EpicSidebarMessageHits(props: {
 
 function MessageHitsBody(props: {
   readonly status: ChatSearchMessageHitsStatus;
+  /** Keys the list: a host change is a different index, not a new page. */
+  readonly hostId: string | null;
   readonly onOpen: (target: ChatSearchOpenTarget) => void;
   readonly renderExpansion: (target: ChatSearchExpansionTarget) => ReactNode;
 }): ReactNode {
-  const { onOpen, renderExpansion, status } = props;
+  const { hostId, onOpen, renderExpansion, status } = props;
   if (status.kind === "loading") {
     return (
       <div className="flex px-3 py-1.5">
@@ -148,8 +168,14 @@ function MessageHitsBody(props: {
   // task label goes and the snippet takes one line. There is no nav provider
   // here - the tree owns its own roving focus and the rows are ordinary
   // buttons, reachable by Tab.
+  //
+  // Keyed by the host on top of the list's own per-request remount, which does
+  // not include one: a host switch under an unchanged query is a different
+  // index answering, so expanded groups must not carry the previous host's
+  // chat ids into it.
   return (
     <ChatSearchMessageHitList
+      key={hostId}
       status={status}
       onOpen={onOpen}
       renderExpansion={renderExpansion}
