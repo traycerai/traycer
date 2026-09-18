@@ -7,7 +7,7 @@ import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   __getOpenEpicRegistryForTests,
   EpicSessionPresentationContext,
@@ -203,9 +203,9 @@ function renderShell(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
           <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -229,11 +229,11 @@ function renderShellWithPresentation(
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
           <EpicSessionPresentationContext.Provider value={presentation}>
             <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
           </EpicSessionPresentationContext.Provider>
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </TooltipProvider>
     </QueryClientProvider>,
   );
