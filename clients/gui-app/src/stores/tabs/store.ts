@@ -255,7 +255,10 @@ function reconcileLayoutRefs(
   const wanted = new Set(nextRefs.map(tabRefKey));
   const withoutMissing = flattenLayoutRefs(layout)
     .filter((ref) => !wanted.has(tabRefKey(ref)))
-    .reduce(removeLayoutRef, layout);
+    .reduce(
+      (current, ref) => removeLayoutRef(current, ref, isHomeTabEnabled()),
+      layout,
+    );
   const withAdditions = nextRefs.reduce(
     (current, ref) =>
       findStripItemForRef(current, ref) === null
@@ -494,7 +497,9 @@ export const useTabsStore = create<TabsStoreState>()(
       dropRef: (ref) => {
         if (isTabStructurallyLocked(ref)) return;
         set((state) =>
-          committedLayout(removeLayoutRef(layoutFromState(state), ref)),
+          committedLayout(
+            removeLayoutRef(layoutFromState(state), ref, isHomeTabEnabled()),
+          ),
         );
       },
 
@@ -551,7 +556,11 @@ export const useTabsStore = create<TabsStoreState>()(
       closeSystemTab: (kind) => {
         set((state) =>
           committedLayout({
-            ...removeLayoutRef(layoutFromState(state), { kind, id: kind }),
+            ...removeLayoutRef(
+              layoutFromState(state),
+              { kind, id: kind },
+              isHomeTabEnabled(),
+            ),
             systemTabs: { ...state.systemTabs, [kind]: null },
           }),
         );
@@ -734,7 +743,9 @@ export const useTabsStore = create<TabsStoreState>()(
       version: 2,
       storage: createJSONStorage(() => tabsStorage),
       partialize: (state): PersistedTabsStoreState =>
-        committedLayout(withoutSampleWorkspace(layoutFromState(state))),
+        committedLayout(
+          withoutSampleWorkspace(layoutFromState(state), isHomeTabEnabled()),
+        ),
       migrate: (persisted) => migrateTabsPersistedStorageState(persisted),
       merge: (persisted, current) => ({
         ...current,

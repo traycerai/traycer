@@ -317,35 +317,37 @@ function SampleTranscript() {
           ))}
         </div>
       </div>
-      {side === "hide" || coarsePointer ? (
-        <div
-          ref={minimapRef}
-          className={cn(
-            "absolute top-1/2 rounded border border-dashed p-2 text-ui-xs text-muted-foreground",
-            side === "left" ? "left-3" : "right-3",
-          )}
-        >
-          {minimapCondition}
-        </div>
-      ) : (
-        <ChatTurnMinimapView
-          items={SAMPLE_MINIMAP_ITEMS}
-          currentIndex={currentIndex}
-          cursorIndex={currentIndex}
-          maxVisibleItems={capacity}
-          bottomInset={0}
-          hitStripWidth={24}
-          side={side}
-          open={false}
-          ref={minimapRef}
-          hitStripRef={null}
-          onOpen={sampleNoop}
-          onFocus={sampleNoop}
-          onKeyDown={sampleNoop}
-          onCursorIndexChange={sampleNoop}
-          onSelect={sampleNoop}
-        />
-      )}
+      <div inert className="contents">
+        {side === "hide" || coarsePointer ? (
+          <div
+            ref={minimapRef}
+            className={cn(
+              "absolute top-1/2 rounded border border-dashed p-2 text-ui-xs text-muted-foreground",
+              side === "left" ? "left-3" : "right-3",
+            )}
+          >
+            {minimapCondition}
+          </div>
+        ) : (
+          <ChatTurnMinimapView
+            items={SAMPLE_MINIMAP_ITEMS}
+            currentIndex={currentIndex}
+            cursorIndex={currentIndex}
+            maxVisibleItems={capacity}
+            bottomInset={0}
+            hitStripWidth={24}
+            side={side}
+            open={false}
+            ref={minimapRef}
+            hitStripRef={null}
+            onOpen={sampleNoop}
+            onFocus={sampleNoop}
+            onKeyDown={sampleNoop}
+            onCursorIndexChange={sampleNoop}
+            onSelect={sampleNoop}
+          />
+        )}
+      </div>
       {(["left", "right"] as const).map((edge) => (
         <CustomizeDropSlot
           key={edge}

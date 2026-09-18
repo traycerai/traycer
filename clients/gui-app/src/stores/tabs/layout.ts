@@ -396,9 +396,11 @@ export function replaceLayoutRef(
   );
 }
 
+/** Home availability only affects the sample tab's captured return selection. */
 export function removeLayoutRef(
   layout: PersistedTabStripLayout,
   ref: TabRef,
+  homeEnabled: boolean,
 ): PersistedTabStripLayout {
   const itemIndex = layout.items.findIndex((item) =>
     flattenStripItemRefs(item).some((entry) => refsEqual(entry, ref)),
@@ -419,7 +421,7 @@ export function removeLayoutRef(
       ref.kind === "sample-workspace" &&
       layout.activeItemId === item.id &&
       item.sampleReturnItemId !== undefined &&
-      (item.sampleReturnItemId === null ||
+      ((item.sampleReturnItemId === null && homeEnabled) ||
         items.some((candidate) => candidate.id === item.sampleReturnItemId))
     )
       activeItemId = item.sampleReturnItemId;
@@ -607,7 +609,7 @@ export function repairLayout(
       (ref.kind === "settings" && systemTabs.settings === null),
   );
   const withoutMissingSystemRefs = missingSystemRefs.reduce(
-    removeLayoutRef,
+    (current, ref) => removeLayoutRef(current, ref, false),
     withSystemRefs,
   );
   return repairTabGroups({
@@ -890,10 +892,12 @@ function repairSystemTabs(systemTabs: SystemTabs): SystemTabs {
 /** Ephemeral editor tabs never survive a renderer restart. */
 export function withoutSampleWorkspace(
   layout: PersistedTabStripLayout,
+  homeEnabled: boolean,
 ): PersistedTabStripLayout {
-  const next = removeLayoutRef(layout, {
-    kind: "sample-workspace",
-    id: "sample-workspace",
-  });
+  const next = removeLayoutRef(
+    layout,
+    { kind: "sample-workspace", id: "sample-workspace" },
+    homeEnabled,
+  );
   return next === layout ? layout : repairTabGroups(next);
 }

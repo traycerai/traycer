@@ -331,6 +331,96 @@ afterEach(() => {
   useTabsStore.setState(useTabsStore.getInitialState(), true);
 });
 
+// A small, inert-aware tabbable check.
+//
+// The `tabbable` package is NOT a direct dependency (it exists only as a
+// transitive bun package under traycer/node_modules/.bun/tabbable@6.5.0, and
+// deps live in the root package.json only), so it is not imported here. This
+// helper matches `tabbable(root, { displayCheck: "none" })` for what matters
+// in jsdom: no layout, so no display/visibility check, but the `inert`
+// attribute, `hidden`, `disabled`, `tabindex < 0` and hidden inputs are all
+// honoured. If `tabbable` becomes a direct dependency, replace the body with
+// `tabbable(root, { displayCheck: "none" })`.
+const TABBABLE_SELECTOR = [
+  "a[href]",
+  "area[href]",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  "iframe",
+  "audio[controls]",
+  "video[controls]",
+  '[contenteditable]:not([contenteditable="false"])',
+  "[tabindex]",
+].join(",");
+
+function tabbableWithin(root: HTMLElement): ReadonlyArray<HTMLElement> {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR),
+  ).filter((node) => {
+    if (node.closest("[inert]") !== null) return false;
+    if (node.closest("[hidden]") !== null) return false;
+    if (node.hasAttribute("disabled")) return false;
+    if (node instanceof HTMLInputElement && node.type === "hidden")
+      return false;
+    const tabindex = node.getAttribute("tabindex");
+    if (tabindex !== null && Number(tabindex) < 0) return false;
+    return true;
+  });
+}
+
+function describeNode(node: HTMLElement): string {
+  const testId = node.getAttribute("data-testid");
+  const label = node.getAttribute("aria-label");
+  return [
+    node.tagName.toLowerCase(),
+    testId === null ? "" : `[data-testid=${testId}]`,
+    label === null ? "" : `[aria-label=${label}]`,
+  ].join("");
+}
+
+describe("tabbableWithin (helper self-check)", () => {
+  it("counts live focusables and skips inert, hidden, disabled, negative-tabindex and hidden inputs", () => {
+    const host = document.createElement("div");
+    host.innerHTML = `
+      <button data-testid="live-button">live</button>
+      <a href="#x" data-testid="live-link">link</a>
+      <div tabindex="0" data-testid="live-div">div</div>
+      <div inert><button data-testid="inert-button">inert</button></div>
+      <div hidden><button data-testid="hidden-button">hidden</button></div>
+      <button disabled data-testid="disabled-button">disabled</button>
+      <button tabindex="-1" data-testid="negative-button">negative</button>
+      <input type="hidden" data-testid="hidden-input" />
+    `;
+    document.body.append(host);
+    try {
+      expect(tabbableWithin(host).map(describeNode)).toEqual([
+        "button[data-testid=live-button]",
+        "a[data-testid=live-link]",
+        "div[data-testid=live-div]",
+      ]);
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("treats everything under an inert ancestor OUTSIDE the root as inert too", () => {
+    const outer = document.createElement("div");
+    outer.setAttribute("inert", "");
+    const inner = document.createElement("div");
+    inner.innerHTML = "<button>x</button>";
+    outer.append(inner);
+    document.body.append(outer);
+    try {
+      expect(tabbableWithin(inner)).toEqual([]);
+    } finally {
+      outer.remove();
+    }
+  });
+});
+
 describe("Sample workspace inside the real AppShell + TopLevelTabHost", () => {
   it("renders the body exactly once, inside the tab host's sample surface", async () => {
     await shellWithSampleSession();
@@ -491,5 +581,35 @@ describe("Sample workspace inside the real AppShell + TopLevelTabHost", () => {
     await waitFor(() =>
       expect(mainElement().hasAttribute("inert")).toBe(false),
     );
+  });
+
+  it("has ZERO tabbable elements inside <main> during a sample session, including the minimap button", async () => {
+    await shellWithSampleSession();
+    const main = mainElement();
+
+    // The drawn minimap's hit-strip button is really in <main>: this is the
+    // element that used to be a tab stop while the scroller correctly wasn't.
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    expect(main.contains(hitStrip)).toBe(true);
+    expect(hitStrip.closest("[inert]")).not.toBeNull();
+
+    expect(tabbableWithin(main).map(describeNode)).toEqual([]);
+  });
+
+  it("control: the tabbable check would notice a live focusable inside the sample surface", async () => {
+    await shellWithSampleSession();
+    const main = mainElement();
+    const sampleRoot = document.querySelector("[data-sample-workspace]");
+    expect(sampleRoot).not.toBeNull();
+    const probe = document.createElement("button");
+    probe.setAttribute("data-testid", "tabbable-probe");
+    sampleRoot?.append(probe);
+    try {
+      expect(tabbableWithin(main)).toEqual([probe]);
+    } finally {
+      probe.remove();
+    }
+
+    expect(tabbableWithin(main)).toEqual([]);
   });
 });

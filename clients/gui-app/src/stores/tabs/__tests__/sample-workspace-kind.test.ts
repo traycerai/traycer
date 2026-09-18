@@ -240,7 +240,7 @@ describe("sample-workspace kind - persistence exclusion", () => {
   }
 
   it("withoutSampleWorkspace removes it and reselects a neighbour", () => {
-    const stripped = withoutSampleWorkspace(layoutWithSample());
+    const stripped = withoutSampleWorkspace(layoutWithSample(), true);
     expect(sampleItems(stripped)).toHaveLength(0);
     expect(stripped.items).toHaveLength(1);
     expect(stripped.activeItemId).toBe(tabItemId(epicRef));
@@ -252,7 +252,7 @@ describe("sample-workspace kind - persistence exclusion", () => {
       items: layoutWithSample().items.slice(0, 1),
       activeItemId: tabItemId(epicRef),
     };
-    expect(withoutSampleWorkspace(layout)).toEqual(layout);
+    expect(withoutSampleWorkspace(layout, true)).toEqual(layout);
   });
   const SAMPLE_KEY = tabRefKey(SAMPLE_REF);
   const EPIC_KEY = tabRefKey(epicRef);
@@ -269,7 +269,7 @@ describe("sample-workspace kind - persistence exclusion", () => {
       },
     };
 
-    const stripped = withoutSampleWorkspace(layout);
+    const stripped = withoutSampleWorkspace(layout, true);
 
     expect(sampleItems(stripped)).toHaveLength(0);
     expect(stripped.customizations).toEqual({
@@ -291,7 +291,7 @@ describe("sample-workspace kind - persistence exclusion", () => {
       },
     };
 
-    const stripped = withoutSampleWorkspace(layout);
+    const stripped = withoutSampleWorkspace(layout, true);
 
     expect(stripped.groups).toEqual({
       shared: { name: "Work", color: "#81c995", collapsed: false },

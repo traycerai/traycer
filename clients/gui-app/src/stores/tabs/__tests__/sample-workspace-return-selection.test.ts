@@ -375,24 +375,28 @@ describe("S1 - the capture rides on the sample strip item", () => {
   }
 
   it("removing the active sample restores Home when the capture is null", () => {
-    expect(withoutSampleWorkspace(layoutWith(null)).activeItemId).toBeNull();
+    expect(
+      withoutSampleWorkspace(layoutWith(null), true).activeItemId,
+    ).toBeNull();
   });
 
   it("removing the active sample restores the captured item id", () => {
     expect(
-      withoutSampleWorkspace(layoutWith(HISTORY_ITEM_ID)).activeItemId,
+      withoutSampleWorkspace(layoutWith(HISTORY_ITEM_ID), true).activeItemId,
     ).toBe(HISTORY_ITEM_ID);
   });
 
   it("with no capture (legacy/hand-written) it falls back to ordinary neighbour selection without throwing", () => {
-    const stripped = withoutSampleWorkspace(layoutWith(undefined));
+    const stripped = withoutSampleWorkspace(layoutWith(undefined), true);
     expect(stripped.items.map((item) => item.id)).toEqual([HISTORY_ITEM_ID]);
     expect(stripped.activeItemId).toBe(HISTORY_ITEM_ID);
   });
 
   it("does not disturb the selection when the sample is not the active item", () => {
     const layout = { ...layoutWith(null), activeItemId: HISTORY_ITEM_ID };
-    expect(withoutSampleWorkspace(layout).activeItemId).toBe(HISTORY_ITEM_ID);
+    expect(withoutSampleWorkspace(layout, true).activeItemId).toBe(
+      HISTORY_ITEM_ID,
+    );
   });
 
   it("repairLayout preserves the capture, including null", () => {
@@ -436,5 +440,173 @@ describe("S1 - the capture rides on the sample strip item", () => {
     expect(item?.kind === "tab" ? item.sampleReturnItemId : "missing").toBe(
       HISTORY_ITEM_ID,
     );
+  });
+});
+
+describe("S1 round 2 - pure reducer, Home unavailable", () => {
+  function layoutFor(capture: string | null): PersistedTabStripLayout {
+    return {
+      version: 2,
+      items: [
+        { kind: "tab", id: HISTORY_ITEM_ID, ref: HISTORY_REF },
+        {
+          kind: "tab",
+          id: SAMPLE_ITEM_ID,
+          ref: SAMPLE_REF,
+          sampleReturnItemId: capture,
+        },
+      ],
+      activeItemId: SAMPLE_ITEM_ID,
+      systemTabs: {
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: null,
+        },
+        settings: null,
+      },
+      activationHistory: [],
+    };
+  }
+
+  it("a Home capture with Home disabled falls back to the retained tab, not a dangling null", () => {
+    const stripped = withoutSampleWorkspace(layoutFor(null), false);
+
+    expect(stripped.items.map((item) => item.id)).toEqual([HISTORY_ITEM_ID]);
+    expect(stripped.activeItemId).toBe(HISTORY_ITEM_ID);
+  });
+
+  it("a Home capture with Home enabled still restores Home", () => {
+    expect(
+      withoutSampleWorkspace(layoutFor(null), true).activeItemId,
+    ).toBeNull();
+  });
+
+  it("a real-tab capture is honoured whether or not Home is enabled", () => {
+    for (const homeEnabled of [true, false]) {
+      expect(
+        withoutSampleWorkspace(layoutFor(HISTORY_ITEM_ID), homeEnabled)
+          .activeItemId,
+      ).toBe(HISTORY_ITEM_ID);
+    }
+  });
+
+  it("with nothing retained and Home disabled it leaves an empty, unselected window", () => {
+    const onlySample: PersistedTabStripLayout = {
+      ...layoutFor(null),
+      items: [
+        {
+          kind: "tab",
+          id: SAMPLE_ITEM_ID,
+          ref: SAMPLE_REF,
+          sampleReturnItemId: null,
+        },
+      ],
+      systemTabs: { history: null, settings: null },
+    };
+
+    const stripped = withoutSampleWorkspace(onlySample, false);
+
+    expect(stripped.items).toEqual([]);
+    expect(stripped.activeItemId).toBeNull();
+  });
+});
+
+describe("S1 round 2 - Home switched off / on while the sample is open", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ homeTabEnabled: true });
+    seedHistoryStrip(null);
+  });
+
+  function captured(): string | null | undefined {
+    const item = useTabsStore
+      .getState()
+      .items.find((entry) => entry.id === SAMPLE_ITEM_ID);
+    return item?.kind === "tab" ? item.sampleReturnItemId : undefined;
+  }
+
+  it("the desktop writer falls back to the retained History tab once Home is off", async () => {
+    openSample();
+    useSettingsStore.setState({ homeTabEnabled: false });
+
+    const patch = await projectedPatch();
+
+    expect(patch).toMatchObject({
+      tabStripLayout: { activeItemId: HISTORY_ITEM_ID },
+    });
+    expect(patch.activeRoute).not.toBe("/home");
+    expect(patch.activeRoute).not.toBe("/sample-workspace");
+  });
+
+  it("the browser writer falls back to the retained History tab once Home is off", () => {
+    openSample();
+    useSettingsStore.setState({ homeTabEnabled: false });
+
+    const persisted = useTabsStore.persist
+      .getOptions()
+      .partialize?.(useTabsStore.getState());
+
+    expect(persisted).toMatchObject({ activeItemId: HISTORY_ITEM_ID });
+    expect(JSON.stringify(persisted)).not.toContain("sample-workspace");
+  });
+
+  it.each(["done", "escape"] as const)(
+    "%s returns to History when Home was turned off before it",
+    (reason) => {
+      openSample();
+      useSettingsStore.setState({ homeTabEnabled: false });
+
+      exitCustomize(reason);
+
+      expect(sampleItemCount()).toBe(0);
+      expect(useTabsStore.getState().activeItemId).toBe(HISTORY_ITEM_ID);
+      expect(useTabsStore.getState().items.map((item) => item.id)).toEqual([
+        HISTORY_ITEM_ID,
+      ]);
+    },
+  );
+
+  it.each(["done", "escape"] as const)(
+    "%s returns to Home when Home is turned back on before it (capture retained)",
+    (reason) => {
+      openSample();
+      useSettingsStore.setState({ homeTabEnabled: false });
+      useSettingsStore.setState({ homeTabEnabled: true });
+      expect(captured()).toBeNull();
+
+      exitCustomize(reason);
+
+      expect(sampleItemCount()).toBe(0);
+      expect(useTabsStore.getState().activeItemId).toBeNull();
+    },
+  );
+
+  it("the writers report Home again after it is turned back on", async () => {
+    openSample();
+    useSettingsStore.setState({ homeTabEnabled: false });
+    useSettingsStore.setState({ homeTabEnabled: true });
+
+    const persisted = useTabsStore.persist
+      .getOptions()
+      .partialize?.(useTabsStore.getState());
+    const patch = await projectedPatch();
+
+    expect(persisted).toMatchObject({ activeItemId: null });
+    expect(patch).toMatchObject({
+      tabStripLayout: { activeItemId: null },
+      activeRoute: "/home",
+    });
+  });
+
+  it("toggling Home never rewrites the capture on the sample item", () => {
+    openSample();
+    expect(captured()).toBeNull();
+
+    useSettingsStore.setState({ homeTabEnabled: false });
+    expect(captured()).toBeNull();
+
+    useSettingsStore.setState({ homeTabEnabled: true });
+    expect(captured()).toBeNull();
   });
 });

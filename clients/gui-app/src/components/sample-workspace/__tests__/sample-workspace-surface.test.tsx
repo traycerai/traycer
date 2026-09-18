@@ -271,10 +271,10 @@ describe("SampleWorkspaceBody - content", () => {
     expect(
       screen.getByText("Describe the next change…").closest("[inert]"),
     ).not.toBeNull();
-    // The minimap and rail are hotspots the editor reaches through proxies.
+    // The inert minimap stays measurable; the editor reaches it through proxies.
     expect(
       screen.getByTestId("chat-turn-minimap").closest("[inert]"),
-    ).toBeNull();
+    ).not.toBeNull();
   });
 });
 

@@ -476,7 +476,7 @@ function layoutWithRemovedRef(
   layout: PersistedTabStripLayout,
   ref: TabRef,
 ): PersistedTabStripLayout {
-  const next = removeLayoutRef(layout, ref);
+  const next = removeLayoutRef(layout, ref, isHomeTabEnabled());
   if (ref.kind !== "history" && ref.kind !== "settings") return next;
   return {
     ...next,
@@ -620,7 +620,9 @@ export class TabCommandCoordinator {
     // ordinary frame first, then fill the requested side inside the SAME
     // transaction so source ownership never changes and the view stays keyed.
     const withoutUngroupedSource =
-      existing?.kind === "tab" ? removeLayoutRef(layout, command.ref) : layout;
+      existing?.kind === "tab"
+        ? removeLayoutRef(layout, command.ref, isHomeTabEnabled())
+        : layout;
     const next = replaceFillableSide(
       withoutUngroupedSource,
       command,
@@ -1805,7 +1807,10 @@ export class TabCommandCoordinator {
         !sourceKeys.has(tabRefKey(ref)),
     );
     const repaired = repairedLayoutPreservingHome(
-      missing.reduce(removeLayoutRef, layout),
+      missing.reduce(
+        (current, ref) => removeLayoutRef(current, ref, isHomeTabEnabled()),
+        layout,
+      ),
     );
     const currentKeys = new Set(flattenLayoutRefs(current).map(tabRefKey));
     const reservedAdditions = flattenLayoutRefs(repaired).filter(

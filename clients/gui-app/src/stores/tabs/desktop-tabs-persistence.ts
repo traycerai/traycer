@@ -1,3 +1,4 @@
+import { isHomeTabEnabled } from "@/stores/settings/settings-store";
 import { withoutSampleWorkspace } from "./layout";
 import type {
   DesktopJsonValue,
@@ -239,7 +240,7 @@ function createDesktopTabsPersistenceController(
     }
     pending = false;
     const sequence = latestSequence;
-    const layout = withoutSampleWorkspace(currentLayout());
+    const layout = withoutSampleWorkspace(currentLayout(), isHomeTabEnabled());
     const activeItem = layout.items.find(
       (item) => item.id === layout.activeItemId,
     );
