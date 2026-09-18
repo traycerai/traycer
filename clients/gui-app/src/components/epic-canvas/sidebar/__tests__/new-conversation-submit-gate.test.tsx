@@ -206,37 +206,43 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 // Recording the call, not just retargeting the mock's module path, is
 // deliberate: a mock that intercepts nothing looks identical to one that
-// works (this is exactly how the stale `use-composer-paste` mock survived
-// the modal's move to `useComposerHashFirstPaste` unnoticed). Asserting the
-// stub actually ran is what fails loudly the next time this hook is renamed
-// or re-homed, instead of silently handing the test the real hook again.
-const useComposerHashFirstPasteCalls = vi.fn();
+// works (this is exactly how the stale mock survived the modal's move to the
+// hash-only paste adapter unnoticed). Asserting the stub actually ran is what
+// fails loudly the next time this hook is renamed or re-homed, instead of
+// silently handing the test the real hook again.
+const useComposerHashPasteCalls = vi.fn();
 
-vi.mock("@/hooks/composer/use-composer-hash-first-paste", async () => {
+vi.mock("@/hooks/composer/use-composer-paste", async () => {
   const actual = await vi.importActual<
-    typeof import("@/hooks/composer/use-composer-hash-first-paste")
-  >("@/hooks/composer/use-composer-hash-first-paste");
+    typeof import("@/hooks/composer/use-composer-paste")
+  >("@/hooks/composer/use-composer-paste");
+  // A function, not a hoisted object literal: it must re-read `testState`
+  // fresh on every call, since each test toggles `ingesting`/`resolvingPaths`
+  // AFTER the module (and this factory) already evaluated.
+  const stubPasteResult = () => ({
+    onPaste: vi.fn(),
+    onDrop: vi.fn(),
+    onDragOver: vi.fn(),
+    onDragEnter: vi.fn(),
+    onDragLeave: vi.fn(),
+    attachImageFiles: vi.fn(),
+    runPendingImageJob: vi.fn(),
+    isDraggingFiles: false,
+    dragOverlayVariant: null,
+    isIngestingImages: testState.ingesting,
+    isResolvingFilePaths: testState.resolvingPaths,
+  });
   return {
     ...actual,
-    useComposerHashFirstPaste: (
-      ...args: Parameters<typeof actual.useComposerHashFirstPaste>
+    useComposerPaste: stubPasteResult,
+    // The modal actually calls this one (the hash-only paste adapter), not
+    // `useComposerPaste` above - the real hook running underneath left
+    // `testState.ingesting`/`resolvingPaths` toggling nothing.
+    useComposerHashPaste: (
+      ...args: Parameters<typeof actual.useComposerHashPaste>
     ) => {
-      useComposerHashFirstPasteCalls(...args);
-      return {
-        onPaste: vi.fn(),
-        onDrop: vi.fn(),
-        onDragOver: vi.fn(),
-        onDragEnter: vi.fn(),
-        onDragLeave: vi.fn(),
-        attachImageFiles: vi.fn(),
-        isDraggingFiles: false,
-        dragOverlayVariant: null,
-        isIngestingImages: testState.ingesting,
-        isResolvingFilePaths: testState.resolvingPaths,
-        ingestPastedComposerImages: vi.fn(() => []),
-        notePossiblePendingImages: vi.fn(),
-        reingestPendingImages: vi.fn(),
-      };
+      useComposerHashPasteCalls(...args);
+      return stubPasteResult();
     },
   };
 });
@@ -251,11 +257,9 @@ const imageStoreMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   return {
     ...actual,
     sessionImageBytes: imageStoreMocks.sessionImageBytes,
@@ -451,7 +455,7 @@ describe("NewConversationModalBody direct submit gate", () => {
     // The modal must actually be wired to the hash-first paste hook, not
     // silently running the real one because a stale mock stopped
     // intercepting anything (see the mock's own comment above).
-    expect(useComposerHashFirstPasteCalls).toHaveBeenCalled();
+    expect(useComposerHashPasteCalls).toHaveBeenCalled();
 
     const installEditor = testState.installEditor;
     if (installEditor === null) throw new Error("expected ComposerBody seam");

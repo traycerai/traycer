@@ -6,7 +6,7 @@
  * `prompt-stash-image-preparation-browser-fallback.test.ts` does: a
  * `createImageBitmap` double plus canvas `getContext`/`toBlob` doubles.
  *
- * Driven through `useComposerHashFirstPaste`, the hook the chat composer, the
+ * Driven through `useComposerHashPaste`, the hook the chat composer, the
  * edit composer and the new-conversation modal actually run. These pins used to
  * go through `useComposerPasteAdapter`, whose base64 ingest lost its last
  * caller
@@ -28,20 +28,28 @@ import {
   type ComposerFilePathIngestArgs,
 } from "@/hooks/composer/use-composer-paste";
 import {
-  useComposerHashFirstPaste,
-  type ComposerHashFirstEditorHandle,
-} from "@/hooks/composer/use-composer-hash-first-paste";
+  useComposerHashPaste,
+  type ComposerPasteEditorHandle,
+} from "@/hooks/composer/use-composer-paste";
+import type { PendingImageIngestEditorHandle } from "@/hooks/composer/use-composer-pending-image-ingest";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import {
   encodedWebpBytesOfSize,
   pngBytesOfSize,
 } from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
 
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+/**
+ * The two upstream PORTS an editor exposes, intersected: paste needs
+ * `ComposerPasteEditorHandle`, the background ingest job needs
+ * `PendingImageIngestEditorHandle`, and the real `ComposerPromptEditorHandle`
+ * satisfies both. A double standing in for it has to satisfy both too.
+ */
+type PasteAndIngestHandle = ComposerPasteEditorHandle &
+  PendingImageIngestEditorHandle;
+
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   return {
     ...actual,
     putImage: vi.fn(() => Promise.resolve("prepared-image-hash")),
@@ -67,12 +75,10 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
 /**
  * Mounts the real hook against a stub editor handle that records each batch of
  * inserted attrs — the same collector shape these pins used when they drove
- * the deleted adapter's `insertAttrs` callback directly. `budgetOwnerId`
- * is `null` because the byte budget is per-window and the owner id only picks
- * refusal copy, which no pin here asserts.
+ * the deleted adapter's `insertAttrs` callback directly.
  */
 function renderPasteHook(inserted: ImageAttachmentAttrs[][]) {
-  const handle: ComposerHashFirstEditorHandle = {
+  const handle: PasteAndIngestHandle = {
     isReady: () => true,
     insertImageAttachments: (attrs) => {
       inserted.push([...attrs]);
@@ -85,13 +91,11 @@ function renderPasteHook(inserted: ImageAttachmentAttrs[][]) {
   };
   const editorRef = { current: handle };
   return renderHook(() =>
-    useComposerHashFirstPaste({
+    useComposerHashPaste(
       editorRef,
-      budgetOwnerId: null,
-      disabled: false,
-      fileDrops: NOOP_FILE_PATHS.fileDrops,
-      mentionRoots: NOOP_FILE_PATHS.mentionRoots,
-    }),
+      NOOP_FILE_PATHS.fileDrops,
+      NOOP_FILE_PATHS.mentionRoots,
+    ),
   );
 }
 
@@ -230,10 +234,8 @@ describe("shared paste core: preparation against the real codec", () => {
     });
 
     await waitFor(() => expect(inserted).toHaveLength(1));
-    const attrs = inserted[0];
-    const image = attrs?.[0];
-    expect(image).toBeDefined();
-    if (image === undefined) throw new Error("expected an inserted image");
+    expect(inserted[0]).toHaveLength(1);
+    const image = inserted[0][0];
     // The mocked encode always answers a 64-byte WebP blob - far from the
     // source file's 4 MiB, which is the point: the node must carry what
     // preparation produced, never the original File's numbers.
@@ -256,9 +258,8 @@ describe("shared paste core: preparation against the real codec", () => {
     });
 
     await waitFor(() => expect(inserted).toHaveLength(1));
-    const image = inserted[0]?.[0];
-    expect(image).toBeDefined();
-    expect(image?.fileName).toBe("shot.webp");
+    expect(inserted[0]).toHaveLength(1);
+    expect(inserted[0][0].fileName).toBe("shot.webp");
   });
 
   it("prepares a multi-image paste SERIALLY: the second decode is not invoked until the first bitmap's close has run", async () => {
@@ -309,7 +310,7 @@ describe("shared paste core: preparation against the real codec", () => {
     await waitFor(() => expect(gates).toHaveLength(2));
     expect(events).toEqual(["decode-call:0", "close:0", "decode-call:1"]);
 
-    await act(async () => {
+    act(() => {
       gates[1]?.();
     });
 
@@ -329,7 +330,7 @@ describe("shared paste core: preparation against the real codec", () => {
   // another the way the single-paste, two-file test above does (that one's
   // seriality comes from `hashFirstImageAttrsFromFiles`'s own `for` loop,
   // which would hold even without the mount-shared session). This pins the
-  // session-level queue: `useComposerHashFirstPaste` memoizes ONE session per
+  // session-level queue: `useComposerHashPaste` memoizes ONE session per
   // mount, so a second paste issued in the same tick still queues behind the
   // first.
   it("serializes TWO separate attachImageFiles calls issued in the same tick: the second paste's decode waits for the first paste's conversion to settle", async () => {
@@ -381,7 +382,7 @@ describe("shared paste core: preparation against the real codec", () => {
     // The second paste's decode starts only after the first's bitmap closed.
     expect(events).toEqual(["decode-call:0", "close:0", "decode-call:1"]);
 
-    await act(async () => {
+    act(() => {
       gates[1]?.();
     });
 

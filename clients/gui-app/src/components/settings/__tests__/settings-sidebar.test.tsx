@@ -9,6 +9,7 @@ import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -113,6 +114,10 @@ describe("<SettingsSidebar /> leader hints", () => {
       kind: "settings",
       name: "Settings",
       lastPath: "/settings/general",
+    });
+    useOnboardingStore.setState({
+      completedAt: null,
+      setupProgress: { agents: -1, appearance: -1, cookies: -1 },
     });
   });
 
@@ -250,6 +255,40 @@ describe("<SettingsSidebar /> leader hints", () => {
     );
     expect(app?.label).toBe("Sounds");
     expect(host?.label).toBe("Notifications");
+  });
+
+  it("puts Getting started before General in the application settings order", () => {
+    expect(SETTINGS_SECTIONS.slice(0, 2).map((section) => section.id)).toEqual([
+      "getting-started",
+      "general",
+    ]);
+  });
+
+  it("shows Getting started completion progress in the sidebar", async () => {
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    const progress = await screen.findByRole("progressbar", {
+      name: "Getting started",
+    });
+    expect(progress.getAttribute("aria-valuenow")).toBe("0");
+    // Three, not four: this shell has no browser view, so the browser
+    // sign-ins guide is not offered and is left out of the count.
+    expect(progress.getAttribute("aria-valuemax")).toBe("3");
+
+    useOnboardingStore.getState().complete();
+
+    expect(
+      (
+        await screen.findByRole("progressbar", {
+          name: "Getting started",
+        })
+      ).getAttribute("aria-valuenow"),
+    ).toBe("1");
   });
 
   it("delays sub-leader digit badges in settings navigation", async () => {

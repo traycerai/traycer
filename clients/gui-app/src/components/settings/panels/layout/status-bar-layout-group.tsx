@@ -348,10 +348,10 @@ function StatusBarLayoutGroupContent(): ReactNode {
 // ── usage limits ▸ display ──────────────────────────────────────────────────
 
 /**
- * How a reading is WRITTEN, as opposed to which readings there are. Every row
- * here is also a rung of the strip's collapse ladder: one already switched off
- * is a rung the strip skips, because taking away something invisible frees no
- * width.
+ * How a reading is WRITTEN, as opposed to which readings there are. Each row
+ * adds or removes one part of every reading on the strip, at every window
+ * width: the strip never shortens a reading to fit, it scrolls the readings
+ * that do not.
  */
 function UsageDisplaySubgroup(): ReactNode {
   const rateLimits = useLayoutStore((state) => state.statusBar.rateLimits);

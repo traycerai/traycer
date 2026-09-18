@@ -6,142 +6,234 @@ import type { HostRpcRegistry } from "@/lib/host";
 import {
   getImageBytes,
   putImageBytesAtHash,
-} from "@/lib/composer/composer-image-store";
+  releaseSession,
+} from "@/lib/composer/landing-image-store";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64, base64ToBytes } from "@/lib/composer/image-base64";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "./draft-blob-transport-budget";
 import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import { readPromptStashRestoreBlobs } from "@/lib/composer/prompt-stash-repository";
 import type { PromptStashImageBlob } from "@/lib/composer/prompt-stash-codec";
 import { appLogger, describeLogError } from "@/lib/logger";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { blobHashesOfWrite } from "./draft-write-codec";
-import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "./draft-blob-transport-budget";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 
 const blobUnsupportedHosts = new Set<string>();
 
 /**
- * Which blob digests this renderer has seen a host ACK, keyed by host.
+ * ## The once-per-host upload memo
  *
- * The point is the submit path: an image is uploaded once when it is pasted
- * (the draft mirror's `putDraftBlobsForWrite`), and a create that then sends
- * the same image BY HASH must not push the bytes a second time - that upload is
- * the whole cost the by-reference create exists to remove. Every `putDraftBlobs`
- * ack lands here so the one memo answers for both callers.
+ * Every debounced draft write re-sent every image the draft still carries. The
+ * bytes are content-addressed and the host already had them, so each repeat was
+ * a megabyte of base64 on the wire to be told "yes, still there" - which is most
+ * of what made a large draft's editing traffic unbearable even after the row
+ * itself got small.
  *
- * HOST-KEYED, because the fact is about a host's staging tier and not about the
- * image: a draft pasted while pinned to host A and submitted on host B has
- * confirmed bytes on A and none on B, and a flat set would skip B's upload and
- * send it a hash it cannot resolve.
+ * Three maps, all keyed by host first, because every one of these facts is
+ * about a particular host and nothing generalizes across two of them.
  *
- * It can go STALE in one direction only - the host's staging tier sweeps on
- * quota or idle age - and on the CREATE path that direction is recoverable: a
- * hash the host no longer holds comes back as the `missing-attachment-bytes`
- * refusal, whose remedy calls {@link forgetConfirmedBlobs} and re-uploads. So a
- * stale entry costs one refusal round trip, while the absent memo would cost
- * every create a full re-upload.
+ *  - `confirmedBlobOwners`: digest -> the owner it was confirmed FOR. Keyed by
+ *    owner and not merely present/absent, because the host's draft blob store
+ *    is owner-partitioned: the same digest confirmed under account A says
+ *    nothing about whether account B's partition holds it, and treating it as
+ *    confirmed would send a bare hash into a partition that cannot resolve it.
  *
- * ON THE SEND PATH it is recoverable both ways, but by two different routes,
- * and the split is worth stating because the difference is not where the
- * refusal comes from - it is whether anything is handed back to a composer:
+ *    ONE slot per digest, not a set of owners, and the consequence is stated
+ *    here so it is not read later as an oversight: confirming under B REPLACES
+ *    A's record, so after an account switch A re-uploads once per digest. That
+ *    is the fail-safe direction - an extra upload, never a bare hash the host
+ *    cannot answer - and it is the shape the ticket specifies. Widen it to a
+ *    per-digest owner SET only if switching accounts on one host turns out to
+ *    be common enough for the churn to matter.
+ *  - `inFlightBlobUploads`: upload key -> the upload already running for it, so
+ *    two concurrent first writes of the same image issue ONE request.
+ *    Registered before the local byte read, not after: the read is itself an
+ *    await, and two callers that both got past it before either registered
+ *    would both upload. The key carries the OWNER as well as the digest,
+ *    because the host's blob store is owner-partitioned: a joiner under a
+ *    different account would be handed an answer about bytes that landed in
+ *    somebody else's partition, and that answer feeds the landing draft's
+ *    eviction gate.
+ *  - `unbridgeableBlobs`: digests this host answered `unsupported-format` for.
+ *    Deliberately NOT owner-keyed - what a host's writer can decode is a
+ *    property of the host BUILD, so a different account cannot change the
+ *    answer. Only `forgetBlobUnsupportedHost` clears it, which is the
+ *    host-may-have-upgraded signal: acquisition, and the mirror's re-bootstrap,
+ *    since the host that answers a reconnect can be one that came back on a
+ *    NEW build.
  *
- *  - A live send is refused at `handleSend`'s dangling-hash chokepoint, which
- *    rejects the send FRAME. The renderer sees that as a rejected `actionAck`,
- *    hands the prompt back to the composer, and retracts these acks on the way
- *    (`forgetRefusedContentBlobAcks` in `chat-session-store.ts`, which carries
- *    the full enumeration of restore arms). So the resend re-uploads.
- *  - A QUEUED prompt refused at drain time is recoverable too, but by a
- *    different route, because nothing is handed back to the composer:
- *    `failQueuedPromptPreparation` writes a `send.failed` row and PAUSES the
- *    queue with the item retained, so there is no restore arm to retract from.
- *    `use-queued-prompt-blob-repair.ts` reads that durable row's typed
- *    metadata, calls {@link forgetConfirmedBlobs} for the hashes the host
- *    named, re-uploads them and resumes the queue - so the acks are retracted
- *    here as well, just from the event rather than from a restored document.
- *    The host's queued drain now materializes from the item author's staging
- *    tier before its dangling-hash guard, which is what makes that re-upload
- *    visible to the retry rather than invisible to it.
+ * ## Why an epoch, and why not the session's own generation
  *
- *    That arm is bounded to ONE repair per queued item, so a host that still
- *    cannot find the bytes ends in a visible paused state rather than a loop;
- *    the user's way out there is the queue row itself, which stays editable.
+ * A confirmation is only worth keeping if the host that gave it is still the
+ * host we are talking to. `drafts.putBlob` can be acknowledged after a
+ * reconnect has already re-listed against a host that restarted and lost the
+ * blob - recording it then would leave the gate confident about bytes nothing
+ * holds, and the send would go out bare.
+ *
+ * So each upload captures the host's epoch when it STARTS and reports success
+ * only if that epoch still stands. Both consumers of the answer need the same
+ * fence, which is why the retired-epoch arm reports FAILURE rather than "the
+ * wire call succeeded but we did not memoize it":
+ *
+ *  - the send gate reads the memo, and a stale confirmation would send a bare
+ *    hash to a host that no longer holds it;
+ *  - `rememberLandingBlobsOnHost` reads `putDraftBlobs`' return, and
+ *    `landingDraftPinsLocalImageBytes` stops pinning a landing draft's local
+ *    bytes once every hash in it is "confirmed on the host". A stale
+ *    acknowledgement there authorizes `evictAdoptedLandingMirrors` to discard
+ *    the draft holding the only copy of the image.
+ *
+ * The second is the one that costs bytes rather than a round trip, and it is
+ * exactly the host-restart case: the old conversation's ack cannot establish
+ * custody on the new one. Reporting failure re-uploads on the new conversation,
+ * which is the fail-safe direction.
+ *
+ * `DraftMirrorSession`'s own `bootGeneration` looks like the right counter and
+ * is not: it bumps only in `close()`, so the reconnect re-bootstrap - the case
+ * that matters here - reuses it. Bumping it there instead would also change
+ * when `runBootstrap`'s two early-return guards fire, which is not this
+ * ticket's to move.
  */
-const confirmedBlobsByHost = new Map<string, Set<string>>();
-
-/**
- * Uploads currently on the wire, keyed by host and digest, so two callers that
- * want the same bytes on the same host send ONE body.
- *
- * The memo above answers "already acked"; this answers "acking right now", and
- * the gap between them is a real window with two real occupants. Pasting an
- * image starts the draft mirror's `putDraftBlobsForWrite`; pressing send before
- * that ack arrives runs `confirmAttachmentsByHash`, which finds no memo entry
- * (there is none until the ack) and starts a second upload of the same
- * multi-megabyte body.
- *
- * NOTHING BELOW THIS LAYER DEDUPES IT, which is why the join lives here:
- * `drafts.putBlob` is `mode: "fifo"` in the policy table, and the request
- * coordinator's `selectJob` returns `null` for every FIFO submission by
- * construction - FIFO jobs are never joined onto an in-flight one, however
- * identical their params. The host would cope (the put is content-addressed and
- * carries `idempotencyKey: sha256`), so this is about the bytes on the wire, not
- * about correctness on disk.
- *
- * KEYED BY HOST, NOT BY CLIENT: the fact is about a host's staging tier, so two
- * different client objects addressing the same host are joinable and must be.
- *
- * It holds an entry only while the request is live. A caller that needs a FRESH
- * upload - the `missing-attachment-bytes` repair, after the host has swept the
- * bytes - runs strictly after its create came back refused, so there is nothing
- * in flight to join and it issues a real put. Single-flight narrows concurrency;
- * it never answers from history. That is `confirmedBlobsByHost`'s job, and
- * `putDraftBlobs` deliberately does not consult it.
- */
-const putsInFlight = new Map<string, Promise<PutBlobOutcome>>();
+const confirmedBlobOwners = new Map<string, Map<string, string>>();
+const inFlightBlobUploads = new Map<string, Map<string, Promise<boolean>>>();
+const unbridgeableBlobs = new Map<string, Set<string>>();
+const blobEpochs = new Map<string, number>();
 
 export function resetDraftBlobTransportForTests(): void {
   blobUnsupportedHosts.clear();
-  confirmedBlobsByHost.clear();
-  putsInFlight.clear();
-}
-
-/** Whether `hash` has been acked by `hostId` during this renderer's lifetime. */
-export function draftBlobConfirmedOnHost(
-  hostId: string,
-  hash: string,
-): boolean {
-  return confirmedBlobsByHost.get(hostId)?.has(hash) === true;
+  confirmedBlobOwners.clear();
+  inFlightBlobUploads.clear();
+  unbridgeableBlobs.clear();
+  blobEpochs.clear();
 }
 
 /**
- * Drop this host's ack for these digests, because the host has just said it no
- * longer holds them.
+ * The account a confirmation is recorded under, and the one the send gate asks
+ * about. One reader for both so they can never key on different things - a gate
+ * asking under a different id than the upload recorded would simply never fire,
+ * silently, and every send would re-inline.
  *
- * The one place the client ever LEARNS the memo is stale is a refusal naming
- * those hashes, so that is the one place this is called from. Bypassing the
- * memo (which `putDraftBlobs` does) is not the same thing: bypassing re-uploads
- * now, while the entry still claims `confirmed` for any hash whose re-upload
- * failed - no local bytes, a digest mismatch - and the NEXT message carrying it
- * skips the upload all over again on the strength of an ack that was disproved.
- * Clearing first means the memo only ever holds acks the host has not retracted.
+ * `null` (signed out, or the context metadata not yet projected) records and
+ * confirms nothing rather than falling back to a placeholder id, which would
+ * pool two accounts into one bucket.
  */
-export function forgetConfirmedBlobs(
-  hostId: string,
-  hashes: ReadonlyArray<string>,
-): void {
-  const existing = confirmedBlobsByHost.get(hostId);
-  if (existing === undefined) return;
-  for (const hash of hashes) existing.delete(hash);
-  if (existing.size === 0) confirmedBlobsByHost.delete(hostId);
+export function currentDraftBlobOwnerId(): string | null {
+  return useAuthStore.getState().contextMetadata?.userId ?? null;
 }
 
-function rememberConfirmedBlobs(
+/**
+ * Whether a read that began under `owner` may still write into this window's
+ * partition.
+ *
+ * The owner id ALONE is not enough, and the gap is not theoretical:
+ * `setSigningIn` moves the status to `signing-in` without clearing
+ * `contextMetadata`, so throughout a fresh sign-in attempt this window keeps
+ * reporting the previous account's id. A read that started under A therefore
+ * passes an id-only check for the whole attempt, and if that attempt settles
+ * as B, A's bytes are already in B's partition - and rooted there by the
+ * session entry `putImageBytesAtHash` seeds on its way through.
+ *
+ * The cloud leg has always paired the two, checking `authorizesCloudCapability`
+ * beside its owner comparison. This is the host leg catching up to it.
+ *
+ * A false negative costs one wasted fetch, which is the trade the call sites
+ * were already written around.
+ */
+function stillServingBlobIdentity(owner: string | null): boolean {
+  return (
+    currentDraftBlobOwnerId() === owner &&
+    authorizesCloudCapability(useAuthStore.getState().status)
+  );
+}
+
+function blobEpochOf(hostId: string): number {
+  return blobEpochs.get(hostId) ?? 0;
+}
+
+/**
+ * A new mirror bootstrap for this host: the confirmations it gave belong to the
+ * conversation that just ended. Called on the re-bootstrap path too, which
+ * acquisition alone does not cover - `draft-mirror-session.ts` re-lists on a
+ * reconnect without re-acquiring, and that is exactly when a restarted host has
+ * silently dropped its blobs.
+ *
+ * The unbridgeable set survives, per the module doc.
+ */
+export function forgetConfirmedDraftBlobs(hostId: string): void {
+  blobEpochs.set(hostId, blobEpochOf(hostId) + 1);
+  confirmedBlobOwners.delete(hostId);
+  inFlightBlobUploads.delete(hostId);
+}
+
+/** Whether this host is known to hold `sha256` for `ownerUserId`. */
+export function isDraftBlobConfirmed(
+  hostId: string,
+  sha256: string,
+  ownerUserId: string | null,
+): boolean {
+  if (ownerUserId === null) return false;
+  return confirmedBlobOwners.get(hostId)?.get(sha256) === ownerUserId;
+}
+
+/**
+ * The subset of `hashes` this host holds for this owner - the send gate's
+ * question. Answered as a set rather than a per-hash predicate so the caller
+ * builds one union and the "every node is covered" test is a single pass.
+ */
+export function confirmedDraftBlobHashes(
+  hostId: string,
+  ownerUserId: string | null,
+  hashes: ReadonlyArray<string>,
+): ReadonlySet<string> {
+  const held = new Set<string>();
+  if (ownerUserId === null) return held;
+  const perHost = confirmedBlobOwners.get(hostId);
+  if (perHost === undefined) return held;
+  for (const sha256 of hashes) {
+    if (perHost.get(sha256) === ownerUserId) held.add(sha256);
+  }
+  return held;
+}
+
+/**
+ * Drop these digests' confirmations for this host - the host says it does not
+ * have them after all (`not-on-host`). The next write re-uploads.
+ */
+export function invalidateDraftBlobConfirmations(
   hostId: string,
   hashes: ReadonlyArray<string>,
 ): void {
-  if (hashes.length === 0) return;
-  const existing = confirmedBlobsByHost.get(hostId);
-  const set = existing ?? new Set<string>();
-  for (const hash of hashes) set.add(hash);
-  if (existing === undefined) confirmedBlobsByHost.set(hostId, set);
+  const perHost = confirmedBlobOwners.get(hostId);
+  if (perHost === undefined) return;
+  for (const sha256 of hashes) perHost.delete(sha256);
+  if (perHost.size === 0) confirmedBlobOwners.delete(hostId);
+}
+
+/**
+ * This host's writer refuses this digest's format. The node re-inlines from now
+ * on, with no further round trip to be told the same thing.
+ */
+export function markDraftBlobUnbridgeable(
+  hostId: string,
+  sha256: string,
+): void {
+  const perHost = unbridgeableBlobs.get(hostId);
+  if (perHost === undefined) {
+    unbridgeableBlobs.set(hostId, new Set([sha256]));
+    return;
+  }
+  perHost.add(sha256);
+}
+
+export function isDraftBlobUnbridgeable(
+  hostId: string,
+  sha256: string,
+): boolean {
+  return unbridgeableBlobs.get(hostId)?.has(sha256) === true;
 }
 
 /**
@@ -151,6 +243,11 @@ function rememberConfirmedBlobs(
  */
 export function forgetBlobUnsupportedHost(hostId: string): void {
   blobUnsupportedHosts.delete(hostId);
+  // A host that may have upgraded is a host whose every cached verdict is
+  // suspect, including which formats it refuses - that is the one signal that
+  // can change the unbridgeable answer.
+  unbridgeableBlobs.delete(hostId);
+  forgetConfirmedDraftBlobs(hostId);
 }
 
 export function hostWithholdsDraftBlobs(hostId: string): boolean {
@@ -187,17 +284,16 @@ async function localBytesForHash(
 export type DraftBlobClient = {
   readonly request: HostRequester<HostRpcRegistry>["request"];
   /**
-   * The combined dispatch, for the put path: an upload needs BOTH its digest
-   * idempotency key (a replayed put of the same bytes is the same put) and the
-   * extended response budget a multi-megabyte body earns, and no narrow entry
-   * point carries the two together.
+   * `drafts.putBlob` rides this, never the plain `request` above, because it
+   * needs an idempotency key and a budget the default 30s unary one cannot
+   * give a multi-megabyte body.
    *
-   * Widened here rather than at the call site so every `DraftBlobClient`
-   * provider - the draft mirror, tab recovery, the composer - hands over a
-   * client that CAN make that call. A `Pick<…, "request">` was enough while
-   * uploads rode the default budget with no key; it is not enough now, and a
-   * type that still said so would push the choice back to whichever caller
-   * happened to be first.
+   * Widened on the TYPE rather than at the call site so every provider - the
+   * draft mirror, tab recovery, the composer - hands over a client that can
+   * make that call. A `request`-only client was enough while uploads rode the
+   * default budget with no key; it is not enough now, and a type that still
+   * said so would push the choice back to whichever caller happened to be
+   * first.
    */
   readonly requestWithOptions: HostRequester<HostRpcRegistry>["requestWithOptions"];
 };
@@ -206,115 +302,248 @@ export async function putDraftBlobsForWrite(
   hostId: string,
   client: DraftBlobClient,
   write: DraftWrite,
+  ownerUserId: string | null,
 ): Promise<ReadonlyArray<string>> {
-  return putDraftBlobs(hostId, client, blobHashesOfWrite(write));
+  return putDraftBlobs(hostId, client, blobHashesOfWrite(write), ownerUserId);
 }
-
-/**
- * What one hash's upload settled as.
- *
- * `unsupported` is not a per-hash fact and is the reason this is three-valued
- * rather than a boolean: the host withholds the blob methods entirely, so the
- * caller must stop the whole batch rather than try the next digest.
- */
-type PutBlobOutcome = "confirmed" | "skipped" | "unsupported";
 
 export async function putDraftBlobs(
   hostId: string,
   client: DraftBlobClient,
   hashes: readonly string[],
+  ownerUserId: string | null,
 ): Promise<ReadonlyArray<string>> {
   if (hashes.length === 0) return [];
   if (blobUnsupportedHosts.has(hostId)) return [];
   const confirmed: string[] = [];
   for (const sha256 of hashes) {
-    const outcome = await putOneDraftBlob(hostId, client, sha256);
-    if (outcome === "unsupported") return confirmed;
-    if (outcome === "confirmed") confirmed.push(sha256);
+    // The memo hit, and the whole point of the ticket: no local read, no
+    // base64, no request.
+    if (isDraftBlobConfirmed(hostId, sha256, ownerUserId)) {
+      confirmed.push(sha256);
+      continue;
+    }
+    if (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId)) {
+      confirmed.push(sha256);
+    }
+    // Checked after each digest rather than only on the throw: a joined upload
+    // can be the one that discovers the host withholds the methods, and its
+    // joiner sees that only through this flag.
+    if (blobUnsupportedHosts.has(hostId)) return confirmed;
   }
   return confirmed;
 }
 
 /**
- * One digest, joined to whatever identical upload is already on the wire.
+ * Undo a host-blob writeback that landed under a different account.
  *
- * NUL-joined key, as everywhere else in this renderer: no host id or hex digest
- * can contain one, so two pairs cannot collide on a shared separator.
+ * Twin of `retireCrossedWrite` on the cloud leg, and the same two steps for the
+ * same reasons: release the session entry synchronously because it is itself a
+ * GC root, then let the root-aware reconcile decide about the durable bytes. A
+ * direct delete here would re-read roots and then await a transaction, and an
+ * account that acquired the digest inside that window would lose bytes it now
+ * names; the sweep's `reclaimImageBytes` probes on the far side of its own
+ * delete instead. *
+ * BEST EFFORT, and the limits are stated rather than implied because the two
+ * halves are not equally strong:
+ *
+ *  - the session release is a GUARANTEE. It is synchronous, and it is what
+ *    removes the GC root - so the bytes stop being reachable through this
+ *    window's cache the instant this returns, which is the half that matters
+ *    for the account that must not see them.
+ *  - the durable reclaim is NOT. The sweep reads roots and then hops inside
+ *    idb-keyval before deleting, so its own outcome is racy in both directions
+ *    (see the note in `landing-image-gc.reconcile`), and `getImageBytes` /
+ *    `knownHashes` can still answer for a digest until a sweep succeeds.
+ *
+ * Closing the second properly means letting a root acquisition veto a delete
+ * already enqueued, which is a change to the storage protocol and does not
+ * belong in an identity helper. Until then: unreferenced, unreachable through
+ * the session, and reclaimed on a later sweep.
  */
-function putOneDraftBlob(
-  hostId: string,
-  client: DraftBlobClient,
-  sha256: string,
-): Promise<PutBlobOutcome> {
-  const key = `${hostId}\0${sha256}`;
-  const existing = putsInFlight.get(key);
-  if (existing !== undefined) return existing;
-  const started = dispatchDraftBlobPut(hostId, client, sha256).finally(() => {
-    putsInFlight.delete(key);
+function retireCrossedBlobWrite(sha256: string): void {
+  appLogger.warn("[draft-blobs] readBlob landed after an identity change", {
+    sha256,
   });
-  putsInFlight.set(key, started);
-  return started;
+  releaseSession(sha256);
+  scheduleLandingImageReconcile();
 }
 
-async function dispatchDraftBlobPut(
+/** The in-flight key: one upload per (host, digest, owner) at a time. */
+function blobUploadKey(sha256: string, ownerUserId: string | null): string {
+  // A null owner is its own bucket rather than sharing the first account's: an
+  // upload made with no signed-in identity records no confirmation, so joining
+  // it would hand a real owner an answer nothing memoized.
+  return `${sha256}\u0000${ownerUserId ?? ""}`;
+}
+
+/**
+ * One upload per (host, digest, owner) at a time. A second caller for a digest
+ * already going up under the SAME owner awaits that promise instead of starting
+ * its own.
+ *
+ * The owner is in the key because the host partitions blobs by it. Keyed by
+ * digest alone, owner B joining owner A's flight was told `true` while
+ * `uploadOneDraftBlob` recorded the confirmation only for A - and that `true`
+ * is what `rememberLandingBlobsOnHost` turns into permission to evict B's local
+ * bytes, in a partition that may not hold them. Same shape as the retired-epoch
+ * bug one function down: an answer about one conversation used for another.
+ *
+ * The registration is synchronous with the decision to start - before
+ * `uploadOneDraftBlob`'s first await - which is the only ordering that actually
+ * dedupes. Registering after the local byte read would let two callers both
+ * finish that read, both find the map empty, and both upload.
+ */
+function joinOrStartBlobUpload(
   hostId: string,
   client: DraftBlobClient,
   sha256: string,
-): Promise<PutBlobOutcome> {
-  const bytes = await localBytesForHash(sha256);
-  if (bytes === null) return "skipped";
+  ownerUserId: string | null,
+): Promise<boolean> {
+  const key = blobUploadKey(sha256, ownerUserId);
+  const joined = inFlightBlobUploads.get(hostId)?.get(key);
+  if (joined !== undefined) return joined;
+  // Never rejects - every failure is contained into `false` - so the cleanup
+  // below and the joiners above need no rejection handling of their own.
+  const flight = uploadOneDraftBlob(hostId, client, sha256, ownerUserId);
+  const perHost = inFlightBlobUploads.get(hostId);
+  if (perHost === undefined) {
+    inFlightBlobUploads.set(hostId, new Map([[key, flight]]));
+  } else {
+    perHost.set(key, flight);
+  }
+  void flight.finally(() => {
+    const live = inFlightBlobUploads.get(hostId);
+    // Identity-checked: `forgetConfirmedDraftBlobs` may have dropped this
+    // host's map and a NEWER upload of the same digest may already own the
+    // slot. Deleting by key alone would evict that one and un-dedupe it.
+    if (live?.get(key) !== flight) return;
+    live.delete(key);
+    if (live.size === 0) inFlightBlobUploads.delete(hostId);
+  });
+  return flight;
+}
+
+/** Resolves `true` when the host acknowledged holding the digest. Never rejects. */
+async function uploadOneDraftBlob(
+  hostId: string,
+  client: DraftBlobClient,
+  sha256: string,
+  ownerUserId: string | null,
+): Promise<boolean> {
+  // Captured at the START, per the module doc: what matters is whether the
+  // conversation this upload belongs to is still the live one by the time it
+  // is answered.
+  const epoch = blobEpochOf(hostId);
   try {
+    // Inside the try, not before it. The local read is IndexedDB (or the stash
+    // repo) and can reject; outside the containment that rejection escaped as
+    // the flight's own, and the cleanup `.finally` chained onto it - which
+    // nothing awaits - became a SECOND, detached unhandled rejection even when
+    // the caller handled the first. The "never rejects" claim above has to be
+    // true across the whole operation for that discarded promise to be safe.
+    const bytes = await localBytesForHash(sha256);
+    if (bytes === null) return false;
     const response = await client.requestWithOptions(
       "drafts.putBlob",
       { sha256, bytesBase64: bytesToBase64(bytes) },
       {
-        // The blob's OWN digest. A `putBlob` that the transport replays -
-        // because a relay leg died mid-body and the retrying messenger
-        // re-sent it - is by construction the same upload: the params are
-        // byte-identical, and the host stores content-addressed bytes, so
-        // the second arrival resolves to the same file rather than a second
-        // copy. This is the narrow promise the key allowlist on
-        // `requestWithIdempotencyKey` asks for, and `epic.create` (keyed on
-        // the epicId it mints) is the other half of it.
+        // The blob's OWN digest. A `putBlob` the transport replays - because a
+        // relay leg died mid-body and the retrying messenger re-sent it - is by
+        // construction the same upload: the params are byte-identical and the
+        // host stores content-addressed bytes, so the second arrival resolves
+        // to the same file rather than a second copy.
         //
         // It is NOT what keeps two concurrent callers to one body: the key
         // deduplicates a TRANSPORT replay of one submission, while two
-        // submissions are two FIFO jobs the coordinator never joins. That is
-        // `putsInFlight`'s job, above.
+        // submissions are two flights. That is `inFlightBlobUploads`' job.
         idempotencyKey: sha256,
+        // The default unary budget is 30s, sized for a few KB of JSON crossing
+        // a relay. A prepared image is ~5 MiB once base64 has inflated it and
+        // rides ONE request, so under the default a genuinely-succeeding
+        // upload is discarded client-side while the host stores the bytes.
         responseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
-        // No floor: the method has existed since `drafts@1.0`, and a host
-        // that withholds it is already handled as an old host below.
+        // No floor: the method has existed since `drafts@1.0`, and a host that
+        // withholds it is already handled as an old host below.
         requiredHostMethodVersion: null,
-        // No caller cancellation. The upload is a background mirror of a
-        // draft the user has already pasted into; abandoning it mid-body
-        // would leave the hash unconfirmed and force an inline base64 send
-        // for bytes that were nearly there. Now that joiners share this one
-        // request, a caller-owned abort would also cancel somebody else's.
+        // No caller cancellation. The upload is a background mirror of a draft
+        // the user has already pasted; abandoning it mid-body would leave the
+        // hash unconfirmed and force an inline send for bytes that were nearly
+        // there. With joiners sharing this one request, a caller-owned abort
+        // would also cancel somebody else's.
         signal: undefined,
       },
     );
-    if (response.ok) {
-      rememberConfirmedBlobs(hostId, [sha256]);
-      return "confirmed";
+    if (!response.ok) {
+      appLogger.warn("[draft-blobs] putBlob digest-mismatch", { sha256 });
+      return false;
     }
-    appLogger.warn("[draft-blobs] putBlob digest-mismatch", { sha256 });
-    return "skipped";
+    if (blobEpochOf(hostId) !== epoch) {
+      // Unconfirmed, not "confirmed but unmemoized". This acknowledgement
+      // describes a mirror conversation that has since been replaced, so it
+      // establishes nothing about the one now running - see the epoch section
+      // of the module doc for why BOTH consumers need that answer.
+      appLogger.warn("[draft-blobs] putBlob acknowledged after re-bootstrap", {
+        sha256,
+      });
+      return false;
+    }
+    if (ownerUserId === null) {
+      // Acknowledged, and still UNCONFIRMED - the third case of the same rule
+      // as the two arms above. With no signed-in identity there is nothing to
+      // memoize against, so `isDraftBlobConfirmed` will keep answering false;
+      // returning `true` here would put the digest in
+      // `confirmedHostBlobHashes` anyway, and `landingDraftPinsLocalImageBytes`
+      // would stop pinning the local bytes on the strength of a claim no memo
+      // can corroborate. The two consumers must agree, and the memo is the one
+      // that can be asked again.
+      appLogger.warn("[draft-blobs] putBlob acknowledged with no owner", {
+        sha256,
+      });
+      return false;
+    }
+    recordConfirmedBlob(hostId, sha256, ownerUserId);
+    return true;
   } catch (error: unknown) {
     if (isBlobUnsupported(error)) {
-      markBlobUnsupported(hostId);
-      return "unsupported";
+      // Fenced on the SAME epoch as a success, and for the mirror reason. A
+      // refusal is a verdict about the host BUILD, and the re-bootstrap that
+      // moved the epoch is the signal that the build may have changed - so a
+      // refusal from the previous connection, landing after that reset, would
+      // re-mark an upgraded host unsupported and short-circuit every blob call
+      // until the next reconnect. Undoing the re-probe with the very answer it
+      // was meant to discard.
+      if (blobEpochOf(hostId) === epoch) markBlobUnsupported(hostId);
+      else {
+        appLogger.warn("[draft-blobs] putBlob refused after re-bootstrap", {
+          sha256,
+        });
+      }
+      return false;
     }
     appLogger.warn("[draft-blobs] putBlob failed", {
       sha256,
       error: describeLogError(error),
     });
-    return "skipped";
+    return false;
   }
 }
 
+function recordConfirmedBlob(
+  hostId: string,
+  sha256: string,
+  ownerUserId: string,
+): void {
+  const perHost = confirmedBlobOwners.get(hostId);
+  if (perHost === undefined) {
+    confirmedBlobOwners.set(hostId, new Map([[sha256, ownerUserId]]));
+    return;
+  }
+  perHost.set(sha256, ownerUserId);
+}
+
 /**
- * Fetch missing hashes into the window-partitioned composer image store.
+ * Fetch missing hashes into the window-partitioned landing-image-store.
  * Already-local hashes are left alone. `missing` / corrupt collapse to
  * skip (images render unavailable).
  */
@@ -346,8 +575,34 @@ async function readDraftBlobs(
   const images = new Map<string, PromptStashImageBlob>();
   if (hashes.length === 0) return images;
   if (blobUnsupportedHosts.has(hostId)) return images;
+  // Captured before the first request, exactly as `uploadOneDraftBlob` does.
+  // A read is as able to outlive its connection as a write, and a refusal is a
+  // verdict about the host BUILD - so a `drafts.readBlob` still in flight when
+  // a re-bootstrap re-probes would otherwise restore the verdict that reset
+  // just cleared, and short-circuit every blob call on an upgraded host until
+  // the next reconnect.
+  const epoch = blobEpochOf(hostId);
+  // And the ACCOUNT, for the writeback below. `drafts.readBlob` has no
+  // cancellation signal and the landing-image store it writes into is
+  // window-global and NOT account-partitioned, so bytes fetched for account A
+  // and answered after a sign-out or a switch would be seeded into the session
+  // cache and IndexedDB that account B is now using - and the session entry is
+  // itself a GC root, so they would stay. The cloud-payload sibling fences the
+  // same boundary; this is the host leg of it.
+  const owner = currentDraftBlobOwnerId();
   for (const sha256 of hashes) {
-    const existing = await getImageBytes(sha256);
+    // Contained, and the containment is the point: an unavailable or failing
+    // IndexedDB makes this reject, and OUTSIDE a catch that rejection escaped
+    // the whole read - taking the `drafts.readBlob` request below with it, so
+    // a host that had the bytes was never asked. A local-store fault is "not
+    // here", which is exactly the case the host leg exists for.
+    const existing = await getImageBytes(sha256).catch((error: unknown) => {
+      appLogger.warn("[draft-blobs] local image read failed", {
+        sha256,
+        error: describeLogError(error),
+      });
+      return undefined;
+    });
     if (existing !== undefined) {
       const mimeType = sniffImageMimeType(existing) ?? "image/png";
       images.set(sha256, { bytes: existing, mimeType });
@@ -358,13 +613,31 @@ async function readDraftBlobs(
       if (!response.ok) continue;
       const bytes = base64ToBytes(response.bytesBase64);
       if (bytes === null) continue;
+      // Checked immediately before the write, and again after it: `store`
+      // hashes and awaits IndexedDB, so a check on only one side leaves the
+      // other half of that window open. Losing this race costs one wasted
+      // fetch; winning it wrongly costs an image in the wrong account's
+      // partition.
+      if (!stillServingBlobIdentity(owner)) return images;
       const stored = await store(sha256, bytes);
       if (!stored) continue;
+      if (!stillServingBlobIdentity(owner)) {
+        retireCrossedBlobWrite(sha256);
+        return images;
+      }
       const mimeType = sniffImageMimeType(bytes) ?? "image/png";
       images.set(sha256, { bytes, mimeType });
     } catch (error: unknown) {
       if (isBlobUnsupported(error)) {
-        markBlobUnsupported(hostId);
+        if (blobEpochOf(hostId) === epoch) markBlobUnsupported(hostId);
+        else {
+          appLogger.warn("[draft-blobs] readBlob refused after re-bootstrap", {
+            sha256,
+          });
+        }
+        // Returning either way: this host answered "no such method" on the
+        // connection that served this request, so there is nothing to gain by
+        // asking it for the remaining hashes on that same connection.
         return images;
       }
       appLogger.warn("[draft-blobs] readBlob failed", {

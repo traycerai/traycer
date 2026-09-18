@@ -1,6 +1,10 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { numberValue, stringValue } from "./tiptap-json-content";
+import {
+  DEFAULT_IMAGE_MIME_TYPE,
+  isHostStorableImageMimeType,
+} from "./host-storable-image-formats";
 
 export interface ComposerImageAtom {
   readonly id: string;
@@ -83,6 +87,110 @@ export function appendImageAttachmentAtoms(
     ...content,
     content: [...children, ...nodes],
   };
+}
+
+/**
+ * Every hash carried by an image node that has NO inline bytes of its own - the
+ * nodes whose rendering, stashing and sending all depend on some other store
+ * still holding the bytes.
+ *
+ * Deliberately not `collectImageAtoms().filter(...)`: an atom needs an `id` to
+ * exist at all, and a hash-only node with a malformed `id` is still a node the
+ * send has to account for.
+ */
+export function hashOnlyImageHashes(
+  content: JsonContent,
+): ReadonlyArray<string> {
+  const hashes = new Set<string>();
+  const visit = (node: JsonContent): void => {
+    if (node.type === "imageAttachment") {
+      const hash = hashOnlyImageHash(node);
+      if (hash !== null) hashes.add(hash);
+      return;
+    }
+    node.content?.forEach(visit);
+  };
+  visit(content);
+  return Array.from(hashes);
+}
+
+/**
+ * Whether this document holds an inline image node that a REWRITE WILL CLAIM -
+ * a job still in flight, not merely bytes in the document.
+ *
+ * The distinction is the whole point and it was missing at first. A
+ * rich-clipboard paste inserts bytes in place and a background job flips the
+ * node to a hash, so such a node means "withhold the draft write; the small
+ * document is seconds away". But a node whose declared format the host's writer
+ * REFUSES is left inline deliberately and permanently - no job will ever claim
+ * it. Treating that one as pending withheld the entire draft forever, text and
+ * settings included, for the life of the composer, with removing the image the
+ * only way out. It also silently broke the settled "a BMP keeps today's
+ * behaviour" decision, since today's behaviour is that the draft mirrors.
+ *
+ * So this asks the same format question the ingest asks, defaulting a missing
+ * `mimeType` exactly as `collectImageAtoms` does. The two must agree: if the
+ * collector defaulted one way and the rewrite the other, a node with no
+ * declared type would be withheld by one and ignored by the other.
+ */
+export function containsPendingInlineImageNode(content: JsonContent): boolean {
+  return walk(content, (node) => {
+    if (node.type !== "imageAttachment") return false;
+    if (stringValue(node.attrs?.b64content) === null) return false;
+    const mimeType =
+      stringValue(node.attrs?.mimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
+    return isHostStorableImageMimeType(mimeType);
+  });
+}
+
+/** This node's hash iff it is an image node carrying no inline bytes. */
+function hashOnlyImageHash(node: JsonContent): string | null {
+  if (node.type !== "imageAttachment") return null;
+  const hash = stringValue(node.attrs?.hash);
+  if (hash === null) return null;
+  return stringValue(node.attrs?.b64content) === null ? hash : null;
+}
+
+/**
+ * Rewrite each hash-only image node whose hash is in `bytesByHash` to carry
+ * those bytes inline instead.
+ *
+ * The `hash` attr is DROPPED, not kept alongside: an image node carries exactly
+ * one payload, and this is the shape a fresh paste produces - which is what
+ * makes a re-inlined node indistinguishable on the wire from the inline path
+ * that has always been there. Nodes with nothing to inline keep their identity,
+ * so an unchanged subtree stays referentially equal for memoized renderers.
+ */
+export function inlineHashOnlyImageBytes(
+  content: JsonContent,
+  bytesByHash: ReadonlyMap<string, string>,
+): JsonContent {
+  if (bytesByHash.size === 0) return content;
+  return rewriteHashOnlyImageNodes(content, bytesByHash);
+}
+
+function rewriteHashOnlyImageNodes(
+  node: JsonContent,
+  base64ByHash: ReadonlyMap<string, string>,
+): JsonContent {
+  const hash = hashOnlyImageHash(node);
+  if (hash !== null) {
+    const b64content = base64ByHash.get(hash);
+    if (b64content === undefined) return node;
+    const { hash: _hash, ...rest } = node.attrs ?? {};
+    return { ...node, attrs: { ...rest, b64content } };
+  }
+  const children = node.content;
+  if (children === undefined) return node;
+  const next: JsonContent[] = [];
+  let changed = false;
+  for (const child of children) {
+    const rewritten = rewriteHashOnlyImageNodes(child, base64ByHash);
+    if (rewritten !== child) changed = true;
+    next.push(rewritten);
+  }
+  if (!changed) return node;
+  return { ...node, content: next };
 }
 
 /**

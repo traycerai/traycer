@@ -717,8 +717,8 @@ describe("<LayoutSettingsPanel />", () => {
     expect(weekly?.style.width).toBe("96%");
     // Two rows of one provider in two severity tiers: a bar drawn from the
     // provider's tightest window instead of its own would be amber twice.
-    expect(fiveHour?.className).toContain("bg-blue-500");
-    expect(weekly?.className).toContain("bg-amber-500");
+    expect(fiveHour?.className).toContain("bg-info");
+    expect(weekly?.className).toContain("bg-warning");
     expect(within(limitsGroup("Claude Code")).getByText("22%")).toBeTruthy();
     // The figures are `aria-hidden`; the same reading reaches the box's name.
     expect(limitCheckbox("Claude Code", "5h")).toBe(
@@ -998,7 +998,6 @@ describe("<LayoutSettingsPanel />", () => {
 
     expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
       "cpu",
-      "memory",
       "processes",
     ]);
 
@@ -1007,7 +1006,6 @@ describe("<LayoutSettingsPanel />", () => {
     );
 
     expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
-      "memory",
       "processes",
     ]);
     expect(trackSettingChanged).toHaveBeenCalledWith(

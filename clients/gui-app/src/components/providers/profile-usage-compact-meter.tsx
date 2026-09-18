@@ -36,10 +36,10 @@ export function ProfileUsageCompactMeter({
         "h-1 w-[clamp(3.5rem,22%,5.5rem)] shrink-0 overflow-hidden rounded-full bg-foreground/15",
         projection.kind === "semantic_only" &&
           projection.severity === "running_low" &&
-          "bg-amber-500/25 dark:bg-amber-400/25",
+          "bg-warning/25",
         projection.kind === "semantic_only" &&
           projection.severity === "limited" &&
-          "bg-red-500/25 dark:bg-red-400/25",
+          "bg-destructive/25",
         (projection.kind === "stale" || projection.kind === "unavailable") &&
           "opacity-50",
       )}

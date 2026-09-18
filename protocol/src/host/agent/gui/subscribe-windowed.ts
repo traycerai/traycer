@@ -5,7 +5,9 @@ import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   messageSchema,
+  messageSchemaPreBrowser,
   messageSchemaPreFallback,
+  messageSchemaPreShellHost,
 } from "@traycer/protocol/persistence/epic/messages";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -731,6 +733,35 @@ export const chatTranscriptWindowSchemaPreFallback = z.object({
 });
 
 /**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.10`: the live tail
+ * with `messages` swapped for `messageSchemaPreShellHost`, so a resume
+ * trigger's shell host - which `1.11` added - reaches none of that line's
+ * three body channels. `rowContext` stays live: `1.10` is the line that
+ * introduced the live row context. Hand-frozen field-for-field.
+ */
+export const chatTranscriptWindowSchemaPreShellHost = z.object({
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()).optional(),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreShellHost),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+});
+
+/**
+ * Wire-freeze copy of the tail bound to `chat.subscribe@1.11`/`@1.12`.
+ * Shell-host fields are present, but browser-session references are not.
+ */
+export const chatTranscriptWindowSchemaPreBrowser = z.object({
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()).optional(),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreBrowser),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+});
+
+/**
  * A slice of the skeleton.
  *
  * The skeleton is delivered in chunks rather than inline on the snapshot for
@@ -890,6 +921,40 @@ export const chatRangeResponseSchemaPreFallback = z.object({
   rowContext: z
     .record(z.string(), transcriptRowContextSchemaPreFallback)
     .default({}),
+  reachedStart: z.boolean(),
+  reachedEnd: z.boolean(),
+  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.10` -
+ * see {@link chatTranscriptWindowSchemaPreShellHost}. Hand-frozen
+ * field-for-field.
+ */
+export const chatRangeResponseSchemaPreShellHost = z.object({
+  requestId: rangeRequestIdSchema,
+  epoch: z.number().int().nonnegative(),
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreShellHost),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+  reachedStart: z.boolean(),
+  reachedEnd: z.boolean(),
+  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+});
+
+/** Wire-freeze copy of the range response for `@1.11`/`@1.12`. */
+export const chatRangeResponseSchemaPreBrowser = z.object({
+  requestId: rangeRequestIdSchema,
+  epoch: z.number().int().nonnegative(),
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaPreBrowser),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
   reachedStart: z.boolean(),
   reachedEnd: z.boolean(),
   truncatedAtOrdinal: z.number().int().nonnegative().optional(),

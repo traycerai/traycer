@@ -9,11 +9,11 @@ import {
   stageDraftImageHandoff,
 } from "@/lib/composer/landing-image-move";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   getImageBytes,
   putImage,
   releaseSession,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { installFreshIndexedDb } from "./prompt-stash-fake-idb";
 
@@ -184,7 +184,7 @@ describe("landing-image-move", () => {
       // partition that never had them; here the local copy is removed).
       await stageDraftImageHandoff(draftId, [hash]);
       releaseSession(hash);
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       expect(await getImageBytes(hash)).toBeUndefined();
 
       // Must RESOLVE - a regression back to a held handoff connection makes

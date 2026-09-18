@@ -1,5 +1,4 @@
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
-import type { TierCandidate } from "@traycer/protocol/host/fallback-policy";
 import { harnessDisplayName } from "@/components/session-import/session-import-model";
 
 /**
@@ -9,6 +8,13 @@ import { harnessDisplayName } from "@/components/session-import/session-import-m
  * vendor outside it. Printing the id is the honest fallback: it is what is
  * saved, and inventing a friendly name for a harness this surface cannot
  * describe would be a label with nothing behind it.
+ *
+ * Takes a plain `string` rather than `TierCandidate["harnessId"]`, because the
+ * `safeParse` below is the whole mechanism and it does not care where the id
+ * came from. A narrower parameter only forced the next caller with a
+ * `string`-typed id - the host-switch clone toast - to re-implement this body,
+ * which is the second way to name one vendor that this module exists to
+ * prevent.
  *
  * ## Why this is its own module
  *
@@ -27,7 +33,7 @@ import { harnessDisplayName } from "@/components/session-import/session-import-m
  * hook and a host query into every consumer that only wants to spell a harness
  * id. A `.ts` module with no React import cannot acquire either problem.
  */
-export function harnessLabel(harnessId: TierCandidate["harnessId"]): string {
+export function harnessLabel(harnessId: string): string {
   const parsed = guiHarnessIdSchema.safeParse(harnessId);
   return parsed.success ? harnessDisplayName(parsed.data) : harnessId;
 }

@@ -51,7 +51,13 @@ function fakeClient(
   return { client: { request }, calls };
 }
 
-function throwingClient(error: unknown): {
+// `Error`, not `unknown`: the parameter was wider than anything this helper is
+// given (its one caller passes a `HostRpcError`, which extends `Error`), and a
+// rejection with a non-Error is what the lint forbids. Narrowing it costs no
+// coverage - the poll's catch arm only distinguishes `HostRpcError` from
+// everything else, and every "everything else" case a test could want is still
+// an `Error`.
+function throwingClient(error: Error): {
   readonly client: EpicExistenceClient;
   readonly calls: unknown[];
 } {

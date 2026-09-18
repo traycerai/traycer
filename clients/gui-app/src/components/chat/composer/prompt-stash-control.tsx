@@ -91,25 +91,23 @@ function promptStashTriggerLabel(rowCount: number): string {
 }
 
 function PromptStashTriggerButton(props: {
-  readonly open: boolean;
   readonly saving: boolean;
   readonly rowCount: number;
   readonly pulseEpoch: number;
 }) {
-  const { open, saving, rowCount, pulseEpoch } = props;
+  const { saving, rowCount, pulseEpoch } = props;
   return (
     <div data-composer-utility-rail="" className="relative shrink-0">
       <PopoverTrigger asChild>
         <Button
           type="button"
-          variant="outline"
+          variant="muted-outline"
           size="xs"
           aria-label={promptStashTriggerLabel(rowCount)}
           disabled={rowCount === 0}
-          className={cn(
-            "rounded-full bg-background/95 px-2.5 text-muted-foreground shadow-sm hover:text-foreground",
-            open && "text-foreground",
-          )}
+          // Open state is the variant's own `aria-expanded:` styling, which the
+          // PopoverTrigger sets for us.
+          className="rounded-full shadow-sm"
           onPointerDown={(event) => event.preventDefault()}
         >
           {saving ? (
@@ -313,17 +311,17 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
   return (
     <Popover open={open} onOpenChange={setMenuOpen}>
       <PromptStashTriggerButton
-        open={open}
         saving={saving}
         rowCount={rows.length}
         pulseEpoch={pulseEpoch}
       />
       {open ? (
         <PopoverContent
+          layout="bare"
           side="top"
           align="end"
           sideOffset={6}
-          className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg gap-0 overflow-hidden p-0"
+          className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg overflow-hidden"
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={handleCloseAutoFocus}
         >
@@ -331,14 +329,15 @@ function PromptStashControlImpl(props: PromptStashControlProps) {
             loop
             value={selectedId ?? ""}
             onValueChange={setHighlightedId}
-            className="max-h-full min-h-0 rounded-lg bg-transparent p-0"
+            variant="embedded"
+            className="max-h-full min-h-0"
           >
             <div className="flex h-8 items-center gap-1.5 border-b border-border/60 px-2.5 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground">
               <Bookmark className="size-3" aria-hidden />
               <span>Stashed prompts</span>
             </div>
             <CommandList ref={listRef} className="min-h-0 max-h-none">
-              <CommandGroup className="p-1">
+              <CommandGroup>
                 {rows.map((row) =>
                   row.kind === "entry" ? (
                     <PromptStashEntryRowView
@@ -391,7 +390,7 @@ function PromptStashEntryRowView(props: {
       value={props.entry.id}
       data-prompt-stash-id={props.entry.id}
       disabled={props.busy}
-      className="group/stash grid min-h-9 cursor-pointer grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden rounded-md px-2 py-1.5 [&>svg:last-child]:hidden"
+      className="group/stash grid min-h-9 cursor-pointer grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden [&>svg:last-child]:hidden"
       onPointerDown={(event) => event.preventDefault()}
       onMouseMove={props.onHighlight}
       onSelect={props.onRestore}
@@ -424,7 +423,7 @@ function PromptStashEntryRowView(props: {
                 type="button"
                 aria-label="Insert stashed prompt"
                 aria-keyshortcuts="Enter"
-                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                className="inline-flex h-6 items-center gap-1 rounded px-1 text-overline text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -437,7 +436,7 @@ function PromptStashEntryRowView(props: {
               >
                 <span>Insert</span>
                 <ShortcutHint>
-                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                  <Kbd className="h-4 min-w-4" variant="mono" size="xs">
                     ↵
                   </Kbd>
                 </ShortcutHint>
@@ -446,7 +445,7 @@ function PromptStashEntryRowView(props: {
                 type="button"
                 aria-label="Delete stashed prompt"
                 aria-keyshortcuts="D"
-                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                className="inline-flex h-6 items-center gap-1 rounded px-1 text-overline text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -455,7 +454,7 @@ function PromptStashEntryRowView(props: {
               >
                 <span>Delete</span>
                 <ShortcutHint>
-                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                  <Kbd className="h-4 min-w-4" variant="mono" size="xs">
                     D
                   </Kbd>
                 </ShortcutHint>
@@ -472,7 +471,7 @@ function PromptStashRowMetadata(props: { readonly children: ReactNode }) {
   return (
     <div
       data-slot="prompt-stash-row-metadata"
-      className="pointer-events-none col-start-2 row-start-1 flex h-6 w-full items-center justify-end gap-1 text-[11px] leading-none text-muted-foreground transition-opacity group-hover/stash:opacity-0 group-focus-within/stash:opacity-0 group-data-[selected=true]/stash:opacity-0"
+      className="pointer-events-none col-start-2 row-start-1 flex h-6 w-full items-center justify-end gap-1 text-overline leading-none text-muted-foreground transition-opacity group-hover/stash:opacity-0 group-focus-within/stash:opacity-0 group-data-[selected=true]/stash:opacity-0"
     >
       {props.children}
     </div>
@@ -526,7 +525,7 @@ function PromptStashUnavailableRowView(props: {
       value={props.id}
       data-prompt-stash-id={props.id}
       disabled={props.busy}
-      className="group/stash grid min-h-9 cursor-default grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden rounded-md px-2 py-1.5 opacity-70 [&>svg:last-child]:hidden"
+      className="group/stash grid min-h-9 cursor-default grid-cols-[minmax(0,1fr)_9rem] items-start gap-1.5 overflow-hidden [&>svg:last-child]:hidden"
       onPointerDown={(event) => event.preventDefault()}
       onMouseMove={props.onHighlight}
       onSelect={() => undefined}
@@ -562,7 +561,7 @@ function PromptStashUnavailableRowView(props: {
                 <button
                   type="button"
                   aria-label="Copy stashed text"
-                  className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  className="inline-flex h-6 items-center gap-1 rounded px-1 text-overline text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                   onPointerDown={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -581,7 +580,7 @@ function PromptStashUnavailableRowView(props: {
                 type="button"
                 aria-label="Delete stashed prompt"
                 aria-keyshortcuts="D"
-                className="inline-flex h-6 items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                className="inline-flex h-6 items-center gap-1 rounded px-1 text-overline text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -590,7 +589,7 @@ function PromptStashUnavailableRowView(props: {
               >
                 <span>Delete</span>
                 <ShortcutHint>
-                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                  <Kbd className="h-4 min-w-4" variant="mono" size="xs">
                     D
                   </Kbd>
                 </ShortcutHint>

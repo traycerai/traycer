@@ -16,11 +16,12 @@ import {
   type PathInsertionCommit,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
-import type {
-  ImagePreparationSession,
-  PreparedComposerImage,
+import {
+  createComposerImagePreparationSession,
+  type ImagePreparationSession,
+  type PreparedComposerImage,
 } from "@/lib/composer/composer-image-preparation";
-import { putImage } from "@/lib/composer/composer-image-store";
+import { putImage } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { reserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
 import { base64ToBytes } from "@/lib/composer/image-base64";
@@ -44,22 +45,23 @@ import {
  * + `collectImages` + `prepareComposerImageFile`); only the ingest differs.
  *
  * The chat composer, the edit composer and the new-conversation modal are
- * hash-first too now, through `useComposerHashFirstPaste` — the same model over
+ * hash-first too now, through `useComposerHashPaste` — the same model over
  * the same base, differing in whose budget an image charges against and in when
  * a pending node is re-entered (landing re-enters at mount; the chat family
  * sweeps every document change, because a node can arrive there long after the
- * editor mounted). The base64 adapter those surfaces used to share is gone.
- * Inline base64 now exists only at submit, in
- * `lib/composer/composer-image-inlining.ts`, which is what the host still
- * ingests.
+ * editor mounted). Inline base64 now exists only at submit, through
+ * `lib/drafts/draft-image-inlining.ts` and the rewrite in
+ * `lib/composer/image-atoms.ts`, which is what a host without the draft-blob
+ * bridge still ingests.
  *
  * Images are prepared SERIALLY before anything is reserved or stored, so a
  * multi-image paste holds one decoded bitmap at a time, and the reservation
  * and the node both carry the PREPARED size - the bytes that actually land in
- * the store - rather than the source file's. The session is the composer
- * MOUNT's, not this call's, so the loop below also serializes against the
- * structured-paste jobs the same mount runs (`startPendingImageIngest`) -
- * awaiting in this loop alone would not, since those jobs do not await it.
+ * the store - rather than the source file's. The session belongs to the HOOK's
+ * mount rather than to this call, which is what makes a second drop landing
+ * mid-preparation queue behind the first instead of decoding beside it; see the
+ * note at its declaration for why it is not also shared with the mount's
+ * structured-paste jobs.
  *
  * The returned reservation (when present) is deliberately NOT released here:
  * `runImageIngest` releases it only after `insertAttrs` has run, so a
@@ -120,9 +122,21 @@ async function landingImageAttrsFromFiles(
   }
 
   const settled = await Promise.allSettled(
-    prepared.map(async (image) => {
+    prepared.map(async (image, candidateIndex) => {
       signal.throwIfAborted();
       const hash = await putImage(image.bytes);
+      // These bytes are in the partition now, and whatever roots them charges
+      // them from here on. Hand THIS candidate's slot over to the hash rather
+      // than holding both until the slowest sibling finishes - that double
+      // count refuses pastes that fit. The index matters: these writes run
+      // concurrently, so "the first unnamed slot" would be whichever sibling is
+      // slowest, and settling a large slot with a small item's hash makes the
+      // difference vanish from the ledger.
+      //
+      // The index is over `prepared`, which is also what the reservation was
+      // built from one block up, so the two index spaces are the same by
+      // construction rather than by coincidence.
+      reservation.settleStored(candidateIndex, hash);
       signal.throwIfAborted();
       return {
         id: uuidv4(),
@@ -160,21 +174,25 @@ export function useLandingComposerPaste(params: {
   readonly disabled: boolean;
   readonly fileDrops: IFileDropHost;
   readonly mentionRoots: ReadonlyArray<string>;
-  /**
-   * The composer MOUNT's preparation session, shared with that mount's
-   * structured-paste jobs so every image this surface prepares queues behind
-   * the same one in-flight preparation.
-   */
-  readonly preparationSession: ImagePreparationSession;
 }): UseComposerPasteResult {
-  const {
-    editorRef,
-    draftId,
-    disabled,
-    fileDrops,
-    mentionRoots,
-    preparationSession,
-  } = params;
+  const { editorRef, draftId, disabled, fileDrops, mentionRoots } = params;
+  // THIS HOOK's session, one per mount, so the file-paste path serializes its
+  // own decodes: a multi-file drop holds one bitmap at a time however many
+  // files it carries.
+  //
+  // Not the mount's single session shared with the structured-paste jobs, which
+  // is what an earlier shape had. That sharing is unreachable here: the ingest
+  // hook is built FROM this hook's result (`landing-composer.tsx` passes
+  // `paste.runPendingImageJob` into it), so a session cannot flow from one to
+  // the other without inverting that edge. `useComposerPendingImageIngest`
+  // therefore owns a second one. The cost is at most two concurrent
+  // preparations per mount; what it does NOT cost is the unbounded case - N
+  // structured-paste jobs launched in one tick all decoding at once - because
+  // those all queue behind the ingest hook's single session.
+  const preparationSession = useMemo(
+    (): ImagePreparationSession => createComposerImagePreparationSession(),
+    [],
+  );
   const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
     const handle = editorRef.current;
     if (handle === null || !handle.isReady()) return null;

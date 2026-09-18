@@ -80,7 +80,7 @@ function hashOnlyImageDoc(hash: string): JsonContent {
 
 type Modules = {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
-  readonly store: typeof import("@/lib/composer/composer-image-store");
+  readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly handoff: typeof import("@/stores/epics/initial-chat-handoff-store");
 };
 
@@ -103,7 +103,7 @@ async function loadModules(): Promise<Modules> {
   vi.mocked(idb.keys).mockImplementation(() =>
     Promise.resolve(Array.from(idbData.keys())),
   );
-  const store = await import("@/lib/composer/composer-image-store");
+  const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
   const handoff = await import("@/stores/epics/initial-chat-handoff-store");
   handoff.useInitialChatHandoffStore.getState().resetForTests();
@@ -128,7 +128,7 @@ describe("landing image GC: pending initial-chat handoff is a root source", () =
   it("a hash referenced ONLY by a pending handoff survives the reconcile sweep", async () => {
     const m = await loadModules();
     // Browser runtime: readiness flips automatically on the queued microtask
-    // from the draft store's module-bottom hook, which composer-image-store's
+    // from the draft store's module-bottom hook, which landing-image-store's
     // import chain does not itself pull in here - flip it directly since this
     // test is scoped to the handoff root source, not the landing draft store.
     m.gc.markLandingDraftsReady();

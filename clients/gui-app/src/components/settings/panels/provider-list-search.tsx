@@ -36,7 +36,6 @@ export function ProviderListSearch(props: {
           aria-label={inputLabel}
           autoComplete="off"
           spellCheck={false}
-          className="text-ui-sm"
         />
         {props.query.length > 0 ? (
           <InputGroupAddon align="inline-end">

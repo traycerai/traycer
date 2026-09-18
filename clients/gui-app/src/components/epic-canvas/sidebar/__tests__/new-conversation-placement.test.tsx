@@ -113,7 +113,9 @@ const testState = vi.hoisted(() => ({
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
   bodySubmit: null as (() => void) | null,
-  bodyStartTerminal: null as ((launch: TerminalAgentLaunch) => void) | null,
+  bodyStartTerminal: null as
+    | ((launch: TerminalAgentLaunch, assembledFor: string | null) => void)
+    | null,
   installEditor: null as (() => void) | null,
   /** Drives what the modal's placement resolves to, per test. */
   placement: placementHolder(),
@@ -290,27 +292,29 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
-vi.mock("@/hooks/composer/use-composer-hash-first-paste", async () => {
+vi.mock("@/hooks/composer/use-composer-paste", async () => {
   const actual = await vi.importActual<
-    typeof import("@/hooks/composer/use-composer-hash-first-paste")
-  >("@/hooks/composer/use-composer-hash-first-paste");
+    typeof import("@/hooks/composer/use-composer-paste")
+  >("@/hooks/composer/use-composer-paste");
+  const stubPasteResult = () => ({
+    onPaste: vi.fn(),
+    onDrop: vi.fn(),
+    onDragOver: vi.fn(),
+    onDragEnter: vi.fn(),
+    onDragLeave: vi.fn(),
+    attachImageFiles: vi.fn(),
+    runPendingImageJob: vi.fn(),
+    isDraggingFiles: false,
+    dragOverlayVariant: null,
+    isIngestingImages: false,
+    isResolvingFilePaths: false,
+  });
   return {
     ...actual,
-    useComposerHashFirstPaste: () => ({
-      onPaste: vi.fn(),
-      onDrop: vi.fn(),
-      onDragOver: vi.fn(),
-      onDragEnter: vi.fn(),
-      onDragLeave: vi.fn(),
-      attachImageFiles: vi.fn(),
-      isDraggingFiles: false,
-      dragOverlayVariant: null,
-      isIngestingImages: false,
-      isResolvingFilePaths: false,
-      ingestPastedComposerImages: vi.fn(() => []),
-      notePossiblePendingImages: vi.fn(),
-      reingestPendingImages: vi.fn(),
-    }),
+    useComposerPaste: stubPasteResult,
+    // The modal calls `useComposerHashPaste` (T4's hash-only adapter), not
+    // `useComposerPaste` above - without this the real hook ran underneath.
+    useComposerHashPaste: stubPasteResult,
   };
 });
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
@@ -632,13 +636,16 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     };
     renderModal();
     act(() => {
-      testState.bodyStartTerminal?.({
-        harnessId: "claude",
-        model: null,
-        reasoningEffort: null,
-        terminalAgentArgs: null,
-        profileId: null,
-      });
+      testState.bodyStartTerminal?.(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: null,
+          profileId: null,
+        },
+        "host-b",
+      );
     });
 
     expect(testState.createTerminalAgent).not.toHaveBeenCalled();

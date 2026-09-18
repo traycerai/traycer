@@ -19,11 +19,11 @@ import {
 } from "@/lib/composer/composer-clipboard";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   putImage,
   releaseSession,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import { decodeValidatedPastedImage } from "@/hooks/composer/use-landing-composer-paste";
 import type {
   PastedComposerImage,
@@ -131,7 +131,7 @@ beforeEach(async () => {
     Promise.resolve(Array.from(idbData.keys())),
   );
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
   idbData.clear();

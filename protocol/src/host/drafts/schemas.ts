@@ -54,8 +54,8 @@ export type DraftAdoption = z.infer<typeof draftAdoptionSchema>;
 
 /**
  * Publication halt causes for the drafts-scope backup indicator. Chat
- * backup's set plus `stale-authority` — the self-resolving cause a
- * post-claim publish from the old host lands on.
+ * backup's set plus `stale-authority` — the self-resolving cause a publish
+ * lands on when the cloud row's authority epoch has moved past this host.
  */
 export const draftPublicationHaltCauseSchema = z.enum([
   "conflict",
@@ -94,6 +94,15 @@ export const draftPublicationSchema = z.object({
 });
 export type DraftPublication = z.infer<typeof draftPublicationSchema>;
 
+/**
+ * A draft is mutated only by the host it was created on; ownership never
+ * moves. A device editing a draft another host owns FORKS it: a new id on
+ * its own host, the same content, and a one-shot `supersedes` pointer to
+ * the ancestor. The fork's host retires the ancestor's cloud row once the
+ * fork is first published or deleted; the ancestor's host, finding its row
+ * tombstoned, deletes its local row if unchanged since its last publication
+ * and otherwise re-mints it under a fresh id (again with `supersedes`).
+ */
 const draftDocumentCommonFields = {
   draftId: z.string().min(1),
   target: draftTargetSchema,
@@ -104,6 +113,16 @@ const draftDocumentCommonFields = {
   origin: draftOriginSchema,
   adoption: draftAdoptionSchema,
   publication: draftPublicationSchema,
+  /**
+   * Host-authored echo of `DraftWrite.supersedes`, also set by a host
+   * re-mint: the ancestor draft id this row replaces. A client that still
+   * has the ancestor open re-keys that tab onto this row in place (the
+   * upsert precedes the ancestor's delete frame). Cleared to `null`
+   * once the supersession debt is paid, so a cold `drafts.list` never
+   * re-keys on a stale pointer. Defaulted on the wire, not required: a host
+   * that predates supersession still lists and echoes its rows.
+   */
+  supersedes: z.string().min(1).nullable().default(null),
 } as const;
 
 const draftWriteCommonFields = {
@@ -116,6 +135,15 @@ const draftWriteCommonFields = {
   revision: z.number().int().nonnegative(),
   lastTouchedAt: z.number().int().nonnegative(),
   workspace: draftWorkspaceSnapshotSchema.nullable(),
+  /**
+   * Write-plane only. An ancestor draft id whose cloud row this host
+   * retracts once the written draft is first published or deleted. Sent on
+   * the fork's FIRST upsert and `null` on every other write. Never enters
+   * the `draft/v1` head; the dialect and its `{1,0}` pin do not change.
+   * Defaulted on the wire, like the document's echo: a write that omits it
+   * owes nothing.
+   */
+  supersedes: z.string().min(1).nullable().default(null),
 } as const;
 
 export const draftDocumentSchema = z.discriminatedUnion("kind", [
@@ -255,10 +283,26 @@ export const draftsListResponseSchema = z.object({
 });
 export type DraftsListResponse = z.infer<typeof draftsListResponseSchema>;
 
-export const draftsClaimRequestSchema = z.object({
+/**
+ * Retract the cloud row of a draft this host holds NO row for: a foreign
+ * draft (another host's, listed here through the account directory) the
+ * user deleted from History. The host deletes the row through
+ * `cloud.deleteChat` in the caller's drafts scope; the owning host then
+ * finds its row tombstoned and applies its own tombstone rule. A live own
+ * row for the id is a `drafts.delete`, not a retract, and is refused.
+ * Kept separate from `drafts.delete` so an absent local row stays an
+ * honest `{ deleted: false }` there.
+ */
+export const draftsRetractRequestSchema = z.object({
   draftId: z.string().min(1),
 });
-export type DraftsClaimRequest = z.infer<typeof draftsClaimRequestSchema>;
+export type DraftsRetractRequest = z.infer<typeof draftsRetractRequestSchema>;
+
+/** Idempotent: `retracted` is false when the cloud row was already gone. */
+export const draftsRetractResponseSchema = z.object({
+  retracted: z.boolean(),
+});
+export type DraftsRetractResponse = z.infer<typeof draftsRetractResponseSchema>;
 
 /** Lowercase hex sha256 — the only form a draft blob address is written in. */
 export const draftBlobSha256Schema = z
@@ -385,37 +429,6 @@ export type DraftsReadBlobResponseV11 = z.infer<
   typeof draftsReadBlobResponseSchemaV11
 >;
 
-/**
- * Client-facing face of cross-host claim. `publication-not-ready` is the
- * typed answer while the host has the method but not yet the publisher
- * (T5 registers; T6 implements).
- */
-export const draftsClaimResponseSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("ok"),
-    draft: draftDocumentSchema,
-  }),
-  z.object({
-    status: z.literal("already-owned"),
-    draft: draftDocumentSchema,
-  }),
-  z.object({
-    status: z.literal("unavailable"),
-    reason: z.enum([
-      "not-found",
-      "not-published",
-      "publication-not-ready",
-      "plan-ineligible",
-      /**
-       * The stored head is not `{major:1, minor:0}`. A 1.0 host must
-       * not decode it (unknown fields would strip). The caller upgrades.
-       */
-      "unsupported-version",
-    ]),
-  }),
-]);
-export type DraftsClaimResponse = z.infer<typeof draftsClaimResponseSchema>;
-
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
 } as const;
@@ -451,6 +464,12 @@ const storeSeqField = {
  * Host-scoped draft change frames. `drafts.list` is the snapshot
  * (live rows + `tombstones`); (re)connect means re-read the list,
  * apply tombstones as held deletes, then apply what arrives.
+ *
+ * A host re-mint (its cloud row was tombstoned by a fork elsewhere while
+ * the row had unpublished edits) is an ordinary `upsert` frame whose
+ * document carries `supersedes`, FOLLOWED by a `delete` frame for the old
+ * id: a client with the old id open re-keys its tab onto the successor
+ * before the ancestor is removed, and the delete then finds nothing.
  *
  * Merge rule (`draftSubscribeFrameApplies` is the executable form):
  * - held **present** (row or tombstone): apply iff

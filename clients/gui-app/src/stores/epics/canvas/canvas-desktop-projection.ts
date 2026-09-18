@@ -14,7 +14,7 @@ import type { EpicCanvasState, EpicViewTab } from "./types";
 import { createEmptyCanvas } from "./canvas-state";
 import {
   epicCanvasStatesEqual,
-  parseCanvasByTabId,
+  parseDesktopEpicCanvasState,
   serializeCanvasByTabId,
 } from "./migrate-canvas";
 import type { EpicCanvasStore } from "./store";
@@ -75,12 +75,14 @@ export function projectCanvasByTabIdForDesktop(
   );
 }
 
-function parseProjectedEpicTabs(snapshot: DesktopPerWindowSnapshot): {
+function parseProjectedEpicTabs(
+  snapshot: DesktopPerWindowSnapshot,
+  state: Pick<EpicCanvasStore, "canvasByTabId">,
+): {
   readonly tabsById: Readonly<Record<string, EpicViewTab | undefined>>;
   readonly canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>;
   readonly openTabOrder: ReadonlyArray<string>;
 } {
-  const snapshotCanvasByTabId = parseCanvasByTabId(snapshot.canvasByTabId);
   const seen = new Set<string>();
   const tabsById: Record<string, EpicViewTab> = {};
   const canvasByTabId: Record<string, EpicCanvasState> = {};
@@ -100,7 +102,10 @@ function parseProjectedEpicTabs(snapshot: DesktopPerWindowSnapshot): {
       surfaceMode: tab.surfaceMode ?? { kind: "epic" },
     };
     canvasByTabId[tab.id] =
-      snapshotCanvasByTabId[tab.id] ?? createEmptyCanvas();
+      parseDesktopEpicCanvasState(
+        snapshot.canvasByTabId[tab.id],
+        state.canvasByTabId[tab.id],
+      ) ?? createEmptyCanvas();
     openTabOrder.push(tab.id);
   }
   return { tabsById, canvasByTabId, openTabOrder };
@@ -185,7 +190,7 @@ export function buildDesktopProjectionPatch(
   state: EpicCanvasStore,
   snapshot: DesktopPerWindowSnapshot,
 ): Partial<EpicCanvasStore> {
-  const projected = parseProjectedEpicTabs(snapshot);
+  const projected = parseProjectedEpicTabs(snapshot, state);
   // The desktop sync round-trip echoes our own writes back and re-parses every
   // tab into a FRESH record on each interaction. Reuse the existing record
   // when its display metadata is unchanged so `tabsById` identity stays stable

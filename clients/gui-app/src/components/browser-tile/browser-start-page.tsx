@@ -112,7 +112,7 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
                       </span>
                     </span>
                     <span
-                      className="size-2.5 shrink-0 rounded-full bg-emerald-500 ring-4 ring-emerald-500/10"
+                      className="size-2.5 shrink-0 rounded-full bg-success ring-4 ring-success/10"
                       aria-hidden
                     />
                   </button>
@@ -152,10 +152,11 @@ function startPageStatus(
   failed: boolean,
 ): string {
   if (!localServersReachable) {
-    return "Local server shortcuts aren’t available for this browser. Enter a URL above.";
+    return "Local server shortcuts aren’t available for this browser. Search or enter a website address above.";
   }
   if (pending) return "Looking for local servers…";
-  if (failed) return "Unable to find local servers. Enter a URL above.";
+  if (failed)
+    return "Unable to find local servers. Search or enter a website address above.";
   if (scope.kind === "independent") {
     return "No local servers detected. Start one in a terminal here or enter a URL above.";
   }

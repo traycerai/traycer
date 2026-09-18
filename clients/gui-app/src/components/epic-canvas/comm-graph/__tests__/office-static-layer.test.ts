@@ -1062,4 +1062,58 @@ describe("officeBakesIntoStaticFloor", () => {
     // nothing.
     expect(officeBakesIntoStaticFloor(ONE_OF_EACH[kind])).toBe(false);
   });
+
+  /**
+   * Written out rather than spread from {@link ONE_OF_EACH}, which is typed as
+   * the whole `OfficeDrawable` union: spreading one and adding `ground` checks
+   * the literal against the union's FIRST member, and a sprite has no such
+   * field. Declaring the two the painters actually stamp keeps the fixture
+   * honest about which kinds carry the marker.
+   */
+  const GROUND_TINTS: Readonly<
+    Record<
+      "block" | "quad",
+      Extract<OfficeDrawable, { kind: "block" | "quad" }>
+    >
+  > = {
+    block: { kind: "block", x: 0, y: 0, width: 16, height: 16, fill: "civic" },
+    quad: {
+      kind: "quad",
+      points: [
+        { x: 0, y: 0 },
+        { x: 16, y: 8 },
+        { x: 0, y: 16 },
+        { x: -16, y: 8 },
+      ],
+      fill: "civic",
+    },
+  };
+
+  it.each(["block", "quad"] as const)(
+    "bakes a %s once the civic ground tint marks it ground: true",
+    (kind) => {
+      // The one exception to the partition above: `pushCivicGround`
+      // (floor-painter.ts) and `civicGround` (iso-painter.ts) stamp the
+      // civic ground tint `ground: true` so it bakes WITH the sprites -
+      // without that, an offscreen host would composite the tint's wash over
+      // a district's own walls, doors and props every single frame instead
+      // of drawing it once, underneath, like the rest of the floor.
+      expect(
+        officeBakesIntoStaticFloor({ ...GROUND_TINTS[kind], ground: true }),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["block", "quad"] as const)(
+    "still leaves a %s with ground explicitly false to the per-frame path - not merely truthy, the literal `true`",
+    (kind) => {
+      // Not vacuous alongside the case above: proves the exception is scoped
+      // to `ground: true` and not to the kind alone. The ordinary lod-0 block
+      // map's own blocks and quads (no `ground` at all) already prove the
+      // absent case in the `.each` block above this one.
+      expect(
+        officeBakesIntoStaticFloor({ ...GROUND_TINTS[kind], ground: false }),
+      ).toBe(false);
+    },
+  );
 });

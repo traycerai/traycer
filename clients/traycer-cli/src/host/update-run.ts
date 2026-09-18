@@ -1349,9 +1349,19 @@ async function selectBoundResume(
   // is released before the claim, so its `install-changed` terminalization
   // never runs and the level-triggered reconciler re-spawns the refusal every
   // idle tick.
+  // Starting this attempt already permitted replacing an incomparable local
+  // install (transferUnderClaim uses automatic: false for every trigger).
+  // Preserve that permission across a busy park without treating a malformed
+  // target as authorization. Comparable downgrades still need recorded consent.
+  const comparison = compareHostVersions(
+    record.targetVersion,
+    baseline.installedVersion,
+  );
   const consented =
     baseline.allowDowngrade ||
-    strictlyNewer(record.targetVersion, baseline.installedVersion);
+    (comparison.comparable
+      ? comparison.ordering === "greater"
+      : isValidHostVersion(record.targetVersion));
   return consented
     ? resumeSelection(input, record)
     : {

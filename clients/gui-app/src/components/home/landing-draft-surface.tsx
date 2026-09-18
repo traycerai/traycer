@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useRouterState } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { HomeHero } from "@/components/home/home-hero";
@@ -12,8 +13,6 @@ import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
 import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
-import { CloudDraftsSection } from "@/components/drafts/cloud-drafts-section";
-import { useOptionalHostClient } from "@/lib/host";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import "./home-touch-targets.css";
@@ -40,13 +39,6 @@ export function LandingDraftSurface() {
   const showRecentHistory = useSettingsStore(
     (state) => state.showRecentHistory,
   );
-  // Optional on purpose: the top-level tab host mounts this surface without a
-  // `HostRuntimeProvider`, and the cloud-drafts section is the only consumer
-  // here that wants a client at all - it already treats `null` as "no
-  // directory to read". A throwing read would make one section's data need
-  // decide whether the landing page can render.
-  const hostClient = useOptionalHostClient();
-  const hostId = hostClient?.getActiveHostId() ?? null;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const layout = startPageLayout(showGreeting, showRecentHistory);
 
@@ -197,15 +189,16 @@ export function LandingDraftSurface() {
             </SurfaceActivityProvider>
           </div>
 
-          {/* Drafts another host owns, read from the cloud backup. Rendered at
-              every width: the phone is the reader this section exists for.
-              Mounted only with a host runtime above us: with no client there
-              is no directory to read, and the section's own host query would
-              otherwise demand a Query client from a surface that renders
-              bare. */}
-          {hostClient === null ? null : (
-            <CloudDraftsSection client={hostClient} hostId={hostId} />
-          )}
+          <FirstTaskLandingGuide
+            enabled={surfaceEffectivelyFocused}
+            rootRef={surfaceRef}
+            workspaceFolders={workspaceFolders}
+          />
+
+          {/* Drafts another host owns are not a section of their own: the
+              ingest mount puts them in the landing store and the History
+              drafts list below shows them beside this host's, with no owner
+              bucket. Opening one forks it underneath on the first edit. */}
           {showRecentHistory && isMobile ? (
             /* Recent tasks live in the hamburger drawer at this width, which is
                not discoverable from a landing page that is otherwise empty
@@ -365,9 +358,8 @@ function CustomizeStartPageButton() {
         align={undefined}
       >
         <Button
-          variant="ghost"
+          variant="muted"
           size="icon"
-          className="text-muted-foreground"
           aria-label="Customize start page"
           onClick={() => {
             openSettings({ section: "appearance", resetToGeneral: false });

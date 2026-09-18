@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   act,
   cleanup,
@@ -20,18 +20,26 @@ import {
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import {
-  useComposerHashFirstPaste,
-  type ComposerHashFirstEditorHandle,
-} from "@/hooks/composer/use-composer-hash-first-paste";
+  useComposerHashPaste,
+  type ComposerPasteEditorHandle,
+} from "@/hooks/composer/use-composer-paste";
+import type { PendingImageIngestEditorHandle } from "@/hooks/composer/use-composer-pending-image-ingest";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+/**
+ * The two upstream PORTS an editor exposes, intersected: paste needs
+ * `ComposerPasteEditorHandle`, the background ingest job needs
+ * `PendingImageIngestEditorHandle`, and the real `ComposerPromptEditorHandle`
+ * satisfies both. A double standing in for it has to satisfy both too.
+ */
+type PasteAndIngestHandle = ComposerPasteEditorHandle &
+  PendingImageIngestEditorHandle;
+
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   return {
     ...actual,
     putImage: vi.fn(() => Promise.resolve("paste-core-hash")),
@@ -65,43 +73,41 @@ function useAdapterUnderTest(
 ): UseComposerPasteResult {
   // Read through refs: several call sites pass an inline arrow, so the handle
   // must not close over the first render's callback.
+  //
+  // Synced in an effect rather than during render, which `react-hooks/refs`
+  // forbids and which would be a real hazard in app code. It costs nothing
+  // here: the handle's members are only ever invoked from a paste handler or a
+  // pending job inside `act(...)`, i.e. after the commit's effects have run, so
+  // no call in this file can observe the one-render window where a ref still
+  // holds the previous render's callback.
   const insertRef = useRef(insertAttrs);
-  insertRef.current = insertAttrs;
   const filePathsRef = useRef(filePaths);
-  filePathsRef.current = filePaths;
-  const editorRef = useRef<ComposerHashFirstEditorHandle>({
+  useEffect(() => {
+    insertRef.current = insertAttrs;
+    filePathsRef.current = filePaths;
+  });
+  const editorRef = useRef<ComposerPasteEditorHandle>({
     isReady: () => true,
     insertImageAttachments: (attrs) => {
       insertRef.current(attrs);
     },
     beginPathInsertion: () => filePathsRef.current.beginPathInsertion(),
     focus: () => undefined,
-    getJSON: () => EMPTY_EDITOR_DOC,
-    removeImageAttachmentById: () => undefined,
-    rewriteImageAttachmentHashById: () => true,
   });
-  return useComposerHashFirstPaste({
+  return useComposerHashPaste(
     editorRef,
-    budgetOwnerId: null,
-    disabled: false,
-    fileDrops: filePaths.fileDrops,
-    mentionRoots: filePaths.mentionRoots,
-  });
+    filePaths.fileDrops,
+    filePaths.mentionRoots,
+  );
 }
 
 /** The deleted `useComposerPaste`'s signature, likewise over the shipping hook. */
 function usePasteUnderTest(
-  editorRef: { readonly current: ComposerHashFirstEditorHandle | null },
+  editorRef: { readonly current: ComposerPasteEditorHandle | null },
   fileDrops: IFileDropHost,
   mentionRoots: ReadonlyArray<string>,
 ): UseComposerPasteResult {
-  return useComposerHashFirstPaste({
-    editorRef,
-    budgetOwnerId: null,
-    disabled: false,
-    fileDrops,
-    mentionRoots,
-  });
+  return useComposerHashPaste(editorRef, fileDrops, mentionRoots);
 }
 
 // Default fixture for tests that don't care about file-path resolution at
@@ -415,7 +421,7 @@ describe("composer paste core - attachImageFiles", () => {
   it("does not report an attachment when the editor ref disappears during conversion", async () => {
     const track = vi.spyOn(Analytics.getInstance(), "track");
     const insertImageAttachments = vi.fn();
-    const editorRef: { current: ComposerHashFirstEditorHandle | null } = {
+    const editorRef: { current: PasteAndIngestHandle | null } = {
       current: {
         insertImageAttachments,
         beginPathInsertion: () => null,
@@ -449,7 +455,7 @@ describe("composer paste core - attachImageFiles", () => {
   it("does not report an attachment when a non-null editor is not ready", async () => {
     const track = vi.spyOn(Analytics.getInstance(), "track");
     const insertImageAttachments = vi.fn();
-    const editorRef: { current: ComposerHashFirstEditorHandle | null } = {
+    const editorRef: { current: PasteAndIngestHandle | null } = {
       current: {
         insertImageAttachments,
         beginPathInsertion: () => null,

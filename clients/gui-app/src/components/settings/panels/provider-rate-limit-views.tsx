@@ -53,6 +53,8 @@ import {
   useSampledNow,
 } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
   selectEarliestExpiringCodexResetCredit,
   visibleCodexResetCredits,
@@ -278,14 +280,21 @@ function plausibleResetTimestamp(resetsAt: number, now: number): boolean {
 }
 
 /**
- * The right-hand `detail` slot for a window row: "{percent}% used" followed
- * by the reset line (a relative countdown for a near window - "Resets in 4h
- * 7m" - or an absolute calendar date/time for a far one,
- * since "Resets in 3d" is too coarse to act on), separated by a middle dot -
- * dropped entirely when there's no reset to show. `tone` is left to
- * `MeterRow`'s own wrapping span (this slot never overrides it), unlike
- * `CodexSpendControlRow`'s reset line, which needs its own severity-driven
- * tone outside a `MeterRow`.
+ * The right-hand `detail` slot for a window row: "{percent}% used" (or
+ * "{percent}% remaining") followed by the reset line (a relative countdown
+ * for a near window - "Resets in 4h 7m" - or an absolute calendar date/time
+ * for a far one, since "Resets in 3d" is too coarse to act on), separated by
+ * a middle dot - dropped entirely when there's no reset to show. `tone` is
+ * left to `MeterRow`'s own wrapping span (this slot never overrides it),
+ * unlike `CodexSpendControlRow`'s reset line, which needs its own
+ * severity-driven tone outside a `MeterRow`.
+ *
+ * The words follow Layout's Used / Remaining setting through the strip's own
+ * `windowPercentText`, so the popover under the footer and the footer itself
+ * can never state one limit two ways (feedback: "this overlay should also
+ * respect Used vs Remaining"). Only the WORDS flip: `MeterRow`'s fill stays
+ * used-based in both modes, because the strip's mini bars do too, and a bar
+ * that inverted here alone would be two readings of one fact.
  */
 function WindowMeterDetail({
   resetsAt,
@@ -294,10 +303,12 @@ function WindowMeterDetail({
   readonly resetsAt: number | null;
   readonly usedPercent: number;
 }): ReactNode {
-  const percent = Math.round(Math.min(100, Math.max(0, usedPercent)));
+  const percentMode = useLayoutStore(
+    (state) => state.statusBar.rateLimits.percentMode,
+  );
   return (
     <span className="flex items-center gap-1">
-      <span>{percent}% used</span>
+      <span>{windowPercentText(usedPercent, percentMode)}</span>
       {resetsAt !== null ? (
         <>
           <span aria-hidden="true">·</span>
@@ -1330,7 +1341,8 @@ function GrokPeriodFallback({
  * rolling-utilization windows, so three shapes are handled:
  *
  * - `period` present -> the period usage bar, reusing the shared `RateLimitWindowRow`
- *   so its "% used · Resets <date>" reads identically to codex/claude; the bar's
+ *   so its "% used · Resets <date>" (or "% remaining", per Layout's setting)
+ *   reads identically to codex/claude; the bar's
  *   label is the period cadence ("Weekly").
  * - `period` null -> the unmeasured-period fallback (`GrokPeriodFallback`): the
  *   plan tier and the billing period's dates.
@@ -1404,7 +1416,8 @@ export function GrokRateLimitView({
 /**
  * Cursor's usage detail. Structurally grok's twin - synthesized billing-cycle
  * windows plus money rows - so it reuses the same `RateLimitWindowRow`, and
- * its "% used · Resets <date>" reads identically to codex/claude.
+ * its "% used · Resets <date>" (or "% remaining", per Layout's setting) reads
+ * identically to codex/claude.
  *
  * The two bars are the two buckets Cursor's own Spending page renders -
  * "Cursor Models" (Cursor Grok + Composer) and "Other Models" (named
@@ -1563,7 +1576,7 @@ export function ProviderRateLimitBody(
             source: "Provider usage limits",
           })}
           presentation="link"
-          className="ml-1 h-auto p-0 text-current"
+          className="ml-1"
         />
       </div>
     );

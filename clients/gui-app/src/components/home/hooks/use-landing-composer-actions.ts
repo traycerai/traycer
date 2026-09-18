@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
   CreateEpicChatSeedV12,
   CreateEpicResponseV12,
@@ -68,16 +69,21 @@ import {
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
 // The inline step is shared with the in-epic send, the edit-and-resend, the
 // new-conversation create and the handoff resend - every surface that has to
 // hand the host base64 - so "what the host receives" has one implementation.
 import {
-  imageHashesFromContent,
-  inlineImageHashes,
-  readSessionImageBytes,
-  resolveImageBytes,
-} from "@/lib/composer/composer-image-inlining";
+  containsImageAtoms,
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
+} from "@/lib/composer/image-atoms";
+import { sessionImageBytes } from "@/lib/composer/landing-image-store";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import {
+  resolveDraftImageBytes,
+  type DraftImageByteTarget,
+} from "@/lib/drafts/resolve-draft-image-bytes";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
 // The by-hash half of the same question: which of those nodes need NOT be
 // inlined, because the host will resolve them from this account's blob tier.
 import {
@@ -88,6 +94,7 @@ import {
   reportCreateAttachmentHashCapExceeded,
   type AttachmentsByHashPlan,
 } from "@/lib/composer/attachments-by-hash";
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import {
   createOutcomeIsDecidable,
   pollEpicExistence,
@@ -774,6 +781,7 @@ export function useLandingComposerActions(
           }
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
+          useFirstTaskGuideStore.getState().dismiss();
           clearConsumedLandingWorktreeIntent(workspaceContext);
           // Re-anchor the create-race window on COMPLETION - see the terminal
           // flow's copy for why. This flow needs it most: the tab is opened
@@ -927,7 +935,7 @@ export function useLandingComposerActions(
    */
   const refusedOverWireHashCap = useCallback(
     (content: JsonContent, attempt: DraftSubmissionAttempt): boolean => {
-      if (!exceedsCreateAttachmentHashCap(imageHashesFromContent(content))) {
+      if (!exceedsCreateAttachmentHashCap(hashOnlyImageHashes(content))) {
         return false;
       }
       reportCreateAttachmentHashCapExceeded();
@@ -972,9 +980,13 @@ export function useLandingComposerActions(
         hostId,
         client: input.client,
         plan,
+        // Read here, not inside the leaf: a confirmation is recorded against
+        // the account that uploaded, and a `null` owner (no signed-in account
+        // in this window) confirms nothing, which inlines everything.
+        ownerUserId: currentDraftBlobOwnerId(),
       })
         .then(async (confirmed) => {
-          if (attempt.abortController.signal.aborted) return;
+          if (attemptAborted(attempt)) return;
           if (confirmed.inline.length === 0) {
             if (refusedOverWireHashCap(editorContent, attempt)) return;
             finalizeSubmission({
@@ -989,8 +1001,11 @@ export function useLandingComposerActions(
             });
             return;
           }
-          const bytesByHash = await resolveImageBytes(confirmed.inline);
-          if (attempt.abortController.signal.aborted) return;
+          const bytesByHash = await resolveBase64ByHash(
+            confirmed.inline,
+            draftImageByteTargetForHost(hostId),
+          );
+          if (attemptAborted(attempt)) return;
           const missing = confirmed.inline.filter(
             (hash) => !bytesByHash.has(hash),
           );
@@ -1012,7 +1027,10 @@ export function useLandingComposerActions(
           // node keeps its hash and every other one comes back as base64 -
           // the mixed document `attachmentsByHash` is defined for. Counted
           // AFTER that rewrite, because that is the document the host counts.
-          const resolvedContent = inlineImageHashes(editorContent, bytesByHash);
+          const resolvedContent = inlineHashOnlyImageBytes(
+            editorContent,
+            bytesByHash,
+          );
           if (refusedOverWireHashCap(resolvedContent, attempt)) return;
           finalizeSubmission({
             resolvedContent,
@@ -1029,7 +1047,7 @@ export function useLandingComposerActions(
           });
         })
         .catch(() => {
-          if (attempt.abortController.signal.aborted) return;
+          if (attemptAborted(attempt)) return;
           reportableErrorToast(
             "Couldn't attach an image.",
             { description: "Image storage is unavailable. Please try again." },
@@ -1097,7 +1115,7 @@ export function useLandingComposerActions(
       // the optimistic local-state + navigation block synchronous. Slow path: a
       // restored (session-cold) draft → await IndexedDB BEFORE that block; a hash
       // with no bytes (manual wipe) blocks the send with a toast.
-      const hashes = imageHashesFromContent(editorContent);
+      const hashes = hashOnlyImageHashes(editorContent);
       if (hashes.length === 0) {
         finalizeSubmission({
           resolvedContent: editorContent,
@@ -1142,10 +1160,13 @@ export function useLandingComposerActions(
         });
         return;
       }
-      const sessionBytes = readSessionImageBytes(hashes);
+      const sessionBytes = sessionBase64ByHash(hashes);
       if (sessionBytes !== null) {
         finalizeSubmission({
-          resolvedContent: inlineImageHashes(editorContent, sessionBytes),
+          resolvedContent: inlineHashOnlyImageBytes(
+            editorContent,
+            sessionBytes,
+          ),
           hashOnlyContent: editorContent,
           attachmentsByHash: false,
           text,
@@ -1172,9 +1193,9 @@ export function useLandingComposerActions(
         return;
       }
       submissionInFlightRef.current = true;
-      void resolveImageBytes(hashes)
+      void resolveBase64ByHash(hashes, draftImageByteTargetForHost(hostId))
         .then((bytesByHash) => {
-          if (attempt.abortController.signal.aborted) return;
+          if (attemptAborted(attempt)) return;
           const missing = hashes.filter((hash) => !bytesByHash.has(hash));
           if (missing.length > 0) {
             reportableErrorToast(
@@ -1193,7 +1214,10 @@ export function useLandingComposerActions(
             return;
           }
           finalizeSubmission({
-            resolvedContent: inlineImageHashes(editorContent, bytesByHash),
+            resolvedContent: inlineHashOnlyImageBytes(
+              editorContent,
+              bytesByHash,
+            ),
             hashOnlyContent: editorContent,
             attachmentsByHash: false,
             text,
@@ -1204,7 +1228,7 @@ export function useLandingComposerActions(
           });
         })
         .catch(() => {
-          if (attempt.abortController.signal.aborted) return;
+          if (attemptAborted(attempt)) return;
           reportableErrorToast(
             "Couldn't attach an image.",
             {
@@ -1859,6 +1883,78 @@ function clearConsumedLandingWorktreeIntent(
   // draft). This only runs once a create has actually succeeded, so there is
   // no retry left that needs the staged intent.
   useWorktreeIntentStagingStore.getState().clearForAllHosts(stagingKey);
+}
+
+/**
+ * The landing composer's own byte-resolution policy, on top of the shared
+ * primitives.
+ *
+ * The RESOLUTION (`resolveDraftImageBytes`) and the REWRITE
+ * (`inlineHashOnlyImageBytes`) are upstream's and are not restated here. What
+ * is local is the refusal: a hash with no bytes names nothing on a landing
+ * submit, because no epic exists yet for the host to resolve it against, so
+ * this surface reports a miss and refuses rather than sending a reference
+ * nothing can answer. Every other surface leaves such a node hash-only on
+ * purpose - see `draft-image-inlining.ts`.
+ */
+async function resolveBase64ByHash(
+  hashes: ReadonlyArray<string>,
+  target: DraftImageByteTarget,
+): Promise<Map<string, string>> {
+  const base64ByHash = new Map<string, string>();
+  await Promise.all(
+    hashes.map(async (hash) => {
+      const bytes = await resolveDraftImageBytes(hash, target);
+      if (bytes !== null) base64ByHash.set(hash, bytesToBase64(bytes));
+    }),
+  );
+  return base64ByHash;
+}
+
+/**
+ * The synchronous fast path: every hash straight from this session's cache, or
+ * `null` the moment one is cold.
+ *
+ * Kept even though `resolveDraftImageBytes`' first leg already consults the
+ * session cache, because the value here is not avoiding a round trip - it is
+ * staying in ONE STACK FRAME. A landing submit that yields between reading the
+ * document and clearing it opens a window for a re-entrant submit; the async
+ * path below carries an explicit in-flight guard for exactly that reason, and
+ * this path exists so the common case never needs it.
+ */
+function sessionBase64ByHash(
+  hashes: ReadonlyArray<string>,
+): Map<string, string> | null {
+  const base64ByHash = new Map<string, string>();
+  for (const hash of hashes) {
+    const bytes = sessionImageBytes(hash);
+    if (bytes === null) return null;
+    base64ByHash.set(hash, bytesToBase64(bytes));
+  }
+  return base64ByHash;
+}
+
+/**
+ * Whether this attempt has been abandoned since it was last asked.
+ *
+ * A FUNCTION rather than a bare `attempt.abortController.signal.aborted` read,
+ * and that is the entire point of it. TypeScript narrows a property access and
+ * KEEPS that narrowing across an `await`, because nothing in the type system
+ * models the abort controller flipping the flag from outside this function. So
+ * the first guard in a callback narrows the property to `false`, and the second
+ * one - on the far side of the suspension, which is the only place an abort can
+ * have happened, and therefore the guard that actually matters - types as
+ * always-falsy and lints as an unnecessary condition.
+ *
+ * Deleting that guard is what the lint literally suggests and it would be a
+ * bug: a submit abandoned during the byte read would go on to finalize. A
+ * call's result is a fresh `boolean` every time, so no narrowing carries and
+ * each guard means what it says. Used at every abort check on this surface, not
+ * just the one that happened to trip the rule, so inserting an `await` above
+ * any of them cannot quietly re-create the situation.
+ */
+function attemptAborted(attempt: DraftSubmissionAttempt): boolean {
+  return attempt.abortController.signal.aborted;
 }
 
 function buildEpicLight(input: {

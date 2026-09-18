@@ -70,6 +70,7 @@ describe("interview answers across the host round-trip", () => {
     });
     expect(write.kind).toBe("interview");
     if (write.kind !== "interview") return;
+    expect(write.supersedes).toBeNull();
     expect(write.portable.answers).toEqual([
       {
         questionIdentity: "q-1",
@@ -131,12 +132,14 @@ describe("draft write codec", () => {
       composerMode: "chat",
       workspace: null,
       closed: false,
+      supersedes: "ancestor-1",
     });
     expect(write.target.chatId).toBe("chat-1");
     expect(write.target.epicId).toBe("epic-1");
     expect(write.kind).toBe("chat-composer");
     if (write.kind !== "chat-composer") return;
     expect(write.portable.blobHashes).toEqual([HASH]);
+    expect(write.supersedes).toBe("ancestor-1");
   });
 
   it("collects sha256 image refs without inlining bytes", () => {
@@ -149,11 +152,13 @@ describe("draft write codec", () => {
       content: { type: "doc", content: [{ type: "paragraph" }] },
       blobHashes: [HASH],
       createdAt: 42,
+      annotations: [],
     });
     expect(write.kind).toBe("stash-entry");
     if (write.kind !== "stash-entry") return;
     expect(write.revision).toBe(0);
     expect(write.portable.createdAt).toBe(42);
     expect(write.portable.blobHashes).toEqual([HASH]);
+    expect(write.supersedes).toBeNull();
   });
 });

@@ -1,14 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { DraftsPutBlobResponse } from "@traycer/protocol/host/drafts/schemas";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { hostRpcRegistry } from "@traycer/protocol/host";
 
 import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
@@ -17,14 +10,7 @@ import { createComposerPickerStore } from "@/components/chat/composer/picker/com
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
-import {
-  recordNegotiatedStreamMethodVersions,
-  resetNegotiatedStreamVersions,
-} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
-import type { HostRpcRegistry } from "@/lib/host";
 
 const imageStoreMocks = vi.hoisted(() => ({
   sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
@@ -33,11 +19,9 @@ const imageStoreMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   return {
     ...actual,
     sessionImageBytes: imageStoreMocks.sessionImageBytes,
@@ -47,14 +31,6 @@ vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
 
 const HASH = "hash-in-epic-image-1";
 const IMAGE_BYTES = new Uint8Array([1, 2, 3, 4]);
-
-// A real-looking sha256 hex digest, for the by-hash arm below: `putDraftBlobs`
-// keys the upload's idempotency on the hash itself, and `HostRequestCoordinator`
-// validates that key against the wire's sha256 shape - the plain `HASH` label
-// above never reaches that seam (the inline arm never uploads), so it was
-// never validated against it either.
-const BY_HASH_SHA256 =
-  "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00";
 
 function hashOnlyImageDoc(): JsonContent {
   return {
@@ -98,32 +74,6 @@ function hashOnlyImageDocWithText(text: string): JsonContent {
               size: 4,
               byHashEligible: true,
               hash: HASH,
-            },
-          },
-          { type: "text", text },
-        ],
-      },
-    ],
-  };
-}
-
-/** Same shape as {@link hashOnlyImageDocWithText}, keyed on the by-hash arm's own sha256. */
-function byHashDoc(text: string): JsonContent {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: [
-          {
-            type: "imageAttachment",
-            attrs: {
-              id: "node-1",
-              fileName: "shot.png",
-              mimeType: "image/png",
-              size: 4,
-              byHashEligible: true,
-              hash: BY_HASH_SHA256,
             },
           },
           { type: "text", text },
@@ -194,12 +144,19 @@ function fakeEditor(content: JsonContent): ComposerPromptEditorHandle {
   };
 }
 
+/**
+ * Mounts the hook for the INLINE arm.
+ *
+ * `targetHostId: null` and a bridge that answers `false` keep
+ * `submitHostHeldImageHashes` at its inherited set, so every hash-only node
+ * these cases carry still owes bytes and the resolution path runs - which is
+ * the path this file is about. It no longer takes a host client: the hook
+ * itself never uploads (see the retirement note at the bottom of this file).
+ */
 function mountSubmit(args: {
   readonly taskId: string;
   readonly editor: ComposerPromptEditorHandle;
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
-  readonly hostId: string | null;
-  readonly hostClient: HostClient<HostRpcRegistry> | null;
 }) {
   const toolbarStore = createComposerToolbarStore({
     seedKey: "hash-first-image-submit",
@@ -215,13 +172,12 @@ function mountSubmit(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
   return renderHook(() =>
     useChatComposerSubmit({
       taskId: args.taskId,
-      hostId: args.hostId,
-      hostClient: args.hostClient,
       editorRef: { current: args.editor },
       pickerStore: createComposerPickerStore(),
       toolbarStore,
@@ -235,85 +191,13 @@ function mountSubmit(args: {
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
-      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
+      targetHostId: null,
+      queueEditTargetId: null,
+      getDraftBlobBridgeSupported: () => false,
     }),
   );
-}
-
-// A real `HostClient` (not a bare mock) - `drafts.putBlob` dispatches through
-// `requestWithOptions` with its own `responseTimeoutMs`, which `HostClient`
-// validates against the registry-declared scheduling policy before the call
-// ever reaches the messenger (see the epic-create-refusal-repair-host fixture
-// for the same trap). Each `drafts.putBlob` call is held open until
-// {@link release} is called, so a test can drive exactly when an upload
-// settles relative to a generation-changing edit.
-function createGatedByHashHostFixture(hostId: string): {
-  readonly hostClient: HostClient<HostRpcRegistry>;
-  readonly release: (ok: boolean) => void;
-  readonly pendingCount: () => number;
-  readonly putBlobCallCount: () => number;
-} {
-  // A QUEUE, not a single slot: an ablated `confirmAttachmentsByHash` (or any
-  // other bug that re-uploads) issues a SECOND `drafts.putBlob` before the
-  // test releases the first, and a one-shot gate then parks that second call
-  // forever - the test times out waiting for the send instead of ever
-  // reaching its call-count assertion, so the ablation "reddens" for a reason
-  // that has nothing to do with the claim. A queue lets every call - real or
-  // ablation-only - actually settle, so the assertion that follows is the one
-  // that runs.
-  // The response is the DISCRIMINATED UNION, not `{ ok: boolean }`: a failed
-  // put also carries `reason`, so a boolean-shaped resolver does not satisfy
-  // the handler's type. `release` below maps the caller's boolean onto the
-  // matching member rather than widening the union here.
-  const pending: Array<(response: DraftsPutBlobResponse) => void> = [];
-  let callCount = 0;
-  const messenger = new MockHostMessenger<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    requestId: () => "req-chat-byhash-gated",
-    handlers: {
-      "drafts.putBlob": () => {
-        callCount += 1;
-        return new Promise<DraftsPutBlobResponse>((resolve) => {
-          pending.push(resolve);
-        });
-      },
-    },
-  });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  const entry = { ...mockLocalHostEntry, hostId };
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (candidate) => (candidate === hostId ? entry : null),
-    messenger,
-    schedulingPolicy: hostRpcSchedulingPolicy,
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({
-      identity: {
-        userId: "user-byhash",
-        username: "user-byhash",
-        providerHandle: null,
-      },
-      origin: "renderer",
-    }),
-  );
-  return {
-    hostClient: spine.createRequester(entry),
-    release: (ok) => {
-      const resolve = pending.shift();
-      if (resolve === undefined) {
-        throw new Error("no drafts.putBlob call in flight");
-      }
-      resolve(ok ? { ok: true } : { ok: false, reason: "digest-mismatch" });
-    },
-    pendingCount: () => pending.length,
-    putBlobCallCount: () => callCount,
-  };
 }
 
 beforeEach(() => {
@@ -326,12 +210,15 @@ beforeEach(() => {
 
 afterEach(() => {
   useComposerDraftStore.setState({ drafts: {} });
-  resetNegotiatedStreamVersions();
   resetDraftBlobTransportForTests();
 });
 
 describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
-  it("(a) synchronous session-cache fast path - submitted payload carries b64content", async () => {
+  // NOT `async`, and that is the claim rather than a lint concession: this
+  // path dispatches in the same stack frame as `submitDraft`, so there is
+  // nothing to await and a signature saying otherwise weakens the assertion
+  // below.
+  it("(a) synchronous session-cache fast path - submitted payload carries b64content", () => {
     imageStoreMocks.sessionImageBytes.mockReturnValue(IMAGE_BYTES);
 
     const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
@@ -339,8 +226,6 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       taskId: "chat-fast-path",
       editor: fakeEditor(hashOnlyImageDoc()),
       onSubmitMessage: submit,
-      hostId: null,
-      hostClient: null,
     });
 
     act(() => {
@@ -369,8 +254,6 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       taskId: "chat-cold-hash",
       editor: fakeEditor(hashOnlyImageDoc()),
       onSubmitMessage: submit,
-      hostId: null,
-      hostClient: null,
     });
 
     act(() => {
@@ -378,7 +261,7 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
     });
     // Not sent yet - the session cache missed and the store read is async.
     expect(submit).not.toHaveBeenCalled();
-    expect(result.current.imageResolutionPending).toBe(true);
+    expect(result.current.annotationPreparationPending).toBe(true);
 
     await waitFor(() => {
       expect(submit).toHaveBeenCalledTimes(1);
@@ -390,7 +273,7 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
     expect(atoms[0]?.b64content).toBe(
       btoa(String.fromCharCode(...IMAGE_BYTES)),
     );
-    expect(result.current.imageResolutionPending).toBe(false);
+    expect(result.current.annotationPreparationPending).toBe(false);
   });
 
   it("(c) non-refusal: a hash with NO local bytes anywhere is left hash-only and the send STILL goes out", async () => {
@@ -406,8 +289,6 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       taskId: "chat-host-only-hash",
       editor: fakeEditor(hashOnlyImageDoc()),
       onSubmitMessage: submit,
-      hostId: null,
-      hostClient: null,
     });
 
     act(() => {
@@ -424,7 +305,7 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
     // Left HASH-ONLY - never dropped from the document, never a b64content.
     expect(atoms[0]?.hash).toBe(HASH);
     expect(atoms[0]?.b64content).toBeNull();
-    expect(result.current.imageResolutionPending).toBe(false);
+    expect(result.current.annotationPreparationPending).toBe(false);
   });
 
   // The async arm used to be `.then(dispatch).catch(() => dispatch(original))`.
@@ -444,8 +325,6 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       taskId: "chat-double-dispatch",
       editor: fakeEditor(hashOnlyImageDoc()),
       onSubmitMessage: submit,
-      hostId: null,
-      hostClient: null,
     });
 
     act(() => {
@@ -466,7 +345,7 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
     // The in-flight latch must still clear, or the composer would refuse every
     // later send after one throwing dispatch.
     await waitFor(() => {
-      expect(result.current.imageResolutionPending).toBe(false);
+      expect(result.current.annotationPreparationPending).toBe(false);
     });
   });
 
@@ -494,8 +373,6 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       taskId,
       editor: editor.handle,
       onSubmitMessage: submit,
-      hostId: null,
-      hostClient: null,
     });
 
     act(() => {
@@ -535,7 +412,7 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       btoa(String.fromCharCode(...IMAGE_BYTES)),
     );
     await waitFor(() => {
-      expect(result.current.imageResolutionPending).toBe(false);
+      expect(result.current.annotationPreparationPending).toBe(false);
     });
   });
 
@@ -559,8 +436,6 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       taskId: "chat-second-submit-during-await",
       editor: fakeEditor(hashOnlyImageDoc()),
       onSubmitMessage: submit,
-      hostId: null,
-      hostClient: null,
     });
 
     act(() => {
@@ -596,184 +471,26 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
   });
 });
 
-// The BY-HASH arm's own generation guard - same `settleResolvedSend` seam as
-// the cold-read arm above, but the async gap here is an UPLOAD
-// (`drafts.putBlob`) rather than an IndexedDB read, and a stale-generation
-// retry that lands on an already-confirmed hash must not re-upload it.
-describe("useChatComposerSubmit: by-hash upload arm - generation guard and no-double-upload", () => {
-  const HOST_ID = "host-chat-byhash";
-
-  beforeEach(() => {
-    recordNegotiatedStreamMethodVersions(
-      HOST_ID,
-      new Map([["chat.subscribe", { major: 1, minor: 11 }]]),
-    );
-    // The upload path reads local bytes through the SAME `getImageBytes` the
-    // cold-read arm mocks above - `draft-blob-transport`'s `localBytesForHash`
-    // calls it too, so this one setting covers both readers.
-    imageStoreMocks.getImageBytes.mockResolvedValue(IMAGE_BYTES);
-  });
-
-  // C-new-3: typing during the upload await is preserved, AND (since the
-  // retry lands on an already-confirmed hash) doubles as the no-double-upload
-  // control - the two facts share one run because the re-entry's upload skip
-  // is what makes the resend possible without a second round trip.
-  it("typing during the upload await is preserved, and the confirmed hash is not re-uploaded on retry", async () => {
-    const fixture = createGatedByHashHostFixture(HOST_ID);
-    const taskId = "chat-byhash-typing-preserved";
-    const editor = mutableEditor(byHashDoc("first"));
-    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
-    const { result } = mountSubmit({
-      taskId,
-      editor: editor.handle,
-      onSubmitMessage: submit,
-      hostId: HOST_ID,
-      hostClient: fixture.hostClient,
-    });
-
-    act(() => {
-      result.current.submitDraft("enter");
-    });
-    expect(submit).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(fixture.putBlobCallCount()).toBe(1);
-    });
-
-    // Both halves of a real keystroke: the document changes, and the editor
-    // boundary bumps the draft store's `revision` (what the generation guard
-    // reads).
-    const typed = byHashDoc("first and then more");
-    act(() => {
-      editor.setJSON(typed);
-      useComposerDraftStore.getState().setSnapshot(taskId, typed, null);
-    });
-
-    // Release every call the retry issues, not just the first: a memo bug
-    // (confirmed-hash filter deleted) makes the re-entry re-upload, which
-    // parks a SECOND `drafts.putBlob` with nobody to answer it. Draining the
-    // queue here is what lets that ablation reach the call-count assertion
-    // below instead of timing out on the `waitFor(submit)` first - a red from
-    // a stuck queue proves the fixture is one-shot, not that the memo works.
-    await act(async () => {
-      fixture.release(true);
-      await Promise.resolve();
-    });
-    while (fixture.pendingCount() > 0) {
-      await act(async () => {
-        fixture.release(true);
-        await Promise.resolve();
-      });
-    }
-
-    await waitFor(() => {
-      expect(submit).toHaveBeenCalledTimes(1);
-    });
-    // The send carries the text typed DURING the upload, not the captured one.
-    expect(submit.mock.calls[0][0].contentText).toContain("and then more");
-    const atoms = collectImageAtoms(submit.mock.calls[0][0].content);
-    expect(atoms[0]?.hash).toBe(BY_HASH_SHA256);
-    expect(atoms[0]?.b64content).toBeNull();
-    // Re-entered from the annotation stage (fresh `editor.getJSON()`), not
-    // resent from the stale capture - and the re-derived plan finds the hash
-    // already confirmed, so it never re-uploads it.
-    expect(fixture.putBlobCallCount()).toBe(1);
-    await waitFor(() => {
-      expect(result.current.imageResolutionPending).toBe(false);
-    });
-  });
-
-  // C-new-3's second fact: a second Enter while the upload is in flight must
-  // not start a second upload or a second send.
-  it("a second submit during the upload await is a no-op", async () => {
-    const fixture = createGatedByHashHostFixture(HOST_ID);
-    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
-    const { result } = mountSubmit({
-      taskId: "chat-byhash-second-submit",
-      editor: fakeEditor(byHashDoc("look")),
-      onSubmitMessage: submit,
-      hostId: HOST_ID,
-      hostClient: fixture.hostClient,
-    });
-
-    act(() => {
-      result.current.submitDraft("enter");
-    });
-    expect(submit).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(fixture.putBlobCallCount()).toBe(1);
-    });
-
-    act(() => {
-      result.current.submitDraft("enter");
-    });
-    expect(submit).not.toHaveBeenCalled();
-
-    await act(async () => {
-      fixture.release(true);
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(submit).toHaveBeenCalledTimes(1);
-    });
-    // Drain every remaining microtask: a second dispatch would land here.
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(submit).toHaveBeenCalledTimes(1);
-    // The second submit never started an upload of its own either.
-    expect(fixture.putBlobCallCount()).toBe(1);
-  });
-
-  // C-new-4's failure-direction pair: when the FIRST pass's upload does not
-  // confirm the hash (host digest-mismatch), the stale-generation retry has
-  // nothing confirmed to skip and DOES re-upload - total calls go to 2, not 1.
-  it("an unconfirmed hash's stale-generation retry DOES re-upload", async () => {
-    const fixture = createGatedByHashHostFixture(HOST_ID);
-    const taskId = "chat-byhash-unconfirmed-retry";
-    const editor = mutableEditor(byHashDoc("first"));
-    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
-    const { result } = mountSubmit({
-      taskId,
-      editor: editor.handle,
-      onSubmitMessage: submit,
-      hostId: HOST_ID,
-      hostClient: fixture.hostClient,
-    });
-
-    act(() => {
-      result.current.submitDraft("enter");
-    });
-    await waitFor(() => {
-      expect(fixture.putBlobCallCount()).toBe(1);
-    });
-
-    const typed = byHashDoc("first and then more");
-    act(() => {
-      editor.setJSON(typed);
-      useComposerDraftStore.getState().setSnapshot(taskId, typed, null);
-    });
-
-    // Pass 1's upload digest-mismatches - the hash is never confirmed.
-    await act(async () => {
-      fixture.release(false);
-      await Promise.resolve();
-    });
-
-    // The retry re-derives the plan, finds nothing confirmed, and uploads
-    // again.
-    await waitFor(() => {
-      expect(fixture.putBlobCallCount()).toBe(2);
-    });
-    await act(async () => {
-      fixture.release(true);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(submit).toHaveBeenCalledTimes(1);
-    });
-    expect(fixture.putBlobCallCount()).toBe(2);
-  });
-});
+// RETIRED: "useChatComposerSubmit: by-hash upload arm - generation guard and
+// no-double-upload" (three cases, plus the `createGatedByHashHostFixture` that
+// drove them through a real `HostClient`).
+//
+// They pinned a `drafts.putBlob` issued BY THIS HOOK at submit. The hook no
+// longer uploads anything: `chat.subscribe@1.12` moved send-path
+// materialization behind the bridge capability, and the bytes get to the host
+// from `lib/drafts/draft-mirror-coordinator.ts` while the user types. All this
+// hook does now is ask `submitHostHeldImageHashes` what the host already holds.
+// With no upload in the unit, "not re-uploaded on retry", "a second submit
+// during the upload await is a no-op" and "a stale-generation retry DOES
+// re-upload" have nothing to observe - a fixture counting `putBlob` calls here
+// would assert zero and pass whatever the hook did.
+//
+// Where each claim lives now:
+//  - the upload itself, its de-duplication and its epoch fence: the mirror
+//    coordinator's own suites, over `putDraftBlobs`.
+//  - upload-at-submit with a generation guard across it: the inline EDIT
+//    composer is the one surface that still does this (it has no mirror), and
+//    `use-chat-message-actions-edit-by-hash.test.tsx` drives the real
+//    `putDraftBlobs` against a faked `drafts.putBlob`.
+//  - "typing during the await is preserved" for THIS hook: still pinned above,
+//    over the byte-resolution await, which is the only await it has left.

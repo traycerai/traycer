@@ -19,19 +19,7 @@ export const GENERAL = defineSettingsSection("general", {
   page: {
     label: "General",
     description: "App behavior, agent activity, and local data controls.",
-    keywords: [
-      "preferences",
-      "options",
-      "misc",
-      "website sessions",
-      "save website sessions",
-      "bring in existing sessions",
-      "saved website sessions",
-      "cookies",
-      "logins",
-      "stay signed in",
-      "browser profile",
-    ],
+    keywords: ["preferences", "options", "misc"],
   },
   chatComposer: {
     kind: "group",
@@ -41,6 +29,31 @@ export const GENERAL = defineSettingsSection("general", {
     breadcrumb: null,
     availableWhen: alwaysAvailable,
     keywords: ["prompt", "input", "message box", "editor"],
+  },
+  // Application scope, deliberately: this is one preference for this app, not
+  // per machine, so it belongs here rather than under the sidebar's host picker
+  // (SETTINGS.md, "Scope: the organising idea"). The Auto-mode judge it pairs
+  // with IS per machine and lives on the host-scoped Permissions page for the
+  // same reason.
+  defaultPermission: {
+    kind: "row",
+    group: "chatComposer",
+    search: { anchor: "general-default-permission-mode" },
+    label: "Default permission mode",
+    description:
+      "What a new conversation starts under. A machine you have already run agents on reuses the mode it last ran with; this is what a fresh one opens on, and any chat can still change its own.",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "permissions",
+      "approval",
+      "approve",
+      "auto mode",
+      "plan mode",
+      "accept edits",
+      "full access",
+      "supervised",
+      "new chat",
+    ],
   },
   voiceInput: {
     kind: "row",
@@ -79,68 +92,6 @@ export const GENERAL = defineSettingsSection("general", {
       "ctrl",
       "shortcut",
     ],
-  },
-  // Gated on DATA: the card renders only once a terminal has printed a local
-  // URL, which no shell can promise — so it folds into the page.
-  browser: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Browser",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  detectedDevOrigins: {
-    kind: "row",
-    group: "browser",
-    search: { contributesTo: "page" },
-    label: "Detected dev origins",
-    description:
-      "Terminal URLs with local hosts or explicit ports are kept for browser-origin classification.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  // Gated on the HOST RUNTIME: the group also needs a bound host runtime and a
-  // first successful read of the browser bridge, so none of it is a target.
-  websiteSessions: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Website sessions",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  saveWebsiteSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Save website sessions on this computer",
-    // Says whether saving is on or paused, so the sentence is the row's status.
-    description: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  savedWebsiteSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Saved website sessions",
-    description:
-      "Shared with connected Traycer hosts. Removing a site may sign you out there.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  bringInExistingSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Bring in existing sessions",
-    description:
-      "Choose a browser or cookie file, then review the sites before importing.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
   },
   // Drawn by `PreventSleepSettingsSection` around its one row - the two
   // resource-visibility toggles that used to sit beside it moved to Layout -
@@ -212,24 +163,6 @@ export const GENERAL = defineSettingsSection("general", {
       "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts.",
     availableWhen: alwaysAvailable,
     keywords: ["roles", "coordination", "delegation", "feature flag"],
-  },
-  onboarding: {
-    kind: "group",
-    search: { anchor: "general-onboarding" },
-    label: "Onboarding",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["tour", "welcome", "first run", "intro"],
-  },
-  productTour: {
-    kind: "row",
-    group: "onboarding",
-    search: { anchor: "general-product-tour" },
-    label: "Product tour",
-    description: "Replay the first-launch onboarding tour.",
-    availableWhen: alwaysAvailable,
-    keywords: ["tour", "walkthrough", "replay", "welcome", "guide"],
   },
   dangerZone: {
     kind: "group",

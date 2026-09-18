@@ -1,3 +1,4 @@
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { SyntheticEvent } from "react";
 import type {
   BrowserNavState,
@@ -82,7 +83,13 @@ export function useScreencastTileChrome(
   const addressValue = draft.addressValue;
   const navigateToUrl = (url: string): void => {
     draft.onAddressSubmitted(url);
-    if (url === normalizeBrowserAddressInput(liveUrl)) {
+    if (
+      url ===
+      normalizeBrowserAddressInput(
+        liveUrl,
+        useSettingsStore.getState().browserSearchEngine,
+      )
+    ) {
       onReload();
     } else {
       onNavigateUrl(url);
@@ -111,7 +118,10 @@ export function useScreencastTileChrome(
     annotation: null,
     onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
       event.preventDefault();
-      const url = normalizeBrowserAddressInput(addressValue);
+      const url = normalizeBrowserAddressInput(
+        addressValue,
+        useSettingsStore.getState().browserSearchEngine,
+      );
       navigateToUrl(url);
     },
     onAddressChange: draft.onAddressChange,

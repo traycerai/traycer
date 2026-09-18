@@ -42,19 +42,31 @@ import type {
 const DEFAULT_SLASH_PROVIDER_ID = "claude";
 
 export interface InlineEditState {
+  /**
+   * Identity of one editing SESSION, minted by `beginInlineEdit`.
+   *
+   * `targetMessageId` cannot stand in for it: cancelling an edit of message M
+   * and reopening M is a new session with the same target, and an async submit
+   * preparation left over from the first one would otherwise recognise the
+   * second as its own and send it - with the first session's revert choices and
+   * without the user ever pressing send again. Minted at the dispatch site
+   * rather than in the reducer, so a double-invoked reducer cannot mint two.
+   */
+  readonly sessionId: string;
   readonly targetMessageId: string;
   readonly originalMessage: ChatMessageModel;
   readonly initialContent: JsonContent;
   readonly currentContent: JsonContent;
   /**
-   * Bumped on every content edit, and on nothing else.
+   * Which version of `currentContent` this is, counted from 0 at
+   * `beginInlineEdit` and minted at the DISPATCH site like `sessionId`.
    *
-   * The generation an async edit submit captures (see
-   * `captureComposerSubmitGeneration`). An edit submit can now await an image
-   * read or a blob upload, and the editor stays EDITABLE across that await, so
-   * the document at dispatch need not be the one that was submitted. The epoch
-   * beside it answers a different question - which edit SESSION is live - and
-   * typing deliberately does not bump that, so it cannot stand in for this.
+   * It exists because a React update that has been queued but not yet committed
+   * is invisible to everything outside React - including an awaited image
+   * preparation deciding what to send. The send publishes the revision it
+   * actually sent, and `markInlineEditPending` refuses to mark a different one,
+   * so an acknowledgement can never close an editor over content that was never
+   * put on the wire.
    */
   readonly revision: number;
   readonly dirty: boolean;
@@ -80,6 +92,7 @@ export type ChatTileUiAction =
     }
   | {
       readonly type: "beginInlineEdit";
+      readonly sessionId: string;
       readonly targetMessageId: string;
       readonly originalMessage: ChatMessageModel;
       readonly initialContent: JsonContent;
@@ -87,12 +100,15 @@ export type ChatTileUiAction =
   | {
       readonly type: "updateInlineEditContent";
       readonly content: JsonContent;
+      readonly revision: number;
     }
   | {
       readonly type: "markInlineEditPending";
       readonly targetMessageId: string;
       readonly clientActionId: string;
       readonly messageId: string;
+      /** The `revision` whose content this send actually carried. */
+      readonly sentRevision: number;
     }
   | {
       readonly type: "clearInlineEdit";
@@ -130,6 +146,7 @@ export function chatTileUiReducer(
       return {
         ...state,
         inlineEdit: {
+          sessionId: action.sessionId,
           targetMessageId: action.targetMessageId,
           originalMessage: action.originalMessage,
           initialContent: action.initialContent,
@@ -143,13 +160,25 @@ export function chatTileUiReducer(
       };
     case "updateInlineEditContent":
       if (state.inlineEdit === null) return state;
-      if (state.inlineEdit.pendingClientActionId !== null) return state;
+      // Deliberately NOT gated on `pendingClientActionId`. These ids are the
+      // RAW record of a send, and a rejected dispatch is settled by the
+      // projection (`projectInlineEditAgainstState`) rather than by an action -
+      // so after a rejection the raw state still names the failed send while
+      // the editor the user is looking at has been reopened. Refusing here
+      // froze that editor for good: the correction never reached the reducer,
+      // the retry's own mark was refused as a revision mismatch, and its
+      // acknowledgement then closed an editor still tracking the first attempt.
+      //
+      // Freezing during a LIVE send is the hook's job and is done from the live
+      // record (`inlineEditSendOutstanding`), which reads the projection - the
+      // same state that reopens the editor - so it lifts exactly when the
+      // editor does.
       return {
         ...state,
         inlineEdit: {
           ...state.inlineEdit,
           currentContent: action.content,
-          revision: state.inlineEdit.revision + 1,
+          revision: action.revision,
           dirty: true,
           pendingClientActionId: null,
           pendingMessageId: null,
@@ -159,6 +188,13 @@ export function chatTileUiReducer(
       if (state.inlineEdit?.targetMessageId !== action.targetMessageId) {
         return state;
       }
+      // The mark has to describe the content that was SENT. A send prepared
+      // asynchronously can be overtaken by an edit the user made while it was
+      // in flight, and marking THAT one pending hands it to an acknowledgement
+      // which closes the editor - discarding, with no trace, text the user can
+      // still see. Refusing leaves the newer edit open and dirty, which is what
+      // it is: unsent.
+      if (state.inlineEdit.revision !== action.sentRevision) return state;
       return {
         ...state,
         inlineEdit: {

@@ -22,6 +22,7 @@ SettingsLayout
 ├── SettingsSidebar
 └── Outlet
     └── settings panel route
+        ├── GettingStartedSettingsPanel
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
         ├── LayoutSettingsPanel
@@ -61,6 +62,69 @@ alias - so it is a superset, and three ids went missing before anyone noticed
 The gate now exists and is a test rather than the compiler:
 `stores/tabs/__tests__/settings-kind.test.ts` asserts every section id is in
 the set.
+
+## Getting started
+
+`/settings/getting-started` is the persistent setup checklist for agent selection,
+appearance and layout, and browser sign-ins.
+Cards launch guides over the existing controls
+through `SettingsSetupGuide`, shared by the modal and routed settings surfaces.
+It uses the same nonmodal coachmark as the first-task guide: no overlay or
+focus trap, and nested pickers pause it. In a modal it portals inside that modal.
+A halo marks the target; there is no arrow. While the card has focus, Right/Enter
+continues and Left goes back; Tab and Enter retain native button behavior.
+Action-required steps press the real control when it is a button or link, and focus it when it is a field, instead of skipping it. Once focus
+moves into a control, the coachmark does not take it back. Text fields and pickers
+keep their own keys. Keyboard navigation reveals settings instantly.
+Escape closes the guide before Settings can close and returns focus to its target, and it works from anywhere on the surface rather than only from the card or its target - unless a picker, menu or dialog is open, which answers its own Escape first.
+Closing a guide is a skip, and a skip is done: Escape and the card's X both mark that guide complete, so a card the person has seen and declined never comes back asking again.
+Closing the settings surface mid-guide is not a skip - `activeSetup` is session-local presence, so the guide simply resumes at its step when Settings reopens.
+
+**Every step names its own section**, not the guide.
+The guide draws only while the mounted section is the one the current step points at, Continue navigates to the next step's section when it differs, and Back navigates to the previous step's.
+`setupGuideStepSection` is the same answer for a card: resuming lands on the section of the step it resumes at, not on a section hardcoded per guide.
+The engine's mount point survives a section change (`SettingsPanelForSection` swaps the panel beneath it), so crossing sections does not pause the guide.
+
+**The guides are a table, not four special cases.**
+`stores/onboarding/setup-guides.ts` holds every step - its section, its selector, its copy - and is React-free, so the store, the coachmark and the product code a step waits on all read the same rows.
+`SETUP_GUIDE_LENGTHS` is gone with it: `setupGuideLength(id)` is the step list's own length, never a number copied beside it.
+
+The three guides: agent selection is three steps on Agents (the editor shell, its Edit/Preview toggle, the Revert button).
+Appearance and layout is five, and it crosses surfaces: theme mode, wallpaper and interface font on Appearance, then the density preset and the sidebar panel arranger on Layout.
+Browser sign-ins is two steps on Browser: the "Save website sessions" switch, then the "Choose source…" button, which is action-required and is where the guide waits.
+It is also the one guide with a `requiresBrowserView` flag, because without the desktop browser bridge there is no way to finish it.
+
+Progress is local in `onboarding-store`: -1 means not started, intermediate steps
+resume, and the guide length means complete. Active guides are session-local;
+replaying a completed guide does not clear completion. Agent selection and
+appearance finish on Done, so keeping defaults is valid.
+
+The store is persisted at version 2.
+The migration settles a checklist nobody has touched for anyone who finished the tour before the checklist shipped: every guide is marked complete and the reminder is dismissed, because they have been using the app already and three open cards would be a nag rather than a checklist.
+Someone part-way through a guide keeps their progress and is still offered the rest of it, and a user who has not finished the tour is left alone.
+
+**A step the product finishes says so in the table, and the product reports an event rather than a guide id.**
+A step carries `advanceOn` for an event that moves past it in place of Continue, and `completesOn` for the event that ends the guide from it.
+`SettingsSetupGuide` reads those flags: a step with `completesOn` offers no Done and waits, and `advanceSetup` refuses to walk off it, so the guide can only end with the real thing having happened.
+Both call sites go through `notifySetupEvent`: the "Save website sessions" switch reports `browser-save-enabled`, which auto-advances to the import step (the switch IS the step, so there is nothing to confirm), and the existing import mutation reports `browser-logins-imported` only when cookies were successfully imported.
+Cancelled, blocked, and empty imports leave the card unfinished, and neither `browser-settings-section.tsx` nor the mutation hook names a guide.
+Import is offered only when the desktop browser bridge and host binding are present.
+
+A started, unfinished card reads "Step n of total" and draws a thin meter along its bottom edge; a finished one keeps the green check and "Complete".
+The meter is a native `<progress>` filled with the steps already COMPLETED, styled through `getting-started-settings.css`: the last unfinished step draws a nearly-full bar, not a full one, and no table of width classes has to track the step counts.
+The header count is "n of m complete" over the guides this shell can OFFER - the tour plus the available ones.
+A guide gated out (`requiresBrowserView` on a build with no browser bridge) drops out of the numerator and the denominator alike, so the panel never reads one short for ever and the start page's reminder, which is that same difference, goes quiet once the reachable work is done.
+The sidebar's progress ring counts the same way.
+
+Each card's label and copy come from `getting-started-settings.definitions.ts`, like any other searchable setting.
+Only the replay card owns a search ENTRY and an anchor - it inherited the removed General "Product tour" row, keywords included, so "walkthrough" and "first run" still land on it.
+The three guide cards contribute their words to the page instead: each one names a settings page that already has an entry of its own, and a second result under the same label would outrank the page the person typing it wants.
+
+Getting started leads the sidebar in its own unlabeled Guide group, above
+Application. It uses the first settings leader digit; General uses the second.
+The start page offers the checklist through a persistent, dismissible toast once
+the first-task guide ends. Dismissing it is remembered locally across reloads;
+the checklist remains available in Settings. Completed checklists hide the toast.
 
 ## Search
 
@@ -288,7 +352,9 @@ different answers:
   stream and a negotiated import capability; host Diagnostics' Log detail and
   both Shell cards, Terminal shell · New terminals and Host environment ·
   After restart, which a host too old for the config RPC replaces with a
-  notice; and the Overview's Installation and Danger zone cards themselves,
+  notice; Permissions' Auto mode group, which a host advertising
+  neither `autoJudge.get` nor `autoPolicy.get` has no notion of at all; and
+  the Overview's Installation and Danger zone cards themselves,
   which the page drops for an unresolved or vanished host) — not indexed. A
   shell-level context cannot decide selected-host identity or a capability
   negotiated over host RPC, and a predicate that pretended to would be a
@@ -297,8 +363,8 @@ different answers:
   every definition on it `contributesTo: "page"` — its label folds into the
   page entry's keywords beside the page's own vocabulary — so
   "uninstall", "snapshots", "import", "installation", "log level", "startup
-  flags" and "wsl" still land on the right page. The invariant that follows:
-  **no host-scoped section indexes an anchor.**
+  flags", "wsl" and "auto mode policy" still land on the right page. The
+  invariant that follows: **no host-scoped section indexes an anchor.**
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
   host runtime and a successful first read of the browser bridge; host
   Notifications' two groups, which the page's scope gate conceals while the
@@ -911,14 +977,75 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     for rebinding). `Pin context usage breakdown` used to sit here and now
     lives in **Layout › Chat** - it places a panel rather than changing what
     the composer does.
-  - **Browser**: the in-app browser has no toggle - it is always on, and the
-    group carries no master switch. What is left of the group is the
-    conditional **Detected dev origins** row (terminal URLs with local hosts
-    or explicit ports, kept for browser-origin classification), so the whole
-    `SettingsGroup` is skipped when none were detected rather than drawing a
-    heading over an empty card. The link-open and agent-tab-surfacing selects
-    that used to lead this group live in **Opening behavior** now - see that
-    section for the fields and their semantics.
+    - **Default permission mode** is the only writer of
+      `settingsStore.defaultPermission`, which until this row existed was
+      initialized and never written. It renders the composer's own
+      `PermissionsPicker` with `supportedPermissionModes={null}` and
+      `harnessLabel={null}` (no harness scope, so every mode stays enabled -
+      that null case was documented on the picker for this row before the row
+      existed) and `closeFocus="trigger"`. That last prop is new and exists for
+      this caller: the picker's composer-focus return is app-global and its
+      inactive fallback can name an editor on a canvas BEHIND Settings, so
+      closing the menu here would pull focus, and the tab it lives in, out from
+      under the panel.
+      It is APPLICATION scope, not host scope, which is why it is here rather
+      than beside the Auto-mode judge it pairs with (see "Scope: the
+      organising idea"): it is one preference for this app. It is also not the
+      only input to a new chat - a composer prefers the last mode that HOST ran
+      with (`composer-run-settings-store`, bucketed per host) - so the copy
+      says "what a fresh one opens on". Session import reads the same ladder
+      (`newChatPermissionModeFor`), which is what makes this row the thing that
+      can put `auto` into an import; see `session-import-wizard.tsx`'s note on
+      why the gate now reads `sessionImport.run`'s own negotiated line rather
+      than a catalog row, so an import no longer silently demotes on a remote
+      host.
+  - **Running agents**: Prevent sleep while running
+    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
+    "Two different mobile questions") is the only row left. The two
+    resource-visibility toggles that used to sit beside it - the global
+    resources button and the sidebar resource chips - moved to **Layout**
+    (Status bar and Sidebar respectively), which is where WHERE-a-thing-sits
+    controls live now. Because that leaves one self-hiding row, the group
+    itself is returned by `prevent-sleep-settings-section.tsx` rather than
+    wrapped here, so the heading disappears with the row instead of drawing
+    over an empty card.
+  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
+    your work and Data migration used to share this group under the name
+    "Setup & migration"; both moved to the scoped host's **Overview**, because
+    each acts on ONE machine's local data and General is app-wide - the rows
+    could only ever speak for whichever host the window happened to point at,
+    while naming none. The tour stays because it is genuinely window-level:
+    replaying it re-runs this app's onboarding, which no host owns. The group
+    is named for its subject rather than for its single row.
+  - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
+"danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
+    only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
+    destructive action here that is genuinely about this APP rather than about
+    a host. File Edit Snapshots and Remove Traycer both moved to
+    `host-scope/host-danger-zone.tsx` on the scoped host's own Overview: each
+    acts on ONE host's data, and a host-scoped destructive row sitting on an
+    app-wide page is how a snapshot wipe could be aimed at a host the page
+    never named. Their arm-time target capture lives there too, alongside the
+    remote counterpart added with the Overview restructure, **Remove from
+    account** - see the Host Overview section for its copy rule. The zone's
+    distinct restrained-red card/label tone is unchanged from before the
+    reorg, just carried by the shared group component instead of bespoke
+    markup.
+- `Browser` (`panels/browser-settings-panel.tsx`, `/settings/browser`, Application):
+  default search engine, browser agent access and detected dev origins, browser tile
+  placement, agent-opened tab surfacing, and saved website sessions. Search
+  entries belong to this section, including conditional host/desktop controls.
+  Host and desktop scope remain explicit in each control's copy.
+  - **Search** selects Google (default), DuckDuckGo, Bing, or Kagi. The shared
+    address-bar normalizer navigates recognizable addresses and encodes other
+    input as a query in native and streamed tabs. The preference is persisted
+    and invalid or missing values fall back to Google.
+  - **Browser placement** shows the effective browser destination. Selecting
+    one enables per-category placement while preserving other categories'
+    current effective values. No preference keys or defaults are migrated.
+  - **Agent-opened tabs** keeps `agentTabSurfacing` and the existing canvas/PiP
+    rules. It controls explicit REPL opens; page-created tabs keep their
+    existing popup/link behavior.
   - **Website sessions** (`browser-settings-section.tsx`'s second group,
     `data-testid="settings-saved-logins"`): where session data from the in-app
     browser is kept, and the only place it can be turned off, removed, or
@@ -1047,111 +1174,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       again instead of hiding it for the session. **Remove all** calls the
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
-  - **Running agents**: Prevent sleep while running
-    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
-    "Two different mobile questions") is the only row left. The two
-    resource-visibility toggles that used to sit beside it - the global
-    resources button and the sidebar resource chips - moved to **Layout**
-    (Status bar and Sidebar respectively), which is where WHERE-a-thing-sits
-    controls live now. Because that leaves one self-hiding row, the group
-    itself is returned by `prevent-sleep-settings-section.tsx` rather than
-    wrapped here, so the heading disappears with the row instead of drawing
-    over an empty card.
-  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
-    your work and Data migration used to share this group under the name
-    "Setup & migration"; both moved to the scoped host's **Overview**, because
-    each acts on ONE machine's local data and General is app-wide - the rows
-    could only ever speak for whichever host the window happened to point at,
-    while naming none. The tour stays because it is genuinely window-level:
-    replaying it re-runs this app's onboarding, which no host owns. The group
-    is named for its subject rather than for its single row.
-  - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
-"danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
-    only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
-    destructive action here that is genuinely about this APP rather than about
-    a host. File Edit Snapshots and Remove Traycer both moved to
-    `host-scope/host-danger-zone.tsx` on the scoped host's own Overview: each
-    acts on ONE host's data, and a host-scoped destructive row sitting on an
-    app-wide page is how a snapshot wipe could be aimed at a host the page
-    never named. Their arm-time target capture lives there too, alongside the
-    remote counterpart added with the Overview restructure, **Remove from
-    account** - see the Host Overview section for its copy rule. The zone's
-    distinct restrained-red card/label tone is unchanged from before the
-    reorg, just carried by the shared group component instead of bespoke
-    markup.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
-  `/settings/opening-behavior`, third in the Application group) Where a click
-  LANDS. TWO `SettingsGroup`s - Links and Tile placement - each one enum
-  select per store field, written through the store's single patch setters -
-  no local state, no disabled states. Store keys are unchanged from the
-  three-group layout (`content` / `conversation` / `browser`, `per-kind` /
-  `per-category`); only the labels are product vocabulary now.
-  - Options are named for the DESTINATION, not the container: `In this pane`,
-    `In a new split`, `Per tile type` - and for links, `In Traycer`,
-    `In default browser`, `Per link type`. A user asks "where does this
-    open", so the answer belongs in the option, not in the reader's head.
-  - Every `EnumSelect`'s `ariaLabel` is its visible label VERBATIM
-    (`Open links`, `Markdown`, `Open new tiles`, `Files, diffs & artifacts`,
-    ...). Destination-shaped option copy only reads correctly under a control
-    the user can find by the name they can see; a spoken name that says
-    something else ("Content tiles") breaks voice control, which types what is
-    on screen.
-  - One `TRIGGER_CLASS` (`w-[min(60vw,12rem)]`) for every trigger: two widths
-    made the override rows look like a different KIND of control rather than a
-    narrower one.
-  - A revealed per-type fragment is wrapped in one `bg-foreground/3` div, so
-    the override rows read as subordinate to the row that revealed them. An
-    alpha of the foreground, not `bg-muted` - see the raised-surface rule in
-    `clients/gui-app/AGENTS.md`.
-  - The four unconfigurable modifiers get ONE platform-aware legend under the
-    groups (`modLabel()` / `altLabel()` / `shiftLabel()` from
-    `lib/keybindings/platform`), not a clause in each row's copy: repeating
-    them per row spent description space the row's own scope needed.
-  - **Links**: "Open links" (no description - the legend carries the
-    modifiers) writes `linkOpen.default` (`in-app | external | per-kind`,
-    default `in-app`); `per-kind` reveals Markdown / Terminal / GitHub /
-    Images, each `in-app | external`, each described by WHERE those links are
-    encountered. `linkOpenModeForKind` resolves a kind against the default.
-  - **Tile placement**: "Open new tiles" writes `tilePlacement.default`
-    (`tab | split | per-category`, default `per-category`); `per-category`
-    reveals **Files, diffs & artifacts** (`content`), **Agents & terminals**
-    (`conversation`) and **Browsers** (`browser`) - product nouns for what the
-    user opens, not the store's category words. Browser alone adds **Picture
-    in picture** (`BrowserTilePlacement`) because the other two have no PiP
-    host. A fourth row, **Side chats** (`sideChat`), covers the `/btw` /
-    `/side` aside: it is a plain `chat` tile, so no tile kind maps to the
-    row - the open carries it as a `beside` placement
-    (`ExplicitTilePlacement`) naming the source chat's pane, and the row
-    decides only how "beside" is drawn ("As a tab of the source chat" /
-    "In a split beside the source chat"). Its own row rather than Agents &
-    terminals because an aside is read next to its conversation whatever
-    the user chose for new agents. Defaults content=tab, conversation=tab,
-    browser=split, sideChat=split;
-    `tilePlacementForCategory` resolves a category against the default. On a
-    single-tile viewport (`useIsMobileViewport()`) the row gains the
-    DESCRIPTION "Narrow windows show one tile at a time, so everything opens
-    in this pane." - a description, not the amber `hint`, because nothing is
-    wrong and nothing was overridden: the window is simply narrow.
-  - **Agent-opened tabs** lives in Tile placement too (after the per-type
-    fragment, unconditional - it is a placement question wearing another
-    name, and a group of one row read like a third topic). `agentTabSurfacing`
-    (`surface | off`, default `off`) - what the GUI does when a HOST opens a
-    browser tab (the agent's REPL `openTab` tool, or a headless page popup),
-    described as "when an agent or a page opens a browser tab without you
-    clicking anything". `surface` ("Like any browser tile") places the tab
-    using the Browsers placement above: `pip` floats it unless a
-    user-converted PiP is showing or the epic surface is hidden, and
-    `tab`/`split` place a canvas tile grouped by session - same-session opens
-    become tabs of one pane - even in hidden epics. `off` ("Leave in the
-    sidebar") answers Electron foreground creates with a hidden off-screen
-    view so the open still succeeds, and leaves headless tabs in the sidebar.
-    Disposition decisions live in
-    `lib/browser-view/tiles/surface-host-opened-tab.ts`; headless-origin tabs
-    are diffed from `browser.sessions` lifecycle frames in the dock, seeded
-    snapshot-only so surfacing stays ephemeral across reloads.
-  - The pre-refactor keys (`browserLinkDefaultMode`,
-    `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
-    migrated once in the store's persist `merge` and then dropped.
+  `/settings/opening-behavior`): link routing (Open links and per-link-type
+  choices), general tile placement and per-type overrides
+  for files, conversations, and side chats. The global default still applies
+  to all categories, including browsers; browser-specific controls live in
+  Browser. `settings-enum-select.tsx` supplies the shared accessible select.
+  Existing store keys and their legacy migrations remain unchanged.
 - `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
   followed by **Start page**, **Interface**, **Fonts and text**, **Motion and
   readability**, **Terminal**, **Agent office**, and **Icon colors** via
@@ -1400,17 +1429,17 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       defaults" assertion with it. `DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN` was
       added to `settings-store` for the one value that had no constant.
 
-      |                     | Default              | Compact                                                              | Detailed                    |
-      | ------------------- | -------------------- | -------------------------------------------------------------------- | --------------------------- |
-      | Mode word/bar/timer | on                   | all off                                                              | all on                      |
-      | Percent mode        | Used                 | Used                                                                 | Used                        |
-      | Providers           | tightest limit       | tightest limit, none hidden                                          | tightest limit, none hidden |
-      | Resource metrics    | CPU/Memory/Processes | CPU                                                                  | all four (adds RAM share)   |
-      | Composer rows       | visible              | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
-      | Reasoning           | Text                 | Bars                                                                 | Bars + text                 |
-      | Pin breakdown       | off                  | off                                                                  | on, all fields              |
-      | Context indicator   | Text                 | Ring only                                                            | Text                        |
-      | Sidebar chips       | none                 | none                                                                 | CPU/Memory/Processes        |
+      |                     | Default        | Compact                                                              | Detailed                    |
+      | ------------------- | -------------- | -------------------------------------------------------------------- | --------------------------- |
+      | Mode word/bar/timer | on             | all off                                                              | all on                      |
+      | Percent mode        | Used           | Used                                                                 | Used                        |
+      | Providers           | tightest limit | tightest limit, none hidden                                          | tightest limit, none hidden |
+      | Resource metrics    | CPU/Processes  | CPU                                                                  | all four (adds RAM share)   |
+      | Composer rows       | visible        | three docks + access compact, mic & compaction hidden, image VISIBLE | all visible                 |
+      | Reasoning           | Text           | Bars                                                                 | Bars + text                 |
+      | Pin breakdown       | off            | off                                                                  | on, all fields              |
+      | Context indicator   | Text           | Ring only                                                            | Text                        |
+      | Sidebar chips       | none           | none                                                                 | CPU/Memory/Processes        |
 
       **Compact hides a composer button only where the verb survives without
       it**: the dictation chord starts voice input, and the command palette
@@ -1601,11 +1630,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     limits shows three independent gauges, which is what `Show mini bar`
     promises. A single bar in front of several readings was one severity
     colour with nothing on the row saying which limit it belonged to. The
-    SWITCH and the ladder's `bar` rung still govern them as ONE decision
-    (`showBar && parts.bar` in `status-bar-provider-segment.tsx`): a strip
-    that runs out of room drops every bar at once rather than thinning them
-    one at a time, and `percent-only` has already narrowed to the tightest
-    reading two rungs after the bars went. Each bar carries
+    switch governs them as ONE decision (`parts.bar` in
+    `status-bar-provider-segment.tsx`): off takes every bar away at once
+    rather than thinning them one at a time. Each bar carries
     `data-window-key`, since order is otherwise the only thing pairing a
     gauge with its number, and every one stays `aria-hidden` - the accessible
     content is the percentages and the provider tooltip, unchanged. The gauge
@@ -1695,27 +1722,39 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     are its alternatives - `Tightest limit (automatic)` beside `5h` reads as
     two kinds of thing on one line - which is why a provider's limits are a
     checkbox column instead.
-  - **Every rate-limit row that hides something is also a rung of the strip's
-    collapse ladder**, and the two meet rather than fight. A provider draws
-    its selected limits (the tightest alone by default). When the cluster runs
-    out of room it drops the mode word, then the bars, then the timers, then
-    everything but the coloured percentage - at which point it also narrows
-    to the tightest of the selection however many are checked, since several
-    bare numbers under one icon say which limits exist but not which is
-    which - then everything but the icon, and finally folds whole providers
-    into a `+N` chip - skipping any rung whose setting is already off, since
-    taking away something invisible would free no width. The percentage is
-    severity-coloured at every rung, bar or no bar.
+  - **The strip draws everything that is switched on, at every width, and
+    SCROLLS what does not fit.** A provider draws its selected limits (the
+    tightest alone by default) with every part the Display rows ask for -
+    mode word, mini bar, countdown - and the width of the window never
+    shortens a reading or hides a provider: every account and every display
+    switch is a choice the user made, and a strip that quietly dropped one to
+    fit would be overriding a choice it was asked to show. When the usage
+    cluster outgrows the room the resource readout leaves it, the cluster
+    scrolls horizontally (`status-bar-usage-scroller.tsx`: a wrapper around
+    the trigger, since a `<button>` is not a reliable scroll container; no
+    scrollbar; a mouse wheel turned sideways by `useHorizontalWheelScroll`,
+    touch and trackpad native) and a mask fades ONLY the edge that hides
+    something (`useHorizontalScrollEdges` + `horizontalScrollFadeClass`) - the
+    fade is the affordance. The scroll position resets to the start when the
+    SET of segments changes (host switch, provider hidden or shown, account
+    checked or unchecked) or the WATCHED HOST changes
+    (`statusBarUsageScrollKey` - two hosts can draw identical segment ids and
+    the strip keeps its subtree across a switch) and never when a reading
+    inside one moves, so a countdown tick does not throw away where the user
+    scrolled to. The refresh `↻` sits after the scroller, outside it, so it
+    never scrolls away with the numbers it refreshes; the resource segment
+    stays `shrink-0`, pinned right, printing every metric with its label at
+    every width. The percentage is severity-coloured always, bar or no bar.
   - **Which ACCOUNTS a provider's segments describe is chosen in the usage
     panel, not on this page** (`layout/header/rate-limit-popover.tsx`). Every
     profile card - managed and ambient, Overview and detail tab alike -
-    carries a `Status bar` switch right of its enable toggle, and the strip
+    carries an eye toggle immediately left of its accent dot (`Eye` checked,
+    `EyeOff` not; `aria-pressed`), and the strip
     draws **one segment per checked account** for the host it is watching:
-    provider icon, the profile's inline `AccentDot`, its name on the rungs
-    that still print words, and its own limits, mini bars and countdowns
-    resolved through the provider's limit selection above. The ladder folds
-    segments, so `+N` counts accounts and its tooltip names each
-    (`Codex · Work 57%`). Store:
+    provider icon, the profile's inline `AccentDot`, its name before the
+    reading, and its own limits, mini bars and countdowns resolved through the
+    provider's limit selection above - every one drawn in full, scrolled to
+    when the strip is short of room. Store:
     `rateLimits.shownProfiles[hostId][providerId] = [profileId | null, …]`
     (`stores/settings/layout-store.ts`; `null` is the ambient login), keyed by
     host because a profile id names a credential on ONE machine - the panel
@@ -1729,7 +1768,18 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     preference: no density preset carries it (`applyLayoutPreset` carries it
     over like `placement`), only `Reset to defaults` clears it, and Layout
     draws no control for it because Layout is app-level and the accounts are
-    not. Analytics: `layout.statusBar.shownProfiles`, from the switch.
+    not. Analytics: `layout.statusBar.shownProfiles`, from the eye.
+    - **The eye exists only while the strip is on screen.** Whether it is
+      is ONE predicate, `selectStatusBarShown` / `useStatusBarShown`
+      (`stores/settings/layout-store.ts`): `placement === "status-bar"` on a
+      desktop viewport, `mobileFooter` on a mobile one - the same read
+      `AppShell` mounts the strip on. Under the header placement, or on a
+      phone with the footer off, every card drops its eye and its "drawn"
+      highlight alike, since there is no segment for either to point at. A
+      hidden provider (`hiddenProviders`) hides the eye only - there is no
+      segment for it to govern - and leaves the highlight alone. The checks
+      stay in the store untouched and take effect again when the strip
+      returns.
     - **Nothing checked draws ONE account**, resolved by
       `resolveStatusBarProfileIds` (`hooks/rate-limits/use-rate-limit-profile-selection.ts`):
       the profile last picked in a composer on THAT host if the provider still
@@ -1738,11 +1788,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       chat on ANY host, so a tile bound to another machine made the segment
       jump to an account this host does not have and fall to ambient. The
       card for the fallback account is highlighted (`aria-current`) with its
-      switch off and a tooltip saying it is shown by default; checked cards
-      are highlighted with the switch on. The old `Active` badge is gone with
-      the rule it described. The switch is hidden while the provider itself is
-      off the strip (`hiddenProviders`), since there is no segment for it to
-      govern.
+      eye off and a tooltip saying it is shown by default; checked cards
+      are highlighted with the eye on. The old `Active` badge is gone with
+      the rule it described.
     - **A segment is a deep link.** Clicking one arms
       `rate-limit-popover-store.revealProfile` (session-only, never persisted)
       and selects the provider's tab; the card scrolls itself into view and
@@ -1750,8 +1798,11 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
       bubble to the cluster's `PopoverTrigger`, which is what opens the panel.
     - The header glyph has two slots and no room to name an account, so it
       draws the FIRST of the accounts the strip would draw per provider
-      (`resolveRateLimitProfileId`); Layout's limits list reads the same one,
-      since the limit selection is per provider.
+      (`resolveRateLimitProfileId`) - while the strip is on screen. While it
+      is not, the checks have no control, so the glyph resolves without them
+      (last-used → first profile → ambient). Layout's limits list keeps
+      reading the checked account regardless, since it previews the strip and
+      the limit selection is per provider.
     - The dot and the name are drawn only for a provider with two or more
       profiles - the composer rail's rule, and for the same reason: one
       account needs telling apart from nothing.
@@ -1765,8 +1816,9 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
     name that carries identity (`Fable`, `Opus wk`, `Cursor models`, a named
     Codex limit) is kept and the countdown appended, since several of those
     share one reset instant and would otherwise print as one string. The count
-    is the provider's LIVE limits, not the ones the rung draws - a provider
-    drawing its tightest alone still has to say which of several it is.
+    is the provider's LIVE limits, not the ones the selection draws - a
+    provider drawing its tightest alone still has to say which of several it
+    is.
     Settings' checkbox list is not a caller: it lists every limit so each can
     be checked, so a name is the point even when there is one.
   - **Grok's period label never parses the wire token.** `periodType` is
@@ -1802,10 +1854,10 @@ Detailed`, and a `Reset to defaults` button that applies Default and is
 settings…`.
   - **The preview is the strip, not a picture of it**
     (`panels/layout/status-bar-preview.tsx`). It renders the same
-    `StatusBarUsageReadings` box, the same `StatusBarProviderSegment`, the same
-    `+N` chip and the same `StatusBarResourceSegment` the footer does, off the
-    same store and the same cache entries, so it cannot show a shape the strip
-    cannot produce. What it does NOT do is make a reading happen:
+    `StatusBarUsageScroller`, the same `StatusBarUsageReadings` box, the same
+    `StatusBarProviderSegment` and the same `StatusBarResourceSegment` the
+    footer does, off the same store and the same cache entries, so it cannot
+    show a shape the strip cannot produce. What it does NOT do is make a reading happen:
     `useStatusBarRateLimitSegments` takes a required `mode`, and `passive`
     disables every observer in all three batches - the http lane included, since
     that is the one that would otherwise fetch - and hands back no mount
@@ -1813,9 +1865,12 @@ settings…`.
     "renders no refresh button" would be a promise about markup, while an empty
     `httpRefetches` is a promise about behaviour, and `refetch` on a disabled
     query still fetches. It also mounts no popover, no resource stream and no
-    dynamic action handler. The whole frame is `inert` + `aria-hidden`: every
-    control in it is a real one that would be a dead end there, and the rows
-    below are where each is actually configured.
+    dynamic action handler. The readings and the resource control inside the
+    frame are `inert` + `aria-hidden`: every control in the picture is a real
+    one that would be a dead end there, and the rows below are where each is
+    actually configured. The frame and the scroller around the readings stay
+    LIVE, so the picture scrolls under a wheel or a swipe exactly as the strip
+    does - an inert ancestor would swallow both.
   - **So the preview is honest rather than idealised.** An account with no
     provider draws the strip's "connect a provider" line, a cold provider
     beside a live one draws its cold track, and with no global resource stream
@@ -1831,18 +1886,16 @@ settings…`.
     and where a live number comes from. Everything else in the cluster is
     passed through untouched - providers past the second keep their cold
     track, and the substitution walks the CLUSTER rather than the two
-    readings, so the provider count, the icon set, the strip order, the
-    per-provider switches and the `+N` fold's arithmetic are the ones the
-    strip would have. An `unavailable` provider is never sampled: it has
+    readings, so the provider count, the icon set, the strip order and the
+    per-provider switches are the ones the strip would have. An
+    `unavailable` provider is never sampled: it has
     ANSWERED that it cannot report usage, so a percentage over it is a
     stronger invention than the cold case and the caption's own sentence
     would be false for it - it keeps its dash and its note, and a cluster
     with nothing cold in it gets no sample at all. The per-provider
     "no reading yet" lines for the SAMPLED providers are dropped while the
     caption speaks for them (the two would otherwise contradict each other
-    under one frame), and a `Folded:` line carrying an invented number is
-    marked `(sample)`, since a fold takes that reading off the strip the
-    caption sits above. The reset instants are taken from the same 60s clock
+    under one frame). The reset instants are taken from the same 60s clock
     the countdowns read, so the sample never ticks; the passive reader is
     unchanged, so it never fetches; and one live or degraded reading anywhere
     in the cluster puts the host's own readings back, cold tracks included -
@@ -1853,26 +1906,20 @@ settings…`.
 placement is Status bar.` in `header` placement, and `Shown at this window
 width when Footer status bar is on.` below `md`, where the placement sentence
     would be a false promise and the switch is what actually answers. The
-    width control also STARTS at `normal` below `md` rather than `wide`,
-    because the strip forces the `compact` rung on a mobile viewport and 880 is
-    the nominal width inside that band - a phone opening the group sees the
-    rung its own footer draws.
+    width control also STARTS at `narrow` below `md` rather than `wide`: a
+    phone's footer is narrower than any option, so the closest picture of it
+    is the one whose readings scroll.
   - **`inert` is why the frame's own tooltips are not the explanation.** It
-    removes the subtree from hit testing, so no `TooltipWrapper` inside it can
+    removes the readings from hit testing, so no `TooltipWrapper` inside them can
     open - and the states those tooltips exist for (three bare dashes, a dimmed
     reading behind a ⚠) are exactly the ones a preview reads as broken without
     one. A `status-bar-preview-notes` list under the frame carries them
     instead: one line per non-live provider segment and ONE line for the
     resource segment, both from the same builders the tooltips use
     (`statusBarSegmentTooltip`, `statusBarResourceMetricViews`), so the caption
-    and the strip can never word one state two ways. The `+N` chip's tooltip is
-    lifted the same way, as a `Folded: <provider> <reading>, …` line built from
-    the chip's own `providerReadingText` - at the Narrow width, the one a reader
-    picks precisely to find out what folds, `+2` with no way to see which two is
-    the worst of the three. It is also why the LADDER is stepped by the preview
-    itself and handed to both halves: which providers folded is a property of
-    the measurement, and only one box can be the measured one. They are two
-    SIBLINGS
+    and the strip can never word one state two ways. Nothing is said about a
+    reading being out of view: a segment past the frame's edge is a scroll
+    away, not a state. They are two SIBLINGS
     rather than one list, because reading the resource reason costs a
     `useDesktopAppResourceUsage` SUBSCRIPTION and subscribing is what starts
     the 1 Hz IPC poll - so that half is its own component mounted under `Show
@@ -1880,55 +1927,45 @@ resource monitor`, never a gated result. Both dim whenever the frame does,
     and both are absent when there is nothing to explain.
   - **The width control names a NOMINAL width, and the frame is drawn at
     exactly that width** - `w-[480px]` / `w-[880px]` / `w-[920px]` on the
-    `inert` frame, one per density band (`< 500` icon-only, `< 900` compact,
-    else full) - under a `max-w-full` that is the honest half of it: every
+    frame - under a `max-w-full` that is the honest half of it: every
     Settings surface caps at `max-w-5xl`, so this box is at most ~944px wide
     however large the window is, and a frame drawn past that would push the
-    resource cluster off the right edge with nothing on screen saying so -
-    the reported bug moved one cluster over, and reproducing at 100% rather
-    than under ~1560px. Wide is **920** for the same reason: a nominal no
-    pane can draw is not a width, and 920 is still `≥ 900`, so the `full`
-    ceiling and every Display switch survive. Density comes from that nominal
-    width through `statusBarDensityForWidth`, NEVER from a measured box:
-    inside the Settings modal that box is `min(pane, 1024) − chrome`, which is
-    `compact` on any window under ~1560px, and at the `compact` ceiling the
-    ladder drops the mode word, the mini bar and the countdown whatever the
-    store says. A preview that measured itself answered "this switch does
-    nothing" to the first three Display switches a user tried - in the modal
-    only, since the promoted tab has less padding and reached `full`, so the
-    same switches worked in one Settings surface and not the other. What is
-    still MEASURED is the ladder's own `roomRef` on the usage slot inside the
-    frame, which the frame's width is what sizes, so the rungs and the `+N`
-    fold answer "does this fit the strip in front of me" exactly as they do in
-    the footer - and on a pane narrower than the nominal they answer it about
+    resource cluster off the right edge with nothing on screen saying so.
+    Wide is **920** for the same reason: a nominal no pane can draw is not a
+    width. What the width changes is how much of the usage cluster is in view
+    before the fade - the readings themselves are the same at every width,
+    since the strip scrolls rather than shortening them - and Narrow is the
+    option that shows the fade at all, on a strip that would need it. The
+    scroller inside the frame measures the room the frame's width leaves it,
+    so it answers "does this fit the strip in front of me" exactly as it does
+    in the footer - and on a pane narrower than the nominal it answers about
     the narrower strip actually drawn, which is the honest reading. It
-    defaults to **Wide**, so the first thing a reader sees is every switch
-    doing something. It is component state, never persisted: a way of LOOKING
-    at the strip rather than a preference about it. The three fixed-px widths
-    are the one sanctioned exception to the fluid-sizing rule, recorded in
+    defaults to **Wide**, the most room the strip can have - the readings
+    still scroll there when there are more than fit. It is component state,
+    never persisted: a way of LOOKING at the
+    strip rather than a preference about it. The three fixed-px widths are
+    the one sanctioned exception to the fluid-sizing rule, recorded in
     `gui-app/AGENTS.md`: the box IS a simulated viewport, and a control that
     names a pixel width has to draw one.
-  - **The preview's ladder measures a stretching box**, the same two-box shape
-    the strip uses: the usage slot is `min-w-0 flex-1` and carries `roomRef`,
-    the readings inside stay `shrink-0` under `contentRef`, and there is no
-    separate spacer. A content-sized container would report its own content the
-    moment that content fits, which is a ladder that can only ever go down -
-    Wide → Narrow → Wide would stay collapsed until Settings was reopened. It
-    also carries an invisible `reservedRef` placeholder composed of the strip's
-    own two numbers (`pl-1` plus the refresh button's `size-5`): the ladder
-    subtracts whatever shares the room with the readings, and a preview that
-    reserved nothing would collapse ~24px later than the strip - at the one
-    width whose whole job is to say what collapses first. The real
-    `RefreshIconButton` would close the gap too, but it renders disabled for a
-    passive reader, which misrepresents a live control.
+  - **The preview's scroller has the room the strip's has**: the usage slot is
+    `min-w-0 flex-1`, the scroller inside it takes that room, the readings
+    stay `shrink-0` at their natural width, and there is no separate spacer.
+    It also carries an invisible placeholder composed of the strip's own two
+    numbers (`pl-1` plus the refresh button's `size-5`): the strip's scroller
+    has only the room that control leaves, and a preview that reserved nothing
+    would give its readings ~24px more than the strip has and show no fade at
+    a width where the strip already scrolls - at Narrow, whose whole job is to
+    show that. The real `RefreshIconButton` would close the gap too, but it
+    renders disabled for a passive reader, which misrepresents a live
+    control.
   - **The preview is STICKY inside its group, from `md` up** (`md:sticky
 md:top-0`): positioned against the nearest scrollport - the settings
     `overflow-y-auto` box, padding-less in both the modal and the tab, hence
     `top-0` - and confined to its containing block, `SettingsGroup`'s card, so
     it releases when the Status bar group scrolls past. The breakpoint is the
     one `AppShell` mounts the strip on, and the reason is the same as the
-    caption's: below `md` this block is a dimmed `inert` picture of a surface
-    the shell does not draw, it is several hundred pixels tall once its
+    caption's: below `md` this block is a dimmed picture of a surface the
+    shell does not draw, it is several hundred pixels tall once its
     description and captions wrap, and a sticky box taller than its scrollport
     pins its TOP - so its own last caption would be unreachable, scrolling
     being what the pin cancels. Two things make it work: `SettingsGroup`'s card
@@ -1975,9 +2012,14 @@ md:top-0`): positioned against the nearest scrollport - the settings
     and workspace pickers, hard against the context-usage cluster, so a chip
     coming and going never shifts those pickers - and one click opens the row
     again; the pill folds to its icon with the name on hover. A chip always
-    draws its own icon (`Bot`, or Background's per-kind glyph - a
-    host-supervised shell is a `Terminal` whether it is running or held, never
-    a pause) and shows activity ON that icon rather than replacing it: the
+    draws its own icon - `FileDiff`, `Bot`, and for Background the section's
+    own chat-with-a-clock (`MessageSquareClock`, the same mark the indicators
+    use for background-only activity). Background used to borrow the panel's
+    per-kind row icon and a neutral `Layers` stack when kinds mixed, so the
+    same chip was a bot, a clock, a terminal or a pile depending on the
+    panel's contents; one mark says "background" wherever it is, and never a
+    pause - a held shell is stated in the chip's sentence. Activity shows ON
+    that icon rather than replacing it: the
     glyph and the count turn `primary`, and the glyph shimmers (an opacity
     sweep on the shared status clock, never a CSS `animation:`). A chip is
     `[icon] N` at every width - it once printed the word for its state after
@@ -2298,12 +2340,17 @@ Greeting and Introduction` - so the page read as a monitor name followed
       stale. `FocusTaskGroup` therefore carries flat `agents` / `jobs` /
       `browsers` / `prompts` and no parent links at all.
     - **A cold task is one summary row.** Agent titles only exist for epics
-      mounted in this window, so a cold task contributes no chat rows and a
-      placeholder would name work nobody can open. It reads `n agents · not
-open in this window`, keeps a disclosure only for jobs and pages this
-      window can still see, and hangs those off the task. A cold task that is
-      in Needs you on the indicator alone shows the attention glyph and nests
-      no prompt - there is no row to nest.
+      mounted in this window, so a cold task contributes no chat rows: a list
+      of rows all called `Agent` said nothing the count does not, and the user
+      asked for the single row back. It reads `● n agents running · not open
+in this window` (`○ … background` when none is mid-turn) beside its
+      `Stop all`, keeps a disclosure only for prompts, jobs and pages this
+      window can still see, and hangs those off the task at level one. A cold
+      task that is in Needs you on the indicator alone shows the attention
+      glyph and nests no prompt - there is no row to nest. Nested chat rows
+      appear once the task is open here and names are known; the
+      `CircleDashed` glyph is for the rarer MOUNTED agent whose projection has
+      no surface yet.
     - **Badges count the WHOLE subtree** (`taskGroupCounts`): `N need you`
       (loaded prompt rows), `N active` (mid-turn agents), `N bg` (jobs at any
       level), `N browsers`. They are read off the group's flat lists rather
@@ -2365,20 +2412,19 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       which hosts a task is split across. Choices are pruned when their row
       leaves the page, which keeps the self-pruning the row-local state gave
       for free: a task that comes back comes back at the page's default.
-    - **The expand default is latched on the first render that HAS TASKS**, not
-      on mount. Three or fewer tasks in TOTAL expand all, otherwise everything
-      is collapsed; the reader scrolls one page, so a rule applied per section
-      would expand eight tasks whenever they happened to be four and four. The
-      latch waits for `groups.length > 0` rather than for the page to have
-      something on it, because the notification feed can answer before the
-      activity plane: a first frame holding one unplaced prompt and no tasks
-      would otherwise latch `0 <= 3` and throw twenty tasks open when they
-      landed. Both the latch and the prune are adjusted DURING render rather
-      than from an effect - the supported shape for state derived from props,
-      and idempotent, so the immediate re-run finds the latch set and nothing
-      stale left. Chat rows have no second disclosure: hiding a monitor behind
-      another click would make finding it a two-gesture job on a page whose
-      whole purpose is one glance.
+    - **Every task starts collapsed, whatever the page holds.** There used to
+      be a count-based default - three or fewer tasks in total opened
+      themselves, latched on the first frame that had any - and it went for
+      two reasons: the user asked for no auto-expand, and a default that
+      depends on how many rows happen to be running is a page whose shape
+      changes for reasons the reader cannot see. The section headings already
+      say how much is there, and the twisty is one click. The only disclosure
+      state is the rows the user has touched this session, pruned DURING
+      render rather than from an effect - the supported shape for state
+      derived from props, and idempotent, so the immediate re-run finds
+      nothing stale left. Chat rows have no second disclosure: hiding a
+      monitor behind another click would make finding it a two-gesture job on
+      a page whose whole purpose is one glance.
     - **No row carries a trailing `Open`**: the row body already spans the card
       and opens the same thing, so the second control was one extra tab stop
       per row announcing a verb the row had already offered. Stop / Stop all
@@ -2406,7 +2452,12 @@ browsers` is omitted at zero for a sharper reason still: that plane is
       timestamp. `needs you` is warning-toned, `turn` / `running` carry a
       primary dot, `background` / `waiting` a hollow muted one; every WORD is
       muted except needs-you, because a column of coloured words is a column
-      nobody scans. Agents have no start time on the activity plane, so their
+      nobody scans. The mid-turn tier PRINTS as `running` (`focusTierWord`,
+      `focus-row-labels.ts`) everywhere Home spells it - the status cell, the
+      cold-task summary, the Stop-all list - because `● turn` read as a noun
+      with no verb; the `turn` state, the wire field and the `tier` union keep
+      their names. `background` is unchanged: it matches the Background panel,
+      the chip and the `N bg` badge. Agents have no start time on the activity plane, so their
       cell shows the word alone rather than an invented duration. `held` is a
       RESERVED slot in the registry - real in the vocabulary, unreachable from
       today's rows, because no field carries the flag and inventing one is new
@@ -2790,6 +2841,66 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
+  - **Who reviews &lt;provider&gt;'s commands**
+    (`provider-auto-judge-section.tsx`), on the provider's own **Permissions**
+    tab. The tab is client-derived like `account` (`provider-settings-tabs.ts`:
+    never on the wire enum), sits right after Env, and is drawn for EVERY
+    provider once the selected host's negotiated
+    `agent.gui.listHarnesses` line can spell `auto` (`catalogLineKnowsAutoMode`)
+    - a host that predates auto mode has no judge to name, so it shows no tab.
+      Two earlier gates were retired here: `autoJudge.get`, which names the
+      HOST-WIDE judge rather than this tab's per-provider classifier, and the
+      catalog's mode UNION, which an unconstrained row contributes nothing to. After Env
+      rather than after CLI & Args so it cannot become a provider's default tab:
+      amp and cursor advertise `env` without `general`, and a tab every provider
+      gets must not displace the one the provider asked for. Inside, a provider
+      whose GUI harness catalog row
+      reports `nativeAutoJudge` gets the two-option select; every other provider
+      gets a read-only line naming Traycer's judge and pointing at Settings ▸
+      Permissions - "nothing to choose" is still the answer to the question the
+      tab is named for. Nothing renders until the catalog has answered, so the
+      line never flashes at a provider about to get the select. It used to be a
+      section at the bottom of CLI & Args, drawn for Claude Code alone, where
+      nobody looking for "permissions" would open. Labelled by provider rather
+      than "Auto mode judge" because the row
+      under Permissions carries that name too and THIS is the one that wins
+      (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
+      so both rows now name whose judge they are about; the provider name is
+      interpolated, which renders "Who reviews Claude Code's commands" today and
+      does not lie if a second provider ever reports `nativeAutoJudge`. Its
+      description ends with the precedence sentence - choosing the provider's
+      classifier means chats on this provider skip Traycer's judge AND the Auto
+      mode policy entirely - because this control is where that is decided and
+      a user who has written a policy under Permissions has no other way to
+      learn it.
+      A two-option `Select` - Traycer's judge, or this
+      provider's own classifier - written through `providers.setAutoJudge` and
+      persisted as `autoJudge` in `provider-overrides.json`, beside
+      `terminalAgentArgs`, so it takes that neighbour's scoping and invalidation
+      (`providers.list` only; a judge choice cannot change availability).
+      Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
+      `nativeAutoJudge: true` - a switch with one option is not a switch, and
+      every other provider runs Traycer's judge with nothing to choose. **Claude
+      Code is the only provider that reports it**, so it is the only select
+      drawn; the flag also stands in for a method gate, because it rides the
+      same catalog minor as the setter, so a host too old to accept the write
+      reports it `false`. Drawing the select is not the same as the provider judging: the
+      host's own store answers `traycer` for a provider nobody has switched, and
+      `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
+      to Traycer's judge.
+      The stored value is read back through `ProviderCliState.autoJudge`, which is
+      `.optional()` on the wire rather than defaulted (a host that predates auto
+      mode omits the key, and absent must stay distinguishable at the protocol
+      boundary), so `providerAutoJudgeFor`
+      (`lib/providers/provider-auto-judge.ts`) is the one place that spells the
+      `?? "traycer"` fallback - "never chosen" and "host too old to say" landing
+      on Traycer's judge alike, the same direction every failure mode in the
+      host's own reader takes. The section also holds a local echo of a fresh pick
+      so the control does not snap back for the width of the `providers.list`
+      round-trip (nor permanently, on a host that never reports the field); the
+      echo clears itself the moment the read agrees, which is what lets another
+      window's edit through, and the row is keyed by `providerId` so switching
+      providers discards it.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
     than a CLI login, so it renders an `ApiKeySection` (masked input +
     Save/Clear) when `state.apiKey.supported` — **as the whole body of the
@@ -3609,13 +3720,194 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     tested row, but the Test button on every OTHER row is also disabled while
     any one test is in flight (the mutation is global, not per-row) - worth
     knowing if this ever reads as a bug report.
+- `Permissions` (section id `permissions`, route `/settings/permissions`,
+  `panels/permissions-settings-panel.tsx`) Who reviews what an agent does on
+  the selected host under the `auto` permission mode. Its own page, not rows
+  on Agent selection: that page is about which agent gets CHOSEN for a task,
+  and permissions are a different question, asked at a different time (a user
+  decision, 2026-09-12, after the rows first shipped above the guide). The
+  mode's app-wide DEFAULT is not here; it is a General row (see "Scope: the
+  organising idea"). The per-provider switch between Traycer's judge and a
+  provider's own classifier is not here either - it is a fact about one
+  provider's CLI and lives on that provider's own Permissions tab under
+  Providers, which is the switch that wins.
+  One `SettingsGroup`, **Auto mode** (`auto-mode-settings-section.tsx`): the
+  judge row, the policy row and, under it, a read-only view of the rules that
+  apply before either - all host RPCs, all scoped by the sidebar picker. The
+  group and its rows are defined in `permissions-settings.definitions.ts`,
+  every one `contributesTo: "page"`, because the group is dropped whole on a
+  host that has no notion of auto mode (see § Search, "Gated on the SELECTED
+  HOST").
+  - **The section is the whole page, so it never renders nothing.** Two
+    states replace the rows with one sentence: the scope is
+    connecting/unreachable/vanished (`isHostScopeUsable` - checked so the rows
+    are not MOUNTED, since a hidden query still fires against the ambient
+    host), or the host does not advertise `autoJudge.get` / `autoPolicy.get`
+    (optional capabilities with an `unsupported` degrade - so this is every
+    host until it updates, and `useHostSupportsMethod` fails closed, hiding on
+    "not yet known" too), in which case the sentence says the host predates
+    Auto mode and asks for an update. A sentence rather than a hidden
+    `<Activity>` keeping the rows mounted: the cost is that a transient
+    same-host disconnect closes an open policy dialog and drops its draft;
+    accepted, because the judge row holds no draft and the policy dialog is an
+    explicit, explicitly-saved editing session rather than the always-open
+    editor Activity was introduced for.
+  - **Traycer's auto mode judge** reuses the composer's `HarnessModelPicker`
+    (`auto-judge-picker.tsx`) with BOTH footers off - `withServiceTier={false}`
+    and the new `withReasoning={false}` - because the stored record is
+    `(harnessId, model, profileId)` and the judge request carries no effort or
+    tier, so either footer would take a choice and silently drop it. It is
+    wired to its own `createComposerToolbarStore` rather than through
+    `useComposerToolbarStore`, deliberately: that hook records every commit
+    into `composer-harness-memory-store`, and pinning a cheap judge model
+    would then quietly become the model the next chat on that provider offers.
+    (One memory write survives from inside the picker's own `commitSelection` -
+    the last profile browsed for a provider - which is a fact about which
+    credential the user pointed at.) Backed by `autoJudge.get` / `autoJudge.set`
+    over `~/.traycer/host/config/auto-judge.json`; the read is updated in place
+    from the write's response, since the picker commits on every click.
+    `selection: null` means unset. Both responses optionally report `effective`
+    (`harnessId`, `model`, `source`) and `blocked` from the host's shared judge
+    selection rule and provider enablement read, without probing availability.
+    The row says "Using Traycer's default judge · <model>" from that effective
+    slug, using its catalog label when available and the slug otherwise. The
+    picker also seeds its selected mark from `effective` when nothing is stored;
+    it never substitutes the catalog's ordinary chat default for the host's
+    reported judge. A disabled provider gets an amber explanation and a
+    Providers action; no default model or unsupported harness asks the user to
+    pick another judge. Returning from Providers refreshes this read even when
+    cached. Hosts that omit both fields retain the existing default-judge copy.
+    These are optional additions to unreleased 1.0, matching `autoPolicy.get`'s
+    `readState` precedent. A stored `harnessId` this build has no
+    adapter for (a newer host, an older app - the protocol keeps that field a
+    checked string precisely so it decodes) is named in an amber line instead of
+    being presented as some other provider.
+  - **The self-billing warning** sits beside those amber lines, on one rule:
+    `harnessId !== "traycer"`. `traycer` is the only harness metered against
+    Traycer credits; every other one routes through that vendor's CLI on the
+    user's own credential, so no catalog field and no protocol minor are
+    needed - `autoJudgeSelfBillingWarning` (`lib/auto-mode/auto-judge-billing.ts`)
+    is the one place that decides. What VARIES is the severity: Copilot gets a
+    number, because it is the only harness whose billing unit is a fixed
+    monthly allotment of premium requests, and the sentence quotes TRAYCER'S
+    OWN allowance ("an hour of Auto mode can use
+    60-350 of your monthly allowance") rather than GitHub's allotment - the
+    rate is a fact about our behaviour that we control and that cannot go stale
+    when GitHub reprices. Every other non-`traycer` harness gets the generic
+    line, whose "on top of your chat replies" clause is the load-bearing half:
+    the sharpest case is a user picking the SAME harness for chat and judge,
+    which is the natural thing to reach for and doubles the spend on one
+    account. It reads the STORED selection, not the presented one - the host
+    bills what it has stored, and the composer's own meta line reads the same
+    record, so the two surfaces cannot disagree about which pocket is spent.
+  - **Auto mode policy** is a summary plus a button that opens
+    `auto-policy-editor-dialog.tsx`, over `autoPolicy.get` / `autoPolicy.set`.
+    A dialog rather than an inline editor because the panel's height is already
+    spent, and a policy is a document. An empty policy prefills the four
+    headings the judge's prompt builder reads (`Environment`, `Allow`, `Soft
+deny`, `Hard deny`) and nothing else - the guidance about what belongs under
+    each is the dialog's copy, because every byte of the document is prose the
+    judge will read. Save is explicit (no debounced auto-save like the guide's):
+    the record is ACCOUNT-wide and last-write-wins, so every keystroke
+    auto-saved is a keystroke racing another device. Two subtleties:
+    `updatedAt: null` means "cannot tell" - the protocol sends it both for a
+    policy never saved AND for one the host is serving from a cache it could
+    not refresh - so the stale-edit banner fires on a
+    null-to-real transition as well as on two different non-null stamps (a
+    policy CREATED elsewhere while the editor was open is the case the
+    symmetric check swallowed), and the summary says "Set" rather than
+    inventing a date - except on a `stale` read with an empty body, where it
+    says it could not check rather than claiming "Not set" about an absence the
+    host merely had cached; and the
+    64 KiB cap is checked in UTF-8 BYTES as a courtesy pre-flight only, the
+    server being the enforcement (the authoritative constant lives in the
+    closed-source service and reaches no client contract).
+  - **The row reads `readState`, not `body`, first.** `autoPolicy.get` answers
+    `readState: "fresh" | "stale" | "unreadable"` alongside the body, because
+    `body: null` was doing two jobs: "never saved" and "the host could not
+    read it". On `unreadable` the summary says "Couldn't read your policy",
+    the button stays "Edit policy" and is DISABLED, and the editor - the only
+    route to Save - is therefore unreachable; Save is additionally disabled
+    inside the dialog for the case where the read fails while the dialog is
+    already open, with a banner saying why. The clobber this closes is narrow
+    and real: a read that fails while the WRITE path is healthy (an expired
+    lease on the GET, a 5xx from a read replica), where "Not set / Write a
+    policy" invited the user to overwrite a policy they could not see. The
+    property is `.optional()` on the wire and rode into `1.0` in place, so a
+    host that predates the resolver half sends nothing and
+    `autoPolicyReadStateFor` (`auto-policy-document.ts`) resolves that to
+    `fresh` - the behaviour this row had before the field existed - in the one
+    place the fallback is spelled.
+  - **Opening the editor asks the server again, and Save waits for the
+    answer.** The stale-edit banner compares the stamp the editor opened on
+    against the live one, and both used to be read off the same cache entry -
+    equal by construction, so the banner could never fire. Opening now fires a
+    refetch; the dialog still appears on the click, but Save is disabled with
+    the usual inline spinner until that read settles, and stays disabled with
+    its own banner if it FAILS. The cost is one round trip at a moment when
+    Save is unreachable anyway (it needs a typed edit), and what it buys is
+    that "nobody else has saved since you opened this" is an answer rather than
+    an assumption. A close-and-reopen is generation-guarded so the first read's
+    late answer cannot unlock Save while the second is in flight.
+  - **The policy cache is partitioned by SIGNED-IN USER.** The record is
+    account-owned while the query is host-shaped, and an auth transition marks
+    host queries stale WITHOUT dropping their data - so a host-only key served
+    the previous user's policy, synchronously, to whoever signed in next, with
+    Edit live. `useAutoPolicyQuery` puts the viewer id in `cacheKeyIdentity`
+    and the save's write-through addresses that one partition
+    (`hostQueryKeys.autoPolicyForViewer`) rather than the method-scope prefix,
+    which would land the new body in every viewer's entry and re-open the same
+    leak from the write side. `autoJudge.get` deliberately takes neither: it
+    answers from a file only this GUI writes on that machine, so the host key
+    already names its owner.
+  - **What the judge already blocks** (`auto-policy-shipped-dialog.tsx`) is a
+    read-only view of the rules the judge applies before any policy of the
+    user's, rendered from `shippedDefaults` - the host's whole bundled
+    `auto-judge/defaults.md`, also `.optional()` on the same response. The row
+    is drawn only when that document arrives AND this build can find a tier in
+    it (`auto-policy-shipped-document.ts`), which is what keeps the view
+    invisible on a host that does not send it rather than showing a card with
+    three empty headings. The bullets are the host's document verbatim, so the
+    view can never describe rules that host is not running; only the HEADINGS
+    are replaced, because the document's own are prompt text addressed to the
+    judge and "non-overridable" over-promises to a person, who can always
+    approve the action on the card. The out-of-scope note is the one piece of
+    prose written here rather than taken from the document.
+  - **What the card says when the judge does not decide** is the other end of
+    this page, and lives in the chat rather than in Settings
+    (`chat/segments/approval-card-disclosure.ts`, rendered by
+    `composer-slot-approval-queue.tsx`). The host's `auto: …` reason is printed
+    verbatim and in mono - a screenshot of one is a diagnosis - with a human
+    sentence BESIDE it, never in its place. There are three sentences, because
+    the constants describe three situations and one sentence is false for two
+    of them: **did not run** (`auto: no judge configured`, `auto: judge
+unavailable (…)`, `auto: judge failed`) says "Traycer couldn't run the
+    judge, so it's asking you instead."; **ran without deciding** (`auto: judge
+returned no verdict`, `auto: unparseable verdict`) says "The judge reviewed
+    this but didn't reach a verdict, so it's asking you instead."; **ran out of
+    time** (`auto: judge timed out`, `auto: judge exceeded <n> min`) says "The
+    judge didn't finish in time, so it's asking you instead." The second family
+    is the one the single sentence got wrong: the judge's own reasoning about
+    the action sits directly above that line. The wire carries `{ rule, text }`
+    and no outcome, so the family is read off the STRING; an `auto: ` constant
+    this build does not know - including the four the host emits outside the
+    three families (`turn stopped`, `judge preflight timed out`, `judge tools
+unavailable`, `account policy could not be read`, all of which the first
+    sentence describes truthfully) - falls back to the "couldn't run" line.
+
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
-  to decide which child agents to spawn (coding agent / model / reasoning
-  effort) for a task. The section is named for _selection_ because it configures
-  how an agent is chosen, not the Agents that live inside a Task; the panel
-  description says so. A full-height CodeMirror Markdown source editor provides syntax
+  to choose harnesses, models, and reasoning effort when creating or
+  reconfiguring Traycer agents. The guide does not automatically configure
+  provider-native subagents, which follow the provider's configuration and have
+  no separate Traycer agent IDs. OpenCode's native task uses the named agent's
+  configured model, or inherits the parent model when none is configured. The
+  panel description explains this scope; the shared guide output and host prompt
+  carry the same distinction. The host prompt also describes the existing
+  `traycer_list_harness_models` → `traycer_create_agent` (explicit `harnessId`
+  and `model`) → `traycer_send_message` path for routing to a Traycer child.
+  A full-height CodeMirror Markdown source editor provides syntax
   highlighting and line numbers, including for Mermaid and wireframe fences.
   It debounce-auto-saves (and flushes on blur) via
   `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the

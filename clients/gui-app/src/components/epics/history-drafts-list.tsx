@@ -11,7 +11,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { useDraftRetract } from "@/hooks/drafts/use-draft-retract";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { openLandingDraftFromHistory } from "@/lib/commands/actions/open-landing-draft-from-history";
+import { deleteLandingDraftThroughHost } from "@/lib/drafts/draft-mirror-coordinator";
 import {
   listHistoryLandingDrafts,
   type HistoryLandingDraft,
@@ -37,10 +40,9 @@ export function HistoryDraftsList(props: {
       listHistoryLandingDrafts({
         drafts,
         query: "",
-        currentHostId: hostId,
         excludeDraftId: surfaceDraftId,
       }),
-    [drafts, hostId, surfaceDraftId],
+    [drafts, surfaceDraftId],
   );
   const navigate = useNavigate();
   const openDraft = useCallback(
@@ -56,11 +58,54 @@ export function HistoryDraftsList(props: {
   const closeDeleteDialog = useCallback(() => {
     setPendingDelete(null);
   }, []);
+  // A delete is routed to the host that owns the row. Ownership never moves:
+  // a row another host owns is not deleted through it but RETRACTED - its
+  // cloud row removed on the user's authority through this History host -
+  // and the owning host tombstones its local row when it finds the cloud
+  // row gone. Nothing is shown for any outcome: a retract the cloud
+  // confirms (or finds already gone) drops the local mirror, and an
+  // inconclusive one - this host offline, or too old for `drafts.retract` -
+  // leaves the row where it is for the next attempt rather than hiding a
+  // draft that still exists.
+  const hostClient = useHostClientForHostId(hostId);
+  const { retract } = useDraftRetract(hostClient);
   const confirmDelete = useCallback(() => {
     if (pendingDelete === null) return;
-    useLandingDraftStore.getState().deleteDraft(pendingDelete.id);
+    const draftId = pendingDelete.id;
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === draftId);
     setPendingDelete(null);
-  }, [pendingDelete]);
+    if (draft === undefined) return;
+    // With no resolved host there is nowhere to route a delete or a retract,
+    // and a local-only delete of a row with a cloud copy would leave that
+    // copy to be ingested straight back. Only a row nobody else owns is safe.
+    if (hostId === null) {
+      if (draft.ownerHostId === null && draft.origin !== "replica") {
+        useLandingDraftStore.getState().deleteDraft(draftId);
+      }
+      return;
+    }
+    if (draft.origin !== "replica" && draft.ownerHostId === hostId) {
+      // A row this host owns is deleted through it explicitly: the landing
+      // placement (which `deleteDraft` consults) can point elsewhere while
+      // History runs on the app-wide host.
+      deleteLandingDraftThroughHost(draftId, hostId, hostClient);
+      return;
+    }
+    if (draft.origin !== "replica" && draft.ownerHostId === null) {
+      // A row no host has adopted yet has nowhere to route and retires
+      // locally as before.
+      useLandingDraftStore.getState().deleteDraft(draftId);
+      return;
+    }
+    void retract(draftId).then((result) => {
+      if (result.status !== "retracted" && result.status !== "absent") return;
+      // The cloud row is gone; the local mirror goes with it, retired so a
+      // directory fetch already in flight cannot ingest it back.
+      useLandingDraftStore.getState().applyHostDelete(draftId);
+    });
+  }, [hostClient, hostId, pendingDelete, retract]);
 
   if (items.length === 0) return null;
 
@@ -84,9 +129,9 @@ export function HistoryDraftsList(props: {
           {canExpand ? (
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-ui-xs text-muted-foreground"
+              variant="muted"
+              size="xs"
+              className="h-7"
               aria-expanded={expanded}
               onClick={() => {
                 setExpanded((current) => !current);
@@ -157,7 +202,8 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
                 <Badge
                   variant="secondary"
                   data-testid={`history-drafts-open-${item.id}`}
-                  className="h-4 px-1 text-overline"
+                  className="h-4"
+                  size="sm"
                 >
                   Open
                 </Badge>
@@ -175,12 +221,12 @@ const HistoryDraftsRow = memo(function HistoryDraftsRow(props: {
         </div>
         <Button
           type="button"
-          variant="ghost"
+          variant="muted-destructive"
           size="icon-sm"
           aria-label={`Delete ${item.title}`}
           aria-haspopup="dialog"
           data-testid="history-drafts-row-delete"
-          className="pointer-events-auto absolute right-2 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          className="pointer-events-auto absolute right-2 top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -204,20 +250,19 @@ function HistoryDraftsDeleteDialog(props: {
   const title = draft === null ? "" : `Delete "${draft.title}"?`;
   const description =
     draft !== null && !draft.closed
-      ? "This draft is currently open. Deleting it removes it on every device. This cannot be undone."
-      : "This permanently removes the start-task draft on every device. It cannot be undone.";
+      ? "This draft is currently open. Deleting it removes it here and from every device it has synced to. This cannot be undone."
+      : "This permanently removes the start-task draft here and from every device it has synced to. It cannot be undone.";
   return (
     <Dialog open={open} onOpenChange={props.onOpenChange}>
       <DialogContent
+        layout="banded"
         showCloseButton={false}
-        className="flex w-[min(92vw,28rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="flex w-[min(92vw,28rem)] min-w-0 flex-col overflow-hidden sm:max-w-md"
         data-testid="history-drafts-delete-dialog"
       >
         <div className="flex min-w-0 flex-col gap-1.5 px-5 pt-5 pb-4">
-          <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-            {title}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+          <DialogTitle className="wrap-anywhere">{title}</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
             {description}
           </DialogDescription>
         </div>

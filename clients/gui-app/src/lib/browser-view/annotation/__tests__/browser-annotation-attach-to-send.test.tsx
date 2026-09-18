@@ -32,11 +32,9 @@ const imageStoreMocks = vi.hoisted(() => ({
   sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
 }));
 
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   return {
     ...actual,
     sessionImageBytes: imageStoreMocks.sessionImageBytes,
@@ -110,16 +108,12 @@ function mountSubmit(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
   return renderHook(() =>
     useChatComposerSubmit({
       taskId: args.taskId,
-      // Explicit `null`: these cases drive the INLINE submit arm, and a null
-      // host/client is what keeps the by-hash gate shut. The args type takes
-      // no optional params or defaults (lint rule), so every site states it.
-      hostId: null,
-      hostClient: null,
       editorRef: { current: args.editor },
       pickerStore: createComposerPickerStore(),
       toolbarStore,
@@ -133,9 +127,13 @@ function mountSubmit(args: {
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
-      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
+      targetHostId: null,
+      queueEditTargetId: null,
+      // T5's gate is off in these fixtures: they predate it and assert the
+      // inline behaviour, which is what `false` preserves exactly.
+      getDraftBlobBridgeSupported: () => false,
     }),
   );
 }

@@ -6,10 +6,6 @@ import type {
   HostClient,
   HostRequester,
 } from "@traycer-clients/shared/host-client/host-client";
-import {
-  recordNegotiatedStreamMethodVersions,
-  resetNegotiatedStreamVersions,
-} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
 
 import { useChatMessageActions } from "@/components/epic-canvas/renderers/use-chat-message-actions";
 import type { ChatMessageActionsInput } from "@/components/epic-canvas/renderers/use-chat-message-actions";
@@ -18,31 +14,59 @@ import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
-import { putImage } from "@/lib/composer/composer-image-store";
+import { putImage } from "@/lib/composer/landing-image-store";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Item A: EDIT-AND-RESEND GOES THROUGH THE BY-HASH GATE.
+ * Item A: EDIT-AND-RESEND UPLOADS THE IMAGES THE USER ADDED, AND SENDS THEM AS
+ * HASHES.
  *
  * An edit-and-resend is a send - same stream, same host-side materializer - and
- * it was the one send path still inlining unconditionally while the composer's
- * own submit had already been routed through `resolveSendContentByHash`. These
- * cases pin the three outcomes that distinguish the gate from the old
- * best-effort inline: a `@1.11` host gets hashes, a `@1.10` host gets base64,
- * and a MIXED message - one hash the host acks, one it refuses - inlines
- * exactly the refused node and leaves the other hash-only.
+ * it was the one send path still inlining unconditionally after
+ * `useChatComposerSubmit` had been routed through the draft-blob bridge. These
+ * cases pin the outcomes that distinguish the arm from the plain re-inline: a
+ * bridge-capable host gets hashes, one without the bridge gets base64, a MIXED
+ * message inlines exactly the refused node, and a hash INHERITED from the sent
+ * message is never uploaded at all.
  *
- * Deliberately NOT mocking `composer-image-inlining` the way
- * `use-chat-message-actions-edit-session.test.tsx` does: that suite is about
- * the edit EPOCH across an await and mocks the read to control its timing,
- * whereas every claim here is about which bytes come out the other end. A
- * mocked inliner would answer the question this file exists to ask. So the real
- * image store runs on a fresh fake IndexedDB, and the only fake is the host's
+ * ## What is driven, and what is a parameter
+ *
+ * The capability is `getDraftBlobBridgeSupported`, an INPUT to the hook, so it
+ * is passed here rather than negotiated. This file used to record a
+ * `chat.subscribe` minor in the stream-version registry; it no longer can, and
+ * should not - the hook does not read that registry, the tile does, and which
+ * negotiated minor makes `ChatStreamClient.draftBlobBridgeSupported()` answer
+ * true is that class's own claim to pin. Driving it from the registry here
+ * would have this suite fail whenever the minor moved, for a reason that has
+ * nothing to do with what it tests.
+ *
+ * Everything else is real. The image store runs on a fresh fake IndexedDB and
+ * `putDraftBlobs` is the production function; the only fake is the host's
  * `drafts.putBlob` answer - the one fact a renderer genuinely cannot produce.
+ * A mocked inliner would answer the question this file exists to ask.
+ *
+ * ## The seeded document is not the edited one
+ *
+ * Every case gives `initialContent` and `currentContent` separately, because the
+ * distinction IS the subject: the editor is seeded from the sent message, whose
+ * images the epic already holds, and only what the user added since is this
+ * client's to place. A fixture that passed one document as both would make
+ * every hash inherited, take the synchronous path, and prove nothing about the
+ * upload.
+ *
+ * ## The owner
+ *
+ * `contextMetadata.userId` is seeded because confirmations are recorded and read
+ * per account: under a null owner `putDraftBlobs` records nothing, the host-held
+ * set never widens, and this suite's by-hash cases would either red or - worse,
+ * for the bridge-down case - pass while reading "signed out" instead of "bridge
+ * down".
  */
 
 const HOST_ID = "host-edit-byhash";
+const USER_ID = "user-edit-byhash";
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => HOST_ID,
@@ -128,6 +152,16 @@ function imageDoc(hashes: ReadonlyArray<string>): JsonContent {
   };
 }
 
+/** The seeded document of an edit whose images the user added afterwards. */
+function textDoc(): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      { type: "paragraph", content: [{ type: "text", text: "before" }] },
+    ],
+  };
+}
+
 function pngBytes(marker: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, marker]);
 }
@@ -156,12 +190,16 @@ function originalMessage(content: JsonContent): ChatMessage {
   };
 }
 
-function inlineEdit(content: JsonContent): InlineEditState {
+function inlineEdit(edit: {
+  readonly initialContent: JsonContent;
+  readonly currentContent: JsonContent;
+}): InlineEditState {
   return {
+    sessionId: "edit-session-byhash",
     targetMessageId: TARGET_MESSAGE_ID,
-    originalMessage: originalMessage(content),
-    initialContent: content,
-    currentContent: content,
+    originalMessage: originalMessage(edit.initialContent),
+    initialContent: edit.initialContent,
+    currentContent: edit.currentContent,
     revision: 0,
     dirty: true,
     pendingClientActionId: null,
@@ -209,7 +247,10 @@ function chatActionsStub(): ChatActions {
   };
 }
 
-function inputFor(activeInlineEdit: InlineEditState): ChatMessageActionsInput {
+function inputFor(
+  activeInlineEdit: InlineEditState,
+  bridgeSupported: boolean,
+): ChatMessageActionsInput {
   return {
     dispatchUi: vi.fn(),
     activeInlineEdit,
@@ -237,13 +278,26 @@ function inputFor(activeInlineEdit: InlineEditState): ChatMessageActionsInput {
     worktreeBinding: null,
     revertOnEditOpen: false,
     queuedCount: 0,
+    getDraftBlobBridgeSupported: () => bridgeSupported,
   };
 }
 
 /** Run the edit submit and wait for the async gate to dispatch. */
-async function submitEdit(content: JsonContent): Promise<void> {
+async function submitEdit(edit: {
+  readonly initialContent: JsonContent;
+  readonly currentContent: JsonContent;
+  readonly bridgeSupported: boolean;
+}): Promise<void> {
   const { result } = renderHook(() =>
-    useChatMessageActions(inputFor(inlineEdit(content))),
+    useChatMessageActions(
+      inputFor(
+        inlineEdit({
+          initialContent: edit.initialContent,
+          currentContent: edit.currentContent,
+        }),
+        edit.bridgeSupported,
+      ),
+    ),
   );
   act(() => {
     result.current.revertOnEdit.onDontRevert();
@@ -255,20 +309,26 @@ async function submitEdit(content: JsonContent): Promise<void> {
 
 /** The content the edit actually dispatched. */
 function dispatchedContent(): JsonContent {
-  const call = editUserMessage.mock.calls[0]?.[0];
+  // `.at(0)`, not `[0]`: without `noUncheckedIndexedAccess` a plain index read
+  // is typed as the element however far past the end it is, so the guard below
+  // compared against a value the type said could not occur and would have been
+  // stripped as dead. `.at` types the miss, which is what makes the named
+  // failure reachable instead of a `TypeError` two lines later.
+  const call = editUserMessage.mock.calls.at(0)?.[0];
   if (call === undefined) throw new Error("no edit was dispatched");
   return call.content;
 }
 
-function negotiateChatSubscribe(minor: number): void {
-  recordNegotiatedStreamMethodVersions(
-    HOST_ID,
-    new Map([["chat.subscribe", { major: 1, minor }]]),
-  );
-}
-
 beforeEach(() => {
   installFreshIndexedDb();
+  // `currentDraftBlobOwnerId()` reads `contextMetadata.userId`, NOT
+  // `profile.userId`, and a null owner records and confirms NOTHING. Without
+  // this every upload below would land and then be forgotten, the host-held set
+  // would never widen, and the by-hash cases would be testing "signed out".
+  useAuthStore.setState({
+    profile: { userId: USER_ID, userName: "Tester", email: "t@example.com" },
+    contextMetadata: { userId: USER_ID, username: USER_ID },
+  });
   editUserMessage.mockClear();
   clientMocks.putBlobCalls.length = 0;
   clientMocks.ackedHashes.clear();
@@ -276,35 +336,48 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  useAuthStore.setState({ profile: null, contextMetadata: null });
   resetDraftBlobTransportForTests();
-  resetNegotiatedStreamVersions();
 });
 
-describe("useChatMessageActions: edit-and-resend by-hash gate", () => {
-  it("a @1.11 host receives hash-only content, with the bytes uploaded once", async () => {
+describe("useChatMessageActions: edit-and-resend by-hash arm", () => {
+  it("a bridge-capable host receives hash-only content, with the bytes uploaded once", async () => {
     const hash = await putImage(pngBytes(1));
     clientMocks.ackedHashes.add(hash);
-    negotiateChatSubscribe(11);
 
-    await submitEdit(imageDoc([hash]));
+    await submitEdit({
+      initialContent: textDoc(),
+      currentContent: imageDoc([hash]),
+      bridgeSupported: true,
+    });
 
     // The upload happened on this host...
     expect(clientMocks.putBlobCalls).toEqual([hash]);
     // ...and the wire carries the reference, not the bytes.
+    //
+    // This is also the ORDER claim, and the only case that carries it. The
+    // reconcile loop reads bytes for its `initialHashes` unconditionally on the
+    // first pass, so a required set computed BEFORE the upload would be read,
+    // base64'd and committed even though the host had just acked the digest -
+    // and `b64content` here would be a string. Recomputing it after the upload
+    // is what makes this null.
     const atoms = collectImageAtoms(dispatchedContent());
     expect(atoms).toHaveLength(1);
     expect(atoms[0]?.hash).toBe(hash);
     expect(atoms[0]?.b64content).toBeNull();
   });
 
-  it("a @1.10 host receives inline base64 and uploads nothing", async () => {
+  it("a host whose stream cannot bridge draft blobs receives inline base64 and uploads nothing", async () => {
     const hash = await putImage(pngBytes(2));
-    // Acked if it were ever asked - so a red here is the GATE opening on a
-    // 1.10 host, not the host refusing the blob.
+    // Acked if it were ever asked - so a red here is the ARM opening with the
+    // bridge down, not the host refusing the blob.
     clientMocks.ackedHashes.add(hash);
-    negotiateChatSubscribe(10);
 
-    await submitEdit(imageDoc([hash]));
+    await submitEdit({
+      initialContent: textDoc(),
+      currentContent: imageDoc([hash]),
+      bridgeSupported: false,
+    });
 
     expect(clientMocks.putBlobCalls).toEqual([]);
     const atoms = collectImageAtoms(dispatchedContent());
@@ -319,9 +392,12 @@ describe("useChatMessageActions: edit-and-resend by-hash gate", () => {
     // so the refused one CAN be inlined - which is what makes this a test of
     // the per-hash split rather than of the best-effort fallback.
     clientMocks.ackedHashes.add(confirmedHash);
-    negotiateChatSubscribe(11);
 
-    await submitEdit(imageDoc([confirmedHash, refusedHash]));
+    await submitEdit({
+      initialContent: textDoc(),
+      currentContent: imageDoc([confirmedHash, refusedHash]),
+      bridgeSupported: true,
+    });
 
     expect([...clientMocks.putBlobCalls].sort()).toEqual(
       [confirmedHash, refusedHash].sort(),
@@ -331,10 +407,34 @@ describe("useChatMessageActions: edit-and-resend by-hash gate", () => {
     const confirmed = atoms.find((atom) => atom.hash === confirmedHash);
     expect(confirmed).toBeDefined();
     expect(confirmed?.b64content).toBeNull();
-    // `inlineImageHashes` clears the `hash` on every node it inlines, so the
-    // refused one is addressed by its BYTES here, not by its hash.
+    // `inlineHashOnlyImageBytes` clears the `hash` on every node it inlines, so
+    // the refused one is addressed by its BYTES here, not by its hash.
     const inlined = atoms.find((atom) => atom.hash === null);
     expect(inlined).toBeDefined();
     expect(inlined?.b64content).not.toBeNull();
+  });
+
+  it("a hash INHERITED from the sent message is sent bare and never uploaded, bridge or no bridge", async () => {
+    // The bytes are local, the host acks, the bridge is up - every condition
+    // that would make an ADDED image upload. It still must not, because this
+    // digest is already an epic attachment: the editor was seeded with it. An
+    // upload here would be a `drafts.putBlob` round trip per Save on the
+    // commonest edit there is, and it is the one this suite can most easily
+    // lose by "simplifying" the inherited set away.
+    const hash = await putImage(pngBytes(5));
+    clientMocks.ackedHashes.add(hash);
+    const seeded = imageDoc([hash]);
+
+    await submitEdit({
+      initialContent: seeded,
+      currentContent: seeded,
+      bridgeSupported: true,
+    });
+
+    expect(clientMocks.putBlobCalls).toEqual([]);
+    const atoms = collectImageAtoms(dispatchedContent());
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.hash).toBe(hash);
+    expect(atoms[0]?.b64content).toBeNull();
   });
 });

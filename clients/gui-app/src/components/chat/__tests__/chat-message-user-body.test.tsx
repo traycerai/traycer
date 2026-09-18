@@ -37,8 +37,25 @@ import {
 } from "@/stores/chats/chat-find-force-store-context";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
+import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+
+// T4: the inline edit composer now runs `reingestPendingImages` on mount and
+// a real file paste through `putImage` - both write to the window's image
+// partition (IndexedDB), which this environment has none of by default.
+// Every test in this file that touches the edit composer needs one, the same
+// way the landing paste suites already do. The budget reservation ledger is
+// ALSO a module-level singleton with no per-test reset of its own - without
+// clearing it, an outstanding reservation from an earlier image-paste test in
+// this file can make a later paste's `reserveLandingImageBudget` refuse and
+// leave that test's ingest stuck pending.
+beforeEach(() => {
+  installFreshIndexedDb();
+  resetLandingImageBudgetReservationsForTesting();
+});
 
 const attachmentMocks = vi.hoisted(() => {
   const fetch = vi.fn((_hash: string, _signal: AbortSignal) =>
@@ -88,48 +105,6 @@ const openEpicHandleMocks = vi.hoisted(() => {
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: reportableErrorToastMock,
 }));
-
-// The inline edit composer is hash-first now: a paste's background ingest job
-// calls `putImage`, which reaches real `indexedDB` and this suite's jsdom
-// environment doesn't have one. Doubling the store keeps every pasted/dropped
-// image on the same synchronous-ish path these pins already drive, and a
-// counter-derived hash (rather than one constant) keeps a multi-image pin
-// from passing for the wrong reason (two nodes sharing a hash).
-const putImageMocks = vi.hoisted(() => ({
-  callCount: 0,
-  gate: null as Promise<void> | null,
-  release: null as (() => void) | null,
-}));
-
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
-  return {
-    ...actual,
-    putImage: vi.fn(async (_bytes: Uint8Array) => {
-      putImageMocks.callCount += 1;
-      const hash = `fake-hash-${putImageMocks.callCount}`;
-      const gate = putImageMocks.gate;
-      if (gate !== null) await gate;
-      return hash;
-    }),
-  };
-});
-
-/** Delays every `putImage` call issued while the gate is open. */
-function gatePutImage(): void {
-  putImageMocks.gate = new Promise<void>((resolve) => {
-    putImageMocks.release = resolve;
-  });
-}
-
-function releasePutImage(): void {
-  putImageMocks.release?.();
-  putImageMocks.gate = null;
-  putImageMocks.release = null;
-}
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
@@ -347,12 +322,6 @@ const STRUCTURED_SKILL_TRIGGER_USER_CONTENT: JsonContent = {
 };
 
 describe("<UserMessageBody /> agent messages", () => {
-  beforeEach(() => {
-    putImageMocks.callCount = 0;
-    putImageMocks.gate = null;
-    putImageMocks.release = null;
-  });
-
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
@@ -757,6 +726,13 @@ describe("<UserMessageBody /> agent messages", () => {
     });
   });
 
+  // T4: a real file paste on the edit composer now goes through
+  // `useComposerHashPaste`/`hashImageAttrsFromFiles` - the same content-
+  // addressed store every other chat surface uses - so the submitted node is
+  // HASH-ONLY with its bytes in the local store, not inline base64. A test
+  // named "submits base64 nodes" asserting the opposite was the old truth;
+  // keeping that name while flipping the assertion is exactly the trap T3's
+  // review caught once already.
   it("adds multiple pasted images to the edit strip and submits hash-only nodes", async () => {
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
@@ -798,16 +774,60 @@ describe("<UserMessageBody /> agent messages", () => {
     const submitted = onSubmit.mock.calls[0][0];
     const images = collectImageAtoms(submitted);
     expect(images.map((image) => image.fileName)).toEqual(["first-paste.png"]);
-    // This harness submits the composer's own snapshot directly and does not
-    // route through `use-chat-message-actions.ts`, so the submitted document
-    // is legitimately hash-only here - inline-at-submit is a separate seam
-    // covered by `use-chat-composer-submit-hash-first-images.test.tsx`.
     expect(images.every((image) => image.hash !== null)).toBe(true);
     expect(images.every((image) => image.b64content === null)).toBe(true);
+    // The bytes are actually IN the store under that hash, not just a node
+    // shaped like one.
+    const hash = images[0]?.hash;
+    expect(hash).not.toBeNull();
+    if (hash === null) return;
+    expect(Array.from((await getImageBytes(hash)) ?? [])).toEqual([1, 2, 3]);
   });
 
-  it("blocks edit submission until a pasted image's ingest settles", async () => {
-    gatePutImage();
+  // T4 format fallback: a declared MIME type outside the host's storable set
+  // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes today's inline path,
+  // for that file alone, which is exactly what still routes through
+  // `FileReader.readAsDataURL` rather than `arrayBuffer()`/`putImage`.
+  it("keeps a declared-BMP paste inline on the edit composer (format fallback)", async () => {
+    const delayedReader = installDelayedFileReader();
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const bmp = new File([new Uint8Array([1, 2, 3])], "legacy.bmp", {
+      type: "image/bmp",
+    });
+
+    fireEvent.paste(editor, { clipboardData: clipboardWithFiles([bmp]) });
+    delayedReader.resolveNext("data:image/bmp;base64,AQID");
+    await screen.findByRole("button", { name: "Open Image#1: legacy.bmp" });
+    // Wait for the GATE, not the chip - the same two-state-updates gap the
+    // storable-PNG sibling below documents. The fallback path takes it too:
+    // `runImageIngest`'s `finally` decrements the pending count after the node
+    // is inserted, so a synchronous click here raced the re-enable and the
+    // click landed on a disabled button.
+    const send = await screen.findByRole("button", { name: "Send edit" });
+    await waitFor(() => {
+      expect(send.getAttribute("disabled")).toBeNull();
+    });
+    fireEvent.click(send);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const atoms = collectImageAtoms(onSubmit.mock.calls[0][0]);
+    expect(atoms).toEqual([
+      expect.objectContaining({
+        fileName: "legacy.bmp",
+        b64content: "AQID",
+        hash: null,
+      }),
+    ]);
+  });
+
+  // T4: a storable PNG paste no longer reads through `FileReader` at all - it
+  // reads `file.arrayBuffer()` and `putImage`s the bytes. The "blocked until
+  // it finishes" contract still holds; only the mechanism under it changed,
+  // so the delay is now injected at `arrayBuffer()`, not `readAsDataURL`.
+  it("blocks edit submission until a pasted image finishes reading", async () => {
+    const delayedRead = installDelayedArrayBufferRead();
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
@@ -823,25 +843,35 @@ describe("<UserMessageBody /> agent messages", () => {
     fireEvent.click(send);
     expect(onSubmit).not.toHaveBeenCalled();
 
-    releasePutImage();
+    delayedRead.resolveNext(new Uint8Array([16, 17, 18]));
     await screen.findByRole("button", {
       name: "Open Image#1: delayed.png",
     });
-    const readySend = screen.getByRole("button", { name: "Send edit" });
-    expect(readySend.getAttribute("disabled")).toBeNull();
+    // Wait for the GATE, not for the chip. The node is inserted before
+    // `runImageIngest`'s `finally` decrements the pending count, so the chip
+    // appearing and the send button re-enabling are two different state
+    // updates - and asserting the second synchronously after awaiting the
+    // first raced the gap. That gap is real and correct: the button must stay
+    // disabled until ingest has genuinely settled, which since T4 includes the
+    // `putImage` write, not just the byte read.
+    const readySend = await screen.findByRole("button", { name: "Send edit" });
+    await waitFor(() => {
+      expect(readySend.getAttribute("disabled")).toBeNull();
+    });
     fireEvent.click(readySend);
 
     const submitted = onSubmit.mock.calls[0][0];
-    // Hash-only, same reasoning as the previous pin: this harness submits
-    // the composer's own snapshot and doesn't route through the
-    // inline-at-submit seam.
-    expect(collectImageAtoms(submitted)).toEqual([
+    const atoms = collectImageAtoms(submitted);
+    expect(atoms).toEqual([
       expect.objectContaining({
         fileName: "delayed.png",
         b64content: null,
-        hash: expect.any(String),
       }),
     ]);
+    const hash = atoms[0]?.hash;
+    expect(hash).not.toBeNull();
+    if (hash === null) return;
+    expect(Array.from((await getImageBytes(hash)) ?? [])).toEqual([16, 17, 18]);
   });
 
   it("submits a synchronously validated rich paste immediately", async () => {
@@ -920,8 +950,8 @@ describe("<UserMessageBody /> agent messages", () => {
     ).not.toBeNull();
   });
 
-  it("discards an image ingest that settles after edit cancellation", async () => {
-    gatePutImage();
+  it("discards an image read that resolves after edit cancellation", async () => {
+    const delayedRead = installDelayedArrayBufferRead();
     render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
 
@@ -934,7 +964,7 @@ describe("<UserMessageBody /> agent messages", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reopen edit" }));
     await screen.findByRole("textbox", { name: "Edit message" });
 
-    releasePutImage();
+    delayedRead.resolveNext(new Uint8Array([13, 14, 15]));
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
@@ -1364,12 +1394,18 @@ function plainUserMessage(content: string): ChatMessageModel {
 }
 
 function imageNode(id: string, fileName: string): JsonContent {
+  // A REAL base64 payload, not the bare id: T4's `reingestPendingImages` now
+  // runs on every editor mount and decodes any surviving `b64content` node
+  // through `decodeValidatedPastedImage`, which rejects a non-base64 string
+  // (the bare id used to contain a `-`, which is not in the standard
+  // alphabet) as corrupted and REMOVES the node - which is a real behaviour
+  // this fixture would otherwise be triggering by accident, not testing.
   return {
     type: "imageAttachment",
     attrs: {
       id,
       fileName,
-      b64content: id,
+      b64content: btoa(id),
       mimeType: "image/png",
       size: id.length,
     },
@@ -1560,6 +1596,61 @@ function dataTransferWithFiles(files: ReadonlyArray<File>) {
     types: ["Files"],
     dropEffect: "none",
     getData: () => "",
+  };
+}
+
+interface DelayedFileReaderControl {
+  readonly resolveNext: (dataUrl: string) => void;
+}
+
+function installDelayedFileReader(): DelayedFileReaderControl {
+  const pending: FileReader[] = [];
+  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+    this: FileReader,
+    _blob: Blob,
+  ) {
+    pending.push(this);
+  });
+  return {
+    resolveNext: (dataUrl) => {
+      const reader = pending.shift();
+      if (reader === undefined) throw new Error("expected pending file read");
+      Object.defineProperty(reader, "result", {
+        configurable: true,
+        value: dataUrl,
+      });
+      reader.dispatchEvent(new ProgressEvent("load"));
+    },
+  };
+}
+
+interface DelayedArrayBufferReadControl {
+  readonly resolveNext: (bytes: Uint8Array) => void;
+}
+
+/**
+ * T4's twin of {@link installDelayedFileReader}: a storable-format paste
+ * (PNG/JPEG/GIF/WebP/SVG) reads `file.arrayBuffer()` directly, never
+ * `FileReader.readAsDataURL` - that FileReader path survives only for the
+ * format FALLBACK (a declared MIME type outside the host's storable set).
+ */
+function installDelayedArrayBufferRead(): DelayedArrayBufferReadControl {
+  const pending: Array<(value: ArrayBuffer) => void> = [];
+  vi.spyOn(File.prototype, "arrayBuffer").mockImplementation(
+    function (this: File) {
+      return new Promise<ArrayBuffer>((resolve) => {
+        pending.push(resolve);
+      });
+    },
+  );
+  return {
+    resolveNext: (bytes) => {
+      const resolve = pending.shift();
+      if (resolve === undefined) {
+        throw new Error("expected pending arrayBuffer read");
+      }
+      resolve(bytes.buffer as ArrayBuffer);
+    },
   };
 }
 

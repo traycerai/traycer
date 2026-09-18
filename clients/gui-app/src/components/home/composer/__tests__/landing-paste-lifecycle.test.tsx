@@ -33,10 +33,10 @@ import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { pngBytesOfSize } from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   releaseSession,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import {
   LANDING_IMAGE_BUDGET_BYTES,
   reserveLandingImageBudget,
@@ -403,7 +403,7 @@ beforeEach(async () => {
     Promise.resolve(Array.from(idbData.keys())),
   );
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
   idbData.clear();
@@ -420,10 +420,10 @@ beforeEach(async () => {
   resetLandingImageBudgetReservationsForTesting();
 });
 
-// `LandingComposer` claims a foreign draft through `useHostMutation`
-// (`useDraftAuthorityControl`), so it needs a Query client the way every
-// host-RPC surface in the app does. Shadows RTL's `render` so each case below
-// keeps reading as a plain render.
+// `useDraftAuthorityControl` no longer claims anything (the fork rule is a
+// synchronous local re-key, no host RPC) - the Query client here is kept
+// for the other host-RPC hooks `LandingComposer` still uses. Shadows RTL's
+// `render` so each case below keeps reading as a plain render.
 function render(ui: ReactElement): RenderResult {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -695,6 +695,55 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     });
   });
 
+  it("leaves a non-storable format INLINE and stores no bytes for it", async () => {
+    // The landing composer long carried its own copy of the pending-image
+    // ingest, and that copy had no notion of a storable format: it started a
+    // store job for any decodable image, so a pasted BMP was hashed here and
+    // then refused by the host's writer, while its budget reservation was taken
+    // and never released.
+    //
+    // The shared hook's rule - a format the host refuses stays INLINE, reserves
+    // nothing and starts no job - is what this asserts on the landing surface.
+    const bytes = bytesOf([7, 7, 7]);
+    const hash = await sha256Hex(bytes);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    pasteComposerContent(nonStorableContent(bytesToBase64(bytes)));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+
+    // The DISCRIMINATOR, and the reason this is not merely a same-tick read:
+    // an ingest job in flight holds the pending indicator true, and this test
+    // releases no gate, so a BMP job that wrongly started would hold it true
+    // until this `waitFor` gave up. Settling to "false" is therefore positive
+    // evidence that no job is outstanding - not just that none had registered
+    // yet when the assertion ran.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("false");
+    });
+
+    // And nothing reached the store under its hash. `setGates` records every
+    // `putImage` that got that far, so an entry here would mean a job ran.
+    expect(setGates.has(hash)).toBe(false);
+
+    // Inline is the ACCEPTED outcome, not a rejection: the draft still sends
+    // this image, just not hash-only.
+    const atoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
+    );
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.b64content).not.toBeNull();
+    expect(atoms[0]?.hash).toBeNull();
+  });
+
   // Seam 2 standalone (also covered above while pending): partialize + desktop.
   it("serialization seams strip pending b64 while the in-memory draft keeps it", async () => {
     const desktopPatches: DesktopPerWindowStatePatch[] = [];
@@ -874,7 +923,7 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     competing?.release();
   });
 
-  it("re-reserves a pending image after an inactive gap and rejects it when capacity was consumed", async () => {
+  it("re-reserves a pending image after an inactive gap and KEEPS it when capacity was consumed", async () => {
     const bytes = bytesOf([6, 6, 6]);
     const hash = await sha256Hex(bytes);
 
@@ -909,22 +958,38 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     );
     await waitForEditorReady();
 
+    // The user is TOLD - the refusal still toasts - and the image STAYS.
+    //
+    // This is a migration of bytes the draft already holds inline, not a paste
+    // being admitted: `b64content` is the durable copy and the draft sends with
+    // it exactly as it is. Deleting the node here destroyed an attachment the
+    // user may no longer have anywhere, for no reason but a full budget at the
+    // moment they reopened the draft.
+    //
+    // The accepted cost, stated because it is real: an inline node keeps this
+    // draft out of `collectDirtyWrites` (`containsPendingInlineImageNode`), so
+    // the row does not SYNC until a later mount migrates it. The draft is still
+    // local, still editable, still sendable - and the toast names the exact
+    // action that clears it. Every mount retries.
     await waitFor(() => {
-      const atoms = collectImageAtoms(
-        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
-          emptyDoc(),
+      expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+        "Couldn't add the image.",
+        expect.objectContaining({
+          description:
+            "Remove images or close a draft yourself, then try again.",
+        }),
+        expect.objectContaining({
+          message: "The image storage budget was exceeded.",
+        }),
       );
-      expect(atoms).toHaveLength(0);
     });
-    expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
-      "Couldn't add the image.",
-      expect.objectContaining({
-        description: "Remove images or close a draft yourself, then try again.",
-      }),
-      expect.objectContaining({
-        message: "The image storage budget was exceeded.",
-      }),
+    const atoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
     );
+    expect(atoms).toHaveLength(1);
+    // Still INLINE: not rewritten to a hash whose bytes were never charged.
+    expect(atoms[0]?.b64content).not.toBeNull();
     competingReservation?.release();
   });
 
@@ -1417,6 +1482,30 @@ function imageOnlyContent(b64: string, fileName: string): JsonContent {
               fileName,
               b64content: b64,
               mimeType: "image/png",
+              size: 3,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** A single non-storable (BMP) image node - a format the host's writer refuses. */
+function nonStorableContent(b64: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "src-bmp",
+              fileName: "shot.bmp",
+              b64content: b64,
+              mimeType: "image/bmp",
               size: 3,
             },
           },

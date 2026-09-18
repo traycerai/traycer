@@ -100,6 +100,7 @@ export const epicSchemaSurfaceBaseline = {
                       "enum": [
                         "supervised",
                         "auto_accept_edits",
+                        "auto",
                         "full_access"
                       ]
                     },
@@ -3429,6 +3430,36 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "browserSession": {
+                                  "type": "object",
+                                  "properties": {
+                                    "hostId": {
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "tabId": {
+                                      "type": "string"
+                                    },
+                                    "profile": {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "isolated"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "hostId",
+                                    "sessionId",
+                                    "tabId",
+                                    "profile"
+                                  ]
                                 }
                               },
                               "required": [
@@ -5452,6 +5483,17 @@ export const epicSchemaSurfaceBaseline = {
                                               "monitoring": {
                                                 "default": false,
                                                 "type": "boolean"
+                                              },
+                                              "hostId": {
+                                                "default": null,
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
                                               }
                                             },
                                             "required": [
@@ -8627,6 +8669,7 @@ export const epicSchemaSurfaceBaseline = {
                       "enum": [
                         "supervised",
                         "auto_accept_edits",
+                        "auto",
                         "full_access"
                       ]
                     },
@@ -12167,6 +12210,37 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "browserSession": {
+                                  "type": "object",
+                                  "properties": {
+                                    "hostId": {
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "tabId": {
+                                      "type": "string"
+                                    },
+                                    "profile": {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "isolated"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "hostId",
+                                    "sessionId",
+                                    "tabId",
+                                    "profile"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               },
                               "required": [
@@ -14278,11 +14352,23 @@ export const epicSchemaSurfaceBaseline = {
                                               "monitoring": {
                                                 "default": false,
                                                 "type": "boolean"
+                                              },
+                                              "hostId": {
+                                                "default": null,
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
                                               }
                                             },
                                             "required": [
                                               "commandId",
-                                              "monitoring"
+                                              "monitoring",
+                                              "hostId"
                                             ],
                                             "additionalProperties": false
                                           },

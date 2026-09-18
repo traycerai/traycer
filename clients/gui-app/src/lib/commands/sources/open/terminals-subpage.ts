@@ -3,8 +3,8 @@
  * workspace selection without leaving cmdk), then existing terminals from
  * `useTerminalList`.
  *
- * The active host's workspaces are shown directly. Other available hosts are
- * nested sub-pages backed by transient clients, so cross-host creation remains
+ * The task's selected/default host's workspaces are shown directly. Other
+ * available hosts are nested sub-pages backed by transient clients, so cross-host creation remains
  * possible without changing the app-wide active host or opening a modal.
  */
 import { useMemo } from "react";
@@ -13,7 +13,8 @@ import { toast } from "sonner";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
+import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-active-epic-surface-host-pin";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -24,10 +25,7 @@ import {
   dialableHostEndpointFor,
 } from "@/lib/host/transport-key";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
-import {
-  useWorktreeListBindingsForEpic,
-  useWorktreeListBindingsForEpicForClient,
-} from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useTerminalWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useHostBinding,
   useHostClient,
@@ -235,7 +233,7 @@ function terminalWorkspaceStatusHint(
     label: isLoading ? "Loading workspaces…" : "Couldn't load workspaces",
     description: isLoading
       ? "Fetching workspaces for this host"
-      : "Try again after the host reconnects",
+      : "Retry the workspace availability check",
     statusBadge: isLoading ? "Loading" : "Unavailable",
     disabled: true,
     keywords: ["workspace", status],
@@ -253,6 +251,8 @@ interface TerminalWorkspaceQueryState {
   readonly folderlessCwd: string | null | undefined;
   readonly isPending: boolean;
   readonly isError: boolean;
+  readonly isFetching: boolean;
+  readonly retry: () => void;
 }
 
 function terminalWorkspaceQueryItems(
@@ -261,17 +261,35 @@ function terminalWorkspaceQueryItems(
   query: TerminalWorkspaceQueryState,
   hostClient: HostClient<HostRpcRegistry>,
 ): ReadonlyArray<CommandItem> {
-  if (query.isPending) return [terminalWorkspaceStatusHint(hostId, "loading")];
-  if (query.isError) return [terminalWorkspaceStatusHint(hostId, "error")];
-  return terminalWorkspaceLeaves(
-    ctx,
-    hostId,
-    {
-      rows: query.rows ?? [],
-      folderlessCwd: query.folderlessCwd ?? null,
-    },
-    hostClient,
+  if (query.isPending || (query.isFetching && !query.isError)) {
+    return [terminalWorkspaceStatusHint(hostId, "loading")];
+  }
+  const items = query.isError
+    ? [terminalWorkspaceStatusHint(hostId, "error")]
+    : terminalWorkspaceLeaves(
+        ctx,
+        hostId,
+        { rows: query.rows ?? [], folderlessCwd: query.folderlessCwd ?? null },
+        hostClient,
+      );
+  const hasUnverifiedRows = (query.rows ?? []).some(
+    (row) => !isBrowsable(row) && row.isGitResolvePending,
   );
+  if (!query.isError && !hasUnverifiedRows) return items;
+  return [
+    ...items,
+    {
+      ...openerActionLeaf({
+        // Recovery is not a terminal-open command for analytics.
+        id: `workspace-check:terminal:${hostId}:retry`,
+        label: "Retry workspace check",
+        keywords: ["workspace", "terminal", "retry"],
+        run: query.retry,
+      }),
+      keepOpen: true,
+      disabled: query.isFetching,
+    },
+  ];
 }
 
 function useHostTerminalWorkspaceItems(
@@ -280,11 +298,12 @@ function useHostTerminalWorkspaceItems(
 ): ReadonlyArray<CommandItem> {
   const hostClient = useHostClient();
   const client = useHostClientForHostId(hostId);
-  const bindings = useWorktreeListBindingsForEpicForClient({
+  const bindings = useTerminalWorkspaceBindingsForClient({
     client,
     epicId: ctx.activeEpicId ?? "",
     enabled: ctx.activeEpicId !== null,
   });
+  const retryBindings = bindings.refetch;
   return useMemo(
     () =>
       terminalWorkspaceQueryItems(
@@ -295,13 +314,19 @@ function useHostTerminalWorkspaceItems(
           folderlessCwd: bindings.data?.folderlessCwd,
           isPending: bindings.isPending,
           isError: bindings.isError,
+          isFetching: bindings.isFetching,
+          retry: () => {
+            void retryBindings({ cancelRefetch: false });
+          },
         },
         hostClient,
       ),
     [
       bindings.data,
       bindings.isError,
+      bindings.isFetching,
       bindings.isPending,
+      retryBindings,
       ctx,
       hostClient,
       hostId,
@@ -323,11 +348,17 @@ function makeHostWorkspaceSubpage(
 function useNewTerminalWorkspaceItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const activeHostId = useAddressableHostId();
+  const surfaceKey = useTabSurfaceKey("new-terminal", ctx.activeTabId ?? "");
+  const { resolvedHostId } = useActiveEpicSurfaceHostPin(
+    surfaceKey,
+    ctx.activeEpicId,
+  );
+  const client = useHostClientForHostId(resolvedHostId);
   const hostClient = useHostClient();
-  const bindings = useWorktreeListBindingsForEpic({
+  const bindings = useTerminalWorkspaceBindingsForClient({
+    client,
     epicId: ctx.activeEpicId ?? "",
-    enabled: ctx.activeEpicId !== null,
+    enabled: ctx.activeEpicId !== null && resolvedHostId !== null,
   });
   const binding = useHostBinding();
   // Command subpages mount only when selected, so this refresh gives the
@@ -346,18 +377,23 @@ function useNewTerminalWorkspaceItems(
       [directory.data],
     ),
   );
+  const retryBindings = bindings.refetch;
   return useMemo(() => {
-    const localLeaves =
-      activeHostId === null
+    const selectedHostLeaves =
+      resolvedHostId === null
         ? []
         : terminalWorkspaceQueryItems(
             ctx,
-            activeHostId,
+            resolvedHostId,
             {
               rows: bindings.data?.rows,
               folderlessCwd: bindings.data?.folderlessCwd,
               isPending: bindings.isPending,
               isError: bindings.isError,
+              isFetching: bindings.isFetching,
+              retry: () => {
+                void retryBindings({ cancelRefetch: false });
+              },
             },
             hostClient,
           );
@@ -369,7 +405,7 @@ function useNewTerminalWorkspaceItems(
       // liveness read came back blind.
       .filter(
         (entry) =>
-          entry.hostId !== activeHostId &&
+          entry.hostId !== resolvedHostId &&
           dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
             null,
       )
@@ -382,12 +418,14 @@ function useNewTerminalWorkspaceItems(
           subpage: makeHostWorkspaceSubpage(entry.hostId, label),
         });
       });
-    return [...localLeaves, ...otherHosts];
+    return [...selectedHostLeaves, ...otherHosts];
   }, [
-    activeHostId,
+    resolvedHostId,
     bindings.data,
     bindings.isError,
+    bindings.isFetching,
     bindings.isPending,
+    retryBindings,
     ctx,
     directory.data,
     hasReadySessionFor,
@@ -406,8 +444,8 @@ export function useTerminalsOpenerItems(
 ): ReadonlyArray<CommandItem> {
   // The epic's terminals are listed on, and their tiles bind to, the host
   // serving the epic's projection - see `useActiveEpicHostId`. (Creating a
-  // NEW terminal below is a placement flow with its own host picker and
-  // deliberately keeps the app-wide default.)
+  // NEW terminal below is a placement flow sharing the sidebar's host pin
+  // and task-agent default.)
   const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
   const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const hostClient = useHostClientForHostId(activeEpicHostId);

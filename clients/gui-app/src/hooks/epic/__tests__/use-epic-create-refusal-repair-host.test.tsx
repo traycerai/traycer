@@ -41,7 +41,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
-import { putImage } from "@/lib/composer/composer-image-store";
+import { putImage } from "@/lib/composer/landing-image-store";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import {
@@ -491,7 +491,11 @@ describe("a missing-attachment-bytes refusal retries once under the same idempot
         "epic.create": () => {
           const call = createCallCount;
           createCallCount += 1;
-          const response = createResponses[call];
+          // `.at`, not `[]` - see `epic-existence-poll.ts`'s `backoffMs` for
+          // the same reasoning: a plain index read is typed as the element
+          // type at any index, so the overrun this guard exists to name was
+          // invisible to the compiler and the guard itself was dead.
+          const response = createResponses.at(call);
           if (response === undefined) {
             throw new Error(`unexpected epic.create call ${String(call)}`);
           }

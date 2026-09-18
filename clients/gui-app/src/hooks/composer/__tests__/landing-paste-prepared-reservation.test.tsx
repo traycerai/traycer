@@ -13,17 +13,16 @@ import { toast } from "sonner";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
-import type { ImagePreparationSession } from "@/lib/composer/composer-image-preparation";
 import {
   resetLandingImageBudgetReservationsForTesting,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
 import * as landingImageBudget from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   releaseSession,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import * as idb from "idb-keyval";
@@ -34,7 +33,6 @@ import {
 
 import {
   makeHandle,
-  makeTestPreparationSession,
   NO_MENTION_ROOTS,
   NOOP_FILE_DROPS,
 } from "./use-landing-composer-paste-test-helpers";
@@ -91,10 +89,8 @@ let urlCounter = 0;
 // One preparation session per test (queue-serialization fix), created fresh
 // in `beforeEach` and shared across every `useLandingComposerPaste` call in
 // a given test - never a fresh one inside a `renderHook` callback.
-let preparationSession: ImagePreparationSession;
 
 beforeEach(async () => {
-  preparationSession = makeTestPreparationSession();
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
   URL.revokeObjectURL = vi.fn();
   vi.mocked(idb.set).mockImplementation((key, value) => {
@@ -104,7 +100,7 @@ beforeEach(async () => {
   const hashes = await imageHashKeys();
   await Promise.all(
     hashes.map(async (hash) => {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }),
   );
@@ -210,7 +206,17 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
       if (reservation === null) return null;
       const release = vi.fn(() => reservation.release());
       releaseSpies.push(release);
-      return { release };
+      // `settleStored` is delegated, not stubbed away: the paste path calls it
+      // per candidate to hand that slot's charge to the hash it turned out to
+      // be, and a spy that answered only `release` would silently leave every
+      // landed image double-charged for the rest of the batch - which is the
+      // very accounting these cases measure.
+      return {
+        release,
+        settleStored: (candidateIndex: number, hash: string) => {
+          reservation.settleStored(candidateIndex, hash);
+        },
+      };
     });
     return { calls, releaseSpies };
   }
@@ -236,7 +242,6 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -251,10 +256,15 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
     expect(calls[0]).toEqual([{ hash: null, bytes: 96 }]);
     expect(calls[0]?.[0]?.bytes).not.toBe(file.size);
 
-    const image = inserted[0]?.[0];
-    expect(image).toBeDefined();
-    expect(image?.size).toBe(96);
-    expect(image?.mimeType).toBe("image/webp");
+    // Indexed directly, and the `expect(image).toBeDefined()` that used to sit
+    // here is gone with the optional chains: `inserted` is
+    // `ImageAttachmentAttrs[][]`, so the element type is non-nullable and that
+    // assertion could never fail. The `waitFor` above is what establishes the
+    // insertion actually happened; if it somehow had not, reading `.size` off
+    // nothing fails this line by name, which is the clearer failure anyway.
+    const image = inserted[0][0];
+    expect(image.size).toBe(96);
+    expect(image.mimeType).toBe("image/webp");
 
     await waitFor(() => expect(releaseSpies).toHaveLength(1));
     await waitFor(() => expect(releaseSpies[0]).toHaveBeenCalledTimes(1));
@@ -294,7 +304,6 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -334,7 +343,6 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 

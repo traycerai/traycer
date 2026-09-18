@@ -22,17 +22,20 @@ import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
+import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
+import { Route as SettingsGettingStartedRouteImport } from "./routes/settings.getting-started";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
 import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
+import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
@@ -106,6 +109,11 @@ const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   path: "/appearance",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsBrowserRoute = SettingsBrowserRouteImport.update({
+  id: "/browser",
+  path: "/browser",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
   id: "/delete-account",
   path: "/delete-account",
@@ -129,6 +137,11 @@ const SettingsFallbackRoute = SettingsFallbackRouteImport.update({
 const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   id: "/general",
   path: "/general",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsGettingStartedRoute = SettingsGettingStartedRouteImport.update({
+  id: "/getting-started",
+  path: "/getting-started",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsHostRoute = SettingsHostRouteImport.update({
@@ -159,6 +172,11 @@ const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
 const SettingsOpeningBehaviorRoute = SettingsOpeningBehaviorRouteImport.update({
   id: "/opening-behavior",
   path: "/opening-behavior",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsPermissionsRoute = SettingsPermissionsRouteImport.update({
+  id: "/permissions",
+  path: "/permissions",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
@@ -204,17 +222,20 @@ export interface FileRoutesByFullPath {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
+  "/settings/getting-started": typeof SettingsGettingStartedRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -234,17 +255,20 @@ export interface FileRoutesByTo {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
+  "/settings/getting-started": typeof SettingsGettingStartedRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -267,17 +291,20 @@ export interface FileRoutesById {
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
+  "/settings/getting-started": typeof SettingsGettingStartedRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -301,17 +328,20 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
     | "/settings/general"
+    | "/settings/getting-started"
     | "/settings/host"
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -331,17 +361,20 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
     | "/settings/general"
+    | "/settings/getting-started"
     | "/settings/host"
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -363,17 +396,20 @@ export interface FileRouteTypes {
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
     | "/settings/general"
+    | "/settings/getting-started"
     | "/settings/host"
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/opening-behavior"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -487,6 +523,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsAppearanceRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/browser": {
+      id: "/settings/browser";
+      path: "/browser";
+      fullPath: "/settings/browser";
+      preLoaderRoute: typeof SettingsBrowserRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/delete-account": {
       id: "/settings/delete-account";
       path: "/delete-account";
@@ -520,6 +563,13 @@ declare module "@tanstack/react-router" {
       path: "/general";
       fullPath: "/settings/general";
       preLoaderRoute: typeof SettingsGeneralRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/getting-started": {
+      id: "/settings/getting-started";
+      path: "/getting-started";
+      fullPath: "/settings/getting-started";
+      preLoaderRoute: typeof SettingsGettingStartedRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/host": {
@@ -562,6 +612,13 @@ declare module "@tanstack/react-router" {
       path: "/opening-behavior";
       fullPath: "/settings/opening-behavior";
       preLoaderRoute: typeof SettingsOpeningBehaviorRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/permissions": {
+      id: "/settings/permissions";
+      path: "/permissions";
+      fullPath: "/settings/permissions";
+      preLoaderRoute: typeof SettingsPermissionsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/providers": {
@@ -626,17 +683,20 @@ interface SettingsRouteChildren {
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
+  SettingsBrowserRoute: typeof SettingsBrowserRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsFallbackRoute: typeof SettingsFallbackRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
+  SettingsGettingStartedRoute: typeof SettingsGettingStartedRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
   SettingsLayoutRoute: typeof SettingsLayoutRoute;
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
+  SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
@@ -650,17 +710,20 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsBrowserRoute: SettingsBrowserRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsFallbackRoute: SettingsFallbackRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
+  SettingsGettingStartedRoute: SettingsGettingStartedRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsLayoutRoute: SettingsLayoutRoute,
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
+  SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,

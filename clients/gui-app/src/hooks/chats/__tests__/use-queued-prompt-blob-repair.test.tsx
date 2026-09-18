@@ -7,10 +7,11 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 
 import type { HostRpcRegistry } from "@/lib/host";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
-import { putImage } from "@/lib/composer/composer-image-store";
+import { putImage } from "@/lib/composer/landing-image-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   type DraftBlobClient,
-  draftBlobConfirmedOnHost,
+  isDraftBlobConfirmed,
   putDraftBlobs,
   resetDraftBlobTransportForTests,
 } from "@/lib/drafts/draft-blob-transport";
@@ -41,6 +42,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
  * this carriage does not.
  */
 
+const OWNER_ID = "owner-queued-repair";
 const HOST_ID = "host-queued-repair";
 const QUEUE_ITEM_ID = "queue-item-1";
 
@@ -59,10 +61,7 @@ type PutBlobResponse = ResponseOfMethod<HostRpcRegistry, "drafts.putBlob">;
 
 function draftBlobClient(): DraftBlobClient {
   return {
-    request: (() =>
-      Promise.reject(
-        new Error("unexpected request call"),
-      )),
+    request: () => Promise.reject(new Error("unexpected request call")),
     requestWithOptions: ((method: string, params: unknown) => {
       if (method !== "drafts.putBlob") {
         return Promise.reject(new Error(`unexpected method ${method}`));
@@ -193,6 +192,14 @@ function mountArm(initial: ArmProps): {
 
 beforeEach(() => {
   installFreshIndexedDb();
+  // Confirmations are recorded and read PER ACCOUNT, and a null owner confirms
+  // nothing - so without an identity every `isDraftBlobConfirmed(...)` below
+  // answers false. The `toBe(true)` cases would red loudly; the `toBe(false)`
+  // ones would pass for the wrong reason, which is the failure this seeding
+  // exists to prevent.
+  useAuthStore.setState({
+    contextMetadata: { userId: OWNER_ID, username: OWNER_ID },
+  });
   blobMocks.putBlobCalls.length = 0;
   blobMocks.ackedHashes.clear();
   blobMocks.pending.length = 0;
@@ -223,8 +230,8 @@ describe("useQueuedPromptBlobRepair", () => {
     // failure-memo case further down, which is the only one that can see it,
     // because the forget only shows up in the memo state left behind when the
     // re-upload FAILS.
-    await putDraftBlobs(HOST_ID, CLIENT, [hash]);
-    expect(draftBlobConfirmedOnHost(HOST_ID, hash)).toBe(true);
+    await putDraftBlobs(HOST_ID, CLIENT, [hash], OWNER_ID);
+    expect(isDraftBlobConfirmed(HOST_ID, hash, OWNER_ID)).toBe(true);
     blobMocks.putBlobCalls.length = 0;
 
     mountArm({
@@ -292,8 +299,8 @@ describe("useQueuedPromptBlobRepair", () => {
     const hash = await putImage(pngBytes(6));
     // Confirmed on this host first...
     blobMocks.ackedHashes.add(hash);
-    await putDraftBlobs(HOST_ID, CLIENT, [hash]);
-    expect(draftBlobConfirmedOnHost(HOST_ID, hash)).toBe(true);
+    await putDraftBlobs(HOST_ID, CLIENT, [hash], OWNER_ID);
+    expect(isDraftBlobConfirmed(HOST_ID, hash, OWNER_ID)).toBe(true);
     // ...and now the host refuses it, so the repair's own put cannot restore
     // the confirmation.
     blobMocks.ackedHashes.clear();
@@ -315,7 +322,7 @@ describe("useQueuedPromptBlobRepair", () => {
     });
     expect(resumeQueue).not.toHaveBeenCalled();
     // The claim: the renderer no longer believes this host holds these bytes.
-    expect(draftBlobConfirmedOnHost(HOST_ID, hash)).toBe(false);
+    expect(isDraftBlobConfirmed(HOST_ID, hash, OWNER_ID)).toBe(false);
   });
 
   it("an empty missingHashes set is paused-with-nothing-to-do, not a vacuous success", async () => {

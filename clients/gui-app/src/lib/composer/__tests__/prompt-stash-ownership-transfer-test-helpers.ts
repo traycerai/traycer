@@ -39,7 +39,7 @@ type LandingDraftStore = typeof import("@/stores/home/landing-draft-store");
 type DraftRuntimeRegistry =
   typeof import("@/stores/home/draft-runtime-registry");
 type ModalStore = typeof import("@/stores/epics/new-conversation-modal-store");
-type LandingImageStore = typeof import("@/lib/composer/composer-image-store");
+type LandingImageStore = typeof import("@/lib/composer/landing-image-store");
 type LandingBudget = typeof import("@/lib/composer/landing-image-budget");
 type EditorHandle =
   import("@/components/chat/composer/composer-prompt-editor").ComposerPromptEditorHandle;
@@ -242,7 +242,7 @@ export async function loadHarness(): Promise<Harness> {
   const draftRuntime = await import("@/stores/home/draft-runtime-registry");
   const modalStore =
     await import("@/stores/epics/new-conversation-modal-store");
-  const landingImages = await import("@/lib/composer/composer-image-store");
+  const landingImages = await import("@/lib/composer/landing-image-store");
   const landingBudget = await import("@/lib/composer/landing-image-budget");
 
   await promptStashStore.usePromptStashStore.getState().hydrate();

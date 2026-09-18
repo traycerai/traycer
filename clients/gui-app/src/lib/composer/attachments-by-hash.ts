@@ -1,49 +1,62 @@
 /**
- * Deciding, per message, which image nodes may travel to the host BY HASH.
+ * The CREATE side of "which image nodes may travel to the host by hash", plus
+ * the plan/confirm steps any surface runs before it puts a hash on the wire.
  *
- * Every composer surface is hash-first: the bytes go to this window's composer
- * image store at paste and the node carries only a `hash`. What varies is what
- * the WIRE can take. A host on `epic.create@1.2` / `epic.createChat@1.2` (with
- * `attachmentsByHash: true`) or on `chat.subscribe@1.11` resolves a hash-only
- * node from the requester's draft blob tier; anything older needs the bytes
- * inline, which is what `composer-image-inlining.ts` puts back.
+ * ## The name is wider than the module
  *
- * Three facts decide it, and all three must hold for a node to go by hash:
+ * It used to own both halves. The SEND half is gone: `chat.subscribe@1.12`
+ * moved send-path materialization behind
+ * `ChatStreamClient.draftBlobBridgeSupported()`, and the inlining that used to
+ * back it out now lives in three modules of its own —
+ * `lib/composer/image-atoms.ts` (which nodes are hash-only, and the rewrite
+ * that puts bytes back), `lib/drafts/resolve-draft-image-bytes.ts` (local →
+ * host → cloud byte resolution) and `lib/drafts/draft-image-inlining.ts` (the
+ * bounded reconcile that keeps a document's required set exact across the
+ * await). Nothing here decides anything about a send's wire shape any more.
+ * The name is kept for this merge; read this paragraph, not the file name.
  *
- *  1. The negotiated version of the method this message is dispatched on, read
- *     at dispatch and FAILING CLOSED on every non-version answer.
- *  2. The host is not withholding `drafts.putBlob` - without the upload channel
- *     there is no staging tier for the host to resolve out of.
- *  3. The NODE's own `byHashEligible`, the preparer's verdict recorded at paste
- *     (`ImageAttachmentAttrs.byHashEligible`). The host's staging install
- *     refuses SVG and every payload it cannot model as a raster image, so a
- *     node the preparer could not model must stay inline whatever the host
- *     negotiates - the `missing-attachment-bytes` refusal is the backstop for
- *     that class, not the rule.
+ * ## What is left
  *
- * The count cap is the fourth fact and it is not per node: the host refuses a
- * create referencing more than {@link MAX_CREATE_ATTACHMENT_HASHES} distinct
- * hashes with an `InvalidArgumentError`, which has no UI arm anywhere. Both
- * create surfaces check it themselves so that refusal is never the user's first
- * notice.
+ * **The create capability gate.** A host on `epic.create@1.2` /
+ * `epic.createChat@1.2` (with `attachmentsByHash: true`) resolves a hash-only
+ * node out of the requester's draft blob tier; anything older needs the bytes
+ * inline. Two facts decide it and both must hold, FAILING CLOSED on every
+ * non-version answer: the negotiated minor of the unary method the create is
+ * dispatched on, and the host not withholding `drafts.putBlob` — without the
+ * upload channel there is no staging tier to resolve out of.
+ *
+ * **The per-node verdict.** `ImageAttachmentAttrs.byHashEligible`, recorded by
+ * the preparer at paste. The host's staging install refuses SVG and every
+ * payload it cannot model as a raster image, so a node the preparer could not
+ * model stays inline whatever the host negotiates — the
+ * `missing-attachment-bytes` refusal is the backstop for that class, not the
+ * rule.
+ *
+ * **The count cap**, which is not per node: the host refuses a create
+ * referencing more than {@link MAX_CREATE_ATTACHMENT_HASHES} distinct hashes
+ * with an `InvalidArgumentError` that has no UI arm anywhere, so both create
+ * surfaces check it themselves and {@link reportCreateAttachmentHashCapExceeded}
+ * puts a sentence in front of the user instead.
+ *
+ * **Plan and confirm** ({@link planAttachmentsByHash},
+ * {@link confirmAttachmentsByHash}), which are NOT create-only despite the rest
+ * of this file: they split a document's hashes and make sure the host holds the
+ * bytes for the ones travelling by hash. The chat session store and the queued
+ * prompt repair drive them too, because "has the host got these bytes" is the
+ * same question wherever a hash is about to be sent.
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { toast } from "sonner";
 
-import {
-  inlineImageHashes,
-  resolveImageBytes,
-} from "@/lib/composer/composer-image-inlining";
 import { imageAttachmentByHashEligible } from "@/lib/composer/image-atoms";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import {
-  draftBlobConfirmedOnHost,
   hostWithholdsDraftBlobs,
+  isDraftBlobConfirmed,
   putDraftBlobs,
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
-import { readNegotiatedStreamMethodVersion } from "@/lib/host/read-negotiated-stream-method-version";
 
 /**
  * How many distinct hashes one create may reference.
@@ -73,9 +86,6 @@ export const MAX_CREATE_ATTACHMENT_HASHES = 32;
  */
 export const CREATE_ATTACHMENTS_BY_HASH_MINOR = 2;
 
-/** The `chat.subscribe` minor whose `send` frame may carry hash-only nodes. */
-export const SEND_ATTACHMENTS_BY_HASH_STREAM_MINOR = 11;
-
 export type AttachmentsByHashCreateMethod = "epic.create" | "epic.createChat";
 
 /**
@@ -96,38 +106,6 @@ export function createAttachmentsByHashSupported(
   if (version === null || version === false) return false;
   return (
     version.major === 1 && version.minor >= CREATE_ATTACHMENTS_BY_HASH_MINOR
-  );
-}
-
-/**
- * Whether a `send` frame on `hostId`'s chat stream may carry hash-only nodes.
- *
- * Reads the host-keyed stream registry rather than a live session's own
- * negotiated version - reader (3) of the three that
- * `read-negotiated-stream-method-version.ts` ranks, where a SEND gate normally
- * takes reader (1). This is the gate that reader's docblock names as the
- * exception, and it qualifies on both of the conditions stated there:
- *
- *  A. the callers hold a `hostId` and no session, because they decide the
- *     document's SHAPE before the store hands it to one (the composer's submit,
- *     the handoff resend, the modal's create), and the divergence reader (3)
- *     allows is bounded by a session's lifetime - no session survives the host
- *     incarnation it negotiated against, on either plane;
- *  B. guessing high commits nothing. Hash-only content reaching a `@1.10`
- *     session comes back as the existing `MISSING_ATTACHMENT_BYTES` rejection,
- *     which surfaces and restores the prompt.
- *
- * Read the two conditions there before adding a caller: a gate that would
- * WRITE something under a contract the host predates fails B, and no amount of
- * plumbing awkwardness licenses reader (3) for it.
- */
-export function sendAttachmentsByHashSupported(hostId: string): boolean {
-  if (hostWithholdsDraftBlobs(hostId)) return false;
-  const version = readNegotiatedStreamMethodVersion(hostId, "chat.subscribe");
-  if (version === null) return false;
-  return (
-    version.major === 1 &&
-    version.minor >= SEND_ATTACHMENTS_BY_HASH_STREAM_MINOR
   );
 }
 
@@ -159,7 +137,7 @@ export interface AttachmentsByHashPlan {
  * ones that must be inlined.
  *
  * A hash that appears on an eligible AND an ineligible node lands in
- * `ineligible`: inlining is per HASH (`inlineImageHashes` rewrites every node
+ * `ineligible`: inlining is per HASH (`inlineHashOnlyImageBytes` rewrites every node
  * carrying it), so the two nodes cannot take different paths and the safe
  * answer is the one that always works.
  */
@@ -211,72 +189,42 @@ export interface ConfirmedAttachmentsByHash {
  * put, so a caller that assumed "asked for" meant "on the host" would send
  * hashes into a refusal.
  *
- * Already-confirmed hashes are not re-uploaded (see `confirmedBlobsByHost`),
+ * Already-confirmed hashes are not re-uploaded (see `confirmedBlobOwners`),
  * which is what makes the ordinary create - paste, then send - carry no
  * `drafts.putBlob` at submit at all.
+ *
+ * OWNER-KEYED, AND THE OWNER IS AN INPUT. A confirmation records which account
+ * put the bytes there, so "does this host hold it" is only answerable together
+ * with "for whom" - a `null` owner confirms nothing and every eligible hash
+ * falls to `inline`, which is the correct answer for a window with no signed-in
+ * account rather than a degenerate one. It arrives as a parameter rather than
+ * being read from the auth store here because this is a leaf: its own suite
+ * drives it with no store mounted, and a leaf that reaches for ambient state
+ * cannot be tested without one. The create surfaces pass
+ * `currentDraftBlobOwnerId()`.
  */
 export async function confirmAttachmentsByHash(input: {
   readonly hostId: string;
   readonly client: DraftBlobClient;
   readonly plan: AttachmentsByHashPlan;
+  readonly ownerUserId: string | null;
 }): Promise<ConfirmedAttachmentsByHash> {
   const pending = input.plan.eligible.filter(
-    (hash) => !draftBlobConfirmedOnHost(input.hostId, hash),
+    (hash) => !isDraftBlobConfirmed(input.hostId, hash, input.ownerUserId),
   );
   if (pending.length > 0) {
-    await putDraftBlobs(input.hostId, input.client, pending);
+    await putDraftBlobs(input.hostId, input.client, pending, input.ownerUserId);
   }
   const byHash = new Set<string>();
   const inline: string[] = [...input.plan.ineligible];
   for (const hash of input.plan.eligible) {
-    if (draftBlobConfirmedOnHost(input.hostId, hash)) {
+    if (isDraftBlobConfirmed(input.hostId, hash, input.ownerUserId)) {
       byHash.add(hash);
       continue;
     }
     inline.push(hash);
   }
   return { byHash, inline };
-}
-
-/**
- * The whole confirm-or-inline step for a BEST-EFFORT surface: confirm what can
- * be confirmed, inline what this window holds bytes for, and leave the rest
- * hash-only.
- *
- * Leaving a hash alone is the correct answer here rather than a failure. A chat
- * document routinely holds hashes whose bytes were never local - an image
- * copied out of a rendered message, a sent message reopened for edit, a quote
- * seed - and those address the epic's own attachment store, which the host
- * checks BEFORE it looks at the staging tier. A hash that is genuinely lost on
- * both sides reaches the host hash-only and comes back as the existing
- * `MISSING_ATTACHMENT_BYTES` rejection, which restores the prompt - the same
- * outcome, and the same message, as before any of this.
- *
- * The landing composer deliberately does NOT use this: a hash there names bytes
- * pasted into that window and existing nowhere else (no epic exists yet), so it
- * refuses instead of shipping a reference nothing can resolve.
- *
- * A node carrying both base64 and a hash is not a problem on the SEND path the
- * way it is on a create: the host's send-side materializer collects its hash
- * too but discards the `missing` set (the dangling-hash guard, which skips such
- * a node entirely, is what decides), so an annotation crop costs one wasted
- * probe and nothing else.
- */
-export async function resolveSendContentByHash(input: {
-  readonly hostId: string;
-  readonly client: DraftBlobClient;
-  readonly content: JsonContent;
-  readonly plan: AttachmentsByHashPlan;
-}): Promise<JsonContent> {
-  const confirmed = await confirmAttachmentsByHash({
-    hostId: input.hostId,
-    client: input.client,
-    plan: input.plan,
-  });
-  if (confirmed.inline.length === 0) return input.content;
-  const bytesByHash = await resolveImageBytes(confirmed.inline);
-  if (bytesByHash.size === 0) return input.content;
-  return inlineImageHashes(input.content, bytesByHash);
 }
 
 /**
@@ -299,10 +247,10 @@ export async function resolveSendContentByHash(input: {
  *    inlines away to none of them, leaves thirty-three hashes on the wire and
  *    clears an eligible-only cap by a mile.
  *
- * `inlineImageHashes` clears the `hash` on every node it inlines, which is what
+ * `inlineHashOnlyImageBytes` clears the `hash` on every node it inlines, which is
  * makes the post-inlining count the host's count and not an approximation of it.
  * The one node the two would disagree about - base64 AND a hash, which the host
- * counts and `imageHashesFromContent` skips - cannot occur on this path:
+ * counts and `hashOnlyImageHashes` skips - cannot occur on this path:
  * `hasInlineHashedNode` sends that whole message the old way, with
  * `attachmentsByHash` off, and the host runs no cap check at all unless the flag
  * is on.

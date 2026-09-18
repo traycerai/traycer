@@ -9,10 +9,10 @@ import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/annota
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { markLandingDraftsReady } from "@/lib/composer/landing-image-gc";
 import {
-  hasComposerImageBytes,
+  hasLandingImageBytes,
   imageHashKeys,
   putImage,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import {
   drainImages,
   installIdbWorking,
@@ -148,7 +148,7 @@ describe("composer draft store browserAnnotations", () => {
       comment: "Make the heading larger",
     });
     const hash = await putImage(stub.png);
-    expect(hasComposerImageBytes(hash)).toBe(true);
+    expect(hasLandingImageBytes(hash)).toBe(true);
 
     const record = {
       kind: "browser-annotation" as const,
@@ -210,7 +210,7 @@ describe("composer draft store browserAnnotations", () => {
       sessionId: "session-remove",
       comment: "drop me",
     });
-    expect(hasComposerImageBytes(attached.hash)).toBe(true);
+    expect(hasLandingImageBytes(attached.hash)).toBe(true);
 
     useComposerDraftStore
       .getState()
@@ -219,7 +219,7 @@ describe("composer draft store browserAnnotations", () => {
 
     expect(draftOf("chat-remove").browserAnnotations).toEqual([]);
     await vi.waitFor(async () => {
-      expect(hasComposerImageBytes(attached.hash)).toBe(false);
+      expect(hasLandingImageBytes(attached.hash)).toBe(false);
       expect(await imageHashKeys()).not.toContain(attached.hash);
     });
     expect(landingLiveImageRootHashes().has(attached.hash)).toBe(false);
@@ -264,7 +264,7 @@ describe("composer draft store browserAnnotations", () => {
       draftOf("chat-share").browserAnnotations.map((r) => r.annotationId),
     ).toEqual(["ann-share-b"]);
     await Promise.resolve();
-    expect(hasComposerImageBytes(sharedHash)).toBe(true);
+    expect(hasLandingImageBytes(sharedHash)).toBe(true);
     expect(await imageHashKeys()).toContain(sharedHash);
 
     useComposerDraftStore
@@ -272,7 +272,7 @@ describe("composer draft store browserAnnotations", () => {
       .removeBrowserAnnotation("chat-share", "ann-share-b");
     scheduleLandingImageReconcile();
     await vi.waitFor(async () => {
-      expect(hasComposerImageBytes(sharedHash)).toBe(false);
+      expect(hasLandingImageBytes(sharedHash)).toBe(false);
       expect(await imageHashKeys()).not.toContain(sharedHash);
     });
   });
@@ -448,7 +448,7 @@ describe("composer draft store browserAnnotations", () => {
     expect(after.content).toEqual(EMPTY_DOC);
     expect(after.resetEpoch).toBe(before.resetEpoch + 1);
     expect(after.revision).toBe(before.revision + 1);
-    expect(hasComposerImageBytes(attached.hash)).toBe(true);
+    expect(hasLandingImageBytes(attached.hash)).toBe(true);
   });
 
   it("Rejected send: restoreBrowserAnnotations puts records back without duplication", async () => {
@@ -519,6 +519,7 @@ describe("composer draft store browserAnnotations", () => {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -527,6 +528,7 @@ describe("composer draft store browserAnnotations", () => {
     handle.store.setState({
       pendingActions: {
         "action-m2": {
+          wireContent: null,
           clientActionId: "action-m2",
           action: "send",
           queueItemId: null,
@@ -544,6 +546,7 @@ describe("composer draft store browserAnnotations", () => {
           messageConfirmedByHost: false,
           accountContext: null,
           deliveryPolicy: null,
+          hashOnlyRetry: false,
           createdAt: 1,
           connectionEpoch: 0,
         },
@@ -557,12 +560,12 @@ describe("composer draft store browserAnnotations", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 700);
     });
-    expect(hasComposerImageBytes(attached.hash)).toBe(true);
+    expect(hasLandingImageBytes(attached.hash)).toBe(true);
 
     handle.store.setState({ pendingActions: {} });
     scheduleLandingImageReconcile();
     await vi.waitFor(() => {
-      expect(hasComposerImageBytes(attached.hash)).toBe(false);
+      expect(hasLandingImageBytes(attached.hash)).toBe(false);
     });
     handle.dispose();
   });

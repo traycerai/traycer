@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useState } from "react";
 import { ChevronRight, Plus, Ungroup, X } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -38,8 +39,8 @@ export function TabGroupChip(props: {
             type="button"
             aria-label={`${group.name || "Unnamed group"}: ${group.collapsed ? "expand" : "collapse"} group`}
             aria-expanded={!group.collapsed}
-            className="relative mx-1 mb-2 flex min-h-6 max-w-48 shrink-0 items-center gap-1 rounded-md px-2 text-ui-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]"
-            style={{ backgroundColor: group.color, color: "#202124" }}
+            className="relative mx-1 mb-2 flex min-h-6 max-w-48 shrink-0 items-center gap-1 rounded-md bg-[var(--swatch)] px-2 text-ui-xs font-medium text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]"
+            style={{ "--swatch": group.color } as CSSProperties}
             onClick={(event) => {
               event.preventDefault();
               actions.updateGroup(groupId, { collapsed: !group.collapsed });
@@ -62,8 +63,8 @@ export function TabGroupChip(props: {
             {!group.collapsed ? (
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-x-0 -bottom-2 h-0.5"
-                style={{ backgroundColor: group.color }}
+                className="pointer-events-none absolute inset-x-0 -bottom-2 h-0.5 bg-[var(--swatch)]"
+                style={{ "--swatch": group.color } as CSSProperties}
               />
             ) : null}
             <ChevronRight
@@ -77,7 +78,7 @@ export function TabGroupChip(props: {
           </button>
         </TooltipWrapper>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-fit max-w-xs space-y-3 p-3">
+      <PopoverContent align="start" className="w-fit max-w-xs">
         <Input
           aria-label="Group name"
           placeholder="Name this group"

@@ -321,12 +321,12 @@ describe("EpicSidebarCloudChatRow", () => {
       if (!(glyph instanceof SVGElement)) {
         throw new Error("cloud row rendered no chat glyph");
       }
-      // jsdom normalizes the hex to rgb(); compare through a probe element so
-      // the assertion states "same color as the settings default" rather than
-      // hardcoding one serialization.
-      const probe = document.createElement("span");
-      probe.style.color = DEFAULT_EPIC_NODE_ICON_COLORS.chat;
-      expect(glyph.style.color).toBe(probe.style.color);
+      // The tint travels as a custom property, which jsdom stores verbatim,
+      // so the assertion states "same color as the settings default" directly
+      // rather than through a probe element that agrees on a serialization.
+      expect(glyph.style.getPropertyValue("--swatch")).toBe(
+        DEFAULT_EPIC_NODE_ICON_COLORS.chat,
+      );
       expect(glyph.classList.contains("text-muted-foreground")).toBe(false);
     });
 
@@ -355,9 +355,7 @@ describe("EpicSidebarCloudChatRow", () => {
       if (!(glyph instanceof SVGElement)) {
         throw new Error("cloud row rendered no chat glyph");
       }
-      const probe = document.createElement("span");
-      probe.style.color = "#ff0000";
-      expect(glyph.style.color).toBe(probe.style.color);
+      expect(glyph.style.getPropertyValue("--swatch")).toBe("#ff0000");
       expect(glyph.classList.contains("text-muted-foreground")).toBe(false);
     });
 
@@ -381,7 +379,7 @@ describe("EpicSidebarCloudChatRow", () => {
         throw new Error("cloud row rendered no chat glyph");
       }
       expect(glyph.classList.contains("text-muted-foreground/70")).toBe(true);
-      expect(glyph.style.color).toBe("");
+      expect(glyph.style.getPropertyValue("--swatch")).toBe("");
     });
 
     it("badges the lock exactly when the owning host is unreachable", () => {

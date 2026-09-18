@@ -3,9 +3,11 @@ import { toast } from "sonner";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import { queuedPreparationFailureFromEventMetadata } from "@traycer/protocol/persistence/epic/chat-events";
 import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
+import {
+  currentDraftBlobOwnerId,
+  type DraftBlobClient,
+} from "@/lib/drafts/draft-blob-transport";
 import { repairQueuedPromptBlobs } from "@/lib/drafts/queued-prompt-blob-repair";
-import { holdImageHashes } from "@/lib/composer/landing-image-budget";
 /**
  * What this arm reads of the queue, and nothing more: whether it is paused, and
  * which items are still in it.
@@ -257,13 +259,6 @@ export function useQueuedPromptBlobRepair(input: {
       const releaseAttempt = (): void => {
         attemptedItems.delete(failure.queueItemId);
       };
-      // GC root for the pass itself. The queued item roots these hashes too
-      // (`chat-session-store`'s root source walks `queue.items`), which covers
-      // the window between the event and this call - but a cancel landing
-      // mid-upload drops that root while the read is still outstanding. Held
-      // here and released on every arm, so the bytes outlive the pass reading
-      // them rather than the row that named them.
-      const releaseRepairHold = holdImageHashes(failure.missingHashes);
       // The paused episode this pass belongs to. A resume that lands in a
       // LATER episode is answering a pause the user has since replaced.
       const episodeAtStart = pausedEpisodeRef.current;
@@ -271,9 +266,14 @@ export function useQueuedPromptBlobRepair(input: {
         hostId,
         client,
         missingHashes: failure.missingHashes,
+        // Read HERE rather than captured in the effect's closure: the
+        // confirmations this repair records are keyed by account, and the
+        // account can change between the refusal landing and this pass running.
+        // Recording under the identity that is live at the upload is the only
+        // reading that matches what the send gate will later ask.
+        ownerUserId: currentDraftBlobOwnerId(),
       }).then(
         (verdict) => {
-          releaseRepairHold();
           if (verdict === "repaired") {
             // RE-CHECKED AT FULFILMENT against the live queue, because the
             // world moved while the bytes were uploading and `resumeQueue` is
@@ -316,7 +316,6 @@ export function useQueuedPromptBlobRepair(input: {
           // The upload or the byte read threw. Same reasoning as the verdict
           // above: nothing resumed, so nothing can loop, so the attempt is not
           // spent.
-          releaseRepairHold();
           releaseAttempt();
           toast.error("Couldn't attach an image");
         },

@@ -5,7 +5,7 @@ import {
   createComposerImagePreparationSession,
   prepareComposerImageBytesOrRefuse,
 } from "@/lib/composer/composer-image-preparation";
-import { putImage } from "@/lib/composer/composer-image-store";
+import { putImage } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 type AttachBrowserAnnotationResult =

@@ -13,7 +13,7 @@ import type {
 } from "@/lib/attachments/image-blob-cache";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
-import { getImageBytes } from "@/lib/composer/composer-image-store";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";

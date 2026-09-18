@@ -4,10 +4,10 @@ import { vi } from "vitest";
 import { idbStringKey } from "./browser-annotation-idb-mock";
 
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   releaseSession,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 
 export function installIdbWorking(
   idbData: Map<string, unknown>,
@@ -30,7 +30,7 @@ export function installIdbWorking(
 
 export async function drainImages(): Promise<void> {
   for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
+    await deleteImageBytesUnchecked(hash);
     releaseSession(hash);
   }
 }

@@ -17,7 +17,6 @@ import {
   type ComposerPasteEditorHandle,
 } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
-import type { ImagePreparationSession } from "@/lib/composer/composer-image-preparation";
 import {
   LANDING_IMAGE_BUDGET_BYTES,
   resetLandingImageBudgetReservationsForTesting,
@@ -25,17 +24,16 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import * as landingImageBudget from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   imageHashKeys,
   releaseSession,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import * as idb from "idb-keyval";
 
 import {
   makeHandle,
-  makeTestPreparationSession,
   NO_MENTION_ROOTS,
   NOOP_FILE_DROPS,
 } from "./use-landing-composer-paste-test-helpers";
@@ -63,7 +61,7 @@ vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
 });
 
 // In-memory stand-in for idb-keyval so `putImage` can persist + read back bytes
-// without a real IndexedDB. Mirrors the composer-image-store unit test.
+// without a real IndexedDB. Mirrors the landing-image-store unit test.
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
 function idbStringKey(key: IDBValidKey): string {
@@ -100,10 +98,8 @@ let urlCounter = 0;
 // One preparation session per test (queue-serialization fix), created fresh
 // in `beforeEach` and shared across every `useLandingComposerPaste` call in
 // a given test - never a fresh one inside a `renderHook` callback.
-let preparationSession: ImagePreparationSession;
 
 beforeEach(async () => {
-  preparationSession = makeTestPreparationSession();
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
   URL.revokeObjectURL = vi.fn();
   vi.mocked(idb.set).mockImplementation((key, value) => {
@@ -113,7 +109,7 @@ beforeEach(async () => {
   const hashes = await imageHashKeys();
   await Promise.all(
     hashes.map(async (hash) => {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }),
   );
@@ -188,7 +184,12 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         reservation.release();
       });
       releaseSpies.push(release);
-      return { release };
+      return {
+        release,
+        settleStored: (candidateIndex: number, hash: string) => {
+          reservation.settleStored(candidateIndex, hash);
+        },
+      };
     });
     return { releaseSpies };
   }
@@ -242,7 +243,6 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -307,7 +307,6 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -372,7 +371,6 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -421,7 +419,6 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -468,7 +465,6 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -538,7 +534,6 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 

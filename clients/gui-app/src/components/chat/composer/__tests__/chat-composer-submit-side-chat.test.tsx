@@ -60,17 +60,13 @@ function mountSubmit(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
 
   return renderHook(() =>
     useChatComposerSubmit({
       taskId: args.taskId,
-      // Explicit `null`: these cases drive the INLINE submit arm, and a null
-      // host/client is what keeps the by-hash gate shut. The args type takes
-      // no optional params or defaults (lint rule), so every site states it.
-      hostId: null,
-      hostClient: null,
       editorRef: args.editorRef,
       pickerStore,
       toolbarStore,
@@ -84,9 +80,13 @@ function mountSubmit(args: {
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
-      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: args.onSideChat,
+      targetHostId: null,
+      queueEditTargetId: null,
+      // T5's gate is off in these fixtures: they predate it and assert the
+      // inline behaviour, which is what `false` preserves exactly.
+      getDraftBlobBridgeSupported: () => false,
     }),
   );
 }

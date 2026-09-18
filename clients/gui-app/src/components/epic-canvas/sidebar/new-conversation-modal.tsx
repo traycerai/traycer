@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -21,6 +22,21 @@ import {
   useEpicAttachmentBytesPresence,
   useEpicImageFetcher,
 } from "@/lib/attachments/use-attachment-blob-src";
+import { useDraftFirstImageFetcher } from "@/lib/attachments/use-draft-image-fetcher";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
+import {
+  draftImageInliningNeeded,
+  prepareDraftImageInlining,
+} from "@/lib/drafts/draft-image-inlining";
+import {
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
+} from "@/lib/composer/image-atoms";
+import { NO_HOST_HELD_HASHES } from "@/lib/composer/host-held-image-hashes";
+import { withHeldComposerContentImageRoots } from "@/lib/composer/composer-content-image-roots";
+import { appLogger } from "@/lib/logger";
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -44,8 +60,11 @@ import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
-import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import { useComposerHashFirstPaste } from "@/hooks/composer/use-composer-hash-first-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerHashPaste,
+} from "@/hooks/composer/use-composer-paste";
+import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import {
   mentionRootsFromWorktreeIntent,
   useWorkspaceMentionRoots,
@@ -88,23 +107,14 @@ import {
 } from "@/lib/disabled-presentation";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
+import { sessionObjectUrl } from "@/lib/composer/landing-image-store";
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import {
-  getImageBytes,
-  hasComposerImageBytes,
-  sessionObjectUrl,
-} from "@/lib/composer/composer-image-store";
-import {
-  imageHashesFromContent,
-  inlineImageHashesFromSession,
-  inlineLocalImageHashes,
-} from "@/lib/composer/composer-image-inlining";
-import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
-import {
+  confirmAttachmentsByHash,
   createAttachmentsByHashSupported,
   exceedsCreateAttachmentHashCap,
   planAttachmentsByHash,
   reportCreateAttachmentHashCapExceeded,
-  resolveSendContentByHash,
   type AttachmentsByHashPlan,
 } from "@/lib/composer/attachments-by-hash";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -170,111 +180,59 @@ import {
   useNewConversationPromptStashSource,
 } from "./use-new-conversation-prompt-stash-adapters";
 
-/**
- * The submit's two documents, carried across the one await this composer can
- * need. `content` is what the user's editor holds - hash-only image nodes - and
- * is what the initial-chat handoff registers. `sendContent` is the same document
- * with this window's image bytes inlined as base64, which is what the host
- * ingests today.
- *
- * They are passed together, rather than re-deriving `content` on re-entry,
- * because the two MUST describe the same message: re-reading the editor after
- * the await could pick up a keystroke that landed while the bytes were being
- * read, and the handoff would then hold a document the send never used.
- */
-interface ResolvedSubmitContent {
-  readonly content: JsonContent;
-  readonly sendContent: JsonContent;
-  /**
-   * The host this content was prepared FOR, or `null` when it was not prepared
-   * against any host's staging tier - every arm that ends in
-   * `attachmentsByHash: false`, whose document either carries its bytes or
-   * carries hashes the host was never asked to resolve out of staging. Those
-   * are destination-independent and re-preparing them would buy nothing.
-   *
-   * A by-hash preparation is a statement about one host's staging tier, and the
-   * host picker is deliberately live while the upload runs. Sending these
-   * hashes anywhere else means sending a reference the destination never
-   * received, which is why the re-entry below compares this against the
-   * destination it is about to dispatch on rather than assuming they match.
-   *
-   * The CLIENT is deliberately not part of the identity: `confirmedBlobsByHost`
-   * and the host's staging tier are both keyed by host, so a fresh client
-   * object addressing the same host resolves the same hashes. What must not
-   * change is the machine.
-   */
-  readonly hostId: string | null;
-  /**
-   * Whether `sendContent` still carries hash-only image nodes for the host to
-   * resolve out of this account's draft blob tier - `epic.createChat@1.2`'s
-   * `attachmentsByHash`. Decided with the content and carried with it, because
-   * the flag and the document are one answer: a flag that disagreed with what
-   * the document holds is either a resolution pass over nothing or a dangling
-   * reference the host was never asked to resolve.
-   */
-  readonly attachmentsByHash: boolean;
-}
-
-/** Placeholder until the first commit publishes the real submit. */
-const NOOP_SUBMIT = (): void => undefined;
+/** Nothing confirmed: below `epic.createChat@1.2`, or an upload that failed. */
+const NO_CONFIRMED_HASHES: ReadonlySet<string> = new Set<string>();
 
 /**
- * The by-hash half of this modal's submit, which is ALWAYS async: whether the
- * host already holds an image's bytes is not a question this window can answer
- * from memory, and `confirmAttachmentsByHash` may have to upload.
+ * Put this window's image bytes into the target host's draft-blob tier and
+ * answer which digests the host CONFIRMED holding.
  *
- * BEST EFFORT on the inline remainder, which is this surface's rule and not the
- * landing composer's. A chat document routinely holds hashes whose bytes were
- * never in the LOCAL store at all - an image copied out of a rendered message,
- * a quote seed - and those address the epic's own attachment store, which the
- * host resolves first, before it ever looks at the staging tier. Refusing them
- * would break creates that work today.
+ * ## Why this is not a second submit arm
  *
- * `null` means REFUSED and already narrated: the message references more
- * distinct hashes than the host will accept, and the caller must not submit.
+ * The confirmed set is handed to `draftImageInliningNeeded` as its host-held
+ * set, and the preparation below then does the rest unchanged: a node whose
+ * digest the host confirmed is subtracted, so it stays hash-only and travels
+ * once as a blob; every other node is inlined by the path that has always
+ * inlined it. There is no by-hash branch to keep in step with the inlining
+ * branch, because there is only one branch - `epic.createChat@1.2` is expressed
+ * entirely as a wider host-held set. Same shape as the inline-edit surface,
+ * deliberately: one idea at both surfaces rather than two that can disagree.
+ *
+ * ## Why a failed upload is not a refusal
+ *
+ * An unconfirmed digest is simply not host-held, so it is inlined - which is
+ * exactly what this surface did before `@1.2` existed. That is what makes it
+ * safe to run this unconditionally whenever the host supports it: the worst
+ * outcome is the status quo, never a create the user cannot complete.
+ *
+ * ## What this does NOT decide
+ *
+ * `attachmentsByHash`. That is read off the document actually dispatched, in
+ * `commit` below, so the flag and the document cannot disagree - a flag set
+ * from the confirmed set would claim hash-only nodes for a document that,
+ * after a late paste and its inlining, no longer has any.
  */
-async function resolveModalSubmitContentByHash(input: {
-  readonly content: JsonContent;
+async function confirmCreateAttachmentHashes(input: {
   readonly hostId: string;
   readonly client: HostClient<HostRpcRegistry>;
   readonly plan: AttachmentsByHashPlan;
-}): Promise<ResolvedSubmitContent | null> {
-  // BEFORE the upload: an eligible set that is already over the cap can never
-  // come back under it, so refusing here saves uploading blobs for a create
-  // that cannot succeed. This is the fast path and NOT the decision - it sees
-  // only the eligible half of what the host will count.
+  /**
+   * The account the confirmations are recorded and read under. `null` confirms
+   * NOTHING, which is correct signed out and is why it is threaded rather than
+   * defaulted: a wrong or absent owner here does not fail, it silently returns
+   * an empty set and the whole surface falls back to inlining.
+   */
+  readonly ownerUserId: string | null;
+}): Promise<ReadonlySet<string>> {
+  // An eligible set already over the cap can never come back under it, so
+  // uploading its blobs would be work for a create that cannot succeed. NOT the
+  // decision - that is made on the dispatched document, which on this
+  // best-effort surface also counts hashes this window never owned bytes for.
   if (exceedsCreateAttachmentHashCap(input.plan.eligible)) {
-    reportCreateAttachmentHashCapExceeded();
-    return null;
+    return NO_CONFIRMED_HASHES;
   }
-  const sendContent = await resolveSendContentByHash(input);
-  // AFTER inlining, on what the request will actually carry - which on this
-  // best-effort surface is not the eligible set. The hashes this window could
-  // not produce bytes for stay hash-only by design (they usually live in the
-  // epic's own attachment store), and the host counts them exactly like the
-  // uploaded ones. Without this, one eligible image beside thirty-two
-  // epic-copied ones clears the check above and is refused by the host with an
-  // `InvalidArgumentError` no surface renders - after the modal has closed and
-  // cleared the draft.
-  const wireHashes = imageHashesFromContent(sendContent);
-  if (exceedsCreateAttachmentHashCap(wireHashes)) {
-    reportCreateAttachmentHashCapExceeded();
-    return null;
-  }
-  return {
-    content: input.content,
-    sendContent,
-    // The host this was resolved against. The picker stays live through the
-    // upload, and a create that reused these hashes on a host that never
-    // received the bytes is the failure this identity exists to prevent.
-    hostId: input.hostId,
-    // Read off the DOCUMENT rather than off the confirmed set: an ineligible
-    // node whose bytes this window could not produce is still hash-only on the
-    // wire, and the host resolving it (from the epic store, where it very
-    // likely lives) is strictly better than leaving it for the dangling-hash
-    // guard to refuse at the first turn.
-    attachmentsByHash: wireHashes.length > 0,
-  };
+  const confirmed = await confirmAttachmentsByHash(input);
+  return confirmed.byHash;
 }
 
 /**
@@ -285,6 +243,7 @@ async function resolveModalSubmitContentByHash(input: {
  */
 function NewConversationModalAttachmentStrip(props: {
   readonly epicId: string;
+  readonly hostId: string | null;
   readonly seedContent: JsonContent;
   readonly onRemoveImage: (id: string) => void;
 }) {
@@ -292,7 +251,15 @@ function NewConversationModalAttachmentStrip(props: {
     (state) =>
       state.draftPatchesByEpicId[props.epicId]?.content ?? props.seedContent,
   );
-  const fetcher = useEpicImageFetcher();
+  // Draft custody FIRST, the epic replica behind it. Everything in this strip
+  // is a draft the user has not sent yet, and `useEpicImageFetcher` has no
+  // local-store leg - so a hash-only chip whose bytes are sitting in this very
+  // window's image partition renders blank through it. The epic leg stays
+  // because a prompt-stash restore can carry a hash this epic genuinely holds.
+  const fetcher = useDraftFirstImageFetcher(
+    useEpicImageFetcher(),
+    props.hostId,
+  );
   return (
     <AttachmentStrip
       content={content}
@@ -363,16 +330,12 @@ export function NewConversationModalAction(
   const trigger = (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size={props.size}
       aria-label={props.triggerLabel}
       aria-disabled={ariaDisabled ? true : undefined}
       data-testid={props.triggerTestId}
-      className={cn(
-        "text-muted-foreground hover:text-foreground",
-        ARIA_DISABLED_TRIGGER_CLASS,
-        props.actionRevealClassName,
-      )}
+      className={cn(ARIA_DISABLED_TRIGGER_CLASS, props.actionRevealClassName)}
       disabled={nativeDisabled}
       onClick={handleOpen}
     >
@@ -514,7 +477,7 @@ function NewConversationModalDialog(props: {
         // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
         // and an overflow container that is also their containing block - this
         // one is, it carries a transform - would clip them.
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         // Same portal rule as the worktree pickers: the host switcher's list
@@ -536,10 +499,10 @@ function NewConversationModalDialog(props: {
         <DialogClose asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label="Close"
-            className="absolute right-0 top-0 z-10 size-6 -translate-y-1/2 translate-x-1/2 rounded-full border border-border/70 bg-popover text-muted-foreground opacity-70 shadow-sm transition-opacity hover:opacity-100 focus-visible:opacity-100"
+            className="absolute right-0 top-0 z-10 size-6 -translate-y-1/2 translate-x-1/2 rounded-full border-border/70 bg-popover opacity-70 shadow-sm transition-opacity hover:opacity-100 focus-visible:opacity-100"
           >
             <XIcon className="size-3.5" />
           </Button>
@@ -610,6 +573,10 @@ export function NewConversationModalBody(props: {
   const isDisconnected = connectionStatus === "closed";
   const canMutate = isEditableRole(permissionRole) && !isDisconnected;
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  // A ref, not state: a re-render would change the send button's disabled look
+  // for a wait that no document produces today, and the guard only has to stop
+  // a second Enter from starting a second create for the same draft.
+  const draftImagePrepFlight = useRef(false);
   // The picker store is lifted onto the always-mounted dialog so it survives
   // this body's focus-driven unmount (see the transient context); the hook falls
   // back to a local store when rendered outside the dialog.
@@ -773,6 +740,7 @@ export function NewConversationModalBody(props: {
       hostClient,
       hostId: resolvedHostId,
       tuiOnly: draftComposerMode === "terminal",
+      chatLineCarriesAutoMode: null,
     },
   );
   const harnessId = useStore(
@@ -846,17 +814,20 @@ export function NewConversationModalBody(props: {
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
-  const paste = useComposerHashFirstPaste({
+  const paste = useComposerHashPaste(
     editorRef,
-    // The epic this modal creates into. Purely the budget's OWNER key (a
-    // per-surface reservation bucket), not a claim about where the bytes live -
-    // they go to this window's composer store like every other surface's.
-    budgetOwnerId: epicId,
-    disabled: isSubmitting,
-    fileDrops: runnerHost.fileDrops,
+    runnerHost.fileDrops,
     mentionRoots,
+  );
+  const {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  } = useComposerPendingImageIngest({
+    editorRef,
+    runPendingImageJob: paste.runPendingImageJob,
+    draftId: null,
   });
-  const { ingestPastedComposerImages, notePossiblePendingImages } = paste;
   const attachmentPending = isAttachmentIngestPending(paste);
   const canSubmit =
     canMutate &&
@@ -868,39 +839,44 @@ export function NewConversationModalBody(props: {
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();
-  // A hash in this composer now has TWO possible homes, and the chip must paint
-  // for either: this window's composer store (anything pasted here, which is
-  // every image this surface produces now that it is hash-first) or the epic's
-  // attachment map (a quote seed, whose hashes were never local). The union is
-  // what the attachment strip asks before it decides an image is unavailable.
-  const hasPastedImageBytes = useCallback(
-    (hash: string) => {
-      if (hasComposerImageBytes(hash)) return true;
-      if (epicImagePresence === null) return true;
-      return epicImagePresence(hash);
-    },
+  // Local partition OR epic replica, for the PASTE filter. On its own the epic
+  // map strips a pasted hash-only node whose bytes are in this window's image
+  // store, because it only ever answers for a SENT image. `null` before the
+  // snapshot loads is preserved - that is the paste handler's "do not filter"
+  // signal, and this surface has always passed it.
+  const hasPastedImageBytes = useMemo(
+    () =>
+      epicImagePresence === null
+        ? null
+        : (hash: string) =>
+            hasLandingImageBytes(hash) || epicImagePresence(hash),
     [epicImagePresence],
   );
   const fetchEpicImage = useEpicImageFetcher();
   const readPromptStashImage = useCallback(
     async (hash: string) => {
-      // Local tier first. A stash saved right after a paste is the common case
-      // now, and those bytes exist only in this window's store - the epic has
-      // no attachment for them until the create's message is actually sent.
-      const local = await getImageBytes(hash);
-      if (local !== undefined) return local;
-      if (epicImagePresence?.(hash) !== true) return null;
-      // Capture deliberately survives composer unmount, so this read is not
-      // coupled to component-lifecycle cancellation. `.fetch` directly: this
-      // one-shot read bypasses `imageBlobCache`, so it wants the byte source
-      // rather than the cache subject bundled with it.
-      const read = await fetchEpicImage.fetch(
+      // "Epic OR resolvable", not "epic only". The presence predicate probes
+      // the epic doc's attachment map, which is a statement about a SENT
+      // image; a hash this composer minted is not in it and never will be, so
+      // gating on it alone refused to stash exactly the drafts this surface
+      // exists to hold. It is partial availability, never provenance.
+      if (epicImagePresence?.(hash) === true) {
+        // Capture deliberately survives composer unmount, so this read is not
+        // coupled to component-lifecycle cancellation. `.fetch` directly: this
+        // one-shot read bypasses `imageBlobCache`, so it wants the byte source
+        // rather than the cache subject bundled with it.
+        const read = await fetchEpicImage.fetch(
+          hash,
+          new AbortController().signal,
+        );
+        return new Uint8Array(read.bytes);
+      }
+      return resolveDraftImageBytes(
         hash,
-        new AbortController().signal,
+        draftImageByteTargetForHost(resolvedHostId),
       );
-      return new Uint8Array(read.bytes);
     },
-    [epicImagePresence, fetchEpicImage],
+    [epicImagePresence, fetchEpicImage, resolvedHostId],
   );
   const promptStashSource = useNewConversationPromptStashSource({
     epicId,
@@ -1018,190 +994,36 @@ export function NewConversationModalBody(props: {
       }),
     [draftWorkspace, latestWorkspaceSeed, stagingKey],
   );
-  // Re-entry for the submit below when its images had to be read back out of
-  // IndexedDB. A `useCallback` cannot name itself, and the async arm has to
-  // re-run the WHOLE submit (every other fact it reads is read fresh), so the
-  // latest callback is reached through a ref rather than closed over.
-  const submitRef =
-    useRef<
-      (
-        resolved: ResolvedSubmitContent | null,
-        resolutionAttempt: number,
-      ) => void
-    >(NOOP_SUBMIT);
-  // One read at a time. The submit button is not disabled during it (the read is
-  // an IndexedDB hit, not a round-trip), so a second click while it is in flight
-  // must not start a second create.
-  const imageResolutionInFlight = useRef(false);
-  const submitWithResolvedContent = useCallback(
-    (resolved: ResolvedSubmitContent | null, resolutionAttempt: number) => {
-      if (!canSubmit) return;
-      const editor = editorRef.current;
-      if (editor === null) return;
-      // AHEAD OF EVERY DISPATCH PATH, the synchronous one included. A read is
-      // in flight for a document already captured; letting a second click run
-      // the synchronous create would put two chats on the wire for one prompt,
-      // and the first one to finish would clear the draft out from under the
-      // other. The async arms below release this latch through
-      // `settleResolvedSubmit` BEFORE re-entering, which is why the re-entry
-      // gets past this line.
-      if (imageResolutionInFlight.current) return;
-      // THE DESTINATION MAY HAVE MOVED WHILE THE UPLOAD RAN. The picker is
-      // live through the wait (it is rendered `disabled={false}` on purpose),
-      // and switching hosts does not touch the draft's `revision` - so the
-      // generation guard below, which only asks whether the DOCUMENT changed,
-      // waves this through. What arrives here is content whose hashes were
-      // confirmed on the host that was selected when send was pressed, about to
-      // be dispatched on whichever host is selected now.
-      //
-      // Re-resolve rather than reuse: re-entering with `null` re-plans against
-      // the new destination, re-asks its negotiated minor, and uploads to it or
-      // inlines for it. Reusing would hand the new host a reference it has
-      // never seen, which it answers with a refusal the user reads as a failed
-      // create.
-      if (
-        resolved !== null &&
-        resolved.hostId !== null &&
-        resolved.hostId !== submitTarget.resolvedHostId
-      ) {
-        // Same budget as the edited-during-the-read arm, and for the same
-        // reason: one re-resolution is a correction, an unbounded chain is a
-        // user holding the picker hostage to a create that never leaves.
-        if (resolutionAttempt === 0) {
-          submitRef.current(null, resolutionAttempt + 1);
-        }
-        return;
-      }
-      // THE HASH-FIRST SEAM, and it is resolved FIRST - before this function
-      // writes anything - so that the async re-entry below repeats no side
-      // effect. What the user's document holds is hash-only image nodes; the
-      // host still ingests inline base64, so `sendContent` is the same document
-      // with this window's bytes put back. The handoff keeps `content`
-      // (hash-only): that is what keeps base64 out of `localStorage` under the
-      // handoff key, and what lets the handoff ROOT those bytes against the
-      // image GC until the resend inlines them itself.
-      //
-      // `null` from the fast path means at least one hash is session-cold - a
-      // draft this window restored off the host mirror rather than pasted - so
-      // the bytes are read back and this submit is re-entered with them.
-      const content =
-        resolved?.content ??
-        buildSubmittedChatJSONContent(
-          editor.getJSON(),
-          pickerStore.getState().knownSlashCommands,
-        );
-      // The draft this submit is for. `content` above was captured off the
-      // editor, but the editor stays EDITABLE across the reads below, and the
-      // create ends in `cleanupAfterSubmit` - which clears the draft store and
-      // the editor. Without this the sentence typed during the read was wiped
-      // by a create that sent the document from before it. The modal's draft
-      // `revision` bumps on `setContent` alone (document mutations), which is
-      // the whole of the work here: there is no annotation sidecar, and a
-      // caret move is not work worth cancelling a send over.
-      const generation = captureComposerSubmitGeneration(
-        () =>
-          useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
-            ?.revision ?? 0,
-      );
+  /**
+   * The create itself, over the document that is actually going to be sent.
+   *
+   * `liveContent` is a parameter rather than a read off `editorRef` because
+   * the byte-resolution branch below re-reads the live document AFTER its
+   * await and hands that re-read in - so every guard from here down, the
+   * §54 placement re-validation included, runs against the same document the
+   * create carries, and a keystroke typed during resolution rides along
+   * instead of being cleared unsent.
+   */
+  const submitPreparedDraft = useCallback(
+    (
+      liveContent: JsonContent,
       /**
-       * The single exit for both async arms below. It owns the latch release
-       * (so the re-entry clears the hoisted guard at the top) and the decision
-       * about whether the captured document may still be sent.
+       * Whether `liveContent` still carries hash-only image nodes for the host
+       * to materialize out of this account's draft-blob tier -
+       * `epic.createChat@1.2`'s `attachmentsByHash`.
        *
-       * `null` means the read produced nothing to send - today that is the
-       * by-hash count-cap refusal, which has already toasted. Nothing is sent
-       * and, just as importantly, nothing is cleared.
+       * A parameter rather than something re-derived here, because it is a fact
+       * about the document its caller prepared: only that caller knows the
+       * remaining hash-only nodes are host-CONFIRMED rather than simply
+       * unresolved, and the two look identical from inside this function.
        */
-      const settleResolvedSubmit = (
-        prepared: ResolvedSubmitContent | null,
-      ): void => {
-        imageResolutionInFlight.current = false;
-        if (prepared === null) return;
-        if (generation.stillCurrent()) {
-          submitRef.current(prepared, resolutionAttempt);
-          return;
-        }
-        // The user edited the prompt during the read, so `prepared` describes a
-        // document that is no longer on screen. Re-enter from scratch and
-        // resolve the CURRENT one rather than sending the stale capture.
-        if (resolutionAttempt === 0) {
-          submitRef.current(null, resolutionAttempt + 1);
-          return;
-        }
-        // Edited again during the retry. Send nothing and clear nothing - the
-        // draft is intact and the user can press send again.
-      };
-      // THE BY-HASH GATE, asked before the inline one because it decides
-      // whether inlining is needed at all. Four conditions, and any failure
-      // falls through to the inline paths that have always worked: a client to
-      // upload on, no node carrying both base64 and a hash (the host would try
-      // to resolve that hash too - see `hasInlineHashedNode`), something the
-      // preparer marked eligible, and the negotiated minor of the method this
-      // create actually dispatches on.
-      const plan = resolved === null ? planAttachmentsByHash(content) : null;
-      const byHashClient = submitTarget.client;
-      const byHashHostId = submitTarget.resolvedHostId;
-      if (
-        plan !== null &&
-        byHashClient !== null &&
-        byHashHostId !== null &&
-        !plan.hasInlineHashedNode &&
-        plan.eligible.length > 0 &&
-        createAttachmentsByHashSupported(byHashHostId, "epic.createChat")
-      ) {
-        imageResolutionInFlight.current = true;
-        void resolveModalSubmitContentByHash({
-          content,
-          hostId: byHashHostId,
-          client: byHashClient,
-          plan,
-        }).then(
-          // `null` is the count-cap refusal, already toasted. Submitting anyway
-          // would put a request on the wire the host will certainly reject with
-          // an error no surface renders.
-          settleResolvedSubmit,
-          // The upload or the byte read failed outright. Fall back to the
-          // document as it stands rather than swallowing the create: an
-          // unresolvable hash comes back as the existing missing-bytes
-          // failure, which is visible, and `attachmentsByHash` stays off so
-          // this host is not asked to resolve what it was never given.
-          () =>
-            settleResolvedSubmit({
-              content,
-              sendContent: content,
-              hostId: null,
-              attachmentsByHash: false,
-            }),
-        );
-        return;
-      }
-      const sendContent =
-        resolved?.sendContent ?? inlineImageHashesFromSession(content);
-      if (sendContent === null) {
-        imageResolutionInFlight.current = true;
-        void inlineLocalImageHashes(content).then(
-          (inlined) =>
-            settleResolvedSubmit({
-              content,
-              sendContent: inlined,
-              hostId: null,
-              attachmentsByHash: false,
-            }),
-          // The store could not be read at all. Submit the hash-only document
-          // rather than swallowing the create: a hash the host cannot resolve
-          // comes back as the existing missing-bytes rejection, which fails
-          // the send visibly and restores the prompt.
-          () =>
-            settleResolvedSubmit({
-              content,
-              sendContent: content,
-              hostId: null,
-              attachmentsByHash: false,
-            }),
-        );
-        return;
-      }
-      const attachmentsByHash = resolved?.attachmentsByHash ?? false;
+      attachmentsByHash: boolean,
+    ) => {
+      if (!canSubmit) return;
+      // The document arrives as an argument now, but a surface with no editor
+      // still has nothing to create from - and `cleanupAfterSubmit` below
+      // reaches for the handle to clear it.
+      if (editorRef.current === null) return;
       const toolbar = toolbarStore.getState();
       if (toolbar.selection.modelSlug.length === 0) return;
       const settings = buildChatRunSettings({
@@ -1233,6 +1055,10 @@ export function NewConversationModalBody(props: {
       // rather than migrates when its frozen client no longer addresses it.
       const activeHostId = placementVerdict.hostId;
       recordPlacement(activeHostId);
+      const content = buildSubmittedChatJSONContent(
+        liveContent,
+        pickerStore.getState().knownSlashCommands,
+      );
       const chatId = uuidv4();
       const messageId = uuidv4();
       const clientActionId = uuidv4();
@@ -1272,10 +1098,14 @@ export function NewConversationModalBody(props: {
           : {
               messageId,
               clientActionId,
-              // What goes ON THE WIRE, unlike the handoff's hash-only copy
-              // above: inline base64 for every image this host cannot take by
-              // hash, and hash-only nodes for the ones it can.
-              content: sendContent,
+              // The SAME document the handoff registered above, not a second
+              // one. `handleSubmit` prepares exactly one: inline base64 for
+              // every image this host could not take by hash, bare hashes for
+              // the ones it confirmed. The handoff's copy is kept free of
+              // base64 by `initial-chat-handoff-store`'s persist `partialize`,
+              // which is where that concern belongs - two documents here could
+              // describe two different messages.
+              content,
               sender: { type: "user" as const, userId },
               settings,
               accountContext,
@@ -1435,6 +1265,7 @@ export function NewConversationModalBody(props: {
       epicId,
       parentId,
       placement,
+      // Read by the deferred create's binding-seed release closure.
       queryClient,
       raiseHostNotice,
       recordPlacement,
@@ -1445,15 +1276,256 @@ export function NewConversationModalBody(props: {
       worktreeIntentForSubmit,
     ],
   );
-  // Published for the async re-entry above. In an effect, not in render, so the
-  // ref is written on commit like any other external sync.
-  useEffect(() => {
-    submitRef.current = submitWithResolvedContent;
-  }, [submitWithResolvedContent]);
-  const handleSubmit = useCallback(
-    () => submitWithResolvedContent(null, 0),
-    [submitWithResolvedContent],
-  );
+  // The LATEST submit, for the continuation below to call. Its closure carries
+  // `canSubmit` and the placement it re-validates, and both can move while the
+  // byte read is in flight - a verdict captured before the await is stale by
+  // construction. Same shape the composer editor uses for its presence getter.
+  //
+  // LAYOUT-timed: a passive effect can run after the byte read resumes in the
+  // post-commit microtask, so the continuation would call the submit from the
+  // render BEFORE the change - carrying the stale `canSubmit` and placement
+  // this ref exists to refresh.
+  const submitPreparedDraftRef = useRef(submitPreparedDraft);
+  useLayoutEffect(() => {
+    submitPreparedDraftRef.current = submitPreparedDraft;
+  }, [submitPreparedDraft]);
+  /**
+   * The LIVE destination, for the in-flight preparation to re-check.
+   *
+   * The picker stays usable while an upload runs, and a confirmation is a fact
+   * about ONE machine's draft-blob tier - so the flight has to be able to ask
+   * "is this still the host I confirmed against", which a value captured when
+   * the flight started cannot answer. LAYOUT-timed for the same reason the
+   * submit ref above is: the preparation resumes in a post-commit microtask,
+   * and a passive effect can still be pending then.
+   */
+  const submitTargetRef = useRef(submitTarget);
+  useLayoutEffect(() => {
+    submitTargetRef.current = submitTarget;
+  }, [submitTarget]);
+  /**
+   * Submit, with the byte-resolution step in front of it.
+   *
+   * The initial-create prompt ALWAYS travels inline. `epic.createChat` is unary
+   * and precedes any chat stream, so there is no negotiated session whose minor
+   * could say the host is able to resolve a bare hash - and a sibling tab's
+   * negotiation proves nothing about this call. One send per chat bounds the
+   * cost.
+   *
+   * A document with nothing to resolve - every document this surface produces
+   * today - takes the synchronous path verbatim. The await below exists only
+   * for a hash-only node, and everything it changes about ordering is confined
+   * to the branch that has one.
+   */
+  const handleSubmit = useCallback((): void => {
+    // The ENTRY gate, restored. `submitPreparedDraft` re-checks `canSubmit`
+    // live at the end, which is the check that matters for a condition that
+    // arrives DURING the read - but without one here, a Cmd/Ctrl+Enter pressed
+    // while the host is disconnected or ingestion is pending still started the
+    // flight (`usePrimaryActionShortcut` invokes the callback so it can claim
+    // the shortcut, unlike a disabled button). If the condition then cleared
+    // before resolution finished, the live check passed and the chat was
+    // created from a keystroke the user had every reason to read as a no-op.
+    if (!canSubmit) return;
+    const editor = editorRef.current;
+    if (editor === null) return;
+    const captured = editor.getJSON();
+    // Nothing this surface INHERITS from the host, so the host-held set starts
+    // empty: a new chat has no sent message and no queued prompt to re-open.
+    // `epic.createChat@1.2` is what can WIDEN it - see the upload below - and
+    // the widened set is read live at every call rather than captured, because
+    // it grows when the upload confirms, mid-flight and after this line.
+    const hostHeldRef = { current: NO_CONFIRMED_HASHES };
+    // The machine those confirmations are ABOUT. A digest confirmed on host A
+    // is NOT host-held on host B, and the picker stays live through the upload,
+    // so a switch has to retract the whole set rather than carry it across.
+    //
+    // Retracting is enough to make the switch land correctly, and the
+    // reconcile loop is why: `readRequiredHashes` is consulted after every
+    // pass, so digests that stop being host-held come back as REQUIRED, are
+    // resolved on the next pass, and are inlined at commit. The create then
+    // goes to the new host carrying bytes instead of references that host never
+    // received - one create, on the new host, inline.
+    const flightHostId = resolvedHostId;
+    const liveHostHeld = (): ReadonlySet<string> =>
+      submitTargetRef.current.resolvedHostId === flightHostId
+        ? hostHeldRef.current
+        : NO_CONFIRMED_HASHES;
+    const pending = draftImageInliningNeeded(captured, NO_HOST_HELD_HASHES);
+    const readRequiredHashes = (): ReadonlyArray<string> => {
+      const live = editorRef.current;
+      if (live === null) return [];
+      return draftImageInliningNeeded(live.getJSON(), liveHostHeld());
+    };
+    if (pending.length === 0) {
+      submitPreparedDraft(captured, false);
+      return;
+    }
+    // One preparation at a time. A second Enter during resolution would
+    // otherwise start a second create for the same draft.
+    if (draftImagePrepFlight.current) return;
+    draftImagePrepFlight.current = true;
+    const incarnation = editor.getEditorIncarnation();
+    const holderId = `new-conversation-submit:${epicId}`;
+    // The captured document is the only thing that still names these bytes if
+    // the draft row is replaced while the read is in flight, so it is a GC root
+    // for exactly as long as the preparation runs.
+    // Resolved inside the continuation, not captured here: a draft mirror is
+    // acquired and released as tiles mount, and the live session is the one
+    // that can answer. The hold/release try/finally lives in the helper: a
+    // `try` without a `catch` in a hook body defeats the React Compiler's
+    // memoization.
+    void withHeldComposerContentImageRoots(
+      holderId,
+      captured,
+      async () => {
+        // `epic.createChat@1.2` MATERIALIZES from the host's own draft-blob
+        // tier, so a digest this host confirms need not be inlined at all.
+        // Uploaded first, before `prepareDraftImageInlining`, because the
+        // preparation's contract is that the caller has finished all its other
+        // awaiting - an await left running beside it is another window for an
+        // image to arrive unattended.
+        //
+        // Best effort by construction: what the host does not confirm is simply
+        // not host-held, and is inlined by the pass below exactly as it was
+        // before `@1.2` existed.
+        const byHashClient = submitTarget.client;
+        // NARROWED here rather than asserted. A modal with no resolved host has
+        // no machine to confirm against, and the honest answer is the one this
+        // surface gave before `@1.2` existed: leave the set empty and let the
+        // pass below inline everything.
+        //
+        // `flightHostId` and not `resolvedHostId`, though they hold the same
+        // value: it is the id `liveHostHeld` compares against, and recording
+        // confirmations under one id while validating them under another is the
+        // one way this arm could hand the host a digest it never received.
+        const byHashHostId = flightHostId;
+        if (
+          byHashClient !== null &&
+          byHashHostId !== null &&
+          createAttachmentsByHashSupported(byHashHostId, "epic.createChat")
+        ) {
+          hostHeldRef.current = await confirmCreateAttachmentHashes({
+            hostId: byHashHostId,
+            client: byHashClient,
+            plan: planAttachmentsByHash(captured),
+            // Read at the upload, not captured when the flight started: the
+            // identity can change in between, and a confirmation recorded under
+            // one account is invisible to a gate asking under another.
+            ownerUserId: currentDraftBlobOwnerId(),
+          });
+        }
+        await prepareDraftImageInlining({
+          // Recomputed against the widened set: a digest the host just
+          // confirmed is no longer owed bytes by this client.
+          initialHashes: draftImageInliningNeeded(captured, liveHostHeld()),
+          target: draftImageByteTargetForHost(resolvedHostId),
+          // An image pasted while the read ran would otherwise be sent bare
+          // with its bytes sitting right here, and an initial create's epic has
+          // never seen it - so a send this could have completed is refused.
+          readRequiredHashes,
+          // Synchronous with the final required-set read above it: nothing can
+          // arrive between that check and this send.
+          commit: (base64ByHash) => {
+            const live = editorRef.current;
+            // A different editor is a different document. Sending the captured
+            // one would send something the user can no longer see, and
+            // `cleanupAfterSubmit` would clear a surface that never asked.
+            if (live === null || live.getEditorIncarnation() !== incarnation) {
+              return;
+            }
+            // Re-read, exactly as the chat composer's annotation read does: the
+            // revision moves on every keystroke, so comparing it would drop a
+            // send for one typed character, and the pre-flight capture is not
+            // what the user is looking at by the time the modal closes.
+            const inlined = inlineHashOnlyImageBytes(
+              live.getJSON(),
+              base64ByHash,
+            );
+            // A leg that missed leaves its node hash-only with nothing able to
+            // resolve it, and this path has no recovery for that. Even at
+            // `@1.2` the create is unary: a refusal RESOLVES rather than
+            // arriving as a `MISSING_ATTACHMENT_BYTES` acknowledgement to retry
+            // from, and there is no restoration slot, while `cleanupAfterSubmit`
+            // clears the draft synchronously - so dispatching would delete the
+            // user's text and then fail. The chat composer can afford to send
+            // optimistically because its refusal path exists; here the honest
+            // move is to keep the draft and say why.
+            //
+            // Measured against the HOST-HELD set, not the empty one: a node the
+            // host confirmed is resolvable, by the host, out of the draft-blob
+            // tier - it is dispatched deliberately, not unresolved.
+            const unresolved = draftImageInliningNeeded(
+              inlined,
+              liveHostHeld(),
+            );
+            if (unresolved.length > 0) {
+              raiseHostNotice({
+                kind: "refused",
+                message:
+                  unresolved.length === 1
+                    ? "An image in this prompt could not be loaded. The draft has been kept - try removing and re-attaching it."
+                    : `${unresolved.length} images in this prompt could not be loaded. The draft has been kept - try removing and re-attaching them.`,
+              });
+              return;
+            }
+            // What the request will actually carry as bare hashes. Everything
+            // still hash-only here is host-held, since `unresolved` is empty.
+            const wireHashes = hashOnlyImageHashes(inlined);
+            // The cap is the HOST's, counted over the whole request, so it is
+            // decided here rather than on the eligible set: a single uploaded
+            // image beside thirty-two copied out of the epic clears the
+            // pre-upload check and is still refused by the host - with an
+            // `InvalidArgumentError` no surface renders, after the modal has
+            // closed and cleared the draft.
+            if (exceedsCreateAttachmentHashCap(wireHashes)) {
+              reportCreateAttachmentHashCapExceeded();
+              return;
+            }
+            // Derived from the document, never decided beside it: the flag
+            // means "this request carries hash-only nodes the host must
+            // resolve", and reading it off `inlined` makes it impossible to
+            // claim that of a document a late paste left fully inline.
+            submitPreparedDraftRef.current(inlined, wireHashes.length > 0);
+          },
+        });
+      },
+      () => {
+        draftImagePrepFlight.current = false;
+      },
+    ).catch((error: unknown) => {
+      // The third call site of this helper, and the same rule as the other
+      // two: it propagates deliberately rather than swallowing, so `void`
+      // alone left a rejection unhandled. The flight flag is cleared by the
+      // helper's `finally` either way, and the draft is untouched.
+      //
+      // But untouched is not the same as EXPLAINED. This modal has a visible
+      // notice channel and the two refusals beside it already use it, so a
+      // failure that only reached the log left the user pressing Send and
+      // watching nothing happen.
+      appLogger.error(
+        "[new-conversation] submit image preparation failed",
+        { epicId },
+        error,
+      );
+      raiseHostNotice({
+        kind: "refused",
+        message:
+          "The images in this prompt could not be prepared. The draft has been kept - try again.",
+      });
+    });
+  }, [
+    canSubmit,
+    epicId,
+    raiseHostNotice,
+    resolvedHostId,
+    // The client the by-hash upload dispatches on, and it must be the CURRENT
+    // one: the host picker stays live while the upload runs, and bytes put on
+    // the machine the chip stopped showing are bytes the create's host never
+    // received.
+    submitTarget,
+    submitPreparedDraft,
+  ]);
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
@@ -1524,12 +1596,11 @@ export function NewConversationModalBody(props: {
       // Persist the caret alongside the bytes so a focus round-trip that
       // unmounts + remounts the editor restores it (see `initialSelection`).
       setSelection(epicId, selection);
-      // Catch-all for an inline-b64 node this hook did not insert itself - a
-      // cross-host browser-tab preview screenshot, a restored draft that still
-      // carries one. Cheap and short-circuiting when there is nothing pending.
-      notePossiblePendingImages(content);
+      // See `chat-composer.tsx` for why an on-change caller is needed at all:
+      // a b64 node can enter long after mount without going through a paste.
+      noteContentImages(content);
     },
-    [epicId, notePossiblePendingImages, setContent, setSelection],
+    [epicId, noteContentImages, setContent, setSelection],
   );
 
   const handleSelectionChange = useCallback(
@@ -1575,6 +1646,7 @@ export function NewConversationModalBody(props: {
       attachmentsStrip={
         <NewConversationModalAttachmentStrip
           epicId={epicId}
+          hostId={resolvedHostId}
           seedContent={seed.content}
           onRemoveImage={handleRemoveImage}
         />
@@ -1588,7 +1660,7 @@ export function NewConversationModalBody(props: {
       // A draft restored into this modal can already carry a pending b64 node
       // (the editor is created with `initialContent` and fires no document
       // change for it), so the sweep runs once the handle exists as well.
-      onEditorReady={paste.reingestPendingImages}
+      onEditorReady={reingestPendingImages}
       // No terminal surface: a sign-in terminal tile is bound to the TAB's
       // host, while this composer creates on a placement-resolved host that
       // may be another machine, and this modal sits above the canvas the tile

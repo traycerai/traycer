@@ -26,7 +26,9 @@ describe("<TerminalConnectionOverlay />", () => {
     const reconnect = screen.getByRole("button", { name: "Reconnect" });
     const report = screen.getByRole("button", { name: "Report issue" });
     expect(reconnect.getAttribute("data-variant")).toBe("outline");
-    expect(report.getAttribute("data-variant")).toBe("ghost");
+    // `ReportIssueAction` renders the quiet `muted` variant now; the tone is
+    // the variant's, not a class the call site paints on.
+    expect(report.getAttribute("data-variant")).toBe("muted");
 
     fireEvent.click(report);
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({

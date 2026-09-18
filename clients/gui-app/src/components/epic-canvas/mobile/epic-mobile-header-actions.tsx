@@ -63,13 +63,13 @@ export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="muted"
       size="icon-sm"
       aria-label="Switch tab"
       data-testid="mobile-epic-switcher-trigger"
       disabled={!mounted}
       onClick={() => setOpen(tabId, true)}
-      className="shrink-0 text-muted-foreground hover:text-foreground"
+      className="shrink-0"
     >
       <SquareStack className="size-4" />
     </Button>

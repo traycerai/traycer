@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -119,7 +120,10 @@ import {
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
-import { useImageContentRoot } from "@/hooks/composer/use-image-content-root";
+import {
+  holdComposerContentImageRoots,
+  releaseComposerContentImageRoots,
+} from "@/lib/composer/composer-content-image-roots";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -218,7 +222,12 @@ import {
   buildChatRunSettings,
   importedChatSettingsSeed,
 } from "@/lib/composer/chat-run-settings";
-import type { ProviderId } from "@/components/home/data/landing-options";
+import {
+  autoModeOfferableHere,
+  normalizePermissionMode,
+  type ProviderId,
+} from "@/components/home/data/landing-options";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
   effectiveMissingWorktreePaths,
@@ -1064,6 +1073,45 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     viewHandle.store,
     (s) => s.requestTranscriptOrdinal,
   );
+  // The ordinal a jump named stays REQUIRED (protected from window eviction)
+  // until the messages surface reports how the landing ended, not until the
+  // jump is consumed: the rows that hydrate while the viewport moves can push
+  // the window over budget, and the coldest unprotected span - the target's -
+  // was the first to go. Released only for the request that is still current
+  // and only while no newer jump is parked, since that one may already have
+  // named an ordinal of its own. The session store holds one ordinal per
+  // chat, so a second tile of the same chat shares it - the pre-existing
+  // shape of `requestTranscriptOrdinal`, not something this changes.
+  const transcriptJumpRef = useRef(transcriptJump);
+  useLayoutEffect(() => {
+    transcriptJumpRef.current = transcriptJump;
+  }, [transcriptJump]);
+  const onScrollRequestSettled = useCallback(
+    (requestId: number): void => {
+      if (requestId !== backgroundScrollRequestIdRef.current) return;
+      if (transcriptJumpRef.current !== undefined) return;
+      requestTranscriptOrdinal(null);
+    },
+    [requestTranscriptOrdinal],
+  );
+  // ...and a landing whose surface never reports (unmounted mid-flight, or a
+  // request that never found its row) must not hold the ordinal forever.
+  const backgroundScrollRequestId = backgroundScrollRequest?.requestId ?? null;
+  useEffect(() => {
+    if (backgroundScrollRequestId === null) return;
+    const timer = setTimeout(() => {
+      onScrollRequestSettled(backgroundScrollRequestId);
+    }, TRANSCRIPT_JUMP_TTL_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [backgroundScrollRequestId, onScrollRequestSettled]);
+  useEffect(
+    () => () => {
+      requestTranscriptOrdinal(null);
+    },
+    [requestTranscriptOrdinal],
+  );
   // A jump target this client cannot place on its own, once it is clear it
   // cannot. Failing to match here does not mean "not delivered yet" the way it
   // does elsewhere - it means "not hydrated, and hydration is exactly what the
@@ -1148,13 +1196,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         queueMicrotask(() => {
           highlightComposerBlock(landing.approvalId);
         });
-      } else {
-        queueMicrotask(() => {
-          scrollToBlock(landing.blockId, "plan");
-        });
+        consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+        requestTranscriptOrdinal(null);
+        return;
       }
+      queueMicrotask(() => {
+        scrollToBlock(landing.blockId, "plan");
+      });
+      // The ordinal is released by `onScrollRequestSettled` once the plan
+      // card's row has landed, not here.
       consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
-      requestTranscriptOrdinal(null);
       return;
     }
     if (target.kind === "end") {
@@ -1250,10 +1301,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       });
     }
     consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
-    // The jump is done, so the ordinal it was holding open is released. Doing
-    // this AFTER the consume rather than beside the resolve keeps the request
-    // alive across the beat between the two.
-    requestTranscriptOrdinal(null);
+    // The ordinal it named stays held until the messages surface reports the
+    // landing's outcome (`onScrollRequestSettled`) - the target row must not
+    // be evictable while the viewport is still on its way there.
   }, [
     consumeTranscriptJump,
     highlightComposerBlock,
@@ -1467,6 +1517,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 coldRewrittenMessageIds={view.coldRewrittenMessageIds}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
+                onScrollRequestSettled={onScrollRequestSettled}
                 surfaceVisible={view.surfaceVisible}
                 systemOverlayActive={systemOverlayActive}
                 getMessageActions={view.getMessageActions}
@@ -1503,13 +1554,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                       {/*
                        * Above the dock and outside the lower surfaces: this row
                        * is a turn-tail status line, not composer chrome, and it
-                       * belongs to the transcript side of the seam. Mounted
-                       * here rather than inside `ChatLowerInteractionSurfaces`
-                       * because it resolves the tab's routed host client, and
-                       * that surface is deliberately renderable without one
-                       * (see its `hostId` prop). It renders `null` for every
-                       * traversal state but `retrying`, so it is mounted
-                       * unconditionally and the component owns the predicate.
+                       * belongs to the transcript side of the seam. It renders
+                       * `null` for every traversal state but `retrying`, so it
+                       * is mounted unconditionally and owns the predicate.
                        */}
                       <FallbackRetryRow
                         pending={view.lower.fallback.pending}
@@ -1787,6 +1834,9 @@ function useChatTileSessionViewModel(
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
       steerProtocolSupported: s.steerProtocolSupported,
+      autoPermissionModeProtocolSupported:
+        s.autoPermissionModeProtocolSupported,
+      draftBlobBridgeSupported: s.draftBlobBridgeSupported,
       interviewDeliveryRetryProtocolSupported:
         s.interviewDeliveryRetryProtocolSupported,
       turnInProgress: s.turnInProgress,
@@ -2059,11 +2109,28 @@ function useChatTileSessionViewModel(
   // detection, failed-send restoration, sending→consumed transitions
   // (via acceptedActions or via persisted messages), and the
   // waitingChat→sendMessage→markSending hop.
+  // Read from the STORE at submit time, not from the projected boolean below.
+  // The projection is a value from the last committed render and a ref of it is
+  // the last committed effect; a stream transition to a non-bridging session
+  // can be queued in the store while an image preparation is mid-flight, and
+  // neither copy knows it yet. The send gate's whole job is to answer "can this
+  // session resolve a bare hash", and only the store can answer it at the
+  // moment it is asked.
+  const getDraftBlobBridgeSupported = useCallback(
+    () => handle.store.getState().draftBlobBridgeSupported,
+    [handle.store],
+  );
+  // Declared HERE rather than beside its other readers further down: the
+  // initial-chat handoff driver below consumes it too, and a `const` used above
+  // its declaration is a TDZ error rather than a hoist. Nothing about the
+  // reasoning above changes with the position - it is still read at submit
+  // time, from the store.
   useInitialChatHandoffDriver({
     handle,
     nodeId: node.id,
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
+    getDraftBlobBridgeSupported,
   });
   useChatSetupFailureRestoreDriver({
     handle,
@@ -2233,7 +2300,54 @@ function useChatTileSessionViewModel(
       defaultRunSettings,
     ],
   );
-  const nextStepSettings = currentComposerSettings;
+  // The TILE-OWNED send paths (next step, compact, implement-plan, inline edit)
+  // take the same permission clamp the composer's toolbar store applies, and
+  // this is where they get it. They do not go through that store - it belongs
+  // to the lower composer - so before this they sent `currentComposerSettings`
+  // raw: a chat retaining `auto` whose selected harness no longer advertises it
+  // submitted `permissionMode: "auto"` from these buttons while an ordinary
+  // composer send beside them was clamped to a supported mode. One chat, two
+  // answers, and the host refuses the button.
+  //
+  // Same three inputs the composer uses, read off what this tile already holds:
+  // the row from the tab-host catalog, and the pair of proofs
+  // `autoModeOfferableHere` needs (the catalog line, plus THIS chat's
+  // `chat.subscribe` line from the session probe). A catalog that has not
+  // answered leaves the row `null`, which `normalizePermissionMode` reads as
+  // "cannot say" and passes through - the same direction the composer takes on
+  // a cold load, and never a clamp invented from missing evidence.
+  const tileListHarnessesLine = useHostMethodSchemaVersion(
+    activeHostId,
+    "agent.gui.listHarnesses",
+  );
+  const nextStepSettings = useMemo(() => {
+    const row = displayCatalog.find(
+      (harness) => harness.id === currentComposerSettings.harnessId,
+    );
+    const clamped = normalizePermissionMode(
+      currentComposerSettings.permissionMode,
+      row?.supportedPermissionModes ?? null,
+      autoModeOfferableHere(
+        tileListHarnessesLine,
+        state.autoPermissionModeProtocolSupported,
+      ),
+    );
+    // Hand back the SAME object when nothing was clamped, which is a narrower
+    // claim than it looks: `useMemo` already stops a fresh object per render,
+    // so this is not what keeps the memoized composer region stable across
+    // ordinary renders. What it covers is a recompute triggered by a dep that
+    // does not change the ANSWER - a catalog refetch moving `displayCatalog`'s
+    // identity, say - where a spread would mint a new settings object that is
+    // field-for-field equal and still churn every consumer downstream of it.
+    return clamped === currentComposerSettings.permissionMode
+      ? currentComposerSettings
+      : { ...currentComposerSettings, permissionMode: clamped };
+  }, [
+    currentComposerSettings,
+    displayCatalog,
+    tileListHarnessesLine,
+    state.autoPermissionModeProtocolSupported,
+  ]);
   const editSettings = nextStepSettings;
   // The tile's own send paths - next steps, compact, inline edit - never touch
   // the composer, so they cannot read the catalog off its picker store. Subscribe
@@ -2301,15 +2415,30 @@ function useChatTileSessionViewModel(
   // `currentContent` from the saved message, so a pristine edit loses nothing
   // and must not hold the epic resident.
   useEpicDraftGuard(currentEpicId, activeInlineEdit?.dirty ?? false);
-  // GC root, for the same reason and over the same window as the park veto
-  // above. An image pasted into the inline editor is stored by hash and
-  // referenced from `currentContent` alone until Submit, so an unrelated draft
-  // clear - any other composer sending - schedules the reconcile that releases
-  // and then deletes bytes nothing claims. Unlike the park veto this is NOT
-  // gated on `dirty`: a pristine edit re-seeded from a saved message still
-  // names hashes, and rooting a hash whose bytes were never local costs
-  // nothing while failing to root one deletes what the user is looking at.
-  useImageContentRoot(activeInlineEdit?.currentContent ?? null);
+  // The byte-custody twin of that veto. `landing-image-gc.reconcile` deletes
+  // every stored hash outside the live roots, and an inline edit's images are
+  // named by nothing else - not a composer-draft row, not a chat session slice -
+  // so without this a reconcile while an edit is open reaps the bytes the
+  // submit is about to inline. Not gated on `dirty`: a pristine edit still
+  // REFERENCES those hashes, and only the park question cares whether the user
+  // has typed.
+  //
+  // Keyed by the mounted TILE, not the chat. `contentByHolder` is
+  // process-wide and the same chat can be open in several tiles, each with its
+  // own `activeInlineEdit` in its own reducer - so a chat-keyed holder had them
+  // share one slot. Unmounting a tile that never opened an edit then released
+  // the slot belonging to the tile that had one, and the next reconcile reaped
+  // bytes the surviving editor still names. Same reason the queue-edit
+  // saved-draft holder is keyed by `instanceId`.
+  useEffect(() => {
+    const holderId = `inline-edit:${node.instanceId}`;
+    if (activeInlineEdit !== null) {
+      holdComposerContentImageRoots(holderId, activeInlineEdit.currentContent);
+    }
+    return () => {
+      releaseComposerContentImageRoots(holderId);
+    };
+  }, [activeInlineEdit, node.instanceId]);
 
   const displayedMessages = useMemo(() => {
     if (activeInlineEdit === null) return renderedMessages;
@@ -2466,6 +2595,10 @@ function useChatTileSessionViewModel(
       worktreeBinding: state.worktreeBinding,
       revertOnEditOpen: uiState.revertOnEditOpen,
       queuedCount: state.queue.items.length,
+      // The same getter the composer's submit and the handoff driver take, and
+      // for the same reason: an edit's image preparation is asynchronous, so the
+      // capability has to be read where it is used rather than captured here.
+      getDraftBlobBridgeSupported,
     });
 
   // A primitive on purpose: `renderedMessages` takes a fresh identity every
@@ -3054,9 +3187,11 @@ function useChatTileSessionViewModel(
     chatActions,
     handle,
     nodeId: node.id,
+    tileInstanceId: node.instanceId,
     replaceDraftContent,
     clearDraftContent,
     currentComposerSettings,
+    nextStepSettings,
     currentEpicId,
     editingQueueItemId: uiState.editingQueueItemId,
     activeEditingQueueItemId,
@@ -3188,6 +3323,10 @@ function useChatTileSessionViewModel(
   // settings-drift comparison, avoiding a reactive activeTurn prop.
   const steerCapable = state.activeTurn?.sameTurnSteeringSupported ?? false;
   const steerProtocolSupported = state.steerProtocolSupported;
+  // Same stability argument as `steerProtocolSupported`: fixed once the
+  // handshake lands, so it never churns the memoized composer per token.
+  const autoPermissionModeProtocolSupported =
+    state.autoPermissionModeProtocolSupported;
   const getActiveTurnForSteer = useCallback(
     () => handle.store.getState().activeTurn,
     [handle.store],
@@ -3197,6 +3336,8 @@ function useChatTileSessionViewModel(
       activeTurnStatus: composerActiveTurnStatus,
       steerCapable,
       steerProtocolSupported,
+      autoPermissionModeProtocolSupported,
+      getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
@@ -3205,6 +3346,8 @@ function useChatTileSessionViewModel(
       composerActiveTurnStatus,
       steerCapable,
       steerProtocolSupported,
+      autoPermissionModeProtocolSupported,
+      getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
       stopDisabled,
       chatActions.stopTurn,
@@ -3579,6 +3722,7 @@ interface ChatSessionMessagesSurfaceProps {
   readonly coldRewrittenMessageIds: ReadonlySet<string>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
+  readonly onScrollRequestSettled: (requestId: number) => void;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
   readonly getMessageActions: (
@@ -3688,6 +3832,7 @@ function ChatSessionMessagesSurface(
               coldRewrittenMessageIds={props.coldRewrittenMessageIds}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
+              onScrollRequestSettled={props.onScrollRequestSettled}
               getMessageActions={props.getMessageActions}
               nextStepActions={props.nextStepActions}
               instanceId={props.node.instanceId}

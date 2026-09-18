@@ -55,6 +55,7 @@ export { RPC_ERROR_CODES, isRpcErrorCode } from "./versioned-rpc-types";
 
 export type {
   WorktreeBusyErrorDetails,
+  WorktreeBusyChatTier,
   WorktreeBusyHoldKind,
   WorktreeBusyHolder,
   WorktreeBusyHolderActivity,
@@ -66,12 +67,16 @@ export type {
 export {
   HOLDERS_REVISION_DIGEST_PATTERN,
   holdersRevisionWireFieldSchema,
+  worktreeBusyChatTierSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
   worktreeBusyHolderSchema,
+  worktreeBusyHolderSchemaV1,
   worktreeBusyHoldersSchema,
+  worktreeBusyHoldersSchemaV1,
   worktreeBusyHoldersWireFieldSchema,
+  worktreeBusyHoldersWireFieldSchemaV1,
   worktreeBusyOwnerKindSchema,
   worktreeBusyOwnerRefSchema,
   worktreeHoldersChangedErrorDetailsSchema,

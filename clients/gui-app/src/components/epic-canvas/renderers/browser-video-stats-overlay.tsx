@@ -23,7 +23,7 @@ export function BrowserVideoStatsOverlay(props: {
   const { video, videoStats } = props.session;
 
   return (
-    <div className="pointer-events-none absolute left-1 top-1 rounded bg-black/70 px-1.5 py-1 font-mono text-[10px] leading-tight text-white">
+    <div className="pointer-events-none absolute left-1 top-1 rounded bg-black/70 px-1.5 py-1 font-mono text-micro leading-tight text-white">
       <div>plane: {videoPlaneLabel(video)}</div>
       <div>fps: {fps === null ? "-" : fps.toFixed(0)}</div>
       <div>drops: {videoStats === null ? "-" : videoStats.framesDropped}</div>

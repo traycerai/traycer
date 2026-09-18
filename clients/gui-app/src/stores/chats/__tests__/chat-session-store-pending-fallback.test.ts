@@ -90,6 +90,7 @@ function createLegacyHarness(): LegacyHarness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => false,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -130,6 +131,7 @@ function createWindowedHarness(): WindowedHarness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => false,
         requestTranscriptRange: (request) => {
           rangeRequests.push(request);
         },

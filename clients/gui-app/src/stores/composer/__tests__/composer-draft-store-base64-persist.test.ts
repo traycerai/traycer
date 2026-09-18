@@ -38,8 +38,8 @@ function persistedDraftsFromLocalStorage(): Record<string, unknown> {
     typeof parsed !== "object" ||
     parsed === null ||
     !("state" in parsed) ||
-    typeof (parsed).state !== "object" ||
-    (parsed).state === null
+    typeof parsed.state !== "object" ||
+    parsed.state === null
   ) {
     throw new Error("unexpected persisted shape");
   }

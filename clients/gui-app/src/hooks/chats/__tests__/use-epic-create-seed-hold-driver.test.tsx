@@ -55,6 +55,10 @@ function createHandle(chatId: string) {
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
+      // `false`, not `true`: this suite is about the seed hold, and nothing in
+      // it sends an attachment. Answering `true` would have the store report a
+      // bridge no case here exercises, which is a claim rather than a default.
+      draftBlobBridgeSupported: () => false,
       requestTranscriptRange: () => undefined,
       requestResnapshot: () => undefined,
       close: () => undefined,

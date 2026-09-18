@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -20,6 +21,7 @@ import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import { formatResetFullDateTime } from "@/lib/relative-time";
+import { useLayoutStore } from "@/stores/settings/layout-store";
 
 type TurnRefreshCall = {
   readonly providerId: string | null;
@@ -230,6 +232,7 @@ describe("ProviderRateLimitForProvider", () => {
 
   afterEach(() => {
     cleanup();
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
   });
 
   it("renders the embedded variant as an integrated section without a nested card border", () => {
@@ -318,6 +321,27 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.queryByText("Loading usage limits")).toBeNull();
   });
 
+  it("words the Settings › Providers rows by Layout's Used / Remaining setting, the same as the strip and the popover", () => {
+    mocks.data = envelope(CLAUDE_RATE_LIMITS);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("55% used")).toBeTruthy();
+
+    act(() => {
+      useLayoutStore.getState().setStatusBarPercentMode("remaining");
+    });
+    expect(screen.getByText("88% remaining")).toBeTruthy();
+    expect(screen.getByText("45% remaining")).toBeTruthy();
+    expect(screen.queryByText("12% used")).toBeNull();
+  });
+
   it("renders the Claude Code rate-limit detail once loaded", () => {
     mocks.data = envelope(CLAUDE_RATE_LIMITS);
     render(
@@ -395,13 +419,11 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
-      0,
-    );
-    expect(container.querySelectorAll(".bg-amber-500").length).toBeGreaterThan(
-      0,
-    );
-    expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-info").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-warning").length).toBeGreaterThan(0);
+    expect(
+      container.querySelectorAll(".bg-destructive").length,
+    ).toBeGreaterThan(0);
   });
 
   it("keeps bars Healthy below their duration-aware warning thresholds", () => {
@@ -415,11 +437,9 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
-    expect(container.querySelectorAll(".bg-red-500").length).toBe(0);
-    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
-      0,
-    );
+    expect(container.querySelectorAll(".bg-warning").length).toBe(0);
+    expect(container.querySelectorAll(".bg-destructive").length).toBe(0);
+    expect(container.querySelectorAll(".bg-info").length).toBeGreaterThan(0);
   });
 
   it("renders the Codex rate-limit detail once loaded", () => {

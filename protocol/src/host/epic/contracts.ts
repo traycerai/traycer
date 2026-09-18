@@ -576,11 +576,18 @@ export const epicCreateUpgradeV10ToV11 = defineUpgradePath<
  *
  * Two optional REQUEST fields, both on new instances forked down to the
  * initial-message leaf (`createEpicRequestSchemaV12`, and the freeze argument
- * in `unary-schemas.ts`): `chat.initialMessage.attachmentsByHash`, which asks
- * the host to resolve hash-only `imageAttachment` nodes from the requester's
- * draft blob tier before the commit point, and
- * `chat.deferWorktreeProvisioning`, by which a caller that owns a resend and a
- * setup card opts out of a synchronous `git worktree add` inside the response.
+ * in `unary-schemas.ts`) - but they are not the same KIND of field, and the
+ * distinction matters to anyone setting them.
+ *
+ * `chat.initialMessage.attachmentsByHash` STATES A PROPERTY OF THE DOCUMENT:
+ * that its `imageAttachment` nodes are hash-only, so the host must resolve
+ * them from the requester's draft blob tier before the commit point. Both
+ * create surfaces derive it from the content they are dispatching rather than
+ * electing it, so it is never a caller-chosen mode.
+ *
+ * `chat.deferWorktreeProvisioning` IS the caller-chosen one: a caller that
+ * owns a resend and a setup card opts out of a synchronous `git worktree add`
+ * inside the response.
  *
  * One RESPONSE change: `refusal` is re-typed onto `epicCreateRefusalKindSchemaV12`,
  * which adds `missing-attachment-bytes`. A value added to the released enum
@@ -1572,7 +1579,13 @@ export const epicGetChatRunSettingsDowngradeV20ToV10 = defineDowngradePath<
     // already renders the record row's harness mark when the read fails, which
     // is exactly the documented degrade for a host that predates the method.
     //
-    // The message names no harness, so it stays honest as the enum grows.
+    // The message names no harness, so it stays honest as the enum grows -
+    // and it has since had to, in a second dimension: `permissionMode` on the
+    // frozen 1.0 tuple is pinned pre-`auto`, so an `auto` chat refuses here on
+    // exactly the same path a Reasonix chat does, with no code change. That is
+    // the intended behaviour, not a gap: projecting `auto` down to
+    // `auto_accept_edits` for a 1.0 reader would be the same false claim in a
+    // quieter form.
     const parsed = getChatRunSettingsResponseSchemaV10.safeParse(response);
     if (!parsed.success) {
       return {

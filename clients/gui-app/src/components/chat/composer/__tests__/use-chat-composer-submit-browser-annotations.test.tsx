@@ -33,11 +33,9 @@ vi.mock("@/lib/reportable-error-toast", async (importOriginal) => {
   return { ...actual, reportableErrorToast: toastMocks.reportableErrorToast };
 });
 
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   return {
     ...actual,
     sessionImageBytes: imageStoreMocks.sessionImageBytes,
@@ -172,16 +170,12 @@ function mountSubmit(args: {
     },
     onSettingsChange: null,
     tuiOnly: false,
+    chatLineCarriesAutoMode: null,
     hostId: null,
   });
   return renderHook(() =>
     useChatComposerSubmit({
       taskId: args.taskId,
-      // Explicit `null`: these cases drive the INLINE submit arm, and a null
-      // host/client is what keeps the by-hash gate shut. The args type takes
-      // no optional params or defaults (lint rule), so every site states it.
-      hostId: null,
-      hostClient: null,
       editorRef: { current: args.editor },
       pickerStore: createComposerPickerStore(),
       toolbarStore,
@@ -195,9 +189,13 @@ function mountSubmit(args: {
       workspaceBlocked: false,
       imagesUnsupported: args.imagesUnsupported,
       attachmentPreparationPending: false,
-      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
+      targetHostId: null,
+      queueEditTargetId: null,
+      // T5's gate is off in these fixtures: they predate it and assert the
+      // inline behaviour, which is what `false` preserves exactly.
+      getDraftBlobBridgeSupported: () => false,
     }),
   );
 }
@@ -489,7 +487,7 @@ describe("useChatComposerSubmit browser annotations", () => {
     expect(atoms[0]?.fileName).toBe(IMAGE_FILE_NAME);
   });
 
-  it("does not send when composer-image-store has no crop bytes", async () => {
+  it("does not send when landing-image-store has no crop bytes", async () => {
     const taskId = "chat-ann-missing";
     useComposerDraftStore
       .getState()
@@ -637,7 +635,7 @@ describe("useChatComposerSubmit browser annotations", () => {
     expect(input.restore.content).toEqual(TYPED_DOC);
   });
 
-  it("sends an annotation attached while crop bytes resolve", async () => {
+  it("holds back a send when an annotation is attached while crop bytes resolve", async () => {
     const taskId = "chat-ann-late-attach";
     const first = annotationRecord(null);
     const late = annotationRecord({
@@ -665,9 +663,8 @@ describe("useChatComposerSubmit browser annotations", () => {
     act(() => {
       result.current.submitDraft("enter");
     });
-    // Attached while the IndexedDB read is in flight. `clearDraft` on
-    // acceptance wipes it, so a send built from the pre-async capture would
-    // drop it silently.
+    // Attached while the IndexedDB read is in flight, so it has a record and
+    // no resolved crop atom.
     act(() => {
       useComposerDraftStore.getState().addBrowserAnnotation(taskId, late);
     });
@@ -675,14 +672,21 @@ describe("useChatComposerSubmit browser annotations", () => {
       release?.();
       await Promise.resolve();
     });
-    await waitFor(() => {
-      expect(submit).toHaveBeenCalledTimes(1);
-    });
+    await Promise.resolve();
 
-    const input = submit.mock.calls[0][0];
-    expect(input.attachments).toContainEqual(first);
-    expect(input.attachments).toContainEqual(late);
-    expect(input.restore.browserAnnotations).toEqual([first, late]);
+    // NOT sent. The three outcomes available here are: drop the record
+    // silently, send it without its crop, or send nothing. The second was what
+    // this test used to assert, and it is the worst of them - the protocol
+    // needs the crop to ride an `imageAttachment`, and the acceptance clears
+    // the sidecar, so the image is gone for good. `commit` is synchronous by
+    // contract (that is what makes the image set exact), so this preparation
+    // cannot grow an atom for the late record; the send is abandoned instead.
+    expect(submit).not.toHaveBeenCalled();
+    // Nothing was cleared: both annotations are still on the draft, and the
+    // next send resolves them in its own pre-flight capture.
+    expect(
+      useComposerDraftStore.getState().drafts[taskId]?.browserAnnotations,
+    ).toEqual([first, late]);
   });
 });
 

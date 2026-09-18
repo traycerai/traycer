@@ -42,9 +42,10 @@ import {
   pollEpicExistence,
 } from "@/lib/epics/epic-existence-poll";
 import { reportEpicCreateRefusal } from "@/lib/epics/report-epic-create-refusal";
-import { imageHashesFromContent } from "@/lib/composer/composer-image-inlining";
+import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
 import {
-  forgetConfirmedBlobs,
+  currentDraftBlobOwnerId,
+  invalidateDraftBlobConfirmations,
   putDraftBlobs,
 } from "@/lib/drafts/draft-blob-transport";
 import {
@@ -160,15 +161,15 @@ export function useEpicCreateForClient(
       // confirm helper: the whole point is to re-upload bytes this renderer
       // already believes are on the host, so the confirmed-blob memo must be
       // bypassed, not consulted.
-      const hashes = imageHashesFromContent(content);
+      const hashes = hashOnlyImageHashes(content);
       if (hashes.length === 0) return response;
       // RETRACTED FIRST, which bypassing alone does not do. This refusal is the
       // client's only evidence that the memo is wrong; leaving the entries
       // standing means any hash whose re-upload fails here (no local bytes, a
       // digest mismatch) still reads as confirmed to the NEXT message that
       // carries it, which then skips the upload on a disproved ack.
-      forgetConfirmedBlobs(hostId, hashes);
-      await putDraftBlobs(hostId, client, hashes);
+      invalidateDraftBlobConfirmations(hostId, hashes);
+      await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
       return redispatch();
     },
     mapDispatchError: asCreateWithoutCloudVerdictError,

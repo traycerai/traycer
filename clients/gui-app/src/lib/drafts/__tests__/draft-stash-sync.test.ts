@@ -80,6 +80,7 @@ describe("stash host sync", () => {
       createdAt: 10,
       content: EMPTY_DOC,
       blobHashes: [] as string[],
+      annotations: [],
     };
     await publishStashEntry(HOST_ID, entry);
     expect(upserts).toHaveLength(1);
@@ -90,6 +91,7 @@ describe("stash host sync", () => {
         content: entry.content,
         blobHashes: entry.blobHashes,
         createdAt: entry.createdAt,
+        annotations: entry.annotations,
       }).draftId,
     ).toBe("stash-1");
 
@@ -158,6 +160,7 @@ describe("stash host sync", () => {
       createdAt: 10,
       content: EMPTY_DOC,
       blobHashes: [] as string[],
+      annotations: [],
     };
     await publishStashEntry(HOST_ID, entry);
     await deleteStashEntryOnHost(null, entry.id);
@@ -166,11 +169,11 @@ describe("stash host sync", () => {
     expect(deletes).toEqual([entry.id]);
   });
 
-  it("restore-consume on a second host claims then deletes; a lost-race delete stays idempotent", async () => {
+  it("restore-consume on a second host retracts the cloud row through drafts.retract, without ever calling drafts.delete there; a lost-race retract falls back to an idempotent delete", async () => {
     installFreshIndexedDb();
     const hostA = "host-a";
     const hostB = "host-b";
-    const claims: string[] = [];
+    const retracts: string[] = [];
     const deletes: string[] = [];
     let listedOnB: DraftDocument[] = [];
     const entry = {
@@ -178,6 +181,7 @@ describe("stash host sync", () => {
       createdAt: 10,
       content: EMPTY_DOC,
       blobHashes: [] as string[],
+      annotations: [],
     };
     acquireDraftMirrorSession({
       hostId: hostA,
@@ -226,34 +230,10 @@ describe("stash host sync", () => {
               scopeId: "scp_TESTDRAFTSSCOPEID000002",
             });
           }
-          if (method === "drafts.claim") {
+          if (method === "drafts.retract") {
             const draftId = (params as { draftId: string }).draftId;
-            claims.push(draftId);
-            return Promise.resolve({
-              status: "ok" as const,
-              draft: {
-                draftId,
-                kind: "stash-entry" as const,
-                target: { epicId: null, chatId: null, blockId: null },
-                revision: 2,
-                lastTouchedAt: 10,
-                workspace: null,
-                ownerHostId: hostB,
-                origin: "own" as const,
-                adoption: { state: "adopted" as const, hostId: hostB },
-                publication: {
-                  status: "unpublished" as const,
-                  lastPublishedAt: null,
-                  publishedRevision: null,
-                  halted: null,
-                },
-                portable: {
-                  content: EMPTY_DOC,
-                  blobHashes: [],
-                  createdAt: 10,
-                },
-              },
-            });
+            retracts.push(draftId);
+            return Promise.resolve({ retracted: true });
           }
           if (method === "drafts.delete") {
             const draftId = (params as { draftId: string }).draftId;
@@ -270,10 +250,121 @@ describe("stash host sync", () => {
     });
     await Promise.resolve();
     await publishStashEntry(hostA, entry);
+    // Consumed through hostB, which never published this entry: the
+    // coordinator retracts the cloud row on the user's authority through
+    // hostB's client, and - on a successful retract - returns without ever
+    // calling `drafts.delete` there. Ownership never moves; hostA (the
+    // publisher) tombstones its own row once it finds the cloud row gone.
     await consumeStashOnHost(hostB, entry.id);
-    expect(claims).toEqual([entry.id]);
+    expect(retracts).toEqual([entry.id]);
+    expect(deletes).toEqual([]);
+    // The entry is no longer bound to a known publishing host after the
+    // retract, so a second consume through hostB falls back to the
+    // idempotent delete path instead of retracting again.
+    await consumeStashOnHost(hostB, entry.id);
+    expect(retracts).toEqual([entry.id]);
     expect(deletes).toEqual([entry.id]);
+  });
+
+  it("keeps the stash binding when drafts.retract fails transiently, instead of deleting on the consuming host (DRIVE RED)", async () => {
+    installFreshIndexedDb();
+    const hostA = "host-a-transient";
+    const hostB = "host-b-transient";
+    const retracts: string[] = [];
+    const deletes: string[] = [];
+    let listedOnB: DraftDocument[] = [];
+    let failRetract = true;
+    const entry = {
+      id: "stash-transient",
+      createdAt: 10,
+      content: EMPTY_DOC,
+      blobHashes: [] as string[],
+      annotations: [],
+    };
+    acquireDraftMirrorSession({
+      hostId: hostA,
+      client: {
+        request: (method: string, params: unknown) => {
+          if (method === "drafts.list") {
+            return Promise.resolve({
+              drafts: [],
+              tombstones: [],
+              snapshotSeq: 0,
+              scopeId: "scp_TESTDRAFTSSCOPEID000001",
+            });
+          }
+          if (method === "drafts.upsert") {
+            return Promise.resolve({
+              draft: {
+                ...(params as { draft: DraftWrite }).draft,
+                ownerHostId: hostA,
+                origin: "own" as const,
+                adoption: { state: "adopted" as const, hostId: hostA },
+                publication: {
+                  status: "unpublished" as const,
+                  lastPublishedAt: null,
+                  publishedRevision: null,
+                  halted: null,
+                },
+                revision: 1,
+              },
+            });
+          }
+          return Promise.reject(new Error(`unexpected A ${String(method)}`));
+        },
+      } as never,
+      streamClient: fakeDraftStreamClient(),
+      timing: undefined,
+    });
+    acquireDraftMirrorSession({
+      hostId: hostB,
+      client: {
+        request: (method: string, params: unknown) => {
+          if (method === "drafts.list") {
+            return Promise.resolve({
+              drafts: listedOnB,
+              tombstones: [],
+              snapshotSeq: 0,
+              scopeId: "scp_TESTDRAFTSSCOPEID000002",
+            });
+          }
+          if (method === "drafts.retract") {
+            const draftId = (params as { draftId: string }).draftId;
+            retracts.push(draftId);
+            // A transport failure, NOT a missing capability.
+            if (failRetract) return Promise.reject(new Error("socket closed"));
+            return Promise.resolve({ retracted: true });
+          }
+          if (method === "drafts.delete") {
+            const draftId = (params as { draftId: string }).draftId;
+            const existed = listedOnB.some((row) => row.draftId === draftId);
+            listedOnB = listedOnB.filter((row) => row.draftId !== draftId);
+            deletes.push(draftId);
+            return Promise.resolve({ deleted: existed });
+          }
+          return Promise.reject(new Error(`unexpected B ${String(method)}`));
+        },
+      } as never,
+      streamClient: fakeDraftStreamClient(),
+      timing: undefined,
+    });
+    await Promise.resolve();
+    await publishStashEntry(hostA, entry);
+
+    // hostB never published this entry, so a fallback delete goes to a host
+    // that does not hold the row. It answers `absent`, `deleteOnHost` counts
+    // `absent` as answered, and the binding naming the only host that CAN
+    // retract is dropped - while the owner's cloud row is still there and
+    // still restorable. Only a MISSING CAPABILITY may fall through.
     await consumeStashOnHost(hostB, entry.id);
-    expect(deletes).toEqual([entry.id, entry.id]);
+    expect(retracts).toEqual([entry.id]);
+    expect(deletes).toEqual([]);
+
+    // The binding survived, so a later consume retries the retract rather
+    // than dropping into the delete path.
+    failRetract = false;
+    await consumeStashOnHost(hostB, entry.id);
+    expect(retracts).toEqual([entry.id, entry.id]);
+    expect(deletes).toEqual([]);
   });
 });

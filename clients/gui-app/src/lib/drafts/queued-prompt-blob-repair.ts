@@ -1,6 +1,6 @@
 import {
   type DraftBlobClient,
-  forgetConfirmedBlobs,
+  invalidateDraftBlobConfirmations,
   putDraftBlobs,
 } from "@/lib/drafts/draft-blob-transport";
 
@@ -45,16 +45,30 @@ export type QueuedPromptBlobRepairVerdict = "repaired" | "bytes-missing";
  * is nothing this pass can have fixed; resuming would re-run the drain into the
  * identical refusal, and on a durable event that is a loop. Leaving it paused
  * costs the user one manual retry and cannot spin.
+ *
+ * `ownerUserId` is a PARAMETER rather than a `currentDraftBlobOwnerId()` call
+ * inside, so this stays a leaf its suite can drive without standing up the auth
+ * store. It is load-bearing, not decorative: confirmations are recorded and read
+ * per account, so a `null` owner records nothing and confirms nothing - this
+ * function would then answer `"bytes-missing"` for every hash it successfully
+ * uploaded. Signed out, that is the honest answer; passed `null` by accident, it
+ * is an arm that can never repair.
  */
 export async function repairQueuedPromptBlobs(input: {
   readonly hostId: string;
   readonly client: DraftBlobClient;
   readonly missingHashes: ReadonlyArray<string>;
+  readonly ownerUserId: string | null;
 }): Promise<QueuedPromptBlobRepairVerdict> {
   if (input.missingHashes.length === 0) return "bytes-missing";
-  forgetConfirmedBlobs(input.hostId, input.missingHashes);
+  invalidateDraftBlobConfirmations(input.hostId, input.missingHashes);
   const confirmed = new Set(
-    await putDraftBlobs(input.hostId, input.client, input.missingHashes),
+    await putDraftBlobs(
+      input.hostId,
+      input.client,
+      input.missingHashes,
+      input.ownerUserId,
+    ),
   );
   for (const hash of input.missingHashes) {
     if (!confirmed.has(hash)) return "bytes-missing";

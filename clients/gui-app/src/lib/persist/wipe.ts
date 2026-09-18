@@ -41,7 +41,7 @@ const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 
 // Landing-image IndexedDB databases are named
 // `traycer-gui-app:<partition>:landing-images` (one per runtime partition —
-// `landingImagePartition()` in `lib/composer/composer-image-store.ts`). The
+// `landingImagePartition()` in `lib/composer/landing-image-store.ts`). The
 // suffix below pins the db namespace so the wipe only drops image partitions,
 // never any other future `traycer-gui-app:`-prefixed db.
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";

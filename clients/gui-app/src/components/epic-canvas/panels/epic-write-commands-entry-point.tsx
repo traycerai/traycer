@@ -50,12 +50,12 @@ function EpicWriteCommandsEntryPointBody(): ReactNode {
       >
         <Button
           type="button"
-          variant="ghost"
+          variant="muted"
           size="icon-xs"
           aria-label={label}
           aria-haspopup="dialog"
           data-testid="epic-write-commands-entry-point"
-          className={cn("text-muted-foreground hover:text-foreground")}
+          className={cn("")}
           onClick={() => setOpen(true)}
         >
           <FileClock className="size-3.5" />

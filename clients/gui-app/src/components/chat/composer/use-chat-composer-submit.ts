@@ -1,4 +1,11 @@
-import { useCallback, useRef, useState } from "react";
+import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { RefObject } from "react";
 import type {
   ChatActiveTurn,
@@ -10,29 +17,38 @@ import { isMobileApp } from "@/lib/mobile-app";
 import { useChatStore } from "@/stores/composer/chat-store";
 import { submitComposerDraft } from "@/lib/drafts/draft-mirror-coordinator";
 import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
+import { toast } from "sonner";
+
 import { appLogger } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   appendImageAttachmentAtoms,
   containsImageAtoms,
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
 import {
-  inlineImageHashesFromSession,
-  inlineLocalImageHashes,
-} from "@/lib/composer/composer-image-inlining";
-import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
-import { useImageContentRoot } from "@/hooks/composer/use-image-content-root";
+  clearHostHeldImageHashes,
+  NO_HOST_HELD_HASHES,
+} from "@/lib/composer/host-held-image-hashes";
+import { submitHostHeldImageHashes } from "@/lib/composer/submit-host-held-image-hashes";
+import { reinlineRefusedSendContent } from "@/lib/drafts/draft-image-retry-content";
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import {
-  planAttachmentsByHash,
-  resolveSendContentByHash,
-  sendAttachmentsByHashSupported,
-} from "@/lib/composer/attachments-by-hash";
+  holdComposerContentImageRoots,
+  releaseComposerContentImageRoots,
+  withHeldComposerContentImageRoots,
+} from "@/lib/composer/composer-content-image-roots";
+import {
+  draftImageInliningNeeded,
+  prepareDraftImageInlining,
+} from "@/lib/drafts/draft-image-inlining";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
-import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import {
   getImageBytes,
   sessionImageBytes,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import { v4 as uuidv4 } from "uuid";
@@ -52,25 +68,12 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { Attachment } from "@/lib/composer/types";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 
 import type { ChatComposerSubmitInput } from "./chat-composer";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
 interface UseChatComposerSubmitArgs {
   readonly taskId: string;
-  /**
-   * The TAB's host - the machine this chat is bound to for life - and the
-   * client its requests go out on. Both are needed only by the image seam: the
-   * send's shape depends on what that host's chat stream negotiated, and a hash
-   * this window has not yet pushed has to be uploaded to THAT host's blob tier
-   * before the frame can reference it. Passed in rather than re-resolved here,
-   * so this hook cannot disagree with the composer around it about which
-   * machine it is talking to.
-   */
-  readonly hostId: string | null;
-  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly pickerStore: ComposerPickerStore;
   /**
@@ -116,13 +119,6 @@ interface UseChatComposerSubmitArgs {
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
-  /**
-   * True while this chat's draft is a replica of another host's row that has
-   * not been claimed. The editor is disabled, but the toolbar's send button
-   * and the deferred steer confirm both reach this hook without passing the
-   * editor, so the block belongs in `submitBlocked` beside the others.
-   */
-  readonly draftReadOnly: boolean;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
@@ -134,6 +130,37 @@ interface UseChatComposerSubmitArgs {
    * chat to fork; the prompt then goes through the ordinary send untouched.
    */
   readonly onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
+  /**
+   * The host this composer submits to - its tab's host, which is also the host
+   * its draft mirror uploaded blobs to. That equivalence is what makes
+   * `drafts.readBlob` the right second leg when submit has to resolve a
+   * hash-only image node's bytes.
+   */
+  readonly targetHostId: string | null;
+  /**
+   * The queued prompt this composer is currently editing, or `null` for an
+   * ordinary send. Part of the submit INTENT: `onSubmitMessage`'s destination
+   * is chosen from this id, so a preparation that started while editing Q must
+   * not deliver into whatever the composer is pointed at when it finishes.
+   */
+  readonly queueEditTargetId: string | null;
+  /**
+   * Whether THIS chat's live stream can materialize a hash-only draft image at
+   * send (T1's `chat.subscribe` 1.12 capability). The gate is per-session and
+   * not app-wide: one host can serve one chat on a bridging stream and another
+   * on a 1.9 one.
+   *
+   * A GETTER bound to the session store, deliberately - the same shape as
+   * `getActiveTurnForSteer`, and for a sharper version of the same reason. A
+   * render prop is a value from the last COMMITTED render, and a ref refreshed
+   * in an effect is the last committed EFFECT; neither is the store. A stream
+   * transition to a non-bridging session queued between two microtasks of an
+   * image preparation is visible in the store and not yet in either copy, and
+   * the final required-hash read then authorizes a bare hash on a stream that
+   * cannot resolve it. Reading the store at the decision is the only version
+   * of this that is true when it is asked.
+   */
+  readonly getDraftBlobBridgeSupported: () => boolean;
 }
 
 export interface ChatComposerSideChatInput {
@@ -167,15 +194,6 @@ export interface ChatComposerSubmitResult {
   readonly submitDraft: (source: ChatComposerSubmitSource) => void;
   readonly annotationPreparationPending: boolean;
   /**
-   * True while a submit is reading a session-cold image's bytes back out of
-   * IndexedDB to inline them. Kept separate from the annotation flag rather
-   * than folded into it: they are two different reads with two different
-   * failures, and a composer that reported "annotation preparation" for an
-   * ordinary restored draft would send the next reader looking in the wrong
-   * place. Both gate the send button the same way.
-   */
-  readonly imageResolutionPending: boolean;
-  /**
    * Confirm-dialog state for a `Mod-Enter` steer whose settings differ from the
    * running turn's baked settings (decision 6). Open means the send is staged
    * behind an interrupt-and-restart confirmation; the composer text is kept
@@ -194,8 +212,6 @@ export function useChatComposerSubmit(
 ): ChatComposerSubmitResult {
   const {
     taskId,
-    hostId,
-    hostClient,
     editorRef,
     pickerStore,
     toolbarStore,
@@ -209,36 +225,74 @@ export function useChatComposerSubmit(
     workspaceBlocked,
     imagesUnsupported,
     attachmentPreparationPending,
-    draftReadOnly,
     onSubmitMessage,
     onSideChat,
+    targetHostId,
+    queueEditTargetId,
+    getDraftBlobBridgeSupported,
   } = args;
   const appendMessage = useChatStore((state) => state.appendMessage);
+  // The LIVE queue-edit target, for the continuation to re-check. A captured
+  // value cannot answer "is this still the submit the user asked for" - that is
+  // precisely the question, and the closure froze its answer at preparation
+  // time. Same shape the other latest-value bridges in this tree use.
+  //
+  // LAYOUT-timed, like every other latest-value bridge in this hook. A passive
+  // effect can run after an awaited read resumes in the post-commit microtask,
+  // so the "live" value would be the one from the render before the change -
+  // which is the staleness these refs exist to remove.
+  const queueEditTargetIdRef = useRef(queueEditTargetId);
+  useLayoutEffect(() => {
+    queueEditTargetIdRef.current = queueEditTargetId;
+  }, [queueEditTargetId]);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
+  // The LIVE staged conflict, for the deferred confirm's continuation to
+  // re-check. Its closure froze `pendingConflict` at the render that started
+  // the read, which is precisely the value that cannot answer "is this consent
+  // still standing".
+  const conflictStagedRef = useRef<PendingSteerConflict | null>(null);
+  useLayoutEffect(() => {
+    conflictStagedRef.current = pendingConflict;
+  }, [pendingConflict]);
+  // One confirmation flight at a time, so repeated clicks cannot start a
+  // second read or produce a second send.
+  const conflictInliningFlight = useRef(false);
   // GC root while the interrupt-restart dialog is open. This is the one send
   // path that parks a fully built document in component state and waits for a
-  // human: `clearAcceptedDraft` has NOT run (the send has not gone out), but
-  // any other composer sending in the meantime schedules the reconcile, and
-  // the confirm would then dispatch hash-only nodes whose bytes were deleted
-  // while the dialog sat there. `restore.content` is the same document
-  // hash-only, so rooting `content` covers both.
-  useImageContentRoot(pendingConflict?.content ?? null);
+  // HUMAN: `clearAcceptedDraft` has not run - the send has not gone out - but
+  // any other composer sending in the meantime schedules the reconcile, and the
+  // confirm would then dispatch hash-only nodes whose bytes were deleted while
+  // the dialog sat there. `restore.content` is the same document hash-only, so
+  // rooting `content` covers both.
+  //
+  // This module rather than a holder registry of its own, and the release is
+  // why: it SCHEDULES a sweep, closing the hole a plain unregister leaves -
+  // dropping the last root for a hash otherwise makes it an orphan with nothing
+  // to trigger the reconcile that would collect it.
+  useEffect(() => {
+    const content = pendingConflict?.content ?? null;
+    if (content === null) return;
+    const holderId = `steer-conflict:${taskId}`;
+    holdComposerContentImageRoots(holderId, content);
+    return () => {
+      releaseComposerContentImageRoots(holderId);
+    };
+  }, [pendingConflict, taskId]);
   const [annotationPreparationPending, setAnnotationPreparationPending] =
     useState(false);
   const annotationPrepFlight = useRef(false);
-  const [imageResolutionPending, setImageResolutionPending] = useState(false);
-  // The editor is NOT cleared until a send is accepted, so a second Enter
-  // during the session-cold read would otherwise start a second send of the
-  // same message. Mirrors `annotationPrepFlight` (and the landing composer's
-  // `submissionInFlightRef`), which exist for exactly this reason.
-  const imageResolutionInFlight = useRef(false);
 
   // Everything an ACCEPTED submit does to the composer, shared by the send and
   // the side-chat paths so a refused one leaves the text in place on both.
   const clearAcceptedDraft = useCallback((): void => {
     void submitComposerDraft(taskId);
     pickerStore.getState().reset();
+    // The inherited queue-edit document is gone with the send, so its
+    // host-custody claim goes with it. Hygiene only - a stale entry would leave
+    // a hash bare on a later send, which is what this composer did before any
+    // of this existed.
+    clearHostHeldImageHashes(taskId);
     editorRef.current?.clear();
     // A rejected send leaves the text in place, and dropping the keyboard
     // there would take the user away from the message they still have to fix.
@@ -277,18 +331,59 @@ export function useChatComposerSubmit(
       sendDisabled === true ||
       workspaceBlocked ||
       imagesUnsupported ||
-      attachmentPreparationPending ||
-      draftReadOnly,
+      attachmentPreparationPending,
     [
       activeTurnStatus,
       attachmentPreparationPending,
-      draftReadOnly,
       hasPendingApprovals,
       imagesUnsupported,
       sendDisabled,
       workspaceBlocked,
     ],
   );
+
+  // The LIVE blocking predicate, for the deferred confirmation's continuation.
+  // `submitBlocked` is rebuilt per render from props; a continuation holds the
+  // one from the render it started in, which is the render before the block.
+  //
+  // Published in a LAYOUT effect, not a passive one. A passive effect runs
+  // after the browser has had a chance to hand control back, so an awaited
+  // image read can resume in the post-commit microtask BEFORE it - and the
+  // "live" gate then answers with the value from the render before the block,
+  // which is exactly the staleness it exists to remove. React commits layout
+  // effects synchronously with the commit, ahead of any such continuation.
+  const submitBlockedRef = useRef(submitBlocked);
+  useLayoutEffect(() => {
+    submitBlockedRef.current = submitBlocked;
+  }, [submitBlocked]);
+
+  // The steering inputs, live for the same reason and read at the same moment.
+  // `getActiveTurnForSteer` is already a getter - the turn was the fact most
+  // obviously able to move while a dialog is open - but the other three inputs
+  // to the policy were still the staging render's. A host that reconnected and
+  // negotiated a line without same-turn steering during the byte read would
+  // have its restart dispatched as a STEER it can no longer serve.
+  //
+  // `steerCapable` rides with them. It gates the settings-drift comparison
+  // rather than the policy, so it looked like a different kind of fact - but it
+  // is the same kind: preparation can span a turn being REPLACED, and a capable
+  // turn arriving where an incapable one was would have its settings drift
+  // injected without the restart confirmation, while the reverse would offer a
+  // confirmation for a turn that can only fall back.
+  const steerInputsRef = useRef({
+    activeTurnStatus,
+    steerCapable,
+    steerEnabled,
+    steerProtocolSupported,
+  });
+  useLayoutEffect(() => {
+    steerInputsRef.current = {
+      activeTurnStatus,
+      steerCapable,
+      steerEnabled,
+      steerProtocolSupported,
+    };
+  }, [activeTurnStatus, steerCapable, steerEnabled, steerProtocolSupported]);
 
   const submitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
@@ -302,35 +397,56 @@ export function useChatComposerSubmit(
       // and clear nothing, letting the just-submitted text resurrect once the
       // editor finishes initializing from that same stale initial content.
       if (editor === null || !editor.isReady()) return;
-      // The guard above narrows `editor`, but control-flow narrowing does not
-      // reach a hoisted function declaration - `runSubmitFromAnnotationStage`
-      // could in principle be called before the guard ran, so TS will not carry
-      // it in. Re-binding makes the handle NON-NULLABLE BY TYPE rather than by
-      // position, which every reader below then gets for free.
-      const readyEditor = editor;
       if (annotationPrepFlight.current) return;
+      const { annotationRecords } = readDraftSidecars(taskId);
+      const editorContent = editor.getJSON();
+      const contentText =
+        extractPlainTextFromComposerJSONContent(editorContent);
+      if (
+        isEmptyComposerSubmit({
+          contentText,
+          editorContent,
+          annotationRecords,
+        })
+      ) {
+        return;
+      }
 
       const submitPreparedDraft = (
         annotationImages: ReadonlyArray<AnnotationImageAtom>,
-        resolutionAttempt: number,
+        draftImageBase64ByHash: ReadonlyMap<string, string>,
       ): void => {
-        if (submitBlocked()) return;
-        // AHEAD OF EVERY DISPATCH PATH, the synchronous one included. It used to
-        // sit inside each async arm, which left this hole: a first submit goes
-        // async on a session-cold hash, the user types, a second submit now
-        // finds every hash session-warm, takes the SYNCHRONOUS fast path below
-        // and sends immediately - and then the first arm settles and sends the
-        // same message again. A resolution in flight owns this submit.
-        if (imageResolutionInFlight.current) return;
+        // LIVE, not the `submitBlocked` this render built. Every call below
+        // reaches here after an awaited image read, and a workspace that became
+        // blocked, a send that became disabled or a draft that became read-only
+        // during it moves none of the identity checks that follow - so the
+        // captured predicate would send the prompt and clear the composer
+        // against a block that is already in force. Same reason the deferred
+        // staged-conflict continuation reads the ref.
+        if (submitBlockedRef.current()) return;
         // Re-read the document rather than comparing the `revision` captured
         // before the async annotation-image read. `revision` bumps on every
         // keystroke, so a single character typed during that read dropped the
         // send silently; and the pre-flight capture is not what the user is
         // looking at by the time we clear the editor, so sending it would
         // discard those keystrokes. The live document is both.
-        const liveContent = readyEditor.getJSON();
+        const liveContent = editor.getJSON();
         const liveContentText =
           extractPlainTextFromComposerJSONContent(liveContent);
+        // Re-inline against the RE-READ document, not the captured one, for the
+        // same reason. An image node that appeared during the read keeps
+        // whatever payload it has: inline stays inline, and a hash nothing
+        // resolved is left hash-only for the host's dangling-hash guard, which
+        // is the only authority on whether that send may proceed.
+        //
+        // `restore.content` below deliberately keeps the UN-inlined document:
+        // it is what goes back into the composer on a failed send, and the
+        // composer's own shape is not the wire's. Its hashes stay rooted
+        // through `chat-session-store`'s restore-content root source.
+        const sendableContent = inlineHashOnlyImageBytes(
+          liveContent,
+          draftImageBase64ByHash,
+        );
         // Re-read the sidecar array for the same reason the document is
         // re-read: an annotation attached while the crop bytes resolved is
         // what the user is looking at, and the `clearDraft` below wipes it -
@@ -348,339 +464,542 @@ export function useChatComposerSubmit(
         });
         const submittedContent = appendImageAttachmentAtoms(
           buildSubmittedChatJSONContent(
-            liveContent,
+            sendableContent,
             pickerStore.getState().knownSlashCommands,
           ),
           annotationImages,
         );
+        const attachments: ReadonlyArray<Attachment> = [
+          ...buildAttachmentsFromJSONContent(submittedContent),
+          ...liveAnnotationRecords,
+        ];
 
-        // Everything from the side-chat split onwards, taking the content the
-        // host will actually receive. Split out because resolving a hash-only
-        // node's bytes can need an IndexedDB read, and the two paths below must
-        // not be able to drift from one another.
-        const dispatchSubmittedContent = (sendContent: JsonContent): void => {
-          const attachments: ReadonlyArray<Attachment> = [
-            ...buildAttachmentsFromJSONContent(sendContent),
-            ...liveAnnotationRecords,
-          ];
-
-          // A `/btw` prompt never reaches this chat: the remainder is asked in
-          // a fork instead. Decided AFTER chip conversion (so a typed `/btw`
-          // and a picked chip read the same) and BEFORE the delivery/steer
-          // decision below - a side question asked mid-turn is the whole point,
-          // and it must neither steer nor queue. It sits inside the
-          // prepared-draft path so it reads the same live document the send
-          // would, and the annotation atoms appended above are transparent to
-          // the leading-token scan.
-          if (onSideChat !== null) {
-            const sideChat = splitLeadingSideChatCommand(sendContent);
-            if (sideChat !== null) {
-              if (onSideChat({ content: sideChat.rest, settings })) {
-                clearAcceptedDraft();
-              }
-              return;
-            }
-          }
-
-          const deliveryPolicy = resolveSubmitDeliveryPolicy({
-            source,
-            activeTurnStatus,
-            steerEnabled,
-            steerProtocolSupported,
-          });
-          const sendInput: ChatComposerSubmitInput = {
-            content: sendContent,
-            contentText: liveContentText,
-            attachments,
-            settings,
-            deliveryPolicy,
-            // The RESTORE is the hash-only live document, never the inlined
-            // send: a refused send puts this straight back in the composer,
-            // where base64 is exactly what this change removed.
-            restore: {
-              content: liveContent,
-              browserAnnotations: liveAnnotationRecords,
-            },
-          };
-          if (deliveryPolicy === "after_safe_point" && steerCapable) {
-            const originTurn = getActiveTurnForSteer();
-            const decision = decideSteerSettings(originTurn, settings);
-            if (decision.kind === "interrupt_restart") {
-              setPendingConflict({
-                content: sendContent,
-                contentText: liveContentText,
-                attachments,
-                restore: {
-                  content: liveContent,
-                  browserAnnotations: liveAnnotationRecords,
-                },
-                settings: decision.newSettings,
-                changed: decision.changed,
-                originTurnId: originTurn?.turnId ?? null,
-              });
-              return;
-            }
-          }
-          finalizeSend(sendInput);
-        };
-
-        // Captured BEFORE either await. `revision` bumps on document edits AND
-        // on browser-annotation add/remove, which is exactly the pair
-        // `clearAcceptedDraft` wipes; it deliberately ignores selection.
-        const generation = captureComposerSubmitGeneration(
-          () => readComposerDraftSnapshot(taskId).revision,
-        );
-
-        // How BOTH async arms settle - the sameness is the point, so an arm
-        // added later cannot grow a differently shaped guard.
-        //
-        // The latch is released FIRST, because the re-entry below has to get
-        // past the guard at the top of this function.
-        const settleResolvedSend = (sendContent: JsonContent): void => {
-          imageResolutionInFlight.current = false;
-          setImageResolutionPending(false);
-          if (generation.stillCurrent()) {
-            dispatchSubmittedContent(sendContent);
-            return;
-          }
-          // The user typed, or attached an annotation, while the bytes were
-          // being resolved. Dispatching now would send the document captured
-          // before that and then clear the one containing it - destroying work
-          // the user can still see, with no way back.
-          //
-          // So re-run the submit instead - from the ANNOTATION STAGE, not from
-          // here. `annotationImages` holds the crops resolved for the sidecar
-          // as it stood at the first submit, and the sidecar is one of the
-          // things the user can have changed during the read: re-entering with
-          // those atoms appends a crop for an annotation that has since been
-          // REMOVED (it arrives as an ordinary image the user never sent) and
-          // has no crop for one attached since. Restarting the stage resolves
-          // the sidecar that is actually on screen.
-          if (resolutionAttempt === 0) {
-            runSubmitFromAnnotationStage(resolutionAttempt + 1);
-            return;
-          }
-          // Changed again during the retry. Send nothing and clear nothing: the
-          // composer still holds everything the user has typed, and the send
-          // button is live again. Bounded rather than looping, because the
-          // re-entry is driven by keystrokes and this arm must terminate.
-        };
-
-        const beginResolution = (): void => {
-          imageResolutionInFlight.current = true;
-          setImageResolutionPending(true);
-        };
-
-        // THE WIRE TAKES HASHES on `chat.subscribe@1.11`: the host materializes
-        // a hash-only node from this account's draft blob tier immediately
-        // before the dangling-hash guard that would otherwise refuse it. So the
-        // first question is whether this host's stream negotiates that, and
-        // only if it does not do the bytes have to be put back inline.
-        //
-        // Best effort on both sides of the gate, and for the same reason: this
-        // composer's document routinely holds hashes whose bytes were never
-        // local (an image copied out of a rendered message, a restored failed
-        // send), and those address the epic's own attachment store, which the
-        // host resolves first. A genuinely lost hash fails visibly either way.
-        const plan = planAttachmentsByHash(submittedContent);
-        if (
-          hostId !== null &&
-          hostClient !== null &&
-          plan.eligible.length > 0 &&
-          sendAttachmentsByHashSupported(hostId)
-        ) {
-          // Always async - "does the host already hold these bytes" is not a
-          // question this window can answer from memory - so it takes the same
-          // re-entry guard and the same pending flag as the cold-read path.
-          // (The guard itself now sits at the top of this function, ahead of
-          // the synchronous path too.)
-          beginResolution();
-          // Two-argument `then`, not `.then(...).catch(...)`: a `catch` chained
-          // after the success arm also catches a throw from the dispatch itself
-          // and would send the message a second time.
-          void resolveSendContentByHash({
-            hostId,
-            client: hostClient,
-            content: submittedContent,
-            plan,
-          }).then(settleResolvedSend, () => {
-            // The upload or the byte read failed outright. Send the document
-            // as it stands: on a `@1.11` host a hash-only node is a shape the
-            // host understands, and one it cannot resolve comes back as the
-            // existing rejection, which restores the prompt.
-            settleResolvedSend(submittedContent);
-          });
-          return;
-        }
-        // Below the minor: the composer is hash-first and this wire is not, so
-        // hashes this window holds bytes for go back to inline base64. Fast
-        // path: every hash is in the session cache (the ordinary "you just
-        // pasted it" case) → stay in this stack frame, so the document is read
-        // and cleared with nothing able to run in between.
-        const inlined = inlineImageHashesFromSession(submittedContent);
-        if (inlined !== null) {
-          dispatchSubmittedContent(inlined);
-          return;
-        }
-        // Something is not session-cached: a draft restored in a later session,
-        // or — the ordinary case on this surface — a hash that was never local
-        // at all, addressing the epic attachment store on the host. Read what
-        // this window has and leave the rest hash-only for the host to resolve,
-        // exactly as it does today. Guarded at the top of this function,
-        // because the editor is NOT cleared until the send is accepted, so a
-        // second Enter during the read would otherwise start a second send of
-        // the same message.
-        beginResolution();
-        // Two-argument `then`, not `.then(...).catch(...)`: a `catch` CHAINED
-        // after the success arm also catches a throw from the dispatch itself
-        // and would send the message a second time.
-        void inlineLocalImageHashes(submittedContent).then(
-          settleResolvedSend,
-          () => {
-            // An IndexedDB open/transaction failure (private browsing, quota, a
-            // corrupt DB). Send the document as it stands rather than losing
-            // the message: hash-only nodes the host cannot resolve come back as
-            // the existing rejection, which restores the prompt.
-            settleResolvedSend(submittedContent);
-          },
-        );
-      };
-
-      /**
-       * THE WHOLE SUBMIT FROM THE ANNOTATION-RESOLUTION STAGE DOWN, so that the
-       * first attempt and the stale-generation retry take the identical path.
-       *
-       * A function declaration rather than a `const` arrow because
-       * `settleResolvedSend`, defined above inside `submitPreparedDraft`, calls
-       * it: hoisting is what lets the two reference each other without a ref.
-       *
-       * The empty-submit guard lives HERE rather than at the top of
-       * `submitDraft` for the same reason the stage is re-entered at all - the
-       * retry is driven by the draft having changed, and one of the things it
-       * can have changed into is empty (the user deleted the text and removed
-       * the annotation while the bytes were read). Nothing further out re-asks.
-       */
-      function runSubmitFromAnnotationStage(resolutionAttempt: number): void {
-        const { annotationRecords } = readDraftSidecars(taskId);
-        const editorContent = readyEditor.getJSON();
-        const contentText =
-          extractPlainTextFromComposerJSONContent(editorContent);
-        if (
-          isEmptyComposerSubmit({
-            contentText,
-            editorContent,
-            annotationRecords,
-          })
-        ) {
-          return;
-        }
-
-        if (annotationRecords.length === 0) {
-          submitPreparedDraft([], resolutionAttempt);
-          return;
-        }
-
-        annotationPrepFlight.current = true;
-        setAnnotationPreparationPending(true);
-        void (async () => {
-          try {
-            const annotationImages =
-              await resolveAnnotationImageAtoms(annotationRecords);
-            if (annotationImages === null) {
-              reportableErrorToast(
-                "Couldn't attach the annotation image.",
+        // A `/btw` prompt never reaches this chat: the remainder is asked in a
+        // fork instead. Decided AFTER chip conversion (so a typed `/btw` and a
+        // picked chip read the same) and BEFORE the delivery/steer decision
+        // below - a side question asked mid-turn is the whole point, and it
+        // must neither steer nor queue. It sits inside the prepared-draft path
+        // so it reads the same live document the send would, and the annotation
+        // atoms appended above are transparent to the leading-token scan.
+        if (onSideChat !== null) {
+          const sideChat = splitLeadingSideChatCommand(submittedContent);
+          if (sideChat !== null) {
+            // A `/btw` prompt does NOT go to this chat's stream - it becomes a
+            // forked chat's `initialMessage` through `epic.createChat`. That
+            // is a CREATE, and the settled decision is that every create
+            // travels inline: there is no negotiated session yet whose bridge
+            // capability could have been consulted, and nothing on the create
+            // path re-inlines. So a memo-confirmed hash that the gate quite
+            // correctly let through for an ordinary send has to be inlined
+            // again on its way out here. Missing this made `/btw` the one
+            // create path that could forward a bare hash.
+            // Whatever bytes this needed were resolved by the preparation
+            // loop ABOVE, because the pre-flight required set forces every
+            // hash-only node on a would-be side chat (see `sideChatPreflight`).
+            // Nothing is awaited here, so this commit keeps the pending flag,
+            // the incarnation check, the intent token and the live re-read the
+            // ordinary send has. A detached read placed here instead froze the
+            // document, left the pending flag false, and cleared text typed
+            // during it.
+            //
+            // Two very different situations produce a surviving hash here, and
+            // the first version treated both as the race and returned - which
+            // made a `/btw` whose image resolves NOWHERE into a permanently
+            // dead send button: every Enter did the read, returned, and said
+            // nothing, and a second Enter could not help because the pre-flight
+            // had agreed with the document the first time too.
+            //
+            //  - The command appeared DURING the read (`sideChatPreflight`
+            //    disagreed with this commit). The required set was computed
+            //    for a non-side-chat, so these bytes were never asked for and
+            //    the next Enter will pre-flight correctly. Abandon, keeping
+            //    the draft.
+            //  - The pre-flight DID ask and every leg missed. This used to
+            //    send anyway, on the policy that an unresolved hash is the
+            //    HOST's guard to rule on - which is true of an ordinary send
+            //    and false here. `startSideChat` is a unary `epic.createChat`
+            //    with no `chat.subscribe` session behind it, so there is no
+            //    negotiated bridge to resolve the hash, no
+            //    `MISSING_ATTACHMENT_BYTES` acknowledgement to retry from, and
+            //    `markFailedByAction` makes the handoff terminal with nothing
+            //    restoring the content to this composer. Same asymmetry the
+            //    new-conversation create path answers the same way: keep the
+            //    draft.
+            //
+            // So an unresolved hash abandons either way, and only the WORDING
+            // differs - a command that appeared mid-read is worth retrying
+            // immediately, a genuine miss is not.
+            if (hashOnlyImageHashes(sideChat.rest).length > 0) {
+              toast.info(
+                sideChatPreflight
+                  ? "An image in this side question could not be loaded."
+                  : "Send again to ask this as a side question.",
                 {
-                  description: "The crop is missing. Try attaching again.",
-                },
-                {
-                  title: "Annotation image missing",
-                  message: null,
-                  code: null,
-                  source: "Chat composer",
+                  description: sideChatPreflight
+                    ? "The draft has been kept - try removing and re-attaching it."
+                    : "The side question was typed while its images were being prepared.",
                 },
               );
               return;
             }
-            submitPreparedDraft(annotationImages, resolutionAttempt);
-          } finally {
-            annotationPrepFlight.current = false;
-            setAnnotationPreparationPending(false);
+            if (onSideChat({ content: sideChat.rest, settings })) {
+              clearAcceptedDraft();
+            }
+            return;
           }
-        })();
+        }
+
+        // LIVE, for the same reason the blocking predicate above is: this
+        // runs after an awaited image read, and a reconnect during it sets
+        // `steerProtocolSupported` false until the new handshake completes.
+        // The render-captured `true` would resolve `after_safe_point`, and
+        // `sendMessage` does not revalidate the policy - the host would be
+        // asked to steer on a line that no longer offers it. The synchronous
+        // path reads the same ref on the same render, so nothing changes there.
+        const liveSteerInputs = steerInputsRef.current;
+        const deliveryPolicy = resolveSubmitDeliveryPolicy({
+          source,
+          activeTurnStatus: liveSteerInputs.activeTurnStatus,
+          steerEnabled: liveSteerInputs.steerEnabled,
+          steerProtocolSupported: liveSteerInputs.steerProtocolSupported,
+        });
+        const sendInput: ChatComposerSubmitInput = {
+          content: submittedContent,
+          contentText: liveContentText,
+          attachments,
+          settings,
+          deliveryPolicy,
+          restore: {
+            content: liveContent,
+            browserAnnotations: liveAnnotationRecords,
+          },
+        };
+        if (
+          deliveryPolicy === "after_safe_point" &&
+          liveSteerInputs.steerCapable
+        ) {
+          const originTurn = getActiveTurnForSteer();
+          const decision = decideSteerSettings(originTurn, settings);
+          if (decision.kind === "interrupt_restart") {
+            setPendingConflict({
+              content: submittedContent,
+              contentText: liveContentText,
+              attachments,
+              restore: {
+                content: liveContent,
+                browserAnnotations: liveAnnotationRecords,
+              },
+              settings: decision.newSettings,
+              changed: decision.changed,
+              originTurnId: originTurn?.turnId ?? null,
+            });
+            return;
+          }
+        }
+        finalizeSend(sendInput);
+      };
+
+      // Hash-only image nodes this client still owes bytes for. A hash the
+      // composer INHERITED from the host - the queued prompt a queue-edit
+      // re-opened - is already an epic attachment, so it travels bare exactly
+      // as it always has; re-inlining one would put megabytes back on a wire
+      // that has been carrying a 64-character hash since message editing
+      // existed. Keyed to this editor incarnation, so a re-created editor never
+      // carries a previous one's inheritance forward.
+      const incarnation = editor.getEditorIncarnation();
+      // Recomputed per document rather than captured once: an upload confirmed
+      // (or a confirmation invalidated) while the async leg runs must be
+      // visible to the live re-read below, and so must a capability the store
+      // has changed since preparation began.
+      // A `/btw` prompt forks a new chat, and a CREATE always travels inline -
+      // there is no negotiated session whose bridge capability could have been
+      // consulted, and nothing on the create path re-inlines. So when this
+      // document reads as a side chat, nothing is host-held for it and every
+      // hash-only node joins the required set, resolved by the same loop and
+      // committed under the same guards as an ordinary send.
+      //
+      // Checked against the CONVERTED document, the same one
+      // `splitLeadingSideChatCommand` sees at commit, so a typed `/btw` and a
+      // picked chip agree here exactly as they do there.
+      const sideChatPreflight =
+        onSideChat !== null &&
+        splitLeadingSideChatCommand(
+          buildSubmittedChatJSONContent(
+            editorContent,
+            pickerStore.getState().knownSlashCommands,
+          ),
+        ) !== null;
+      const hostHeldFor = (content: JsonContent): ReadonlySet<string> =>
+        sideChatPreflight
+          ? NO_HOST_HELD_HASHES
+          : submitHostHeldImageHashes({
+              surfaceKey: taskId,
+              incarnation,
+              content,
+              hostId: targetHostId,
+              bridgeSupported: getDraftBlobBridgeSupported(),
+              ownerUserId: currentDraftBlobOwnerId(),
+            });
+      const pendingImageHashes = draftImageInliningNeeded(
+        editorContent,
+        hostHeldFor(editorContent),
+      );
+      // The submit INTENT, captured whole. The incarnation alone cannot answer
+      // "is this still the submit the user asked for": `restoreQueuedEditDraft`
+      // and every other document REPLACEMENT go through `replaceDraft`, which
+      // swaps the document via `resetEpoch` WITHOUT recreating the editor. So a
+      // cancelled queue-edit passes an incarnation check, and the continuation
+      // would then send the restored, unrelated draft into the cancelled item's
+      // destination and clear it. `resetEpoch` moves on replacement and NOT on
+      // a keystroke (`setSnapshot` passes `bumpResetEpoch: false`), which is
+      // exactly the distinction this needs - ordinary typing must still reach
+      // the live-document re-read below.
+      //
+      // `resetEpoch` also bumps when a HOST document replaces the row, which
+      // looked at first like a source of spurious abandons on the routine
+      // upsert round-trip. It is not, and the reason is worth stating exactly,
+      // because an earlier version of this comment got it wrong: the composer's
+      // own dirty-write ACK does not call the apply path AT ALL - it updates the
+      // held revision and calls `rememberSynced` and nothing else
+      // (`draft-mirror-session.ts`'s dirty-write ACK). The apply-before-remember
+      // sequence belongs to `publishImmutable`, which is the STASH flow, not
+      // this one. Own subscribe echoes are suppressed twice over: by the
+      // local-dirty gate before the ACK, and by the equal held revision after
+      // it.
+      //
+      // What remains is a genuine replacement - another window, a clear, or a
+      // clean reconnect bootstrap. Abandoning there is the accepted behaviour,
+      // and note it includes a bootstrap whose content EQUALS the current text:
+      // nothing compares documents at that point, so an in-flight send can be
+      // cancelled with the text unchanged. Fail-safe - no send, no clear, the
+      // draft stands - and the user's next Enter goes through.
+      const intent = {
+        queueEditTargetId,
+        resetEpoch: readComposerDraftSnapshot(taskId).resetEpoch,
+      };
+
+      if (annotationRecords.length === 0 && pendingImageHashes.length === 0) {
+        submitPreparedDraft([], NO_DRAFT_IMAGE_BYTES);
+        return;
       }
 
-      runSubmitFromAnnotationStage(0);
+      annotationPrepFlight.current = true;
+      setAnnotationPreparationPending(true);
+      // The captured document is the only thing still naming these bytes if the
+      // draft row is replaced mid-read, so it is a GC root for exactly as long
+      // as the preparation runs.
+      // A LABEL, not a key - the helper mints a per-acquisition key so two
+      // overlapping preparations under one `taskId` cannot release each other.
+      const rootsLabel = `chat-composer-submit:${taskId}`;
+      // The hold/release try/finally lives in the helper, not here: a `try`
+      // without a `catch` inside a hook body is something the React Compiler
+      // cannot lower, and it would cost this whole hook its memoization. The
+      // helper deliberately does not swallow a rejection, so the `catch` below
+      // is where one lands: `void` alone left it unhandled, and the send is
+      // already abandoned by then - what was missing was saying so.
+      void withHeldComposerContentImageRoots(
+        rootsLabel,
+        editorContent,
+        async () => {
+          // Awaited BEFORE the reconcile loop, not beside it. As one leg of a
+          // `Promise.all` the image leg could finish while this one was still
+          // pending, and an image added during the remaining wait was never
+          // attempted - the loop had already stopped looking.
+          const annotationImages =
+            annotationRecords.length === 0
+              ? EMPTY_ANNOTATION_IMAGES
+              : await resolveAnnotationImageAtoms(annotationRecords);
+          if (annotationImages === null) {
+            reportableErrorToast(
+              "Couldn't attach the annotation image.",
+              {
+                description: "The crop is missing. Try attaching again.",
+              },
+              {
+                title: "Annotation image missing",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
+            return;
+          }
+          await prepareDraftImageInlining({
+            initialHashes: pendingImageHashes,
+            // Resolved inside the continuation: a draft mirror is acquired and
+            // released as tiles mount, so the live session is the one that can
+            // answer.
+            target: draftImageByteTargetForHost(targetHostId),
+            readRequiredHashes: () => {
+              const live = editorRef.current;
+              if (live === null) return [];
+              const liveContent = live.getJSON();
+              return draftImageInliningNeeded(
+                liveContent,
+                hostHeldFor(liveContent),
+              );
+            },
+            // Synchronous with the final required-set read above it: no image
+            // can arrive between that check and this send.
+            commit: (draftImageBase64ByHash) => {
+              // A re-created editor is a DIFFERENT document. `editor` here is
+              // the handle captured before the read, so without this the send
+              // would carry the destroyed editor's content while
+              // `clearAcceptedDraft` cleared the live one - a stale prompt sent
+              // and a live one wiped.
+              if (editorRef.current?.getEditorIncarnation() !== incarnation) {
+                return;
+              }
+              // And the same document in the same editor can still be a
+              // different SUBMIT: the queue-edit destination may have been
+              // cancelled or switched, or the document replaced underneath.
+              if (
+                queueEditTargetIdRef.current !== intent.queueEditTargetId ||
+                readComposerDraftSnapshot(taskId).resetEpoch !==
+                  intent.resetEpoch
+              ) {
+                return;
+              }
+              // The annotation set must be the SAME set the crops were
+              // resolved from - in both directions, because the two sides are
+              // carried separately and only agree if nothing moved.
+              //
+              // Added: the record is live but has no resolved crop atom, and
+              // the protocol needs the crop to ride an `imageAttachment`.
+              // Sending delivered the record bare and then cleared the
+              // sidecar, so the crop was gone for good.
+              //
+              // Removed: the atom is still in `annotationImages` and
+              // `appendImageAttachmentAtoms` still appends it, while the live
+              // records no longer describe it - so the message carries a crop
+              // of something the user deleted, with no metadata saying what it
+              // is. That is the worse of the two: a send that shows an image
+              // the user chose to take out.
+              //
+              // `commit` is synchronous by contract - that is what makes the
+              // image set exact - so this preparation can neither grow an atom
+              // nor drop one safely. Either way the send is abandoned: nothing
+              // is cleared, the composer is untouched, and the next send
+              // resolves the current set in its own pre-flight capture.
+              const resolvedCrops = new Set(
+                annotationImages.map((atom) => atom.hash),
+              );
+              const liveCrops = new Set(
+                readDraftSidecars(taskId).annotationRecords.map(
+                  (record) => record.imageHash,
+                ),
+              );
+              const added = [...liveCrops].filter(
+                (hash) => !resolvedCrops.has(hash),
+              ).length;
+              const removed = [...resolvedCrops].filter(
+                (hash) => !liveCrops.has(hash),
+              ).length;
+              if (added > 0 || removed > 0) {
+                toast.info(
+                  "Annotations changed - send again to include them.",
+                  {
+                    description:
+                      removed > 0
+                        ? "An annotation was removed while the images were being prepared."
+                        : "An annotation was added while the images were being prepared.",
+                  },
+                );
+                return;
+              }
+              submitPreparedDraft(annotationImages, draftImageBase64ByHash);
+            },
+          });
+        },
+        () => {
+          annotationPrepFlight.current = false;
+          setAnnotationPreparationPending(false);
+        },
+      ).catch((error: unknown) => {
+        appLogger.error(
+          "[chat-composer] submit image preparation failed",
+          { taskId },
+          error,
+        );
+        // The draft is kept - `onSettled` has already cleared the pending flag
+        // - but kept is not the same as EXPLAINED. Without this the user
+        // presses Send, waits out the preparation, and sees nothing happen at
+        // all. The new-conversation sibling raises its own notice for exactly
+        // this; this surface has no notice channel, so it toasts.
+        toast.error("Couldn't prepare the images in this message.", {
+          description: "The draft has been kept - try sending again.",
+        });
+      });
     },
     [
-      activeTurnStatus,
+      // `activeTurnStatus`, `steerCapable`, `steerEnabled` and
+      // `steerProtocolSupported` are deliberately ABSENT: every reader in this
+      // callback now goes through `steerInputsRef`, precisely because a value
+      // captured at this render is stale by the time an awaited image read
+      // returns. Listing them would rebuild the callback for values it no
+      // longer reads.
       clearAcceptedDraft,
       editorRef,
       finalizeSend,
-      hostClient,
-      hostId,
       onSideChat,
       pickerStore,
       getActiveTurnForSteer,
-      steerCapable,
-      steerEnabled,
-      steerProtocolSupported,
+      queueEditTargetId,
+      getDraftBlobBridgeSupported,
       submitBlocked,
+      targetHostId,
       taskId,
       toolbarStore,
     ],
   );
 
+  const restartStagedConflict = useCallback(
+    (pendingConflict: PendingSteerConflict): void => {
+      // The same guards the live submit path enforces (submitDraft) must block this
+      // deferred confirm too. If any holds now, the consent cannot be honored -
+      // dismiss the dialog (the composer text is kept, so the user can retry once it
+      // clears) rather than pushing the send through the guards.
+      if (submitBlocked()) {
+        setPendingConflict(null);
+        return;
+      }
+      // Bind the consent to the turn it was DISPLAYED for. The composer persists
+      // across turn replacement, so if the running turn changed (a successor turn
+      // is live, or none is) since the dialog opened, steering/restarting it would
+      // act on consent shown for a DIFFERENT turn. Only re-resolve to a steer when
+      // it is still that same turn; otherwise degrade to a plain queued send - never
+      // interrupt-restart a successor turn on stale consent. (Re-resolving also
+      // degrades to "auto" if the host reconnected/downgraded while the dialog was
+      // open.) It was always a `mod-enter` chord that opened this dialog.
+      const currentTurn = getActiveTurnForSteer();
+      const sameTurn =
+        currentTurn !== null &&
+        pendingConflict.originTurnId !== null &&
+        currentTurn.turnId === pendingConflict.originTurnId;
+      const steerInputs = steerInputsRef.current;
+      const deliveryPolicy = sameTurn
+        ? resolveSubmitDeliveryPolicy({
+            source: "mod-enter",
+            activeTurnStatus: steerInputs.activeTurnStatus,
+            steerEnabled: steerInputs.steerEnabled,
+            steerProtocolSupported: steerInputs.steerProtocolSupported,
+          })
+        : "auto";
+      if (
+        finalizeSend({
+          content: pendingConflict.content,
+          contentText: pendingConflict.contentText,
+          attachments: pendingConflict.attachments,
+          settings: pendingConflict.settings,
+          deliveryPolicy,
+          restore: pendingConflict.restore,
+        })
+      ) {
+        setPendingConflict(null);
+      }
+    },
+    [finalizeSend, getActiveTurnForSteer, submitBlocked],
+  );
+
   const onRestart = useCallback((): void => {
     if (pendingConflict === null) return;
-    // The same guards the live submit path enforces (submitDraft) must block this
-    // deferred confirm too. If any holds now, the consent cannot be honored -
-    // dismiss the dialog (the composer text is kept, so the user can retry once it
-    // clears) rather than pushing the send through the guards.
-    if (submitBlocked()) {
-      setPendingConflict(null);
+    // The staged content was prepared when the dialog OPENED, and a steer
+    // conflict can sit open for as long as the user takes to read it. If the
+    // bridge capability has gone false in that time, whatever bare hashes this
+    // content carries can no longer be resolved by the stream it is about to
+    // go out on - the same staleness F5 fixes for the async submit path, one
+    // dialog further out. Re-inline through the one inlining path before
+    // dispatching, and only when it is actually needed.
+    // RR4: full ELIGIBILITY, not just the capability boolean. A dialog can sit
+    // open long enough for a mirror close or new bootstrap to invalidate the
+    // confirmation, or for another refusal to mark the hash unbridgeable,
+    // while the stream still speaks 1.12. Checking only the flag sent the old
+    // bare hash in all of those cases. `submitHostHeldImageHashes` is the one
+    // place that knows the whole question, so ask it rather than a piece of it.
+    const stagedHashes = hashOnlyImageHashes(pendingConflict.content);
+    const stillHeld = submitHostHeldImageHashes({
+      surfaceKey: taskId,
+      // `null` matches any incarnation, which is the right answer here: the
+      // staged content is frozen, so the question is whether its hashes are
+      // still eligible, not which editor instance is mounted now.
+      incarnation: null,
+      content: pendingConflict.content,
+      hostId: targetHostId,
+      bridgeSupported: getDraftBlobBridgeSupported(),
+      ownerUserId: currentDraftBlobOwnerId(),
+    });
+    if (stagedHashes.some((hash) => !stillHeld.has(hash))) {
+      // Single owner. A second confirmation while this read is outstanding
+      // must not start a second one, and must not dispatch: the click that
+      // opened this flight is the consent, and there is exactly one of it.
+      if (conflictInliningFlight.current) return;
+      conflictInliningFlight.current = true;
+      const staged = pendingConflict;
+      const intent = {
+        queueEditTargetId: queueEditTargetIdRef.current,
+        resetEpoch: readComposerDraftSnapshot(taskId).resetEpoch,
+      };
+      void reinlineRefusedSendContent({
+        content: staged.content,
+        hostId: targetHostId,
+      })
+        .then(({ content }) => {
+          // Consent is re-checked OUTSIDE the state updater, and the dispatch
+          // is gated on that check rather than following it unconditionally.
+          // Guarding only the updater left the send running after the dialog
+          // was cancelled: the old prompt went out and cleared a replacement
+          // draft the user had typed in the meantime.
+          //
+          // `conflictStagedRef` is the live value, not the closed-over one -
+          // `pendingConflict` here is from the render that started the read.
+          if (conflictStagedRef.current !== staged) return;
+          // And the same submit intent the ordinary path re-checks: the
+          // queue-edit destination may have moved, or the document been
+          // replaced, across this newly added wait.
+          if (
+            queueEditTargetIdRef.current !== intent.queueEditTargetId ||
+            readComposerDraftSnapshot(taskId).resetEpoch !== intent.resetEpoch
+          ) {
+            return;
+          }
+          // RR3: the BLOCKING guards, read live. `restartStagedConflict`
+          // closes over the `submitBlocked` of the render that staged this
+          // dialog, so a workspace that became blocked or a draft that became
+          // read-only during the byte read was invisible to it - the old
+          // prompt went out and the composer was cleared against a live block.
+          // Neither the staged identity nor `resetEpoch` moves for those.
+          if (submitBlockedRef.current()) {
+            setPendingConflict(null);
+            return;
+          }
+          // Attachments are DERIVED from the content, so re-inlining above
+          // invalidates the staged ones: they still name hashes this document
+          // no longer carries, and the optimistic pending message keeps them
+          // for its gallery - which then renders an unavailable image beside
+          // the very bytes that were just put back. Rebuilt the same way the
+          // ordinary submit path builds them, sidecar records included, since
+          // those are attachments too and are not derivable from content.
+          restartStagedConflict({
+            ...staged,
+            content,
+            attachments: [
+              ...buildAttachmentsFromJSONContent(content),
+              ...staged.restore.browserAnnotations,
+            ],
+          });
+        })
+        .finally(() => {
+          conflictInliningFlight.current = false;
+        });
       return;
     }
-    // Bind the consent to the turn it was DISPLAYED for. The composer persists
-    // across turn replacement, so if the running turn changed (a successor turn
-    // is live, or none is) since the dialog opened, steering/restarting it would
-    // act on consent shown for a DIFFERENT turn. Only re-resolve to a steer when
-    // it is still that same turn; otherwise degrade to a plain queued send - never
-    // interrupt-restart a successor turn on stale consent. (Re-resolving also
-    // degrades to "auto" if the host reconnected/downgraded while the dialog was
-    // open.) It was always a `mod-enter` chord that opened this dialog.
-    const currentTurn = getActiveTurnForSteer();
-    const sameTurn =
-      currentTurn !== null &&
-      pendingConflict.originTurnId !== null &&
-      currentTurn.turnId === pendingConflict.originTurnId;
-    const deliveryPolicy = sameTurn
-      ? resolveSubmitDeliveryPolicy({
-          source: "mod-enter",
-          activeTurnStatus,
-          steerEnabled,
-          steerProtocolSupported,
-        })
-      : "auto";
-    if (
-      finalizeSend({
-        content: pendingConflict.content,
-        contentText: pendingConflict.contentText,
-        attachments: pendingConflict.attachments,
-        settings: pendingConflict.settings,
-        deliveryPolicy,
-        restore: pendingConflict.restore,
-      })
-    ) {
-      setPendingConflict(null);
-    }
+    restartStagedConflict(pendingConflict);
   }, [
-    finalizeSend,
+    getDraftBlobBridgeSupported,
     pendingConflict,
-    activeTurnStatus,
-    steerEnabled,
-    steerProtocolSupported,
-    getActiveTurnForSteer,
-    submitBlocked,
+    restartStagedConflict,
+    targetHostId,
+    taskId,
   ]);
 
   const onOpenChange = useCallback((open: boolean): void => {
@@ -691,7 +1010,6 @@ export function useChatComposerSubmit(
   return {
     submitDraft,
     annotationPreparationPending,
-    imageResolutionPending,
     steerConflict: {
       open: pendingConflict !== null,
       changed: pendingConflict?.changed ?? [],
@@ -701,19 +1019,21 @@ export function useChatComposerSubmit(
   };
 }
 
+/**
+ * The synchronous path's empty resolution map. Shared so the "nothing to
+ * re-inline" send reads as the deliberate case it is rather than allocating a
+ * map per keystroke-free submit.
+ */
+const NO_DRAFT_IMAGE_BYTES: ReadonlyMap<string, string> = new Map<
+  string,
+  string
+>();
+
+/** Shared empty for the no-annotation branch, so it allocates nothing. */
+const EMPTY_ANNOTATION_IMAGES: ReadonlyArray<AnnotationImageAtom> = [];
+
 interface ComposerDraftSidecars {
   readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
-}
-
-/**
- * Crops are prepared at attach time (`attachBrowserAnnotation`), so the stored
- * bytes are already within the universal policy and pass through this path
- * untouched. What preparation can change is the ENCODING — the record carries
- * only a hash and a file name, so the atom's MIME type is read back off the
- * bytes rather than assumed to be the PNG the tile captured.
- */
-function annotationImageMimeType(bytes: Uint8Array): string {
-  return sniffImageMimeType(bytes) ?? "image/png";
 }
 
 /**
@@ -771,7 +1091,12 @@ async function resolveAnnotationImageAtoms(
     atoms.push({
       id: uuidv4(),
       fileName: record.imageFileName,
-      mimeType: annotationImageMimeType(bytes),
+      // SNIFFED, not assumed. A crop is a PNG when the browser view captures
+      // it, and it is not one after a stash round trip: the stash canonicalizes
+      // a large PNG to WebP and re-points the record at those bytes. Labelling
+      // WebP bytes `image/png` was wrong in the atom, in the media type and in
+      // the data URL a preview builds from them.
+      mimeType: sniffImageMimeType(bytes) ?? "image/png",
       size: bytes.byteLength,
       b64content: bytesToBase64(bytes),
       hash: record.imageHash,

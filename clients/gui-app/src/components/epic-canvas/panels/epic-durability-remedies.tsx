@@ -80,9 +80,9 @@ function ExportArtifactsAction(props: {
   return (
     <Button
       type="button"
-      size="xs"
+      size="inline-xs"
       variant="ghost"
-      className="h-auto px-0 text-current underline underline-offset-2"
+      className="text-current underline underline-offset-2"
       data-testid="epic-durability-export"
       disabled={props.disabled}
       onClick={props.onExport}

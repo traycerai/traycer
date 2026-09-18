@@ -609,11 +609,19 @@ export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
 /**
  * `@1.2`'s initial message: the released leaf plus `attachmentsByHash`.
  *
- * WHO MAY SET IT: a client that has already uploaded every image in `content`
- * to its own draft blob tier (`drafts.putBlob`) and is sending hash-only
- * `imageAttachment` nodes. The host then resolves those hashes from the
- * REQUESTER's staging tier and installs them into the epic's attachment store
- * before anything references them.
+ * WHAT DECIDES IT: the DISPATCHED DOCUMENT, not a caller's preference. Both
+ * create surfaces derive it - true iff `content` still carries hash-only
+ * `imageAttachment` nodes once the confirmed-upload set has been subtracted
+ * (`draftImageInliningNeeded`) - so it is a function of the bytes actually
+ * being sent, never a mode chosen apart from them.
+ *
+ * The wire meaning is unchanged by that, and is the only thing a host may read
+ * it as: THIS DOCUMENT CARRIES HASH-ONLY NODES THE HOST MUST RESOLVE. The host
+ * resolves those hashes from the REQUESTER's staging tier and installs them
+ * into the epic's attachment store before anything references them. Deriving
+ * rather than electing is what makes the flag and the content agree by
+ * construction; a surface that set it independently could send one without the
+ * other, and the mismatched direction is the refusal described next.
  *
  * ABSENT MEANS `false`, and `false` means today's behaviour exactly: the host
  * does no resolution and hash-only nodes reach the dangling-hash guard, which
@@ -628,6 +636,12 @@ export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
  * `attrs` on the wire), so the host must never infer the intent from the
  * content: without `(minor >= 1.2 AND flag)` a hash-only message keeps today's
  * loud failure instead of silently persisting a dangling reference.
+ *
+ * That the SENDER derives the flag from the content is not the same rule with
+ * the sides swapped. The sender knows which hashes it just uploaded and which
+ * minor it negotiated, and below `@1.2` it inlines instead of deriving a flag
+ * that would be stripped anyway. The host knows neither, so the asymmetry is
+ * the point rather than something the client side has since broken.
  */
 export const createChatInitialMessageSchemaV12 =
   createChatInitialMessageSchema.extend({

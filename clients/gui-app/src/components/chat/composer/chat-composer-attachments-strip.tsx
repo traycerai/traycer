@@ -9,7 +9,7 @@ import { QueueEditDraftPill } from "@/components/chat/composer/queue-edit-draft-
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { sessionObjectUrl } from "@/lib/composer/composer-image-store";
+import { sessionObjectUrl } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 interface ChatComposerAttachmentsStripProps {

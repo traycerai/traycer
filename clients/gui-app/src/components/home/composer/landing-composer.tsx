@@ -9,34 +9,23 @@ import {
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import { v4 as uuidv4 } from "uuid";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
+import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import {
-  getImageBytes,
-  hasComposerImageBytes,
+  hasLandingImageBytes,
   sessionObjectUrl,
-} from "@/lib/composer/composer-image-store";
-import {
-  markLandingEditorMounted,
-  scheduleLandingImageReconcile,
-} from "@/lib/composer/landing-image-gc";
-import {
-  reserveLandingImageBudget,
-  type LandingImageBudgetReservation,
-} from "@/lib/composer/landing-image-budget";
-import {
-  collectImageAtoms,
-  type ComposerImageAtom,
-} from "@/lib/composer/image-atoms";
-import type {
-  PastedComposerImage,
-  PastedComposerImageOutcome,
-} from "@/components/chat/composer/editor/extensions/chat-paste-handler";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
+} from "@/lib/composer/landing-image-store";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { useDraftFirstImageFetcher } from "@/lib/attachments/use-draft-image-fetcher";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import { markLandingEditorMounted } from "@/lib/composer/landing-image-gc";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -53,19 +42,8 @@ import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-e
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import {
-  decodeValidatedPastedImage,
-  useLandingComposerPaste,
-} from "@/hooks/composer/use-landing-composer-paste";
+import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import {
-  createComposerImagePreparationSession,
-  showImageTooLargeToast,
-} from "@/lib/composer/composer-image-preparation";
-import {
-  runPendingImageIngest,
-  type PendingImageIngestOptions,
-} from "@/lib/composer/composer-pending-image-ingest";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -75,7 +53,10 @@ import {
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  landingRowIsForeign,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -112,7 +93,7 @@ import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
-import { DraftAuthorityBanner } from "@/components/drafts/draft-authority-banner";
+import { forkLandingDraftInPlace } from "@/lib/drafts/landing-draft-fork";
 import { useDraftAuthorityControl } from "@/hooks/drafts/use-draft-authority";
 import {
   landingStashIdentity,
@@ -156,16 +137,13 @@ function landingComposerCanSubmit(args: {
   readonly submitBlocked: boolean;
   readonly workspaceCanStart: boolean;
   readonly hasSubmittableContent: boolean;
-  /** Another host owns this draft (replica view); claim before submitting. */
-  readonly readOnly: boolean;
 }): boolean {
   return (
     !args.isSubmitting &&
     !args.attachmentPending &&
     !args.submitBlocked &&
     args.workspaceCanStart &&
-    args.hasSubmittableContent &&
-    !args.readOnly
+    args.hasSubmittableContent
   );
 }
 
@@ -253,50 +231,77 @@ export function LandingComposer(props: LandingComposerProps) {
   const setDraftSettings = useLandingDraftStore(
     (state) => state.setDraftSettings,
   );
-  // Hoisted above the toolbar wiring so the settings handler can consult it:
+  // Hoisted above the toolbar wiring so the settings handler can reach it:
   // every control that mutates the persisted draft - the editor, the mode
-  // switcher, the workspace controls, the run-settings toolbar, the
-  // attachment strip - is held while another host owns the draft. A
-  // foreign-owned draft must not change under its owner before a claim.
-  const landingOwnerHostId = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return (
-      state.drafts.find((entry) => entry.id === draftId)?.ownerHostId ?? null
-    );
-  });
-  const landingOrigin = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return state.drafts.find((entry) => entry.id === draftId)?.origin ?? null;
-  });
-  const landingPublication = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return (
-      state.drafts.find((entry) => entry.id === draftId)?.publication ?? null
-    );
-  });
+  // switcher, the run-settings toolbar - notes its edit, and the first edit
+  // of a draft this host does not own FORKS it underneath: the content moves
+  // into a fresh draft of the placement host's own, the tab re-keys onto it
+  // and the composer remounts under the new id with the same content and
+  // caret. Nothing is held; the user never meets the ownership mechanism.
+  // Foreignness is read at the edit (`landingRowIsForeign` against the
+  // placement), never from a render.
+  const isForeignDraft = useCallback((): boolean => {
+    if (draftId === null) return false;
+    const row = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === draftId);
+    return row !== undefined && landingRowIsForeign(row);
+  }, [draftId]);
+  const forkDraft = useCallback((): void => {
+    if (draftId !== null) forkLandingDraftInPlace(draftId);
+  }, [draftId]);
   const authority = useDraftAuthorityControl({
-    draftId,
-    ownerHostId: landingOwnerHostId,
-    origin: landingOrigin,
-    tabHostId: resolvedHostId,
-    client: hostClient,
-    publication: landingPublication,
+    isForeign: isForeignDraft,
+    fork: forkDraft,
   });
+  // Every local mutation of the draft row bumps `generation`, including the
+  // workspace controls, whose handlers write the store without passing
+  // through this component. A bump past the one seen at mount counts as an
+  // edit only when a substantive field moved with it: a caret move bumps
+  // `generation` but changes no field, and merely looking at a draft must
+  // not fork it. A host echo changes fields without bumping `generation`,
+  // so it does not count either.
+  const landingEditMark = useLandingDraftStore(
+    useShallow((state) => {
+      const draft =
+        draftId === null
+          ? undefined
+          : state.drafts.find((entry) => entry.id === draftId);
+      return {
+        generation: draft?.generation ?? 0,
+        content: draft?.content ?? null,
+        settings: draft?.settings ?? null,
+        composerMode: draft?.composerMode ?? null,
+        workspace: draft?.workspace ?? null,
+        closed: draft?.closed ?? null,
+      };
+    }),
+  );
+  const seenEditMark = useRef<typeof landingEditMark | null>(null);
+  useEffect(() => {
+    const seen = seenEditMark.current;
+    seenEditMark.current = landingEditMark;
+    if (seen === null) return;
+    if (landingEditMark.generation <= seen.generation) return;
+    const substantive =
+      landingEditMark.content !== seen.content ||
+      landingEditMark.settings !== seen.settings ||
+      landingEditMark.composerMode !== seen.composerMode ||
+      landingEditMark.workspace !== seen.workspace ||
+      landingEditMark.closed !== seen.closed;
+    if (substantive) authority.noteEdit();
+  }, [authority, landingEditMark]);
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
-      if (authority.readOnly) return;
       setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
       }
+      // After the write: the fork copies the row as it is, so the setting
+      // rides into the fork and the old row is retired locally unpublished.
+      authority.noteEdit();
     },
-    [
-      activeHostId,
-      authority.readOnly,
-      draftId,
-      setDraftSettings,
-      setGlobalRunSettings,
-    ],
+    [activeHostId, authority, draftId, setDraftSettings, setGlobalRunSettings],
   );
   const settingsSeed = useMemo(
     () =>
@@ -323,7 +328,13 @@ export function LandingComposer(props: LandingComposerProps) {
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
-    { hostClient, hostId: activeHostId, tuiOnly: composerMode === "terminal" },
+    {
+      hostClient,
+      hostId: activeHostId,
+      tuiOnly: composerMode === "terminal",
+      // The landing composer has no chat yet - see `ComposerBody`.
+      chatLineCarriesAutoMode: null,
+    },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -357,7 +368,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // they could not give.
   const actions = useLandingComposerActions(submitTarget);
   const isSubmitting = runtimeState.isSubmitting || actions.isPending;
-  const mutationsDisabled = isSubmitting || authority.readOnly;
+  const mutationsDisabled = isSubmitting;
 
   const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
   const draftWorkspace = useLandingDraftStore((state) => {
@@ -411,203 +422,43 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const runnerHost = useRunnerHost();
-  // One session per mount, shared by BOTH of this composer's ingest paths -
-  // the file paste/drop ingest inside the hook below and the structured-paste
-  // jobs further down. The session serializes preparation, so this mount only
-  // ever holds one decoded bitmap however many images arrive at once; sharing
-  // it is what extends that from one paste to the whole surface. (Its other
-  // state, the WebP-support probe, is likewise run once per mount.)
-  const imagePreparationSession = useMemo(
-    () => createComposerImagePreparationSession(),
-    [],
-  );
   const paste = useLandingComposerPaste({
     editorRef,
     draftId,
     disabled: isSubmitting,
     fileDrops: runnerHost.fileDrops,
     mentionRoots,
-    preparationSession: imagePreparationSession,
   });
-  const runPendingImageJob = paste.runPendingImageJob;
-  // Background job for ONE pending image node (already in the document,
-  // carrying b64 + `id`): prepare the bytes, hash + store THOSE, then flip that
-  // node's payload — hash and the prepared metadata together — IN PLACE.
+  // The SHARED pending-image ingest, the same one the chat composer, the inline
+  // edit and the new-conversation modal use. This surface grew the logic first
+  // and kept a private copy through the epic that extracted it, because it was
+  // the control the three new callers were compared against. The copy has now
+  // been retired: it had drifted behind on five fixes the shared hook received
+  // during that review - a deadline on the store write, a reconcile for a write
+  // that lands after the deadline, the format verdict running before budget
+  // admission, reservations keyed by image index rather than a running counter,
+  // and leaving a format the host refuses INLINE instead of hashing it.
   //
-  // The job itself is `runPendingImageIngest`, shared with the chat family's
-  // `useComposerHashFirstPaste`. It used to be written out here and copied
-  // there; the two were the same sequence with the same reservation contract,
-  // the same abort-release, the same orphan sweep on every non-rewrite branch,
-  // and the same reasons recorded twice. What stays local is the wiring: this
-  // surface's preparation session, its DRAFT as the budget owner, and its
-  // editor ref. Read that module for why each branch does what it does.
-  const startPendingImageIngest = useCallback(
-    (
-      id: string,
-      bytes: Uint8Array<ArrayBuffer>,
-      options: PendingImageIngestOptions,
-    ) => {
-      runPendingImageJob((signal) =>
-        runPendingImageIngest({
-          id,
-          bytes,
-          signal,
-          session: imagePreparationSession,
-          budgetOwnerId: draftId,
-          editor: () => editorRef.current,
-          showRefusal: showImageTooLargeToast,
-          options,
-        }),
-      );
-    },
-    [draftId, imagePreparationSession, runPendingImageJob],
-  );
-  // Synchronously validate a landing paste's inline-base64 images (decode,
-  // MIME/source ceiling, budget), mint a fresh id + start the background job for
-  // each accepted one, and report a verdict per image. The paste handler keeps
-  // the accepted nodes IN document order (stamped with these ids) and drops
-  // rejected ones — no positions are ever discarded.
-  //
-  // The budget is reserved here, synchronously, on the SOURCE length: this path
-  // owes the paste handler a verdict per image before it can yield, so it
-  // cannot wait for preparation to report the prepared length. Preparation only
-  // ever shrinks an image that was over the ceiling, and the node written at
-  // the end of the job carries the prepared `size`, which is what the budget's
-  // steady-state accounting reads — so the anonymous charge here is a
-  // transient upper bound, not the number the budget settles on.
-  const ingestPastedComposerImages = useCallback(
-    (
-      images: ReadonlyArray<PastedComposerImage>,
-    ): ReadonlyArray<PastedComposerImageOutcome> => {
-      const decoded = images.map((image) => decodeValidatedPastedImage(image));
-      const acceptedBytes = decoded.filter(
-        (bytes): bytes is Uint8Array<ArrayBuffer> => bytes !== null,
-      );
-      // Reserve atomically as a batch, but retain one handle per image so an
-      // unmounted job releases its own anonymous charge before that image's
-      // remount re-entry acquires the now-hash-aware reservation. Holding one
-      // aggregate handle until the slowest sibling settles can transiently
-      // double-charge earlier images near the cap.
-      const reservations: LandingImageBudgetReservation[] = [];
-      for (const bytes of acceptedBytes) {
-        const reservation = reserveLandingImageBudget(draftId, [
-          { hash: null, bytes: bytes.byteLength },
-        ]);
-        if (reservation === null) break;
-        reservations.push(reservation);
-      }
-      const budgetOk = reservations.length === acceptedBytes.length;
-      if (!budgetOk) {
-        for (const reservation of reservations) reservation.release();
-        reservations.length = 0;
-        scheduleLandingImageReconcile();
-      }
-      // Count ONLY undecodable images toward the generic "corrupted or too large"
-      // toast. A valid image blocked solely by the aggregate budget is already
-      // covered by `reserveLandingImageBudget`'s own accurate budget toast, so
-      // adding this one would double-toast it with a false cause — matching the
-      // shared file-paste path, which returns after the budget toast.
-      let corruptedCount = 0;
-      let acceptedIndex = 0;
-      const outcomes = decoded.map(
-        (bytes, index): PastedComposerImageOutcome => {
-          if (bytes === null) {
-            corruptedCount += 1;
-            return { kind: "rejected" };
-          }
-          if (!budgetOk) return { kind: "rejected" };
-          const reservation = reservations[acceptedIndex];
-          acceptedIndex += 1;
-          const id = uuidv4();
-          const source = images[index];
-          startPendingImageIngest(id, bytes, {
-            onSettled: () => reservation.release(),
-            reserveAfterStore: false,
-            fileName: source.fileName,
-            mimeType: source.mimeType,
-          });
-          return { kind: "accepted", id };
-        },
-      );
-      if (corruptedCount > 0) {
-        reportableErrorToast(
-          corruptedCount === 1
-            ? "Couldn't attach a pasted image."
-            : "Couldn't attach some pasted images.",
-          { description: "The image was corrupted or too large." },
-          {
-            title: "Could not attach image",
-            message: null,
-            code: null,
-            source: "Chat composer",
-          },
-        );
-      }
-      return outcomes;
-    },
-    [draftId, startPendingImageIngest],
-  );
-  // Mount-time re-entry completes the pending-node model: the b64 image node IS
-  // the work token, so whichever mount owns the editor restarts its ingest. This
-  // covers the null-bound first paste (which creates a draft and key-remounts the
-  // composer) and any in-session navigate-away-and-back — the b64 node survives
-  // in the canonical in-memory draft (`setDraftContent` no longer strips) and its
-  // ingest resumes here. Idempotent by construction: `putImage` is content-
-  // addressed + single-flight and the rewrite is by id, so re-ingesting a node an
-  // aborted prior job already stored just re-roots the same hash. The restarted
-  // job re-reserves the measured, now-hashed bytes after the shared write settles:
-  // the original anonymous reservation is released first, while capacity consumed
-  // during an inactive gap correctly rejects and removes the pending node.
-  // Fired once per editor instance.
-  const reingestPendingImages = useCallback(() => {
-    const handle = editorRef.current;
-    if (handle === null || !handle.isReady()) return;
-    const pending = collectImageAtoms(handle.getJSON()).filter(
-      (atom): atom is ComposerImageAtom & { readonly b64content: string } =>
-        atom.b64content !== null,
-    );
-    if (pending.length === 0) return;
-    let corruptedCount = 0;
-    for (const atom of pending) {
-      const bytes = decodeValidatedPastedImage({
-        fileName: atom.fileName,
-        mimeType: atom.mimeType,
-        b64content: atom.b64content,
-      });
-      if (bytes === null) {
-        // A corrupt/oversized b64 node (only reachable via a manually corrupted
-        // restore) can't be ingested: drop it with the single shared toast.
-        handle.removeImageAttachmentById(atom.id);
-        corruptedCount += 1;
-        continue;
-      }
-      startPendingImageIngest(atom.id, bytes, {
-        onSettled: undefined,
-        reserveAfterStore: true,
-        fileName: atom.fileName,
-        mimeType: atom.mimeType,
-      });
-    }
-    if (corruptedCount > 0) {
-      reportableErrorToast(
-        corruptedCount === 1
-          ? "Couldn't attach a pasted image."
-          : "Couldn't attach some pasted images.",
-        { description: "The image was corrupted or too large." },
-        {
-          title: "Could not attach image",
-          message: null,
-          code: null,
-          source: "Chat composer",
-        },
-      );
-    }
-  }, [startPendingImageIngest]);
+  // `draftId` names the budget toast's wording, and is non-null only here: this
+  // is the one composer whose draft a user could close to free capacity.
+  const { ingestPastedComposerImages, reingestPendingImages } =
+    useComposerPendingImageIngest({
+      editorRef,
+      runPendingImageJob: paste.runPendingImageJob,
+      draftId,
+    });
   const attachmentPending = isAttachmentIngestPending(paste);
-  const readPromptStashImage = useCallback(async (hash: string) => {
-    const bytes = await getImageBytes(hash);
-    return bytes ?? null;
-  }, []);
+  // Through the draft resolver rather than the partition alone, so this reader
+  // matches the chat composer's and the modal's. Leg 1 IS `getImageBytes`, so
+  // a landing draft whose bytes were pasted here answers exactly as before;
+  // what is added is the two legs behind it, which is what a landing draft
+  // ADOPTED from another host has - its bytes are on that host, or in the
+  // published blob, and never in this window's partition.
+  const readPromptStashImage = useCallback(
+    (hash: string): Promise<ImageBytes | null> =>
+      resolveDraftImageBytes(hash, draftImageByteTargetForHost(resolvedHostId)),
+    [resolvedHostId],
+  );
   // The unbound phase is intentionally namespaced away from the eventual
   // persisted draft id. Its runtime owns an independent revision counter, so
   // treating both phases as one identity could let equal counter values clear
@@ -654,7 +505,6 @@ export function LandingComposer(props: LandingComposerProps) {
     submitBlocked,
     workspaceCanStart,
     hasSubmittableContent,
-    readOnly: authority.readOnly,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
@@ -777,6 +627,10 @@ export function LandingComposer(props: LandingComposerProps) {
     (content: JsonContent, selection: { from: number; to: number }) => {
       if (runtime !== null) {
         runtime.setSnapshot(content, selection);
+        // After the write, in the same handler: a fork flushes the runtime
+        // first, so the copy carries this keystroke, and the old row (never
+        // written through - it is foreign) is retired locally underneath.
+        authority.noteEdit();
         return;
       }
       unboundRuntime.setState((current) => ({
@@ -790,7 +644,7 @@ export function LandingComposer(props: LandingComposerProps) {
         .getState()
         .setDraftContent(ensureBoundDraftId(), content, selection);
     },
-    [ensureBoundDraftId, runtime, unboundRuntime],
+    [authority, ensureBoundDraftId, runtime, unboundRuntime],
   );
 
   const handleSelectionChange = useCallback(
@@ -809,10 +663,14 @@ export function LandingComposer(props: LandingComposerProps) {
     [runtime, unboundRuntime],
   );
 
-  const handleSubmit = useCallback(() => {
-    if (!canSubmit) return;
+  const handleSubmit = useCallback((): boolean => {
+    if (!canSubmit) return false;
     const toolbar = toolbarStore.getState();
-    if (toolbar.selection.modelSlug.length === 0) return;
+    if (toolbar.selection.modelSlug.length === 0) return false;
+    // Submit is "delete the draft here, create the chat". A draft this host
+    // does not own is sent as it is: its retirement receipt keeps the row
+    // from being ingested back here, and its cloud row is retracted on the
+    // user's authority underneath. Nothing waits on ownership.
     const refusal = actions.submit({
       // `handleDocumentChange` mints the unbound draft the moment the first
       // edit becomes submittable, but `props.draftId` only catches up on the
@@ -835,29 +693,34 @@ export function LandingComposer(props: LandingComposerProps) {
     raiseHostNotice(
       refusal === null ? null : { kind: "refused", message: refusal.message },
     );
+    return refusal === null;
   }, [actions, canSubmit, draftId, pickerStore, raiseHostNotice, toolbarStore]);
 
-  const handleStartTerminal = useCallback(
-    (launch: TerminalAgentLaunch) => {
-      if (!workspaceCanStart || isSubmitting) return;
-      // Terminal mode bypasses `canSubmit` entirely, so the authority gate
-      // has to be restated here: a replica must not create an agent before
-      // the claim lands, and `ComposerBody` disabling Start is only the
-      // affordance half of that.
-      if (authority.readOnly) return;
+  const dispatchStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch): boolean => {
       const refusal = actions.selectTerminalAgent(launch, draftId);
       raiseHostNotice(
         refusal === null ? null : { kind: "refused", message: refusal.message },
       );
+      return refusal === null;
     },
-    [
-      actions,
-      authority.readOnly,
-      draftId,
-      isSubmitting,
-      raiseHostNotice,
-      workspaceCanStart,
-    ],
+    [actions, draftId, raiseHostNotice],
+  );
+  const handleStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch, assembledFor: string | null): boolean => {
+      if (!workspaceCanStart || isSubmitting) return false;
+      // A launch names a harness, model and profile out of the host's own
+      // catalog. `assembledFor` is the host the terminal panel held when it
+      // assembled the launch (the one its picker resolved against), so a
+      // launch put together for a host the placement has since left is
+      // dropped rather than forwarded to a host whose catalog may not hold
+      // them.
+      if (assembledFor !== null && assembledFor !== resolvedHostId) {
+        return false;
+      }
+      return dispatchStartTerminal(launch);
+    },
+    [dispatchStartTerminal, isSubmitting, resolvedHostId, workspaceCanStart],
   );
 
   const handleRemoveImage = useCallback(
@@ -882,6 +745,7 @@ export function LandingComposer(props: LandingComposerProps) {
         if (draftId !== null) {
           setDraftComposerMode(draftId, next);
         }
+        authority.noteEdit();
       }}
     />
   );
@@ -898,24 +762,13 @@ export function LandingComposer(props: LandingComposerProps) {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
-      editorReadOnly={authority.readOnly}
+      editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
       toolbarLayout={isMobile ? "collapsed" : "full"}
       topBanner={
         <>
-          {authority.readOnly ? (
-            <DraftAuthorityBanner
-              ownerLabel={authority.ownerLabel}
-              claiming={authority.claiming}
-              claimError={authority.claimError}
-              publicationLabel={authority.publicationLabel}
-              onClaim={() => {
-                void authority.claim();
-              }}
-            />
-          ) : null}
           <ComposerHostNotice
             notice={hostNotice}
             onDismiss={dismissHostNotice}
@@ -966,13 +819,14 @@ export function LandingComposer(props: LandingComposerProps) {
         <LandingComposerAttachmentStrip
           content={runtimeState.content}
           onRemoveImage={handleRemoveImage}
+          hostId={resolvedHostId}
         />
       }
       workspaceControls={props.workspaceControls(mutationsDisabled)}
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
-      hasPastedImageBytes={hasComposerImageBytes}
+      hasPastedImageBytes={hasLandingImageBytes}
       ingestPastedComposerImages={ingestPastedComposerImages}
       onEditorReady={reingestPendingImages}
       // No tab yet, but a placement all the same: the composer creates on its
@@ -1023,11 +877,30 @@ function resolveLandingSubmitBlock(args: {
 
 function noopSwitchProfileForTask(): void {}
 
-function LandingComposerAttachmentStrip(props: {
+/**
+ * Exported for its test only. The byte source below is the whole subject of
+ * that test, and a test that rebuilt this composition itself would keep passing
+ * after someone put the local-only fetcher back - which is the regression it
+ * exists to catch.
+ */
+export function LandingComposerAttachmentStrip(props: {
   readonly content: JsonContent;
   readonly onRemoveImage: (id: string) => void;
+  readonly hostId: string | null;
 }): ReactNode {
-  const fetcher = useLandingImageFetcher();
+  // Draft-first, over the local-only landing fetcher rather than instead of it.
+  // A restored draft's chip used to have exactly one source - this window's
+  // partition - and the blob cache retries a failed fetch four times inside
+  // about 1.75 s before resting on `unavailable` until a remount. Bytes that a
+  // cloud recovery landed at three seconds therefore sat in the store with
+  // nothing to make the mounted chip look again. Resolving through the draft
+  // legs means the chip's OWN fetch performs the cloud read, so it renders on
+  // the first attempt instead of racing that ladder. The landing fetcher stays
+  // underneath as the fallback whose throw keeps the poisoned-entry retry.
+  const fetcher = useDraftFirstImageFetcher(
+    useLandingImageFetcher(),
+    props.hostId,
+  );
   return (
     <AttachmentStrip
       content={props.content}

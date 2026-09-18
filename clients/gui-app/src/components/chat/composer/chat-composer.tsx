@@ -18,8 +18,11 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import { useComposerHashFirstPaste } from "@/hooks/composer/use-composer-hash-first-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerHashPaste,
+} from "@/hooks/composer/use-composer-paste";
+import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -55,8 +58,7 @@ import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { hasComposerImageBytes } from "@/lib/composer/composer-image-store";
-import { ChatComposerDraftAuthorityBanner } from "./chat-composer-draft-authority";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
@@ -73,6 +75,7 @@ import {
 } from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
+import { useComposerReingestOnReplacement } from "./use-composer-reingest-on-replacement";
 import {
   useChatComposerSubmit,
   type ChatComposerSideChatInput,
@@ -93,6 +96,9 @@ import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-swi
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import {
@@ -102,6 +108,9 @@ import {
 import { PromptStashControl } from "./prompt-stash-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+
+import { FirstTaskChatGuide } from "@/components/onboarding/first-task-guide";
 
 // Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
 // handlers imports them from one place.
@@ -189,6 +198,20 @@ interface ChatComposerProps {
    */
   readonly steerProtocolSupported: boolean;
   /**
+   * Whether this chat's negotiated `chat.subscribe` line can carry
+   * `permissionMode: "auto"` (`@1.13`), or `null` while the session cannot
+   * say. Threaded to the toolbar exactly as `steerProtocolSupported` is: both
+   * are facts about THIS session's line that no host-wide read can answer.
+   */
+  readonly autoPermissionModeProtocolSupported: boolean | null;
+  /**
+   * Whether this chat's OWN live stream can materialize a hash-only draft image
+   * at send (T1's `chat.subscribe` 1.12 capability). Gates the hash-only send:
+   * a bare hash on a stream that cannot resolve it is a refusal the user has to
+   * read, so the flag is the chat's own, never an app-wide one.
+   */
+  readonly getDraftBlobBridgeSupported: () => boolean;
+  /**
    * Reads the live active turn at submit time (not a reactive prop) so the
    * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
    * callback per streamed token - mirrors `steerQueuedItemNow`'s live read.
@@ -244,9 +267,8 @@ function composerUtilityNeedsClearance(args: {
 function composerAttachmentPending(
   pastePending: boolean,
   annotationPreparationPending: boolean,
-  imageResolutionPending: boolean,
 ): boolean {
-  return pastePending || annotationPreparationPending || imageResolutionPending;
+  return pastePending || annotationPreparationPending;
 }
 
 function ComposerUtilityClearanceFill(props: {
@@ -298,6 +320,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     activeTurnStatus,
     steerCapable,
     steerProtocolSupported,
+    autoPermissionModeProtocolSupported,
     getActiveTurnForSteer,
     editingQueueItemId,
     onCancelQueueEdit,
@@ -308,10 +331,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
     workspaceAvailability,
     topSpacing,
     topSlot,
+    getDraftBlobBridgeSupported,
   } = props;
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  const guideRef = useRef<HTMLDivElement | null>(null);
+  const submitWithGuide = useFirstTaskSubmit(
+    onSubmitMessage,
+    tabHostId,
+    taskId,
+  );
   // Where the picker's setup terminal lands: this epic, in THIS view - in a
   // split view each pane's composer names its own, exactly as the reauth
   // banner does. Memoized because the toolbar and picker are memo'd.
@@ -333,7 +363,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const epicImagePresence = useEpicAttachmentBytesPresence();
   const hasPastedImageBytes = useCallback(
     (hash: string) => {
-      if (hasComposerImageBytes(hash)) return true;
+      if (hasLandingImageBytes(hash)) return true;
       if (epicImagePresence === null) return true;
       return epicImagePresence(hash);
     },
@@ -411,7 +441,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused ? "chat-tile" : null,
     seedSource,
     onSettingsChange,
-    { hostClient, hostId: tabHostId, tuiOnly: false },
+    {
+      hostClient,
+      hostId: tabHostId,
+      tuiOnly: false,
+      // The one composer with a live chat session, so the one that can supply
+      // the second proof. This reaches the STICKY CLAMP, which decides the
+      // mode actually sent - the toolbar's own gate only decides what is
+      // offered, and a sticky `auto` would otherwise survive both.
+      chatLineCarriesAutoMode: autoPermissionModeProtocolSupported,
+    },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
@@ -523,41 +562,39 @@ function ChatComposerImpl(props: ChatComposerProps) {
     dragOverlayVariant,
     isIngestingImages,
     isResolvingFilePaths,
-    ingestPastedComposerImages,
-    notePossiblePendingImages,
-  } = useComposerHashFirstPaste({
+    runPendingImageJob,
+  } = useComposerHashPaste(
     editorRef,
-    // The chat's own id: the byte budget is per-window, so this only picks the
-    // refusal copy.
-    budgetOwnerId: taskId,
-    // Never gated here, matching the base64 ingest this replaces: a read-only
-    // replica draft disables the EDITOR, which is what stops a paste from
-    // reaching this hook at all, and `insertAttrs` re-checks readiness anyway.
-    // (The landing composer gates on `isSubmitting` because its submit is a
-    // create it cannot take back; a chat send restores its draft on refusal.)
-    disabled: false,
-    fileDrops: runnerHost.fileDrops,
-    mentionRoots: resolvedMentionRoots,
+    runnerHost.fileDrops,
+    resolvedMentionRoots,
+  );
+  // The rich-clipboard channel and the mount-time restart. A file paste is
+  // already hashed before insertion; these two cover the HTML paste (whose
+  // nodes must keep their positions, so they go in with bytes and flip in
+  // place) and every draft that still holds inline bytes - including ones
+  // written by a build that had no rewrite at all.
+  const {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  } = useComposerPendingImageIngest({
+    editorRef,
+    runPendingImageJob,
+    draftId: null,
+  });
+  // Restarts the rewrite on editor readiness AND on every host-document
+  // replacement; see the hook for why readiness alone left a dead end. Called
+  // AFTER `useChatComposerDraft` so the reset bridge has already installed the
+  // replacement by the time it runs in the same commit.
+  useComposerReingestOnReplacement({
+    chatId: taskId,
+    editorReadyTick,
+    reingestPendingImages,
   });
   const pastePending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
   });
-  // The catch-all half of the pending-image model. `draftContent` is the
-  // canonical draft document, so this one effect covers every way a b64 node
-  // can appear: a structured/HTML paste, the cross-host browser-tab preview
-  // (inserted asynchronously by the mention extension, which has no paste hook
-  // to route through), a restored failed send, and a mount whose draft already
-  // held one. No-op — a short-circuiting walk — unless something is pending,
-  // and the hook refuses to start a second job for a node already in flight.
-  //
-  // Gated on `editorReadyTick` for the mount race: the first pass can land
-  // before Tiptap exists, where the sweep has no document to read and no node
-  // to rewrite, and `draftContent` alone would never fire it again.
-  useEffect(() => {
-    if (editorReadyTick === 0) return;
-    notePossiblePendingImages(draftContent);
-  }, [draftContent, editorReadyTick, notePossiblePendingImages]);
 
   // Chat-plane read with the reader's own bound, which replaces the old
   // `hasAttachmentBytes` pre-check: the bytes may live on this host's disk or
@@ -565,7 +602,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // the bound is what keeps a stash save from hanging on an unreachable image.
   // A capture deliberately survives composer unmount, so this read is not
   // coupled to component-lifecycle cancellation.
-  const readPromptStashImage = useChatAttachmentByteReader();
+  const readChatAttachmentBytes = useChatAttachmentByteReader();
+  // The chat reader above answers for a SENT image; a hash this composer is
+  // still holding is in neither the chat plane nor the epic doc, so the stash
+  // would refuse to capture exactly the drafts it exists to hold. Chat-first,
+  // because that leg fails fast and this one is purely additive behind it.
+  const readPromptStashImage = useCallback(
+    async (hash: string): Promise<ImageBytes | null> => {
+      const fromChat = await readChatAttachmentBytes(hash);
+      if (fromChat !== null) return fromChat;
+      return resolveDraftImageBytes(
+        hash,
+        draftImageByteTargetForHost(tabHostId),
+      );
+    },
+    [readChatAttachmentBytes, tabHostId],
+  );
   const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
   // Chat writes the draft store, but restore still requires the exact ready
   // editor generation that started the restore - a remount under the same
@@ -586,43 +638,53 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const authority = useChatComposerDraftAuthority({
     chatId: taskId,
     tabHostId,
-    client: hostClient,
   });
+  // The first edit of a draft this host does not own forks it underneath
+  // (a fresh id, same content) before the keystroke lands; the editor is
+  // never held for it.
+  const handleDocumentChangeNotingEdit = useCallback(
+    (content: JsonContent, selection: { from: number; to: number }): void => {
+      authority.noteEdit();
+      handleDocumentChange(content, selection);
+      // The document is the queue, and mount-time re-entry cannot see a node
+      // that did not exist at mount. The browser-preview screenshot the mention
+      // extension appends asynchronously is exactly that node, and it enters
+      // through no paste. Edge-triggered in the hook - a node whose job has
+      // started is never looked at again this mount - so this costs one scan.
+      noteContentImages(content);
+    },
+    [authority, handleDocumentChange, noteContentImages],
+  );
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
-  const {
-    submitDraft,
-    steerConflict,
-    annotationPreparationPending,
-    imageResolutionPending,
-  } = useChatComposerSubmit({
-    taskId,
-    // The TAB's host, like every other read in this composer - a tab bound to
-    // another machine sends there, and the image seam's version gate and blob
-    // upload both have to address that same machine.
-    hostId: tabHostId,
-    hostClient,
-    editorRef,
-    pickerStore,
-    toolbarStore,
-    activeTurnStatus,
-    steerCapable,
-    steerEnabled,
-    steerProtocolSupported,
-    getActiveTurnForSteer,
-    hasPendingApprovals,
-    sendDisabled: sendBlocked,
-    workspaceBlocked,
-    imagesUnsupported,
-    attachmentPreparationPending: pastePending,
-    draftReadOnly: authority.readOnly,
-    onSubmitMessage,
-    onSideChat,
-  });
+  const { submitDraft, steerConflict, annotationPreparationPending } =
+    useChatComposerSubmit({
+      taskId,
+      editorRef,
+      pickerStore,
+      toolbarStore,
+      activeTurnStatus,
+      steerCapable,
+      steerEnabled,
+      steerProtocolSupported,
+      getActiveTurnForSteer,
+      hasPendingApprovals,
+      sendDisabled: sendBlocked,
+      workspaceBlocked,
+      imagesUnsupported,
+      attachmentPreparationPending: pastePending,
+      getDraftBlobBridgeSupported,
+      onSubmitMessage: submitWithGuide,
+      onSideChat,
+      targetHostId: tabHostId,
+      // The queued prompt this composer is pointed at, which is also what the
+      // tile's `onSubmitMessage` chooses its destination from - so it is part
+      // of the submit intent a preparation has to re-check before delivering.
+      queueEditTargetId: editingQueueItemId,
+    });
   const attachmentPending = composerAttachmentPending(
     pastePending,
     annotationPreparationPending,
-    imageResolutionPending,
   );
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
@@ -649,7 +711,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
-    // BY VALUE. The key is present on every live `1.10` frame with `undefined`
+    // BY VALUE. The key is present on every live `1.12` frame with `undefined`
     // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
     // banner open for the life of the chat.
     fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
@@ -678,7 +740,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
-    draftReadOnly: authority.readOnly,
   });
   const utilityClearanceVisible = composerUtilityNeedsClearance({
     rowCount: promptStash.rows.length,
@@ -688,7 +749,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
-      <ChatComposerDraftAuthorityBanner authority={authority} />
       <ChatComposerFallbackBanners
         topBannerKind={topBannerKind}
         fallback={providerFallback}
@@ -734,7 +794,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
           </div>
         </ChatComposerBannerPortal>
       ) : null}
-      <div data-chat-composer="" className="pointer-events-none px-4">
+      <div
+        ref={guideRef}
+        data-chat-composer=""
+        className="pointer-events-none px-4"
+      >
+        <FirstTaskChatGuide
+          enabled={focused}
+          rootRef={guideRef}
+          hostId={tabHostId}
+          chatId={taskId}
+        />
         <div
           className={cn(
             "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
@@ -809,8 +879,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     hasPastedImageBytes={hasPastedImageBytes}
                     ingestPastedComposerImages={ingestPastedComposerImages}
                     isActive={focused}
-                    disabled={authority.readOnly}
-                    onDocumentChange={handleDocumentChange}
+                    disabled={false}
+                    onDocumentChange={handleDocumentChangeNotingEdit}
                     onSelectionChange={handleSelectionChange}
                     onSubmit={handleSubmitDraft}
                     steerHintActive={steerHintActive}
@@ -829,7 +899,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     attachmentPending={attachmentPending}
                     onSubmit={handleSubmitFromButton}
                     activeTurnStatus={activeTurnStatus}
-                    hasPendingApprovals={hasPendingApprovals}
                     stopDisabled={stopDisabled}
                     onStopTurn={onStopTurn}
                     composerDisabledHint={sendBlockedHint}
@@ -839,6 +908,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     createProfileHostId={tabHostId}
                     runTargetHostId={tabHostId}
                     terminalLoginSurface={terminalLoginSurface}
+                    autoPermissionModeProtocolSupported={
+                      autoPermissionModeProtocolSupported
+                    }
                   />
                 }
               />
@@ -931,13 +1003,6 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
-  /**
-   * The draft belongs to another host and has not been claimed. Disabling the
-   * editor is not enough on its own: the toolbar's send button and the
-   * editor's own Enter handler both reach `submitDraft` without going through
-   * it, so the gate has to sit on the submit path too.
-   */
-  readonly draftReadOnly: boolean;
 }
 
 /**
@@ -1027,7 +1092,23 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
-    !args.draftReadOnly &&
     (args.draftHasText || args.draftHasImages)
   );
+}
+
+function useFirstTaskSubmit(
+  onSubmit: ((input: ChatComposerSubmitInput) => boolean) | null,
+  hostId: string | null,
+  chatId: string,
+): ((input: ChatComposerSubmitInput) => boolean) | null {
+  const submit = useCallback(
+    (input: ChatComposerSubmitInput): boolean => {
+      const accepted = onSubmit?.(input) ?? false;
+      if (accepted)
+        useFirstTaskGuideStore.getState().messageSubmitted(hostId, chatId);
+      return accepted;
+    },
+    [onSubmit, hostId, chatId],
+  );
+  return onSubmit === null ? null : submit;
 }

@@ -13,7 +13,11 @@ export function collectAssistantReplyText(
   segments: ReadonlyArray<MessageSegment>,
 ): string {
   return segments
-    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .flatMap((segment) =>
+      segment.kind === "text" && segment.browserSession === undefined
+        ? [segment.markdown]
+        : [],
+    )
     .join("\n\n")
     .trim();
 }

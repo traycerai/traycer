@@ -45,6 +45,7 @@ import {
   type AgentRow,
 } from "@/hooks/agent/use-agent-stop-controls";
 import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
@@ -61,7 +62,6 @@ import { accumulatedDiffTotals } from "@/lib/chat/accumulated-change-rows";
 import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 import {
   backgroundHeaderSummary,
-  backgroundKind,
   backgroundRunningRowCount,
   dedupeByTaskId,
 } from "@/lib/chat/background-item-tree";
@@ -89,10 +89,8 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly viewTabId: string;
   readonly chatId: string;
   /**
-   * The tile's bound host. A prop rather than a `useTabHostId()` read so this
-   * surface stays renderable on its own (several suites mount it directly),
-   * and so the host it resolves chat-session state under is visible at the
-   * boundary like `epicId` and `chatId` already are.
+   * The tile's bound host, made explicit for chat-session state lookups.
+   * Must match the surrounding TabHostProvider used for stop requests.
    */
   readonly hostId: string;
   readonly runtime: ChatLowerRuntimeState;
@@ -164,6 +162,15 @@ export interface ChatLowerTurnState {
    * can steer at all, keeping a new renderer from steering a <=1.4 host.
    */
   readonly steerProtocolSupported: boolean;
+  /**
+   * Whether that same negotiated line can carry `permissionMode: "auto"`
+   * (`@1.12`), or `null` while the session cannot say. A sibling of
+   * `steerProtocolSupported` in every respect - same line, same per-session
+   * scope - and it gates whether the toolbar may OFFER Auto at all.
+   */
+  readonly autoPermissionModeProtocolSupported: boolean | null;
+  /** Own live stream's draft-blob bridge capability. */
+  readonly getDraftBlobBridgeSupported: () => boolean;
   /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly stopDisabled: boolean;
@@ -316,7 +323,8 @@ export function ChatLowerInteractionSurfaces(
     rootAgentId: props.chatId,
   });
   const activeAgents = stopControls.descendants;
-  const agentStop = useAgentStop();
+  const tabHostClient = useTabHostClient();
+  const agentStop = useAgentStop(tabHostClient);
   const [stopChildrenOpen, setStopChildrenOpen] = useState(false);
 
   // Destructure the turn prop for stable use in callbacks
@@ -325,6 +333,10 @@ export function ChatLowerInteractionSurfaces(
   const turnStopDisabled = props.turn.stopDisabled;
   const turnSteerCapable = props.turn.steerCapable;
   const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
+  const turnAutoPermissionModeProtocolSupported =
+    props.turn.autoPermissionModeProtocolSupported;
+  const turnGetDraftBlobBridgeSupported =
+    props.turn.getDraftBlobBridgeSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
   // Intercept the composer Stop button: when this chat has active
@@ -343,6 +355,9 @@ export function ChatLowerInteractionSurfaces(
       activeTurnStatus: turnActiveTurnStatus,
       steerCapable: turnSteerCapable,
       steerProtocolSupported: turnSteerProtocolSupported,
+      autoPermissionModeProtocolSupported:
+        turnAutoPermissionModeProtocolSupported,
+      getDraftBlobBridgeSupported: turnGetDraftBlobBridgeSupported,
       getActiveTurnForSteer: turnGetActiveTurnForSteer,
       stopDisabled: turnStopDisabled,
       onStopTurn: requestStopTurn,
@@ -351,6 +366,8 @@ export function ChatLowerInteractionSurfaces(
       turnActiveTurnStatus,
       turnSteerCapable,
       turnSteerProtocolSupported,
+      turnAutoPermissionModeProtocolSupported,
+      turnGetDraftBlobBridgeSupported,
       turnGetActiveTurnForSteer,
       turnStopDisabled,
       requestStopTurn,
@@ -687,24 +704,6 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       }),
     [backgroundRunning, input.heldManagedCommands, dedupedBackgroundItems],
   );
-  // The chip's icon is the kind's own, running or not, so it always reads as
-  // what it stands for - activity lights that icon rather than replacing it.
-  // Running and held shells are counted together: the sets overlap, and one of
-  // either is enough to put a shell row in the section.
-  const backgroundGlyph = useMemo(
-    () =>
-      backgroundKind({
-        items: dedupedBackgroundItems,
-        hasManagedCommands:
-          input.runningManagedCommands.length > 0 ||
-          input.heldManagedCommands.length > 0,
-      }),
-    [
-      dedupedBackgroundItems,
-      input.runningManagedCommands,
-      input.heldManagedCommands,
-    ],
-  );
   const changeTotals = useMemo(
     () => accumulatedDiffTotals(input.restore.accumulatedFileChanges),
     [input.restore.accumulatedFileChanges],
@@ -807,7 +806,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     if (backgroundChip) {
       models.push({
         section: "background",
-        glyph: backgroundGlyph,
+        // The section's own mark whatever the rows are - activity lights it
+        // rather than replacing it, and the kinds are the panel's to draw.
+        glyph: "background",
         // The count IS the running count, so anything in it lights the chip -
         // and a shell whose process is alive is in that count whether or not it
         // is monitoring, since the host reports it as `running` either way
@@ -829,7 +830,6 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     agentsChip,
     backgroundChip,
     backgroundSummary,
-    backgroundGlyph,
     changeTotals,
     changedFileCount,
     agentsRunningCount,
@@ -1117,6 +1117,10 @@ function LiveChatComposer(props: {
       activeTurnStatus={model.turn.activeTurnStatus}
       steerCapable={model.turn.steerCapable}
       steerProtocolSupported={model.turn.steerProtocolSupported}
+      autoPermissionModeProtocolSupported={
+        model.turn.autoPermissionModeProtocolSupported
+      }
+      getDraftBlobBridgeSupported={model.turn.getDraftBlobBridgeSupported}
       getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}

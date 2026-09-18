@@ -1,6 +1,6 @@
 /**
  * Garbage collection for the landing / new-epic composer's content-addressed
- * image bytes (`composer-image-store`). Reclaims IndexedDB bytes + session
+ * image bytes (`landing-image-store`). Reclaims IndexedDB bytes + session
  * entries that no draft references and runs the ready-gated startup orphan
  * sweep. Byte-budget ownership (the 64 MB cap, live-root/referenced-byte
  * accounting, and in-flight reservations) lives in `landing-image-budget.ts`;
@@ -26,11 +26,13 @@
  */
 
 import {
-  deleteImage,
+  ensureMeasuredImageSizes,
+  flushReclaimCustody,
   imageHashKeys,
+  reclaimImageBytes,
   releaseSession,
   sessionHashKeys,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { appLogger, describeLogError } from "@/lib/logger";
 
@@ -143,6 +145,20 @@ export async function reconcile(): Promise<void> {
   // DURING the IndexedDB read — writing its bytes and (per `putImage`) seeding the
   // session before that write — is reflected in `liveRoots`/`sessionKeys` and is
   // not mistaken for an orphan and deleted. [C2: the paste↔reconcile-await race]
+  // Before anything else: a previous sweep can be holding bytes whose durable
+  // write was refused, and those are readable only through that custody. Making
+  // them durable again is what lets this sweep reason about the partition at
+  // all.
+  // Retries a hydration that failed earlier, and is a no-op once it has
+  // succeeded. Admission stays conservative until then, so this is what ends
+  // that state rather than leaving it for the session's lifetime.
+  await ensureMeasuredImageSizes();
+  const stillHeld = await flushReclaimCustody();
+  if (stillHeld > 0) {
+    appLogger.warn("[landing-image-gc] bytes still held after a failed write", {
+      stillHeld,
+    });
+  }
   const stored = await imageHashKeys();
   const liveRoots = landingLiveImageRootHashes();
   const sessionKeys = sessionHashKeys();
@@ -156,10 +172,46 @@ export async function reconcile(): Promise<void> {
   // opens, `markLandingEditorMounted` re-runs the reconcile so genuine orphans are
   // still reaped.
   if (orphans.length > 0 && !landingDeletionAllowed()) return;
-  await Promise.all(orphans.map((hash) => deleteImage(hash)));
+  // `liveRoots` above is a SNAPSHOT, and a delete hops inside idb-keyval before
+  // its transaction runs - so a root acquired in that hop is invisible to it.
+  // That is why the delete is `reclaimImageBytes` and not a bare one: the probe
+  // below is live, and the store calls it again on the far side of its own
+  // commit, restoring the retained bytes if the hash gained a root. A second
+  // root read HERE would be inert (every callback runs in the same synchronous
+  // stack as the snapshot), which is exactly why the protocol has to live at the
+  // storage boundary. The distinction matters because a lost digest is not
+  // always re-fetchable: a local paste that has never been uploaded or published
+  // has no host mirror and no cloud blob behind it.
+  //
+  // Sequential, not `Promise.all`: a reclaim holds the bytes it might have to
+  // restore in memory for the length of its own delete, and the orphan set of a
+  // cold-start sweep can be the whole 64 MiB budget.
+  let reclaimed = 0;
+  let kept = 0;
+  for (const hash of orphans) {
+    const outcome = await reclaimImageBytes(hash, () =>
+      landingLiveImageRootHashes().has(hash),
+    );
+    if (outcome === "reclaimed") reclaimed += 1;
+    if (outcome === "kept") kept += 1;
+  }
+  if (kept > 0) {
+    appLogger.info(
+      "[landing-image-gc] kept bytes that gained a root mid-sweep",
+      {
+        kept,
+        reclaimed,
+      },
+    );
+  }
+  // Re-derived rather than reusing the snapshot: every reclaim above was an
+  // await, and releasing a session entry revokes an object-URL a live <img> may
+  // be painting from. The release is synchronous from here on, so this read is
+  // the current one when it is used.
+  const rootsAfterReclaim = landingLiveImageRootHashes();
   let releasedUnreferenced = false;
   for (const hash of sessionKeys) {
-    if (!liveRoots.has(hash)) {
+    if (!rootsAfterReclaim.has(hash)) {
       releaseSession(hash);
       releasedUnreferenced = true;
     }
@@ -184,7 +236,14 @@ export function scheduleLandingImageReconcile(): void {
   if (reconcileTimer !== null) clearTimeout(reconcileTimer);
   reconcileTimer = setTimeout(() => {
     reconcileTimer = null;
-    void reconcile();
+    // Best effort, like the startup sweep: a reclaim now reads and can write
+    // bytes back, so there is more than `del` to fail here, and a debounced
+    // background sweep must never surface as an unhandled rejection.
+    void reconcile().catch((error: unknown) => {
+      appLogger.warn("[landing-image-gc] scheduled reconcile failed", {
+        error: describeLogError(error),
+      });
+    });
   }, RECONCILE_DEBOUNCE_MS);
 }
 

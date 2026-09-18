@@ -146,7 +146,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(thumb().getAttribute("aria-valuemin")).toBe("0");
     expect(thumb().getAttribute("aria-valuemax")).toBe("3");
     expect(thumb().getAttribute("aria-valuetext")).toBe("High");
-    // The name is above the track too, so the dots never stand alone.
+    // The name sits beside the track too, so the dots never stand alone.
     expect(screen.getByTestId("model-reasoning-level-name").textContent).toBe(
       "High",
     );
@@ -245,7 +245,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(onChange).toHaveBeenLastCalledWith("off");
   });
 
-  it("moves the name above the track when the level changes", () => {
+  it("updates the name beside the track when the level changes", () => {
     const { rerender } = render(
       <HarnessModelPickerModelSettingsFooter
         pickerOpen
@@ -271,28 +271,27 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     expect(thumb().getAttribute("aria-valuenow")).toBe("3");
   });
 
-  // The track may not move when the name changes. It cannot any more: the name
-  // is on its own line ABOVE the track, so its width is not the track's
-  // business at all and the reserved-width sizer stack that used to hold the
-  // line steady is gone with it.
+  // Reserve the label width so changing names cannot shift the track.
   describe("level label", () => {
     function label(): HTMLElement {
       return screen.getByTestId("model-reasoning-level-name");
     }
 
-    it("sits above the track, not beside it, with nothing reserving width", () => {
+    it("sits after the track in a fixed-width, right-aligned slot", () => {
       renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       const name = label();
       expect(name.textContent).toBe("High");
       expect(name.getAttribute("aria-hidden")).toBeNull();
-      // The row the slider lives in stacks; the name is the slider's previous
-      // sibling rather than a cell in the same line.
       const row = name.parentElement;
-      expect(row?.className).toContain("flex-col");
-      expect(row?.lastElementChild).toBe(
+      expect(row?.className).not.toContain("flex-col");
+      expect(name.previousElementSibling).toBe(
         screen.getByTestId("model-reasoning-slider"),
       );
+      expect(row?.lastElementChild).toBe(name);
+      expect(name.className).toContain("w-[9ch]");
+      expect(name.className).toContain("shrink-0");
+      expect(name.className).toContain("text-end");
       expect(screen.queryAllByTestId("model-reasoning-level-sizer")).toEqual(
         [],
       );
@@ -316,7 +315,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
 
       expect(label().textContent).toBe(remembered);
       expect(label().className).toContain("truncate");
-      expect(label().className).toContain("max-w-full");
+      expect(label().className).toContain("max-w-[40%]");
       expect(thumb().getAttribute("aria-valuenow")).toBe("0");
       expect(thumb().getAttribute("aria-valuetext")).toBe(remembered);
     });
@@ -335,7 +334,7 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
     });
   });
 
-  // The thick pill, and the geometry that has to move with it.
+  // The compact pill, and the geometry that has to move with it.
   describe("pill geometry", () => {
     function track(): HTMLElement {
       const element = screen
@@ -352,13 +351,13 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
 
       expect(track().getAttribute("data-size")).toBe("pill");
       expect(thumb().getAttribute("data-size")).toBe("pill");
-      // The pill's own height is a LOCAL override (h-6, slimmer than the
+      // The pill's own height is a LOCAL override (h-4, slimmer than the
       // primitive's own h-9 pill default), merged on top via `cn()` -
-      // `tailwind-merge` strips the primitive's conflicting class.
-      expect(track().className).toContain("data-[size=pill]:h-6");
+      // `cn` strips the primitive's conflicting class.
+      expect(track().className).toContain("data-[size=pill]:h-4");
       expect(track().className).not.toContain("data-[size=pill]:h-9");
       expect(track().className).toContain("h-1");
-      expect(thumb().className).toContain("data-[size=pill]:size-7");
+      expect(thumb().className).toContain("data-[size=pill]:size-6");
       expect(thumb().className).toContain("size-4");
     });
 
@@ -381,28 +380,31 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
 
     // Radix parks the thumb's CENTRE half a thumb inside each end
     // (`getThumbInBoundsOffset`), so the overlay the stops are laid out in has
-    // to be inset by exactly that - 14px for the 28px pill thumb.
+    // to be inset by exactly that - 0.75rem for the 1.5rem pill thumb.
     it("insets the stop overlay by half the pill thumb", () => {
       renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       const overlay = stops().at(0)?.parentElement?.parentElement;
-      expect(overlay?.className).toContain("px-3.5");
+      expect(overlay?.className).toContain("px-3");
       // And matches the slider's own padding vertically, so the overlay is the
       // track's box rather than the padded row's.
-      expect(overlay?.className).toContain("py-2");
-      // No longer stacked above the thumb/badges - nothing here needs to win
-      // a paint order fight any more.
+      expect(overlay?.className).toContain("py-1");
+      // Neighboring stop targets must not cover the thumb in a narrow picker.
       expect(overlay?.className).not.toContain("z-10");
+      expect(stops().at(0)?.className).not.toContain("z-10");
+      // Only the inert selected stop rises above it to keep its hint visible.
+      expect(stops().at(2)?.className).toContain("z-10");
+      expect(stops().at(2)?.className).toContain("pointer-events-none");
       expect(screen.getByTestId("model-reasoning-slider").className).toContain(
-        "py-2",
+        "py-1",
       );
     });
 
-    it("gives each stop the track's full height and a coarse-pointer width", () => {
+    it("keeps each stop taller than the slim track with a coarse-pointer width", () => {
       renderFooter(reasoningConfig("high", FOUR_OPTIONS, vi.fn()));
 
       for (const stop of stops()) {
-        expect(stop.className).toContain("h-full");
+        expect(stop.className).toContain("h-6");
         expect(stop.className).toContain("w-5");
         expect(stop.className).toContain("pointer-coarse:w-6");
       }
@@ -444,15 +446,15 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
 
     it("insets the range's covered edge by the thumb-centre offset, scaled by position", () => {
       // FOUR_OPTIONS has lastIndex 3. `marginInlineEnd` interpolates linearly
-      // from -0.875rem at the lowest stop to +0.875rem at the highest,
+      // from -0.75rem at the lowest stop to +0.75rem at the highest,
       // matching Radix's own thumb-centre inset at each end
       // (`getThumbInBoundsOffset`) instead of leaving the range on raw,
       // uninset percentages.
       const cases: ReadonlyArray<readonly [string, number]> = [
-        ["low", -0.875],
-        ["medium", -0.2916666666666666], // (2 * (1 / 3) - 1) * 0.875
-        ["high", 0.2916666666666667], // (2 * (2 / 3) - 1) * 0.875
-        ["max", 0.875],
+        ["low", -0.75],
+        ["medium", -0.25], // (2 * (1 / 3) - 1) * 0.75
+        ["high", 0.25], // (2 * (2 / 3) - 1) * 0.75
+        ["max", 0.75],
       ];
       for (const [value, expectedRem] of cases) {
         cleanup();
@@ -486,8 +488,8 @@ describe("<HarnessModelPickerModelSettingsFooter /> reasoning slider", () => {
         });
 
         const pulledPosition = reasoningDragPosition(1.125, 3);
-        const expectedMargin = ((2 * pulledPosition) / 3 - 1) * 0.875;
-        const rawMargin = ((2 * 1.125) / 3 - 1) * 0.875;
+        const expectedMargin = ((2 * pulledPosition) / 3 - 1) * 0.75;
+        const rawMargin = ((2 * 1.125) / 3 - 1) * 0.75;
         const margin = parseFloat(
           screen.getByTestId("model-reasoning-range").style.marginInlineEnd,
         );

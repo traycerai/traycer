@@ -15,10 +15,12 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import {
-  draftBlobConfirmedOnHost,
+  isDraftBlobConfirmed,
+  isDraftBlobUnbridgeable,
   putDraftBlobs,
   resetDraftBlobTransportForTests,
   type DraftBlobClient,
@@ -93,7 +95,7 @@ const HASH_ONLY_CONTENT: JsonContent = {
   ],
 };
 
-vi.mock("@/lib/composer/composer-image-store", () => ({
+vi.mock("@/lib/composer/landing-image-store", () => ({
   getImageBytes: (hash: string) =>
     Promise.resolve(hash === SHA256 ? IMAGE_BYTES : undefined),
   putImageBytesAtHash: () => Promise.resolve(true),
@@ -151,6 +153,7 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -297,13 +300,44 @@ function rejectEditForMissingBytes(harness: Harness, frame: SentFrame): void {
   });
 }
 
+/** The same refusal carrying `chat.subscribe@1.12`'s typed cause. */
+function rejectEditWithCause(
+  harness: Harness,
+  frame: SentFrame,
+  cause: "not-on-host" | "unsupported-format" | "too-large",
+): void {
+  harness.callbacks().onActionAck({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    clientActionId: frame.clientActionId,
+    action: "editUserMessage",
+    status: "rejected",
+    reason: "The host's writer cannot decode this image.",
+    code: "MISSING_ATTACHMENT_BYTES",
+    cause,
+    backgroundStopTaskIds: [],
+    token: null,
+  });
+}
+
 let harness: Harness | null = null;
 
 beforeEach(() => {
+  // An identity, because a confirmation is recorded and read PER ACCOUNT and a
+  // null owner confirms nothing. Without it the eight `toBe(true)` assertions
+  // below red - loudly, which is survivable - and, worse, the six `toBe(false)`
+  // ones all pass while proving nothing: they would be reading "signed out",
+  // not "the memo was retracted", which is the entire subject of this file.
+  useAuthStore.setState({
+    contextMetadata: { userId: OWNER_ID, username: OWNER_ID },
+  });
   resetDraftBlobTransportForTests();
 });
 
 afterEach(() => {
+  useAuthStore.setState({ contextMetadata: null });
   harness?.handle.dispose();
   harness = null;
   resetDraftBlobTransportForTests();
@@ -314,8 +348,8 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
     const upload = uploadClient();
     // The state the whole defect needs: this renderer has SEEN an ack for
     // these bytes, which is what makes its submit path skip the upload.
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
     expect(upload.putCalls).toEqual([SHA256]);
 
     harness = createHarness();
@@ -332,16 +366,25 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
       harness.handle.store.getState().failedSendRestoration?.content,
     ).toEqual(HASH_ONLY_CONTENT);
 
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(false);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(false);
 
     // The consequence, which is the point rather than the memo's internal
     // state: the resend's confirm step now issues a real upload instead of
     // skipping it and shipping a hash this host no longer holds.
+    //
+    // `ownerUserId` is the SAME id the seeding puts in the auth store, and it
+    // has to be for the four calls in this file to mean anything: the gate's
+    // memo is keyed per account, so a `null` owner confirms nothing and every
+    // one of these would be reading "signed out" rather than "the memo was
+    // retracted". The leaf takes it as a parameter rather than reading the
+    // store, so passing it here is not redundant with the `beforeEach` - the
+    // two cover different readers of the same identity.
     const resend = uploadClient();
     const confirmed = await confirmAttachmentsByHash({
       hostId: HOST_ID,
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
+      ownerUserId: OWNER_ID,
     });
 
     expect(resend.putCalls).toEqual([SHA256]);
@@ -360,8 +403,8 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
    */
   it("a refused EDIT retracts its acks too, though it restores no prompt", async () => {
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -373,7 +416,7 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
     // made the `restore`-keyed retraction blind here.
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
     // The memo was retracted anyway.
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(false);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(false);
 
     // The consequence: the next edit re-uploads instead of shipping a hash the
     // host has already refused.
@@ -382,10 +425,69 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
       hostId: HOST_ID,
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
+      ownerUserId: OWNER_ID,
     });
 
     expect(resend.putCalls).toEqual([SHA256]);
     expect([...confirmed.byHash]).toEqual([SHA256]);
+  });
+
+  /**
+   * The MARKING half of `hashOnlyRetryForRejection`, for an edit.
+   *
+   * `unsupported-format` is a verdict about the digest, not about this request:
+   * the host's writer cannot decode it, so it must never travel bare again. The
+   * classifier used to bail on `pending.action !== "send"` before reaching the
+   * decision table, so an edit's refusal recorded nothing - and once edits
+   * became hash-only, every later edit of that message shipped the same
+   * undecodable digest and was refused identically.
+   */
+  it("an edit refused unsupported-format marks the digest unbridgeable", async () => {
+    const upload = uploadClient();
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
+    expect(isDraftBlobUnbridgeable(HOST_ID, SHA256)).toBe(false);
+
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const frame = editHashOnlyMessage(harness);
+    const framesBefore = harness.sent.length;
+
+    rejectEditWithCause(harness, frame, "unsupported-format");
+
+    expect(isDraftBlobUnbridgeable(HOST_ID, SHA256)).toBe(true);
+    // And the SILENT half stayed shut. An edit's inline retry would rewrite a
+    // message the user is looking at, so the refusal surfaces instead: nothing
+    // new on the wire, and no recovery record holding custody of it.
+    expect(harness.sent.length).toBe(framesBefore);
+    expect(
+      Object.keys(harness.handle.store.getState().hashOnlyRecoveries),
+    ).toEqual([]);
+  });
+
+  /**
+   * The other side of that guard, and the one that proves the split is real
+   * rather than incidental: `not-on-host` is the retryable cause, and it still
+   * retries nothing for an edit. Without this, a version that simply deleted
+   * the `action !== "send"` check would pass the case above.
+   */
+  it("an edit refused not-on-host still never retries silently", async () => {
+    const upload = uploadClient();
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
+
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const frame = editHashOnlyMessage(harness);
+    const framesBefore = harness.sent.length;
+
+    rejectEditWithCause(harness, frame, "not-on-host");
+
+    expect(harness.sent.length).toBe(framesBefore);
+    expect(
+      Object.keys(harness.handle.store.getState().hashOnlyRecoveries),
+    ).toEqual([]);
+    // `not-on-host` is not a verdict about the digest, so nothing is marked -
+    // the bytes simply were not where this client believed.
+    expect(isDraftBlobUnbridgeable(HOST_ID, SHA256)).toBe(false);
   });
 
   it("without the restore, the resend skips the upload - the loop this breaks", async () => {
@@ -394,13 +496,14 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
     // that it no longer does is a change in behaviour and not a fixture that
     // never had an ack to begin with.
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     const resend = uploadClient();
     await confirmAttachmentsByHash({
       hostId: HOST_ID,
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
+      ownerUserId: OWNER_ID,
     });
 
     expect(resend.putCalls).toEqual([]);
@@ -415,7 +518,7 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
     // which is exactly how the first version of this fix looked correct while
     // sitting on a door the refusal never opens.
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -425,7 +528,7 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
       .takeSetupFailedRestoration(frame.messageId);
 
     expect(restored).toEqual(HASH_ONLY_CONTENT);
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(false);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(false);
   });
 
   it("retracts only this host's ack, never another host's", async () => {
@@ -434,15 +537,15 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
     // different fact, and dropping it would cost that host a re-upload of
     // bytes it still holds.
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
-    await putDraftBlobs("host-b", upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
+    await putDraftBlobs("host-b", upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
     rejectSendForMissingBytes(harness, sendHashOnlyMessage(harness));
 
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(false);
-    expect(draftBlobConfirmedOnHost("host-b", SHA256)).toBe(true);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(false);
+    expect(isDraftBlobConfirmed("host-b", SHA256, OWNER_ID)).toBe(true);
   });
 });
 
@@ -632,8 +735,8 @@ function ackCancel(
 describe("cancelling a queued row whose setup failed returns it to the composer", () => {
   it("hands the prompt back, forgets its hashes, and only once the host accepts", async () => {
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -643,14 +746,14 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     // NOTHING yet: the host materializes before it honours a cancel, so until
     // the ack the row may still be there and the prompt is still in the dock.
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
 
     ackCancel(harness, clientActionId, "accepted");
 
     expect(
       harness.handle.store.getState().failedSendRestoration?.content,
     ).toEqual(HASH_ONLY_CONTENT);
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(false);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(false);
 
     // The consequence, same as arm 1: the resend really re-uploads rather than
     // shipping a hash this host may no longer hold.
@@ -659,6 +762,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
       hostId: HOST_ID,
       client: resend.client,
       plan: { eligible: [SHA256], ineligible: [], hasInlineHashedNode: false },
+      ownerUserId: OWNER_ID,
     });
     expect(resend.putCalls).toEqual([SHA256]);
   });
@@ -669,7 +773,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     // in the dock, so handing a copy to the composer would fork it - the same
     // reason the queued guard declines in the first place.
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -679,7 +783,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     ackCancel(harness, clientActionId, "rejected");
 
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
     // The row is the host's to remove and it did not remove it.
     expect(
       harness.handle.store
@@ -696,7 +800,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     // first version of this did not compile: the agent member carries no
     // `browserAnnotations`, which the restore contract needs.
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -706,7 +810,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     ackCancel(harness, clientActionId, "accepted");
 
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
   });
 
   /**
@@ -719,7 +823,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
    */
   it("settles a cancel whose ack died with the connection: row gone on reconnect means the prompt comes back", async () => {
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -733,7 +837,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     expect(
       harness.handle.store.getState().failedSendRestoration?.content,
     ).toEqual(HASH_ONLY_CONTENT);
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(false);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(false);
     expect(harness.handle.store.getState().pendingCancelRestorations).toEqual(
       {},
     );
@@ -741,7 +845,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
 
   it("settles it the other way when the row survived the reconnect: nothing restored, slot released", async () => {
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -754,20 +858,26 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     reconnectWithQueueItems(harness, [queuedRow("user")]);
 
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
     // Released either way - an entry that outlives its connection is the leak.
     expect(harness.handle.store.getState().pendingCancelRestorations).toEqual(
       {},
     );
   });
 
-  it("states the losing prompt when the restoration slot is already taken", async () => {
-    // ONE slot, first writer wins - and the loser is SAID, not dropped. The
+  it("keeps the losing prompt as a last copy when the restoration slot is already taken", async () => {
+    // ONE slot, first writer wins - and the loser is KEPT, not dropped. The
     // first version reasoned that a displaced cancel's prompt was still safe
     // in the dock; it is not, because the very cancellation being acked is
     // what removes that row.
+    //
+    // The REGRESSION WITNESS is `lastCopyPrompts`, not the notice. A notice is
+    // a rendering the user may never read; the last-copy entry is what roots
+    // the prompt's images against the sweep and what the teardown handoff
+    // stashes. A version of this that dropped the document and still appended
+    // a toast would satisfy the message assertion below and lose the text.
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -784,7 +894,19 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     expect(
       harness.handle.store.getState().failedSendRestoration?.clientActionId,
     ).toBe(occupant?.clientActionId);
-    // ...and the cancelled row's prompt is stated rather than discarded.
+    // ...and the cancelled row's prompt is kept as a last copy rather than
+    // discarded. THIS is the assertion that fails if custody regresses.
+    const lastCopy =
+      harness.handle.store.getState().lastCopyPrompts[clientActionId];
+    // `toBeDefined` first and deliberately, even though the Record's index
+    // type says it cannot be missing: that type is the lie here, and this is
+    // the assertion that actually fails when no entry was recorded.
+    expect(lastCopy).toBeDefined();
+    expect(lastCopy.reason).toContain("Workspace setup failed");
+    expect(JSON.stringify(lastCopy.content)).toContain("look at this");
+    // And it is stated, through upstream's dead-send surface rather than the
+    // displaced-restoration one: the prompt is not waiting anywhere to be put
+    // back, so the statement is about the copy it is carrying.
     const stated = harness.handle.store
       .getState()
       .errorNotices.filter(
@@ -792,7 +914,9 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
       );
     expect(stated).toHaveLength(1);
     expect(stated[0]?.code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
-    expect(stated[0]?.message).toContain("not put back in the composer");
+    expect(stated[0]?.message).toContain(
+      "another unsent message is already waiting in the composer",
+    );
     // The statement quotes the draft, which is the whole point of stating it.
     expect(stated[0]?.message).toContain("look at this");
   });
@@ -802,7 +926,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     // message they no longer want; returning it to the composer would undo the
     // gesture they just made.
     const upload = uploadClient();
-    await putDraftBlobs(HOST_ID, upload.client, [SHA256]);
+    await putDraftBlobs(HOST_ID, upload.client, [SHA256], OWNER_ID);
 
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
@@ -812,6 +936,6 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     ackCancel(harness, clientActionId, "accepted");
 
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
-    expect(draftBlobConfirmedOnHost(HOST_ID, SHA256)).toBe(true);
+    expect(isDraftBlobConfirmed(HOST_ID, SHA256, OWNER_ID)).toBe(true);
   });
 });

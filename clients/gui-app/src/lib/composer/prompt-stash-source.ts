@@ -1,4 +1,5 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
 /**
  * Names the exact generation of a composer's canonical content at the moment
@@ -21,6 +22,14 @@ export interface PromptStashSourceToken {
 
 export interface PromptStashSourceSnapshot {
   readonly content: JsonContent;
+  /**
+   * The surface's annotation sidecar records, or `[]` for a surface that has
+   * none. Captured alongside the content because a crop's provenance lives
+   * beside the document rather than in it, and because clearing the source
+   * takes both: a capture that left the records behind would strip the picture
+   * from the prompt and leave its description in the composer.
+   */
+  readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly token: PromptStashSourceToken;
 }
 

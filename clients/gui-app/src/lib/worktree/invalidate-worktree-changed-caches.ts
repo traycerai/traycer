@@ -8,10 +8,10 @@ import {
 import type { WorktreeChangedAccumulatedScopes } from "@/lib/worktree/worktree-changed-invalidation-scheduler";
 
 /**
- * Drops the host's worktree listing caches for one accumulated burst of
- * `worktree.changed` pushes (see `worktree-changed-invalidation-scheduler`).
- * Invalidation only - the refetch reads the host's own cache, so this never
- * forces a git resolve.
+ * Drops the host's worktree listing and binding caches for one accumulated
+ * burst of `worktree.changed` pushes (see the invalidation scheduler).
+ * Listings read the host's own cache and bindings re-stat their folders;
+ * neither forces a git resolve.
  *
  * Scope-aware on purpose. A `worktreePath` event says exactly one row moved,
  * so only that row's enrichment overlay is re-probed; invalidating them all
@@ -50,6 +50,15 @@ export function invalidateWorktreeChangedCaches(
       hostId,
       "worktree.listByWorkspacePaths",
     ),
+    refetchType: "active",
+  });
+  // The chat's folder warning reads the owner's binding, not Sweep's host-wide
+  // inventory. Re-read its disk-derived missing paths on the same burst so a
+  // deleted or restored folder is reflected before the next send/focus. Path
+  // events carry run directories, not owner ids, so refresh active bindings on
+  // this host at either scope; inactive bindings only need marking stale.
+  void queryClient.invalidateQueries({
+    queryKey: hostQueryKeys.methodScope(hostId, "worktree.getBinding"),
     refetchType: "active",
   });
   // The branch LIST is a separate host-side read, so a summary refresh alone

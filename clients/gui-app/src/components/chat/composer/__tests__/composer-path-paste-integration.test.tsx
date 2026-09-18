@@ -21,9 +21,9 @@ import {
   type ComposerPickerStore,
 } from "../picker/composer-picker-store";
 import {
-  useComposerHashFirstPaste,
-  type ComposerHashFirstEditorHandle,
-} from "@/hooks/composer/use-composer-hash-first-paste";
+  useComposerHashPaste,
+  type ComposerPasteEditorHandle,
+} from "@/hooks/composer/use-composer-paste";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 
 vi.mock("sonner", () => ({
@@ -41,7 +41,7 @@ afterEach(() => {
 /**
  * Real-editor integration coverage for the review-fix round on paste/drop
  * path insertion. Mounts the actual `ComposerPromptEditor` wired to the
- * actual `useComposerHashFirstPaste` handlers - the seam the prior review
+ * actual `useComposerHashPaste` handlers - the seam the prior review
  * called out as untested (plain div / mocked handle would hide ProseMirror
  * ownership races, position mapping, undo grouping, and unmount liveness).
  */
@@ -502,20 +502,14 @@ function Harness({
   const [pickerStore] = useState<ComposerPickerStore>(() =>
     createComposerPickerStore(),
   );
-  const editorRef = useRef<ComposerHashFirstEditorHandle | null>(null);
+  const editorRef = useRef<ComposerPasteEditorHandle | null>(null);
   // The hook the chat family actually runs. Every pin in this file is about
   // the FILE-PATH half of paste/drop - resolution, display paths, the
   // insertion commit, ProseMirror ownership - which lives in the shared base
   // (`useComposerPasteEvents` + `filePaths`) and is identical under either
   // ingest. It is wired through this hook rather than the deleted base64
   // adapter so the coverage sits on the code that ships.
-  const paste = useComposerHashFirstPaste({
-    editorRef,
-    budgetOwnerId: null,
-    disabled: false,
-    fileDrops,
-    mentionRoots,
-  });
+  const paste = useComposerHashPaste(editorRef, fileDrops, mentionRoots);
   const setHandle = (instance: ComposerPromptEditorHandle | null): void => {
     handleRef.current = instance;
     editorRef.current = instance;

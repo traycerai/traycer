@@ -1,4 +1,3 @@
-import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
@@ -113,10 +112,9 @@ function hashOnlyImageDoc(hash: string): JsonContent {
 
 interface Modules {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
-  readonly store: typeof import("@/lib/composer/composer-image-store");
+  readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly budget: typeof import("@/lib/composer/landing-image-budget");
   readonly session: typeof import("@/stores/chats/chat-session-store");
-  readonly contentRoot: typeof import("@/hooks/composer/use-image-content-root");
 }
 
 /**
@@ -144,14 +142,13 @@ async function loadModules(): Promise<Modules> {
   vi.mocked(idb.keys).mockImplementation(() =>
     Promise.resolve(Array.from(idbData.keys())),
   );
-  const store = await import("@/lib/composer/composer-image-store");
+  const store = await import("@/lib/composer/landing-image-store");
   const budget = await import("@/lib/composer/landing-image-budget");
   const gc = await import("@/lib/composer/landing-image-gc");
   const session = await import("@/stores/chats/chat-session-store");
-  const contentRoot = await import("@/hooks/composer/use-image-content-root");
   gc.markLandingDraftsReady();
   await flush();
-  return { gc, store, budget, session, contentRoot };
+  return { gc, store, budget, session };
 }
 
 interface Harness {
@@ -180,6 +177,10 @@ function createHarness(session: Modules["session"]): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        // These roots are about GC, not about the wire shape: a session that
+        // cannot bridge is the conservative answer and keeps every image node
+        // in this file inline-bound, which is what the holders here root.
+        draftBlobBridgeSupported: () => false,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -337,45 +338,6 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, "runnerHost");
 });
 
-describe("landing image GC: an OPEN INLINE EDIT roots its images", () => {
-  it("a hash held only by the inline editor survives the sweep", async () => {
-    const m = await loadModules();
-    const hash = await m.store.putImage(bytesOf([1, 2, 3]));
-    // The inline editor writes to no draft store until Submit, so this hook is
-    // the whole of what stands between the pasted image and the sweep.
-    renderHook(() => m.contentRoot.useImageContentRoot(hashOnlyImageDoc(hash)));
-    m.store.releaseSession(hash);
-
-    await m.gc.reconcile();
-    await flush();
-
-    expect(await m.store.imageHashKeys()).toContain(hash);
-  });
-
-  it("control: the same hash is collected once the edit is cancelled", async () => {
-    const m = await loadModules();
-    const hash = await m.store.putImage(bytesOf([1, 2, 3]));
-    const view = renderHook(() =>
-      m.contentRoot.useImageContentRoot(hashOnlyImageDoc(hash)),
-    );
-    m.store.releaseSession(hash);
-    // A PARK - the tile unmounts with the rest of the canvas and the holder
-    // goes with it. NOT Escape or Cancel: those leave the tile mounted and take
-    // `currentContent` to null instead, which this helper-level case cannot
-    // express. That half is pinned through the real wiring in
-    // `chat-tile.test.tsx` ("charges an open inline edit's images and releases
-    // them on Cancel, without unmounting"), which is also the case that fails
-    // if the tile's own hook call is deleted - deleting it leaves every case in
-    // this file green.
-    view.unmount();
-
-    await m.gc.reconcile();
-    await flush();
-
-    expect(await m.store.imageHashKeys()).not.toContain(hash);
-  });
-});
-
 describe("landing image GC: a PENDING SEND's restore roots its images", () => {
   it("a hash held only by an in-flight send's restore survives the sweep", async () => {
     const m = await loadModules();
@@ -481,51 +443,32 @@ describe("landing image GC: a CANCEL awaiting its ack roots its images", () => {
 
     expect(await m.store.imageHashKeys()).toContain(hash);
   });
-});
 
-describe("landing image GC: an in-flight blob repair roots its hashes", () => {
-  it("a hash held only by a `holdImageHashes` pass survives the sweep", async () => {
+  // The control the other two holders already had, and this one did not. A
+  // positive alone cannot tell "the cancel restoration roots it" from "something
+  // else in this harness roots everything": the queue emit, the failed setup and
+  // the snapshot all touch state, and any of them keeping the hash alive would
+  // read as a pass. Same hash, same harness, same sweep - only the cancel is
+  // missing, and the sweep must then collect it.
+  it("control: the same hash is collected when no cancel is outstanding", async () => {
     const m = await loadModules();
-    const hash = await m.store.putImage(bytesOf([3, 3, 3]));
-    // The shape the queued-prompt repair takes: the row that named these
-    // hashes can be cancelled mid-upload, so the pass roots them itself.
-    const release = m.budget.holdImageHashes([hash]);
+    const harness = createHarness(m.session);
+    emitSnapshot(harness);
+    const hash = await m.store.putImage(bytesOf([2, 4, 6]));
+    emitQueue(harness, [queuedPromptItem("q-1", hashOnlyImageDoc(hash))]);
+    emitFailedSetupFor(harness, "m-q-1");
+
+    // The row leaves the queue with NO cancel parked behind it, so nothing in
+    // this store names the hash once the queue is empty.
+    emitQueue(harness, []);
+    expect(
+      Object.keys(harness.handle.store.getState().pendingCancelRestorations),
+    ).toHaveLength(0);
     m.store.releaseSession(hash);
-
-    await m.gc.reconcile();
-    await flush();
-
-    expect(await m.store.imageHashKeys()).toContain(hash);
-    release();
-  });
-
-  it("control: the same hash is collected once the pass releases", async () => {
-    const m = await loadModules();
-    const hash = await m.store.putImage(bytesOf([3, 3, 3]));
-    const release = m.budget.holdImageHashes([hash]);
-    m.store.releaseSession(hash);
-    release();
 
     await m.gc.reconcile();
     await flush();
 
     expect(await m.store.imageHashKeys()).not.toContain(hash);
-  });
-
-  it("an overlapping hold is not unrooted by the first one to finish", async () => {
-    const m = await loadModules();
-    const hash = await m.store.putImage(bytesOf([3, 3, 3]));
-    const first = m.budget.holdImageHashes([hash]);
-    const second = m.budget.holdImageHashes([hash]);
-    m.store.releaseSession(hash);
-    first();
-    // Repeat releases must not decrement another pass's share either.
-    first();
-
-    await m.gc.reconcile();
-    await flush();
-
-    expect(await m.store.imageHashKeys()).toContain(hash);
-    second();
   });
 });

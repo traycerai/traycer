@@ -22,6 +22,7 @@ function textEntry(
   createdAt: number,
 ): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt,
     blobHashes: [],
@@ -39,6 +40,7 @@ function textEntry(
 
 function imageOnlyEntry(id: string): PromptStashEntry {
   return {
+    annotations: [],
     id,
     createdAt: Date.now(),
     blobHashes: ["abc"],
@@ -192,7 +194,9 @@ describe("PromptStashControl", () => {
     expect(rail?.className).not.toContain("bg-muted");
     expect(trigger.className).not.toContain("absolute");
     expect(trigger.className).not.toContain("translate");
-    expect(trigger.getAttribute("data-variant")).toBe("outline");
+    // `muted-outline` since ticket 04: the border and the label colour are
+    // independent axes, and this pill wants a quiet label on a bordered chip.
+    expect(trigger.getAttribute("data-variant")).toBe("muted-outline");
     expect(trigger.className).toContain("px-2");
     expect(trigger.className).toContain("rounded-full");
     expect(trigger.getAttribute("data-size")).toBe("xs");
@@ -624,6 +628,7 @@ describe("PromptStashControl", () => {
 
   it("preserves inline image placement inside a mixed stashed prompt", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "mixed-image-entry",
       createdAt: Date.now(),
       blobHashes: ["hash-a", "hash-b"],
@@ -684,6 +689,7 @@ describe("PromptStashControl", () => {
 
   it("preserves lists and mention chips in stashed prompt rows", async () => {
     const entry: PromptStashEntry = {
+      annotations: [],
       id: "rich-entry",
       createdAt: Date.now(),
       blobHashes: [],

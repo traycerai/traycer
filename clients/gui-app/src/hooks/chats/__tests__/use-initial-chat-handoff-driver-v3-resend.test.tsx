@@ -3,12 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
-import {
-  recordNegotiatedStreamMethodVersions,
-  resetNegotiatedStreamVersions,
-} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -19,7 +17,14 @@ import {
   useInitialChatHandoffStore,
   type InitialChatHandoffScope,
 } from "@/stores/epics/initial-chat-handoff-store";
-import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { putImage } from "@/lib/composer/landing-image-store";
+import {
+  putDraftBlobs,
+  resetDraftBlobTransportForTests,
+  type DraftBlobClient,
+} from "@/lib/drafts/draft-blob-transport";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
@@ -29,48 +34,6 @@ vi.mock("sonner", () => ({
     dismiss: vi.fn(),
   }),
 }));
-
-// The hash-first resend cases below need a bound host client to reach - the
-// legacy fully-inlined case above never touches this seam at all, so it is
-// mocked here rather than at the top of the file.
-const byHashClient = {
-  getActiveHostId: () => HOST_ID,
-  request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
-  requestWithOptions: vi.fn(
-    // Underscored, not dropped: the branch only reads `method`, but the shape
-    // this mock is handed is half of what the assertions below are about.
-    (method: string, _params: { readonly sha256: string }) =>
-      method === "drafts.putBlob"
-        ? Promise.resolve({ ok: true })
-        : Promise.resolve({}),
-  ),
-};
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({
-    hostClient: {
-      createRequesterForHostId: (hostId: string) =>
-        hostId === HOST_ID ? byHashClient : null,
-    },
-  }),
-}));
-
-const imageStoreMocks = vi.hoisted(() => ({
-  sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
-  getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
-    Promise.resolve(undefined),
-  ),
-}));
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
-  return {
-    ...actual,
-    sessionImageBytes: imageStoreMocks.sessionImageBytes,
-    getImageBytes: imageStoreMocks.getImageBytes,
-  };
-});
 
 const SETTINGS: ChatRunSettings = {
   harnessId: "codex",
@@ -93,17 +56,51 @@ const SCOPE: InitialChatHandoffScope = {
   epicId: EPIC_ID,
 };
 
-function noopChatStreamClientFactory() {
-  return {
+/**
+ * A host that acknowledges every `drafts.putBlob`. Both members are typed
+ * against `DraftBlobClient` and neither is cast: the upload rides
+ * `requestWithOptions` (it needs the idempotency key and the large-body
+ * budget), and a fake carrying only `request` would type-check against nothing.
+ */
+const ACKING_BLOB_CLIENT: DraftBlobClient = {
+  request: () => Promise.reject(new Error("unexpected request call")),
+  requestWithOptions: ((method: string) =>
+    method === "drafts.putBlob"
+      ? Promise.resolve({ ok: true as const })
+      : Promise.reject(
+          new Error(`unexpected method ${method}`),
+        )) as HostRequester<HostRpcRegistry>["requestWithOptions"],
+};
+
+function pngBytes(): Uint8Array<ArrayBuffer> {
+  return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 7]);
+}
+
+function signedInAs(userId: string): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId, username: userId },
+  });
+}
+
+/**
+ * `bridgeSupported` is threaded rather than defaulted - the lint gate forbids
+ * default parameter values, and an explicit `false` at the legacy call site is
+ * the more honest reading anyway: that case is about a document with no hash at
+ * all, so the flag must not be what carries it.
+ */
+function noopChatStreamClientFactory(bridgeSupported: boolean) {
+  return () => ({
     sendAction: () => undefined,
     sameTurnSteeringProtocolSupported: () => true,
+    draftBlobBridgeSupported: () => bridgeSupported,
     requestTranscriptRange: () => undefined,
     requestResnapshot: () => undefined,
     close: () => undefined,
-  };
+  });
 }
 
-function buildHandle(): ChatSessionStoreHandle {
+function buildHandle(bridgeSupported: boolean): ChatSessionStoreHandle {
   return createChatSessionStore({
     environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: HOST_ID,
@@ -114,11 +111,21 @@ function buildHandle(): ChatSessionStoreHandle {
     onProviderAuthError: null,
     wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-    streamClientFactory: noopChatStreamClientFactory,
+    streamClientFactory: noopChatStreamClientFactory(bridgeSupported),
   });
 }
 
-function markSnapshotLoadedAndActable(handle: ChatSessionStoreHandle): void {
+/**
+ * `draftBlobBridgeSupported` is seeded on the STATE as well as answered by the
+ * factory. The store recomputes the field from the live stream client when a
+ * subscribe lands, and these cases never subscribe - so the factory alone would
+ * leave the field at its `false` initial value and the "supported" pins would
+ * pass for the wrong reason.
+ */
+function markSnapshotLoadedAndActable(
+  handle: ChatSessionStoreHandle,
+  bridgeSupported: boolean,
+): void {
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -142,6 +149,7 @@ function markSnapshotLoadedAndActable(handle: ChatSessionStoreHandle): void {
     snapshotLoaded: true,
     access: { role: "owner", ownerUserId: USER_ID, canAct: true },
     chat,
+    draftBlobBridgeSupported: bridgeSupported,
   });
 }
 
@@ -170,12 +178,7 @@ function b64ImageContent(): JsonContent {
   };
 }
 
-// A real-looking sha256 hex digest - `putDraftBlobs` keys the upload's
-// idempotency on the hash itself.
-const BY_HASH_SHA256 =
-  "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
-
-function byHashImageDoc(): JsonContent {
+function byHashImageDoc(hash: string): JsonContent {
   return {
     type: "doc",
     content: [
@@ -190,7 +193,7 @@ function byHashImageDoc(): JsonContent {
               mimeType: "image/png",
               size: 12,
               byHashEligible: true,
-              hash: BY_HASH_SHA256,
+              hash,
             },
           },
           { type: "text", text: "hello" },
@@ -230,17 +233,50 @@ function registerWaitingChatHandoff(content: JsonContent): void {
   store.markWaitingChat(SCOPE);
 }
 
+function mountDriver(handle: ChatSessionStoreHandle): void {
+  renderHook(() =>
+    useInitialChatHandoffDriver({
+      handle,
+      nodeId: CHAT_ID,
+      scope: SCOPE,
+      profileUserId: USER_ID,
+      // Exactly the getter the mounter passes
+      // (`chat-tile.tsx`'s `getDraftBlobBridgeSupported`): read from the store
+      // at the moment of the resend, never a boolean captured at mount.
+      getDraftBlobBridgeSupported: () =>
+        handle.store.getState().draftBlobBridgeSupported,
+    }),
+  );
+}
+
+/** The content the resend actually dispatched, once it has gone out. */
+async function dispatchedResendContent(
+  handle: ChatSessionStoreHandle,
+): Promise<JsonContent> {
+  const sent = await waitFor(() => {
+    const message = handle.store
+      .getState()
+      .pendingUserMessages.find((candidate) => candidate.messageId === "msg-1");
+    if (message === undefined) {
+      throw new Error("the seeded user message has not sent yet");
+    }
+    return message;
+  });
+  return sent.content;
+}
+
 let handles: ChatSessionStoreHandle[] = [];
 
 beforeEach(() => {
+  installFreshIndexedDb();
   useInitialChatHandoffStore.getState().resetForTests();
   handles = [];
-  imageStoreMocks.sessionImageBytes.mockReset();
-  imageStoreMocks.sessionImageBytes.mockReturnValue(null);
-  imageStoreMocks.getImageBytes.mockReset();
-  imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
-  byHashClient.requestWithOptions.mockClear();
   resetDraftBlobTransportForTests();
+  // `currentDraftBlobOwnerId()` reads `contextMetadata.userId` - NOT
+  // `profile.userId`. Seeding the wrong one leaves the owner `null`, which
+  // confirms nothing, which would make every by-hash assertion below pass
+  // vacuously by inlining.
+  signedInAs(USER_ID);
 });
 
 afterEach(() => {
@@ -248,7 +284,6 @@ afterEach(() => {
   for (const handle of handles) handle.dispose();
   handles = [];
   useInitialChatHandoffStore.getState().resetForTests();
-  resetNegotiatedStreamVersions();
   resetDraftBlobTransportForTests();
 });
 
@@ -257,24 +292,17 @@ describe("initial-chat-handoff driver: legacy v3 (fully-inlined) resend", () => 
     const content = b64ImageContent();
     registerWaitingChatHandoff(content);
 
-    const handle = buildHandle();
+    const handle = buildHandle(false);
     handles.push(handle);
-    markSnapshotLoadedAndActable(handle);
+    markSnapshotLoadedAndActable(handle, false);
 
-    renderHook(() =>
-      useInitialChatHandoffDriver({
-        handle,
-        nodeId: CHAT_ID,
-        scope: SCOPE,
-        profileUserId: USER_ID,
-      }),
-    );
+    mountDriver(handle);
 
     // The driver's effect fires synchronously on mount (waitingChat +
-    // snapshotLoaded + canAct), and the fast path
-    // (`inlineImageHashesFromSession`) needs no await - there is no
-    // hash-only node in a fully-inlined legacy document, so nothing is
-    // resolved asynchronously and the send goes out in the same tick.
+    // snapshotLoaded + canAct) and the fast path needs no await: a fully-inlined
+    // legacy document has no hash-only node, so `useSeededSendContent` returns
+    // the recorded content in RENDER, without state and without an extra pass.
+    // Asserted without `waitFor` on purpose - that is the property.
     const sentMessage = handle.store
       .getState()
       .pendingUserMessages.find((message) => message.messageId === "msg-1");
@@ -293,94 +321,93 @@ describe("initial-chat-handoff driver: legacy v3 (fully-inlined) resend", () => 
   });
 });
 
-// Item 41: the resend's OWN gate, `chat.subscribe`'s negotiated minor - a
-// DIFFERENT method and line than the create's `epic.createChat` gate, so a
-// host that shipped hashes at create time is not assumed to still be able to
-// at resend, and vice versa.
+/**
+ * The resend's OWN gate. It is no longer a negotiated minor this hook reads for
+ * itself: `chat.subscribe@1.12` moved the capability onto the live stream
+ * (`ChatStreamClient.draftBlobBridgeSupported()`), which the chat tile hands in
+ * as a getter, and the second condition is the host's confirmed custody of the
+ * digest for THIS account.
+ *
+ * Every case below asserts the DISPATCHED CONTENT'S image node, because that is
+ * the only thing that separates the two implementations. "A resend happened" is
+ * true in all three, and an assertion that stopped there would keep passing if
+ * the arm were deleted again - which is exactly how it came back missing from
+ * the merge.
+ */
 describe("initial-chat-handoff driver: hash-first resend", () => {
-  it("ships the resend hash-only on a chat.subscribe@1.11 host", async () => {
-    recordNegotiatedStreamMethodVersions(
+  it("ships the resend HASH-ONLY when the bridge is supported and the digest is host-held", async () => {
+    const hash = await putImage(pngBytes());
+    const confirmed = await putDraftBlobs(
       HOST_ID,
-      new Map([["chat.subscribe", { major: 1, minor: 11 }]]),
+      ACKING_BLOB_CLIENT,
+      [hash],
+      USER_ID,
     );
-    imageStoreMocks.getImageBytes.mockResolvedValue(new Uint8Array([1, 2, 3]));
-    const content = byHashImageDoc();
-    registerWaitingChatHandoff(content);
+    // The precondition, asserted rather than assumed: if the upload silently
+    // skipped this digest, the case below would inline and the failure would
+    // read as a gate bug rather than a broken fixture.
+    expect(confirmed).toEqual([hash]);
+    registerWaitingChatHandoff(byHashImageDoc(hash));
 
-    const handle = buildHandle();
+    const handle = buildHandle(true);
     handles.push(handle);
-    markSnapshotLoadedAndActable(handle);
+    markSnapshotLoadedAndActable(handle, true);
 
-    renderHook(() =>
-      useInitialChatHandoffDriver({
-        handle,
-        nodeId: CHAT_ID,
-        scope: SCOPE,
-        profileUserId: USER_ID,
-      }),
-    );
+    mountDriver(handle);
 
-    await waitFor(() => {
-      const sent = handle.store
-        .getState()
-        .pendingUserMessages.find((message) => message.messageId === "msg-1");
-      expect(sent).toBeDefined();
-    });
-    // Positive control: the upload actually happened - a document that
-    // silently took the inline arm would pass the assertions below for the
-    // wrong reason.
-    expect(byHashClient.requestWithOptions).toHaveBeenCalledWith(
-      "drafts.putBlob",
-      expect.objectContaining({ sha256: BY_HASH_SHA256 }),
-      expect.anything(),
-    );
-    const sentMessage = handle.store
-      .getState()
-      .pendingUserMessages.find((message) => message.messageId === "msg-1");
-    if (sentMessage === undefined) throw new Error("expected a sent message");
-    const attrs = findImageAttrs(sentMessage.content);
-    expect(attrs?.hash).toBe(BY_HASH_SHA256);
-    expect(attrs?.b64content ?? null).toBeNull();
+    const attrs = findImageAttrs(await dispatchedResendContent(handle));
+    expect(attrs).not.toBeNull();
+    expect(attrs?.hash).toBe(hash);
+    // The whole point: the bytes did NOT cross the relay a second time.
+    expect(attrs?.b64content).toBeUndefined();
   });
 
-  it("inlines the resend below chat.subscribe@1.11", async () => {
-    recordNegotiatedStreamMethodVersions(
+  it("INLINES the resend below the bridge - same document, same held digest, flag off", async () => {
+    // The positive control for the case above, differing in ONE input. Without
+    // it, "hash-only when supported" could be satisfied by a driver that never
+    // inlines anything.
+    const hash = await putImage(pngBytes());
+    const confirmed = await putDraftBlobs(
       HOST_ID,
-      new Map([["chat.subscribe", { major: 1, minor: 10 }]]),
+      ACKING_BLOB_CLIENT,
+      [hash],
+      USER_ID,
     );
-    imageStoreMocks.getImageBytes.mockResolvedValue(new Uint8Array([1, 2, 3]));
-    const content = byHashImageDoc();
-    registerWaitingChatHandoff(content);
+    expect(confirmed).toEqual([hash]);
+    registerWaitingChatHandoff(byHashImageDoc(hash));
 
-    const handle = buildHandle();
+    const handle = buildHandle(false);
     handles.push(handle);
-    markSnapshotLoadedAndActable(handle);
+    markSnapshotLoadedAndActable(handle, false);
 
-    renderHook(() =>
-      useInitialChatHandoffDriver({
-        handle,
-        nodeId: CHAT_ID,
-        scope: SCOPE,
-        profileUserId: USER_ID,
-      }),
-    );
+    mountDriver(handle);
 
-    await waitFor(() => {
-      const sent = handle.store
-        .getState()
-        .pendingUserMessages.find((message) => message.messageId === "msg-1");
-      expect(sent).toBeDefined();
-    });
-    expect(byHashClient.requestWithOptions).not.toHaveBeenCalledWith(
-      "drafts.putBlob",
-      expect.anything(),
-      expect.anything(),
-    );
-    const sentMessage = handle.store
-      .getState()
-      .pendingUserMessages.find((message) => message.messageId === "msg-1");
-    if (sentMessage === undefined) throw new Error("expected a sent message");
-    const attrs = findImageAttrs(sentMessage.content);
-    expect(attrs?.b64content).not.toBeNull();
+    const attrs = findImageAttrs(await dispatchedResendContent(handle));
+    expect(attrs).not.toBeNull();
+    expect(typeof attrs?.b64content).toBe("string");
+    // `inlineHashOnlyImageBytes` DROPS the hash rather than carrying both - a
+    // re-inlined node is indistinguishable on the wire from a fresh inline
+    // paste, which is what makes an old host's ingest work unchanged.
+    expect(attrs?.hash).toBeUndefined();
+  });
+
+  it("INLINES a digest the host does not hold, even with the bridge supported", async () => {
+    // The flag is not sufficient on its own, and this is not a hypothetical
+    // case: the handoff records the fully hash-only document, so it also names
+    // images the CREATE inlined - digests the host was never given. Shipping one
+    // of those bare because the stream could have carried it is a dangling hash.
+    const hash = await putImage(pngBytes());
+    registerWaitingChatHandoff(byHashImageDoc(hash));
+
+    const handle = buildHandle(true);
+    handles.push(handle);
+    markSnapshotLoadedAndActable(handle, true);
+
+    mountDriver(handle);
+
+    const attrs = findImageAttrs(await dispatchedResendContent(handle));
+    expect(attrs).not.toBeNull();
+    expect(typeof attrs?.b64content).toBe("string");
+    expect(attrs?.hash).toBeUndefined();
   });
 });

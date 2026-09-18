@@ -6,13 +6,14 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import {
-  recordNegotiatedStreamMethodVersions,
-  resetNegotiatedStreamVersions,
-} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
+// Only the RESET: the create gate reads the unary manifest, never a stream's
+// negotiated minor - the send half that did is gone with `chat.subscribe@1.12`.
+// The reset stays so a stream version recorded by a neighbouring suite cannot
+// leak into these cases.
+import { resetNegotiatedStreamVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
 import type { HostRpcRegistry } from "@/lib/host";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
-import { putImage } from "@/lib/composer/composer-image-store";
+import { putImage } from "@/lib/composer/landing-image-store";
 import {
   putDraftBlobs,
   resetDraftBlobTransportForTests,
@@ -24,10 +25,18 @@ import {
   exceedsCreateAttachmentHashCap,
   MAX_CREATE_ATTACHMENT_HASHES,
   planAttachmentsByHash,
-  resolveSendContentByHash,
-  sendAttachmentsByHashSupported,
   type AttachmentsByHashPlan,
 } from "@/lib/composer/attachments-by-hash";
+
+/**
+ * The account every confirmation in this file is recorded under. Passed
+ * explicitly rather than seeded into the auth store: `confirmAttachmentsByHash`
+ * takes the owner as an input precisely so this suite needs no store, and a
+ * store-seeded owner would have to be written to `contextMetadata.userId` - not
+ * `profile.userId` - to be read at all, which is a trap the explicit argument
+ * removes.
+ */
+const OWNER = "owner-user-1";
 
 function doc(children: readonly JsonContent[]): JsonContent {
   return { type: "doc", content: [...children] };
@@ -47,14 +56,9 @@ function pngBytesB(): Uint8Array<ArrayBuffer> {
 
 function neverCalledDraftBlobClient(): DraftBlobClient {
   return {
-    request: (() =>
-      Promise.reject(
-        new Error("unexpected request call"),
-      )),
-    requestWithOptions: (() =>
-      Promise.reject(
-        new Error("unexpected requestWithOptions call"),
-      )),
+    request: () => Promise.reject(new Error("unexpected request call")),
+    requestWithOptions: () =>
+      Promise.reject(new Error("unexpected requestWithOptions call")),
   };
 }
 
@@ -78,7 +82,7 @@ function putBlobAckingOnly(acked: ReadonlySet<string>): DraftBlobClient {
 function hostUnsupportedDraftBlobClient(): DraftBlobClient {
   return {
     request: neverCalledDraftBlobClient().request,
-    requestWithOptions: (() =>
+    requestWithOptions: () =>
       Promise.reject(
         new HostRpcError({
           code: "E_HOST_UNSUPPORTED",
@@ -87,7 +91,7 @@ function hostUnsupportedDraftBlobClient(): DraftBlobClient {
           method: "drafts.putBlob",
           fatalDetails: null,
         }),
-      )),
+      ),
   };
 }
 
@@ -170,10 +174,47 @@ describe("confirmAttachmentsByHash", () => {
       hostId,
       client,
       plan,
+      ownerUserId: OWNER,
     });
 
     expect(confirmed.byHash).toEqual(new Set([hashA]));
     expect(confirmed.inline).toEqual([hashB]);
+  });
+
+  it("a null owner confirms nothing, so every eligible hash falls to inline even after the host acks", async () => {
+    // The positive control is the case above: the SAME client, acking the same
+    // digest, puts that hash in `byHash`. The only difference here is the
+    // owner, which is what makes this a statement about owner-keying rather
+    // than about the ack. Without the control it would pass equally well if
+    // `confirmAttachmentsByHash` had simply stopped confirming anything.
+    const hostId = "host-confirm-null-owner";
+    const hashA = await putImage(pngBytesA());
+    const client = putBlobAckingOnly(new Set([hashA]));
+    const plan: AttachmentsByHashPlan = {
+      eligible: [hashA],
+      ineligible: [],
+      hasInlineHashedNode: false,
+    };
+
+    const confirmed = await confirmAttachmentsByHash({
+      hostId,
+      client,
+      plan,
+      ownerUserId: null,
+    });
+
+    expect(confirmed.byHash).toEqual(new Set<string>());
+    expect(confirmed.inline).toEqual([hashA]);
+
+    const withOwner = await confirmAttachmentsByHash({
+      hostId,
+      client,
+      plan,
+      ownerUserId: OWNER,
+    });
+
+    expect(withOwner.byHash).toEqual(new Set([hashA]));
+    expect(withOwner.inline).toEqual([]);
   });
 
   it("an already-confirmed hash costs no drafts.putBlob at submit", async () => {
@@ -196,8 +237,8 @@ describe("confirmAttachmentsByHash", () => {
         );
       }) as HostRequester<HostRpcRegistry>["requestWithOptions"],
     };
-    // Paste-time upload already confirmed the hash.
-    await putDraftBlobs(hostId, countingClient, [hash]);
+    // Paste-time upload already confirmed the hash, for THIS owner.
+    await putDraftBlobs(hostId, countingClient, [hash], OWNER);
     expect(putBlobCalls).toBe(1);
 
     const plan: AttachmentsByHashPlan = {
@@ -209,28 +250,11 @@ describe("confirmAttachmentsByHash", () => {
       hostId,
       client: countingClient,
       plan,
+      ownerUserId: OWNER,
     });
 
     expect(confirmed.byHash).toEqual(new Set([hash]));
     expect(putBlobCalls).toBe(1);
-  });
-});
-
-describe("resolveSendContentByHash", () => {
-  it("is best-effort: a hash with no local bytes stays hash-only rather than failing", async () => {
-    const hostId = "host-resolve-missing";
-    const hash = "ab".repeat(32);
-    const content = doc([imageNode({ hash, byHashEligible: true })]);
-    const plan = planAttachmentsByHash(content);
-
-    const result = await resolveSendContentByHash({
-      hostId,
-      client: neverCalledDraftBlobClient(),
-      content,
-      plan,
-    });
-
-    expect(result).toEqual(content);
   });
 });
 
@@ -284,7 +308,7 @@ describe("createAttachmentsByHashSupported", () => {
       "epic.create": { major: 1, minor: 2 },
     });
     const hash = await putImage(pngBytesA());
-    await putDraftBlobs(HOST, hostUnsupportedDraftBlobClient(), [hash]);
+    await putDraftBlobs(HOST, hostUnsupportedDraftBlobClient(), [hash], OWNER);
 
     expect(createAttachmentsByHashSupported(HOST, "epic.create")).toBe(false);
   });
@@ -311,60 +335,5 @@ describe("createAttachmentsByHashSupported", () => {
     });
 
     expect(createAttachmentsByHashSupported(HOST, "epic.create")).toBe(true);
-  });
-});
-
-describe("sendAttachmentsByHashSupported", () => {
-  const HOST = "host-send-gate";
-
-  it("fails closed with no stream handshake at all", () => {
-    expect(sendAttachmentsByHashSupported(HOST)).toBe(false);
-  });
-
-  it("fails closed when chat.subscribe is absent from the negotiated stream versions", () => {
-    recordNegotiatedStreamMethodVersions(
-      HOST,
-      new Map([["some.other.method", { major: 1, minor: 0 }]]),
-    );
-
-    expect(sendAttachmentsByHashSupported(HOST)).toBe(false);
-  });
-
-  it("fails closed when the host withholds drafts.putBlob", async () => {
-    recordNegotiatedStreamMethodVersions(
-      HOST,
-      new Map([["chat.subscribe", { major: 1, minor: 11 }]]),
-    );
-    const hash = await putImage(pngBytesA());
-    await putDraftBlobs(HOST, hostUnsupportedDraftBlobClient(), [hash]);
-
-    expect(sendAttachmentsByHashSupported(HOST)).toBe(false);
-  });
-
-  it("fails closed at exactly one minor below the gate", () => {
-    recordNegotiatedStreamMethodVersions(
-      HOST,
-      new Map([["chat.subscribe", { major: 1, minor: 10 }]]),
-    );
-
-    expect(sendAttachmentsByHashSupported(HOST)).toBe(false);
-  });
-
-  it("fails closed on a different major", () => {
-    recordNegotiatedStreamMethodVersions(
-      HOST,
-      new Map([["chat.subscribe", { major: 2, minor: 11 }]]),
-    );
-
-    expect(sendAttachmentsByHashSupported(HOST)).toBe(false);
-  });
-
-  it("is true only at major 1, minor >= the gate", () => {
-    recordNegotiatedStreamMethodVersions(
-      HOST,
-      new Map([["chat.subscribe", { major: 1, minor: 11 }]]),
-    );
-
-    expect(sendAttachmentsByHashSupported(HOST)).toBe(true);
   });
 });

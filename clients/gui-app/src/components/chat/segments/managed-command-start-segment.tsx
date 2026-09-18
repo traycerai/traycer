@@ -7,7 +7,10 @@ import {
   managedCommandStatusLabel,
   managedCommandTitle,
 } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
+import {
+  localManagedCommandDoor,
+  useManagedCommandDoor,
+} from "@/lib/managed-commands/use-managed-command-door";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
@@ -66,7 +69,8 @@ export function ManagedCommandStartSegment(
     owner: useMaybeChatTranscript(),
   });
   const live = presence.kind === "present" ? presence.command : null;
-  const openOutput = useManagedCommandDoor();
+  // A start/restart card only ever names a shell this host runs.
+  const openOutput = localManagedCommandDoor(useManagedCommandDoor());
   const openScope = useChatOpenStoreScope();
   const open = useToolOpenStore((state) =>
     state.openIds.has(scopedChatOpenId(openScope, props.id)),
@@ -140,6 +144,7 @@ export function ManagedCommandStartSegment(
   const headerAction = (
     <ManagedCommandTranscriptDoor
       commandId={managedCommand.commandId}
+      hostId={null}
       gone={gone}
       onOpen={openOutput}
       testId={`managed-command-start-door-${managedCommand.commandId}`}

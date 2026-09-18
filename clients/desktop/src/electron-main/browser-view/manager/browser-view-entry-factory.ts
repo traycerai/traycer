@@ -17,6 +17,16 @@ import {
 import type { BrowserViewFind } from "./browser-view-find";
 import type { BrowserViewPopups } from "./browser-view-popups";
 
+/** Chromium's `net::ERR_ABORTED`: the navigation was cancelled, not refused. */
+const ERR_ABORTED = -3;
+
+/** Bounded, single-line copy for a load failure the tile shows the user. */
+function failedLoadReason(errorDescription: string): string {
+  const description = errorDescription.trim();
+  if (description === "") return "This page did not load";
+  return `This page did not load (${description.slice(0, 80)})`;
+}
+
 interface BrowserViewEntryFactoryOptions {
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
   readonly annotations: BrowserViewAnnotationHost;
@@ -121,6 +131,22 @@ export class BrowserViewEntryFactory {
         ): void => {
           this.handleViewStartNavigation(entry, isInPlace, isMainFrame);
         },
+        // Deliberately NOT `did-fail-load` - see `handleFailedLoad`.
+        "did-fail-provisional-load": (
+          _event: Event,
+          errorCode: number,
+          errorDescription: string,
+          validatedUrl: string,
+          isMainFrame: boolean,
+        ): void => {
+          this.handleFailedLoad(
+            entry,
+            errorCode,
+            errorDescription,
+            validatedUrl,
+            isMainFrame,
+          );
+        },
         "did-navigate-in-page": (
           _event: Event,
           url: string,
@@ -155,6 +181,7 @@ export class BrowserViewEntryFactory {
       currentTitle: "",
       status: "loading",
       statusReason: null,
+      navigationAttempt: 0,
       findState: {
         appRequestId: 0,
         query: "",
@@ -201,6 +228,57 @@ export class BrowserViewEntryFactory {
     if (entry.internalNavigation) return;
     if (!isMainFrame || isInPlace) return;
     this.annotations.end(entry, "navigation");
+  }
+
+  /**
+   * A main-frame navigation that ended on an error page. Without this, a
+   * reload or a history move whose page fails (offline, DNS, a refused
+   * connection) left the entry at `loading` for good - the `did-navigate`
+   * settle only fires for a successful commit.
+   *
+   * Only `did-fail-provisional-load` is a settle, and it is treated exactly
+   * like `did-navigate` - unconditionally for the current navigation. That
+   * follows from the emitter, not the event's name or its docs. In Electron
+   * 42.11.1 (`shell/browser/api/electron_api_web_contents.cc`,
+   * `WebContents::DidFinishNavigation`): a navigation that never committed
+   * - cancelled by a stop, a download, or a newer navigation superseding it
+   * - returns before emitting ANYTHING, so a superseded navigation cannot
+   * be mistaken for the current one; a navigation that committed an ERROR
+   * PAGE emits `did-fail-provisional-load` and then, unless the code is
+   * `ERR_ABORTED`, `did-fail-load` too. So the provisional event fires
+   * exactly once per failed navigation, and Chromium only ever commits the
+   * newest one.
+   *
+   * `did-fail-load` is deliberately not listened to: it doubles the
+   * provisional event for the same navigation, and `WebContents::DidFailLoad`
+   * also emits it for a COMMITTED document whose load was interrupted (the
+   * page being left while still loading resources) - a false settle for the
+   * navigation that interrupted it.
+   *
+   * `ERR_ABORTED` is ignored rather than settled. Today it never reaches
+   * this event (an abort never commits); if a later Electron emits it here
+   * for a cancelled navigation, ignoring it degrades to the stall surface
+   * instead of reporting `ready` under a superseder still in flight.
+   */
+  private handleFailedLoad(
+    entry: BrowserViewEntry,
+    errorCode: number,
+    errorDescription: string,
+    validatedUrl: string,
+    isMainFrame: boolean,
+  ): void {
+    if (entry.internalNavigation) return;
+    if (!isMainFrame) return;
+    if (!entry.identity.lifecycle.accepted) return;
+    if (entry.status !== "loading") return;
+    if (errorCode === ERR_ABORTED) return;
+    // The guest is now showing Chromium's error page FOR this url, so the
+    // entry follows it exactly as a successful commit would - otherwise the
+    // toolbar and the host's tab state keep naming the page that was left.
+    entry.currentUrl = validatedUrl;
+    entry.requestedUrl = validatedUrl;
+    entry.currentTitle = entry.webContents.getTitle();
+    this.setStatus(entry, "ready", failedLoadReason(errorDescription));
   }
 
   private handleCommittedNavigation(

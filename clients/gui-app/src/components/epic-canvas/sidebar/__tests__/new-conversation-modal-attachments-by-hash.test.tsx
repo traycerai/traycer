@@ -409,27 +409,32 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
-vi.mock("@/hooks/composer/use-composer-hash-first-paste", async () => {
+// The paste seam, mocked so this suite's cases never run a real ingest. Both
+// hooks are stubbed because the modal calls `useComposerHashPaste`, not
+// `useComposerPaste` - and `runPendingImageJob` is on the RESULT here, not on a
+// separate ingest hook: `useComposerPendingImageIngest` is fed from it, so a
+// stub missing that member leaves the modal wiring an undefined runner.
+vi.mock("@/hooks/composer/use-composer-paste", async () => {
   const actual = await vi.importActual<
-    typeof import("@/hooks/composer/use-composer-hash-first-paste")
-  >("@/hooks/composer/use-composer-hash-first-paste");
+    typeof import("@/hooks/composer/use-composer-paste")
+  >("@/hooks/composer/use-composer-paste");
+  const stubPasteResult = () => ({
+    onPaste: vi.fn(),
+    onDrop: vi.fn(),
+    onDragOver: vi.fn(),
+    onDragEnter: vi.fn(),
+    onDragLeave: vi.fn(),
+    attachImageFiles: vi.fn(),
+    runPendingImageJob: vi.fn(),
+    isDraggingFiles: false,
+    dragOverlayVariant: null,
+    isIngestingImages: false,
+    isResolvingFilePaths: false,
+  });
   return {
     ...actual,
-    useComposerHashFirstPaste: () => ({
-      onPaste: vi.fn(),
-      onDrop: vi.fn(),
-      onDragOver: vi.fn(),
-      onDragEnter: vi.fn(),
-      onDragLeave: vi.fn(),
-      attachImageFiles: vi.fn(),
-      isDraggingFiles: false,
-      dragOverlayVariant: null,
-      isIngestingImages: false,
-      isResolvingFilePaths: false,
-      ingestPastedComposerImages: vi.fn(() => []),
-      notePossiblePendingImages: vi.fn(),
-      reingestPendingImages: vi.fn(),
-    }),
+    useComposerPaste: stubPasteResult,
+    useComposerHashPaste: stubPasteResult,
   };
 });
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
@@ -478,18 +483,16 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 }));
 
 // The by-hash upload path reads local bytes through the SAME
-// `composer-image-store` the landing/chat composers do -
+// `landing-image-store` the landing/chat composers do -
 // `draft-blob-transport`'s `localBytesForHash` calls `getImageBytes`.
 const imageStoreMocks = vi.hoisted(() => ({
   getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
     Promise.resolve(undefined),
   ),
 }));
-vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("@/lib/composer/composer-image-store")
-    >();
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
   return {
     ...actual,
     getImageBytes: imageStoreMocks.getImageBytes,
@@ -572,6 +575,12 @@ beforeEach(() => {
   QUERY_CLIENT = createAppQueryClient();
   useAuthStore.setState({
     profile: { userId: USER_ID, userName: "Tester", email: "t@example.com" },
+    // `currentDraftBlobOwnerId()` reads `contextMetadata.userId`, NOT
+    // `profile.userId` - and a null owner CONFIRMS NOTHING, so without this the
+    // upload below records no confirmation, the host-held set stays empty, the
+    // modal silently falls to the inline path and every by-hash assertion in
+    // this suite either reds or passes for the wrong reason.
+    contextMetadata: { userId: USER_ID, username: USER_ID },
   });
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent(EPIC_ID, DIRTY_CONTENT);
@@ -592,7 +601,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useAuthStore.setState({ profile: null });
+  useAuthStore.setState({ profile: null, contextMetadata: null });
   testState.bodySubmit = null;
   testState.installEditor = null;
   useNewConversationModalStore.getState().resetForTests();
@@ -820,6 +829,29 @@ describe("new-conversation modal: attachments-by-hash submit gate", () => {
 // Pin 3: the destination is live through the upload await, and this pins
 // that a mid-await move dispatches on the NEW host with content that host
 // can actually resolve - never the old host's hashes.
+/**
+ * THE MECHANISM THIS PINS, because the assertions below are satisfiable by two
+ * very different implementations and only one of them is correct.
+ *
+ * A confirmation is a fact about ONE machine's draft-blob tier: a digest host A
+ * acknowledged is not held by host B. The submit's host-held set is therefore
+ * read through `liveHostHeld()`, which compares the flight's captured host
+ * against `submitTargetRef.current` and answers the EMPTY set once they differ -
+ * the set is retracted on a switch rather than carried across.
+ *
+ * Retraction alone is what makes the create land correctly, and the reconcile
+ * loop is why. `prepareDraftImageInlining` re-reads `readRequiredHashes()` after
+ * every pass; a digest that stops being host-held comes back as REQUIRED, is
+ * resolved on the next pass, and is inlined at commit. So the same switch that
+ * invalidates the hashes is what causes their bytes to be fetched, with no
+ * second submit and no refusal.
+ *
+ * The failure this exists to catch is silent: without the retraction, A's
+ * confirmed digests stay subtracted from the required set, their bytes are
+ * never resolved, `unresolved` comes back empty because they read as host-held,
+ * and the create ships to B carrying bare hashes B never received. Every
+ * assertion below except the last two would still pass.
+ */
 describe("new-conversation modal: destination race during the by-hash upload", () => {
   it("a destination switch mid-upload dispatches ONE create, on the NEW host, inline - never with the old host's hashes", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
@@ -855,9 +887,9 @@ describe("new-conversation modal: destination race during the by-hash upload", (
       releaseOldestPutBlob(true);
       await flushMicrotasks();
     });
-    // The re-entry's own inline resolve is a further microtask hop
-    // (`inlineLocalImageHashes`) - drain until the create lands rather than
-    // asserting on a fixed number of flushes.
+    // The retracted digest is picked back up by the reconcile loop's SECOND
+    // pass, whose byte resolve is a further microtask hop - drain until the
+    // create lands rather than asserting on a fixed number of flushes.
     await waitFor(() => {
       expect(testState.createRequests).toHaveLength(1);
     });
@@ -865,13 +897,22 @@ describe("new-conversation modal: destination race during the by-hash upload", (
     // Exactly one create, on B - never a second one, and never on A.
     expect(testState.createRequests).toHaveLength(1);
     expect(testState.createRequests[0]?.hostId).toBe(HOST_ID_B);
-    // No second body was ever put on the wire - the re-entry against B falls
-    // to the inline path, which needs no upload at all.
+    // No second body was ever put on the wire. B never negotiated the minor,
+    // so nothing re-uploads there; the retraction routes the digest through
+    // inlining instead, which needs no upload at all.
     expect(testState.putBlobCalls).toHaveLength(1);
+    // The retraction actually reached the resolver. Without it the digest stays
+    // host-held, is never required, and its bytes are never read - so this is
+    // the assertion that separates a correct retraction from an absent one,
+    // ahead of the shape checks below.
+    expect(imageStoreMocks.getImageBytes).toHaveBeenCalledWith(BY_HASH_SHA256);
 
     const message = sentInitialMessage(testState.createRequests[0]);
     expect(message.attachmentsByHash ?? false).toBe(false);
     const atoms = collectImageAtoms(message.content);
+    // Bytes, not a reference B never received. `rewriteHashOnlyImageNodes`
+    // drops the `hash` attr as it writes `b64content`, so a node that inlined
+    // carries exactly one of the two.
     expect(atoms[0]?.b64content).not.toBeNull();
     expect(atoms[0]?.hash ?? null).toBeNull();
   });

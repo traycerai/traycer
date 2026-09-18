@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/composer/composer-image-store", () => ({
+vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionObjectUrl: () => null,
   getImageBytes: () => Promise.resolve(undefined),
 }));

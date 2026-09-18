@@ -119,6 +119,7 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,
@@ -349,8 +350,8 @@ describe("sendSeededUserMessage carrying the intent", () => {
     expect(pending.displayWorktreeIntent).toEqual(INTENT);
 
     const echo = harness.handle.store.getState().pendingUserMessages[0];
-    expect(echo?.messageId).toBe("seeded-msg");
-    expect(echo?.restoreWorktreeIntent).toBeNull();
+    expect(echo.messageId).toBe("seeded-msg");
+    expect(echo.restoreWorktreeIntent).toBeNull();
   });
 
   it("restores the composer with the intent on a WORKTREE_CREATE_FAILED rejection of that send", () => {

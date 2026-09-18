@@ -7,7 +7,7 @@ import {
   reserveLandingImageBudget,
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
-import { getImageBytes } from "@/lib/composer/composer-image-store";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
 import * as promptStashRepository from "@/lib/composer/prompt-stash-repository";
 import type { PromptStashRestoreBlob } from "@/lib/composer/prompt-stash-codec";
 import {

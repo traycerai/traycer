@@ -16,6 +16,7 @@ import {
   usePickerProviderLeaderForIndex,
 } from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
+import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   harnessAvailabilityUnsettled,
@@ -256,9 +257,9 @@ function railButtonClassName(state: {
       : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
     state.degraded
       ? "opacity-60 hover:opacity-80 data-[active=true]:opacity-75"
-      : "",
-    state.packGated ? "opacity-60" : "",
-    state.packRetryable ? "cursor-pointer" : "",
+      : null,
+    state.packGated ? "opacity-60" : null,
+    state.packRetryable ? "cursor-pointer" : null,
     "aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground",
   );
 }
@@ -322,7 +323,13 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         role="tab"
         aria-selected={active}
         aria-disabled={selectable ? undefined : true}
-        aria-label={railButtonAriaLabel(entry)}
+        aria-label={pickerLeaderControlLabel(
+          railButtonAriaLabel(entry),
+          index,
+          selectable ? leaderModifier : null,
+          // Degraded providers can be browsed without committing a switch.
+          entry.degraded ? "to browse" : "to switch",
+        )}
         aria-describedby={railButtonDescribedBy(entry, {
           preparingDescriptionId,
           degradedDescriptionId,
@@ -346,9 +353,10 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
             </span>
             <span className="absolute inset-0 flex items-center justify-center">
               <AgentSpinningDots
-                className="text-muted-foreground"
+                className={undefined}
                 testId={undefined}
                 variant={undefined}
+                tone="muted"
               />
             </span>
           </>
@@ -375,12 +383,8 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
               </span>
             ) : null}
             <PickerLeaderBadge
-              show={leaderModifier !== null && selectable}
+              modifier={selectable ? leaderModifier : null}
               index={index}
-              // Degraded providers stay browse-only (the leader digit browses,
-              // it does not commit), so the hint must not over-promise "switch".
-              hintAction={entry.degraded ? "to browse" : "to switch"}
-              hintTarget={harness.label}
               testId={`model-provider-digit-${singleDigitLeaderDigitFor(index)}`}
               placement="corner"
             />

@@ -138,12 +138,11 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
                   : [...collapseAll.filePaths],
               })
             }
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={
               collapseAll.allCollapsed ? "Expand all" : "Collapse all"
             }
-            className="text-muted-foreground hover:text-foreground"
           >
             {collapseAll.allCollapsed ? (
               <ChevronsUpDown className="size-4" />
@@ -165,12 +164,11 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
           onClick={() =>
             props.onViewPatch({ mode: isSplit ? "unified" : "split" })
           }
-          variant="ghost"
+          variant="muted"
           size="icon-sm"
           aria-label={
             isSplit ? "Switch to unified view" : "Switch to split view"
           }
-          className="text-muted-foreground hover:text-foreground"
         >
           {isSplit ? (
             <DiffSplitIcon className="size-4" />
@@ -192,10 +190,9 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
               type="button"
               onClick={props.onRefresh}
               disabled={props.refreshing}
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label="Refresh diff"
-              className="text-muted-foreground hover:text-foreground"
             >
               <RefreshIcon refreshing={props.refreshing} />
             </Button>
@@ -213,63 +210,68 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
           >
             <Button
               type="button"
-              variant="ghost"
+              variant="muted"
               size="icon-sm"
               aria-label="Diff settings"
-              className="text-muted-foreground hover:text-foreground"
             >
               <Settings2 className="size-4" />
             </Button>
           </TooltipWrapper>
         </PopoverTrigger>
         <PopoverContent
+          layout="bare"
           {...paneActivationDeferProps}
           align="end"
-          className="w-[min(80vw,15rem)] gap-0 p-1"
+          className="w-[min(80vw,15rem)]"
         >
-          {settings.map((setting) => (
-            <DiffSettingRow
-              key={setting.label}
-              label={setting.label}
-              checked={setting.checked}
-              onCheckedChange={(checked) =>
-                props.onViewPatch(setting.patch(checked))
-              }
-            />
-          ))}
-          <div className="flex items-center justify-between gap-3 px-2 py-1.5 text-ui-sm">
-            <span>Indicator style</span>
-            <IndicatorStyleControl
-              value={view.indicatorStyle}
-              onChange={(indicatorStyle) =>
-                props.onViewPatch({ indicatorStyle })
-              }
-            />
+          {/* The gutter belongs to the LIST, not to the plate: these rows paint
+              their own hover and would otherwise run into the plate's corner. */}
+          <div className="p-1">
+            {settings.map((setting) => (
+              <DiffSettingRow
+                key={setting.label}
+                label={setting.label}
+                checked={setting.checked}
+                onCheckedChange={(checked) =>
+                  props.onViewPatch(setting.patch(checked))
+                }
+              />
+            ))}
+            <div className="flex items-center justify-between gap-3 px-2 py-1.5 text-ui-sm">
+              <span>Indicator style</span>
+              <IndicatorStyleControl
+                value={view.indicatorStyle}
+                onChange={(indicatorStyle) =>
+                  props.onViewPatch({ indicatorStyle })
+                }
+              />
+            </div>
+            {openFile !== null ? (
+              <>
+                <Separator className="my-1" />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={openFile.onClick}
+                  disabled={openFile.disabled}
+                  className="h-7 w-full justify-start font-normal"
+                >
+                  {openFile.pending ? (
+                    <AgentSpinningDots
+                      className="size-4"
+                      testId="diff-tab-open-editor-spinner"
+                      variant={undefined}
+                      tone="muted"
+                    />
+                  ) : (
+                    <ExternalLink className="size-4 text-muted-foreground" />
+                  )}
+                  {openFile.label}
+                </Button>
+              </>
+            ) : null}
           </div>
-          {openFile !== null ? (
-            <>
-              <Separator className="my-1" />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={openFile.onClick}
-                disabled={openFile.disabled}
-                className="h-7 w-full justify-start font-normal text-foreground"
-              >
-                {openFile.pending ? (
-                  <AgentSpinningDots
-                    className="size-4 text-muted-foreground"
-                    testId="diff-tab-open-editor-spinner"
-                    variant={undefined}
-                  />
-                ) : (
-                  <ExternalLink className="size-4 text-muted-foreground" />
-                )}
-                {openFile.label}
-              </Button>
-            </>
-          ) : null}
         </PopoverContent>
       </Popover>
     </div>
@@ -282,7 +284,7 @@ function DiffSettingRow(props: {
   readonly onCheckedChange: (on: boolean) => void;
 }): ReactNode {
   return (
-    <Label className="cursor-pointer justify-between gap-3 rounded-md px-2 py-1.5 font-normal transition-colors hover:bg-accent">
+    <Label variant="row" className="cursor-pointer justify-between">
       <span>{props.label}</span>
       <Switch checked={props.checked} onCheckedChange={props.onCheckedChange} />
     </Label>

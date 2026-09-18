@@ -68,7 +68,6 @@ export function ProviderRailControls(props: {
           aria-label="Search providers"
           autoComplete="off"
           spellCheck={false}
-          className="text-ui-sm"
           data-testid="provider-rail-search-input"
         />
         {view.query.length > 0 ? (
@@ -124,10 +123,10 @@ function ProviderRailFilterMenu(props: {
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
+            variant="muted"
             size="icon-sm"
             aria-label={label}
-            className="relative shrink-0 text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
+            className="relative shrink-0"
             data-testid="provider-rail-filter-trigger"
           >
             <ListFilter className="size-4" />
@@ -144,9 +143,7 @@ function ProviderRailFilterMenu(props: {
         </DropdownMenuTrigger>
       </TooltipWrapper>
       <DropdownMenuContent align="start" className="min-w-40">
-        <DropdownMenuLabel className="text-overline uppercase tracking-wide">
-          Show
-        </DropdownMenuLabel>
+        <DropdownMenuLabel>Show</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={props.status}
           onValueChange={(next) => {

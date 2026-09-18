@@ -249,7 +249,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   }),
 }));
 
-vi.mock("@/lib/composer/composer-image-store", () => ({
+vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionImageBytes: () => null,
   getImageBytes: () => Promise.resolve(undefined),
   imageHashKeys: () => Promise.resolve([]),

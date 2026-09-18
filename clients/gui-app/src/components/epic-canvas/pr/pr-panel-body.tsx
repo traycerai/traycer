@@ -16,6 +16,16 @@ import type {
   PrLightItem,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
+import { WorkspaceHostSwitcher } from "@/components/home/host-workspace-selector/host-section";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
+import {
+  useSurfaceHostPinWithDefault,
+  type SurfaceHostPin,
+} from "@/hooks/host/use-surface-host-pin";
+import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
+import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
@@ -25,7 +35,10 @@ import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useRecordPrPresence } from "@/hooks/pr/use-pr-presence-probe";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
+import {
+  StreamRuntimeContext,
+  useStreamMethodSupport,
+} from "@/lib/host/stream-runtime-context";
 import { makePrDetailTile, prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import {
   formatPrRowTitle,
@@ -48,33 +61,32 @@ import {
 import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
- * Pull Requests panel body. Subscribes in foreground mode on the canvas host
- * stream client with an explicit visibility gate:
- *   enabled = surface showing this body ∧ method supported
- *
- * On the sidebar, "showing" means sidebar expanded ∧ section expanded.
- * Whole-sidebar collapse is CSS-only (`hidden` on the column) and would leave
- * the body mounted without this gate. Per-section collapse already unmounts
- * the body; the section check is still included so the gate is complete and
- * testable if mount semantics change.
- *
- * Below the mobile breakpoint the sidebar column is not rendered at all, so
- * both collapse flags are stale desktop chrome there and answer nothing about
- * whether this body is on screen. Its host is then the mobile switcher sheet,
- * which mounts the body only while the Pull requests category is showing -
- * mounted IS visible - so the collapse half of the gate is skipped.
- *
- * Layout mirrors the Settings > Worktrees repo listing: a collapsible repo
- * header (chevron + icon + owner/repo + count) over full-bleed rows separated
- * by hairlines - no cards, no per-row accordion. Clicking a row opens the
- * full-view tile. An owned-submodule PR gets its own repo header and its own
- * full row, placed directly under the superproject it shipped with (see
- * `orderRepoGroupKeys`).
- *
- * Host switcher: omitted (list follows the canvas-serving host). See PrPanelActions.
+ * The per-view PR pin defaults to the task's sole agent host, then the canvas
+ * host. Both header actions and list consume one selected-host subscription,
+ * including on mobile. The header
+ * stays mounted through empty, loading and failed reads so the user can always
+ * choose another host. Merely opening an epic does not latch a pin.
  */
 export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
-  const hostId = useCanvasHostId();
+  const canvasHostId = useCanvasHostId();
+  const pin = useSurfaceHostPinWithDefault(
+    tabSurfaceKey("pull-requests", props.tabId),
+    canvasHostId,
+  );
+  const streamBinding = useSurfaceHostStreamBinding(pin.resolvedHostId);
+  return (
+    <StreamRuntimeContext.Provider value={streamBinding}>
+      <PrPanelBodyLive {...props} pin={pin} />
+    </StreamRuntimeContext.Provider>
+  );
+}
+
+function PrPanelBodyLive(
+  props: LeftPanelSlotProps & {
+    readonly pin: SurfaceHostPin;
+  },
+): ReactNode {
+  const hostId = props.pin.resolvedHostId;
   const mainCollapsed = useMainPanelCollapsed(props.tabId);
   const sectionCollapsed = useLeftPanelSectionCollapsed("pull-requests");
   const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");
@@ -93,29 +105,65 @@ export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
     enabled,
   });
 
-  // The rail's presence gate is fed from HERE - the open panel's own stream.
-  // Opening an epic performs no PR work at all, which is why an epic's PR icon
-  // appears from the second open onward rather than the first (see
-  // `pr-presence-store`). A surface that gates the panel's own reachability on
-  // presence and offers no force-visible affordance has to bootstrap the signal
-  // itself, through the probe in `use-pr-presence-probe`.
+  // Never attribute the selected host's rows to the canvas host's presence.
   useRecordPrPresence(hostId, props.epicId, subscription.data?.items ?? null);
 
-  if (!methodSupported) {
-    return <PrHostUpdateRequired />;
-  }
-
   return (
-    <PrPanelBodyContent
-      epicId={props.epicId}
-      tabId={props.tabId}
-      hostId={hostId}
-      items={subscription.data?.items ?? []}
-      sourceStatus={subscription.data?.sourceStatus ?? null}
-      error={subscription.error}
-      isPending={subscription.isPending}
-      hasCachedData={subscription.data !== null}
-    />
+    <div
+      className="flex h-full min-h-0 flex-col"
+      data-testid="pr-panel-surface"
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border/60 px-2 py-1.5">
+        <PrPanelHostPicker pin={props.pin} />
+        <PrPanelActions
+          key={hostId}
+          subscription={subscription}
+          enabled={enabled}
+        />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {!methodSupported ? (
+          <PrHostUpdateRequired />
+        ) : (
+          <PrPanelBodyContent
+            key={hostId}
+            epicId={props.epicId}
+            tabId={props.tabId}
+            hostId={hostId}
+            items={subscription.data?.items ?? []}
+            sourceStatus={subscription.data?.sourceStatus ?? null}
+            error={subscription.error}
+            isPending={subscription.isPending}
+            hasCachedData={subscription.data !== null}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PrPanelHostPicker(props: { readonly pin: SurfaceHostPin }): ReactNode {
+  const options = useHostOptions();
+  const { pin } = props;
+  return (
+    <div
+      className="flex min-w-0 flex-1 items-center gap-1"
+      data-testid="pr-panel-host-picker"
+    >
+      <WorkspaceHostSwitcher
+        hosts={options.hosts}
+        activeHostId={pin.resolvedHostId}
+        onSelect={pin.setSelection}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={options.isLoading}
+        listsFailed={options.listsFailed}
+        onRetryLists={options.retryLists}
+        intent="pin"
+        surface="inline"
+      />
+    </div>
   );
 }
 
@@ -224,7 +272,8 @@ function PrPanelBodyContent(props: {
         <AgentSpinningDots
           testId="pr-panel-loading-dots"
           variant="dots"
-          className="size-5 text-muted-foreground"
+          className="size-5"
+          tone="muted"
         />
       </div>
     );
@@ -282,6 +331,7 @@ function PrPanelBodyContent(props: {
           key={formatRepoGroupLabel(group.repoIdentifier)}
           epicId={props.epicId}
           tabId={props.tabId}
+          hostId={props.hostId}
           group={group}
           collapsed={
             collapsedRepos.has(formatRepoGroupLabel(group.repoIdentifier)) &&
@@ -301,6 +351,7 @@ function PrPanelBodyContent(props: {
  * titles down the panel instead of re-entering a card border per PR.
  */
 function PrRepoGroupSection(props: {
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly tabId: string;
   readonly group: PrRepoGroup;
@@ -347,6 +398,7 @@ function PrRepoGroupSection(props: {
               <PrRow
                 key={entry.key}
                 entry={entry}
+                hostId={props.hostId}
                 epicId={props.epicId}
                 tabId={props.tabId}
               />

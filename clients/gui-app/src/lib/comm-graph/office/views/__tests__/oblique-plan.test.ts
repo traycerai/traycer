@@ -39,7 +39,10 @@ import type {
   OfficeSize,
   OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
-import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
+import {
+  OFFICE_LABEL_GAP,
+  OFFICE_TILE,
+} from "@/lib/comm-graph/office/office-types";
 import type {
   OfficeDeskState,
   OfficePainter,
@@ -1723,6 +1726,68 @@ describe("oblique painters: fixup 6 rule 4 - one reserve label per storey, not o
     // Not vacuous: at least one storey with an empty desk was actually
     // checked.
     expect(floorsChecked).toBeGreaterThan(0);
+  });
+
+  it("letters the reserve label clear of the desk-front sprite's own bottom edge, not across its face (feedback round 1: labels were cut in half)", () => {
+    const epic = makeTestEpic("two-hosts", 400, 1);
+    const layout = planBuilding(initialInput(epic, VIEWPORTS[0]));
+    const painter = BUILDING_VIEW.painter;
+    const assignedSeatIds = new Set(
+      [...layout.desks.values()].map((desk) => desk.seatId),
+    );
+    const deskFrontHeight = officeSpriteSize({ name: "desk-front" }).height;
+    let checked = 0;
+    for (const seat of layout.seats.values()) {
+      if (seat.kind !== "desk" || assignedSeatIds.has(seat.seatId)) continue;
+      if (obliqueReserveLabelSeatId(layout, seat.floorIndex) !== seat.seatId)
+        continue;
+      const props = painter.seatProps(layout, seat, idleDeskState(null), 2);
+      const deskFront = props.find(
+        (item) =>
+          item.drawable.kind === "sprite" &&
+          item.drawable.sprite.name === "desk-front",
+      );
+      const label = props.find(
+        (item) =>
+          item.drawable.kind === "label" && item.drawable.text === "reserve",
+      );
+      if (deskFront === undefined || deskFront.drawable.kind !== "sprite") {
+        throw new Error(
+          "expected this storey's spokesman to draw a desk-front",
+        );
+      }
+      if (label === undefined || label.drawable.kind !== "label") {
+        throw new Error("expected this storey's spokesman to carry the label");
+      }
+      // The desk-front's own tile row, read off THIS SAME call rather than
+      // re-derived: `seatProps` starts every desk sprite at the tile the
+      // seat's own geometry names.
+      expect(deskFront.drawable.y).toBeGreaterThanOrEqual(
+        seat.deskTile.row * OFFICE_TILE,
+      );
+      const deskFrontBottom = deskFront.drawable.y + deskFrontHeight;
+      // EXACTLY THE LINE A NAME TAG LANDS ON, which is the rule the fix is
+      // actually about: the scene letters a seated agent at
+      // `foot + OFFICE_LABEL_GAP` (`buildActors`, where a character is
+      // `OFFICE_CHARACTER_HEIGHT` tall with its feet on `foot`), and `foot` is
+      // the bottom of the chair tile. An empty desk has to letter on the same
+      // line as the occupied desk beside it or the shared gap buys nothing.
+      expect(label.drawable.y).toBe(
+        (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,
+      );
+      // CLEAR OF THE FURNITURE: at or below the sprite's own bottom edge -
+      // which for this geometry is the same line, since the desk-front ends
+      // where the chair tile does. Asserted against the desk-front THIS SAME
+      // call drew rather than a re-typed offset, so moving the desk cannot
+      // leave the lettering behind on its face. `y + 34` used to land
+      // mid-sprite, which is the exact bug feedback round 1 filed ("lower half
+      // of labels on some agents are cut out").
+      expect(label.drawable.y).toBeGreaterThanOrEqual(deskFrontBottom);
+      checked += 1;
+    }
+    // Not vacuous: at least one storey's spokesman seat was actually walked -
+    // otherwise every assertion above passed by never running.
+    expect(checked).toBeGreaterThan(0);
   });
 });
 

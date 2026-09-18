@@ -15,6 +15,7 @@ import {
   OFFICE_SIGN_LETTER_SPACING_EM,
   OFFICE_SIGN_NARROW_PLATE_MAX_CHARS,
   OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PADDING_Y,
   OFFICE_SIGN_PLATE_MAX_CHARS,
   officeCivicSignText,
   officeSignCenterX,
@@ -494,7 +495,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
               widthTiles,
               zoom: OFFICE_LOD_CLOSEUP_ZOOM,
               measure: plateMeasure,
-            });
+            }).text;
           expect(readingAt(plate.widthTiles)).toBe(readingAt(GENEROUS_TILES));
         } else if (room.kind === "archive") {
           // WIDER THAN THE ROOM, on purpose: C5's archive is a DOOR, one tile,
@@ -599,13 +600,17 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         OFFICE_SIGN_FONT_PX * (0.6 + OFFICE_SIGN_LETTER_SPACING_EM);
       const measure = (text: string): number =>
         text.length * charPx + OFFICE_SIGN_PADDING_X * 2;
-      // The renderer's own two numbers for the box it paints around a plate:
-      // the baseline it drops the lettering to below the sign's art, and the
-      // vertical padding of the backing. Mirrored here with the file they come
-      // from named, the way this suite's sibling mirrors the plate's advance -
-      // they live in a `.tsx` component the office modules do not import.
+      // The baseline the renderer drops a plate's lettering to below the
+      // sign's art. Mirrored here with the file it comes from named, the way
+      // this suite's sibling mirrors the plate's advance - it lives in a
+      // `.tsx` component the office modules do not import.
+      //
+      // The backing's VERTICAL PADDING was mirrored the same way and is not
+      // any more: it is `OFFICE_SIGN_PADDING_Y`, imported above beside the
+      // horizontal one it was always the partner of. A private copy here was
+      // exactly the drift the shared constant exists to prevent, and a
+      // mirroring comment is worth no more than the sweep that checks it.
       const SIGN_LABEL_BASELINE = 11;
-      const SIGN_PADDING_Y = 2;
       const projector = view.painter.projector(layout);
       const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
 
@@ -664,11 +669,20 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             label: `${kind} "${text}" at ${entry.sign.tile.col},${entry.sign.tile.row}`,
             left: centreX - width / 2,
             right: centreX + width / 2,
-            top: baseline - OFFICE_SIGN_FONT_PX - SIGN_PADDING_Y,
-            bottom: baseline + SIGN_PADDING_Y,
+            top: baseline - OFFICE_SIGN_FONT_PX - OFFICE_SIGN_PADDING_Y,
+            bottom: baseline + OFFICE_SIGN_PADDING_Y,
           };
         });
-        expect(boxes.some((box) => box.civic)).toBe(true);
+        // CLOSE-UP ONLY. At office zoom a civic sign is fixture lettering
+        // unless its own counter fits or it carries a beacon
+        // (`officeSignLetteredAt`), so a small population or a narrow room
+        // can legitimately draw none there - that is the feedback-round-1
+        // fix, not a gap in this sweep. Close-up still letters every civic
+        // room unconditionally, which is what keeps the sweep from going
+        // vacuous on the one plate kind it exists to catch.
+        if (lod === 2) {
+          expect(boxes.some((box) => box.civic)).toBe(true);
+        }
 
         for (let i = 0; i < boxes.length; i += 1) {
           for (let j = i + 1; j < boxes.length; j += 1) {

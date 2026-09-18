@@ -143,7 +143,8 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden rounded-xl p-0"
+        layout="banded"
+        className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden"
         showCloseButton={false}
         // Radix's document-level Esc listener can't be reached via React
         // propagation; `onEscapeKeyDown` + `preventDefault` is the first-party

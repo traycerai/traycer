@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -9,7 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Gauge, Settings } from "lucide-react";
+import { Eye, EyeOff, Gauge, Settings } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
@@ -135,7 +136,10 @@ import {
   type RateLimitPopoverRevealTarget,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import {
+  useLayoutStore,
+  useStatusBarShown,
+} from "@/stores/settings/layout-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -160,6 +164,8 @@ const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
   ambient: false,
   managedProfiles: false,
 };
+/** What the strip draws for a provider while the strip itself is not on screen. */
+const NO_PROFILE_IDS: ReadonlyArray<string | null> = [];
 
 const POPOVER_SURFACE_CLASS_NAME =
   "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
@@ -468,7 +474,8 @@ export function RateLimitPopover({
       collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
       aria-label="Usage limits"
-      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
+      layout="panel"
+      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)]"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
       // (keyboard a11y) - so it would pop open the instant the popover mounts
@@ -1722,9 +1729,7 @@ function SingleProfileRateLimitProviderBlock({
             {providerDisplayName(providerId)}
           </span>
           {planLabel !== null ? (
-            <Badge variant="secondary" className="font-normal">
-              {planLabel}
-            </Badge>
+            <Badge variant="secondary">{planLabel}</Badge>
           ) : null}
           <ManageProviderLink
             providerId={providerId}
@@ -1814,19 +1819,27 @@ function ProfileRateLimitProviderBlock({
   // The accounts the strip is drawing for this provider right now - what was
   // checked, or the one account it falls back to - and the checks themselves.
   // The two differ exactly when nothing is checked: the fallback card is
-  // highlighted as "on the strip" while its switch stays off, since nothing
-  // was asked for and flipping the switch is how to ask.
-  const shownProfileIds = resolveStatusBarProfileIds(
-    profileSelection,
-    providerId,
-    profiles,
-  );
+  // highlighted as "on the strip" while its eye stays off, since nothing
+  // was asked for and flipping the eye is how to ask.
+  //
+  // Neither means anything while the strip is not on screen (header
+  // placement, or a mobile viewport with the footer off): there is no segment
+  // for the highlight to point at and none for the eye to govern, so both go
+  // until the strip returns. The checks themselves stay in the store and take
+  // effect again when it does.
+  const stripShown = useStatusBarShown();
+  const shownProfileIds = stripShown
+    ? resolveStatusBarProfileIds(profileSelection, providerId, profiles)
+    : NO_PROFILE_IDS;
   const checkedProfileIds = profileSelection.shownProfiles[providerId] ?? [];
-  // A provider hidden from the strip has no segment for a switch to govern;
-  // the switch goes with it rather than toggling a preference nothing shows.
+  // A provider hidden from the strip has no segment for the eye to govern;
+  // the eye goes with it rather than toggling a preference nothing shows.
   const providerHiddenFromStrip = useLayoutStore((state) =>
     state.statusBar.rateLimits.hiddenProviders.includes(providerId),
   );
+  // The host the eye writes for, or `null` when there is no eye to draw.
+  const eyeHostId =
+    stripShown && !providerHiddenFromStrip ? displayedHostId : null;
   const setProfileShown = useLayoutStore(
     (state) => state.setStatusBarProfileShown,
   );
@@ -1954,7 +1967,7 @@ function ProfileRateLimitProviderBlock({
               shownOnStrip={shownProfileIds.includes(target.profileId)}
               checkedForStrip={checkedProfileIds.includes(target.profileId)}
               onSetShownOnStrip={
-                providerHiddenFromStrip || displayedHostId === null
+                eyeHostId === null
                   ? null
                   : (shown) => {
                       trackSettingChanged(
@@ -1962,7 +1975,7 @@ function ProfileRateLimitProviderBlock({
                         "layout.statusBar.shownProfiles",
                       );
                       setProfileShown(
-                        displayedHostId,
+                        eyeHostId,
                         providerId,
                         target.profileId,
                         shown,
@@ -2104,20 +2117,108 @@ function RateLimitProviderProfileUsageMessage({
 }
 
 /**
- * The words on the strip switch's tooltip. Three states, because the switch
- * being off does not always mean the account is off the strip: with nothing
- * checked for the provider, the strip draws one account anyway, and the card
- * for that one has to say so or the switch reads as broken.
+ * The eye toggle's accessible name: the action a press performs, so a reader
+ * hears "Hide Work from status bar" on an account that is checked and "Show
+ * Work in status bar" on one that is not.
  */
+function showInStatusBarLabel(
+  profile: ProviderProfile,
+  checked: boolean,
+): string {
+  const name = profileDisplayLabel(profile);
+  return checked
+    ? `Hide ${name} from status bar`
+    : `Show ${name} in status bar`;
+}
+
+/**
+ * The sentence the tooltip adds beyond the eye's own name, or `null` when
+ * the name says it all. Only one case has more to say: the eye being off does
+ * not always mean the account is off the strip - with nothing checked for
+ * the provider, the strip draws one account anyway, and the card for that
+ * one has to say so or the toggle reads as broken.
+ */
+function showInStatusBarNote(
+  checked: boolean,
+  shownOnStrip: boolean,
+): string | null {
+  if (!checked && shownOnStrip) {
+    return "Shown by default until an account is checked.";
+  }
+  return null;
+}
+
+/** The words on the eye toggle's tooltip: the name, plus the note if any. */
 function showInStatusBarTooltip(
+  profile: ProviderProfile,
   checked: boolean,
   shownOnStrip: boolean,
 ): string {
-  if (checked) return "Shown in the status bar. Switch off to remove it.";
-  if (shownOnStrip) {
-    return "Shown in the status bar by default until an account is checked. Switch on to keep it there.";
-  }
-  return "Show in the status bar. Every checked account gets its own segment.";
+  const label = showInStatusBarLabel(profile, checked);
+  const note = showInStatusBarNote(checked, shownOnStrip);
+  return note === null ? label : `${label}. ${note}`;
+}
+
+/**
+ * The "show in status bar" control, drawn left of the profile's accent dot
+ * so the eye and the colour it governs sit together: `Eye` when the account
+ * is checked for the strip, `EyeOff` when not. An icon rather than a second
+ * switch beside the enable one - two identical toggles on a card said
+ * nothing about which was which. Rendered only while the strip is on screen
+ * and the provider itself is on it (`onSetShownOnStrip` non-null).
+ */
+function StatusBarEyeToggle({
+  profile,
+  shownOnStrip,
+  checkedForStrip,
+  onSetShownOnStrip,
+}: {
+  readonly profile: ProviderProfile;
+  readonly shownOnStrip: boolean;
+  readonly checkedForStrip: boolean;
+  readonly onSetShownOnStrip: (shown: boolean) => void;
+}): ReactNode {
+  const Icon = checkedForStrip ? Eye : EyeOff;
+  const note = showInStatusBarNote(checkedForStrip, shownOnStrip);
+  const noteId = useId();
+  return (
+    <TooltipWrapper
+      label={showInStatusBarTooltip(profile, checkedForStrip, shownOnStrip)}
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      {/* The trigger is the span, not the button (the `RefreshIconButton`
+            shape). Radix describes its trigger by the open tooltip, and this
+            tooltip starts with the button's own name, so a reader would hear
+            the action twice; its Slot concatenates `aria-describedby` rather
+            than letting the child's win, so the button cannot opt out from
+            inside. On the span the description is inert. The button carries
+            its own: the fallback note alone when there is one - the only
+            words the name does not already say - otherwise nothing. */}
+      <span className="inline-flex shrink-0">
+        <button
+          type="button"
+          aria-label={showInStatusBarLabel(profile, checkedForStrip)}
+          aria-pressed={checkedForStrip}
+          aria-describedby={note === null ? undefined : noteId}
+          data-testid="rate-limit-profile-status-bar-eye"
+          onClick={() => onSetShownOnStrip(!checkedForStrip)}
+          className={cn(
+            "inline-flex size-6 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
+            checkedForStrip ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          <Icon className="size-4" aria-hidden />
+        </button>
+        {note === null ? null : (
+          <span id={noteId} className="sr-only">
+            {note}
+          </span>
+        )}
+      </span>
+    </TooltipWrapper>
+  );
 }
 
 function RateLimitProviderProfileActions({
@@ -2128,9 +2229,6 @@ function RateLimitProviderProfileActions({
   profileEnablementPending,
   profileEnablementDisabledReason,
   onSetProfileEnabled,
-  shownOnStrip,
-  checkedForStrip,
-  onSetShownOnStrip,
 }: {
   readonly profile: ProviderProfile;
   readonly refresh: () => Promise<void>;
@@ -2139,10 +2237,6 @@ function RateLimitProviderProfileActions({
   readonly profileEnablementPending: boolean;
   readonly profileEnablementDisabledReason: string | null;
   readonly onSetProfileEnabled: (enabled: boolean) => void;
-  readonly shownOnStrip: boolean;
-  readonly checkedForStrip: boolean;
-  /** `null` hides the switch: the provider itself is off the strip. */
-  readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
 }): ReactNode {
   return (
     <div className="flex shrink-0 items-center gap-1">
@@ -2181,30 +2275,6 @@ function RateLimitProviderProfileActions({
           </span>
         </TooltipWrapper>
       ) : null}
-      {onSetShownOnStrip === null ? null : (
-        <TooltipWrapper
-          label={showInStatusBarTooltip(checkedForStrip, shownOnStrip)}
-          side="left"
-          sideOffset={6}
-          align={undefined}
-        >
-          {/* A labelled control rather than a second bare switch beside the
-              enable one: two identical toggles on a card say nothing about
-              which is which, and the word is short enough to keep. The word
-              is decoration for the eye; the switch's `aria-label` is the
-              name a reader hears. */}
-          <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 text-ui-xs text-muted-foreground">
-            <span aria-hidden>Status bar</span>
-            <Switch
-              aria-label={`Show ${profileDisplayLabel(profile)} in status bar`}
-              data-testid="rate-limit-profile-status-bar-switch"
-              checked={checkedForStrip}
-              className="relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']"
-              onCheckedChange={onSetShownOnStrip}
-            />
-          </span>
-        </TooltipWrapper>
-      )}
     </div>
   );
 }
@@ -2229,7 +2299,10 @@ function RateLimitProviderProfileRow({
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
   readonly fetchEligible: boolean;
-  /** Whether the strip is drawing this account - checked, or the fallback. */
+  /**
+   * Whether the strip is drawing this account - checked, or the fallback.
+   * Always false while the strip is not on screen.
+   */
   readonly shownOnStrip: boolean;
   readonly checkedForStrip: boolean;
   readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
@@ -2292,8 +2365,8 @@ function RateLimitProviderProfileRow({
       className={cn(
         "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2 transition-opacity duration-150",
         // The accent marks the cards the strip is DRAWING, which is what a
-        // reader coming from the strip is looking for; the switch beside it
-        // says whether that is by choice or by default.
+        // reader coming from the strip is looking for; the eye beside the
+        // dot says whether that is by choice or by default.
         shownOnStrip && "border-primary/60 bg-primary/5",
         !profile.enabled && "opacity-60",
       )}
@@ -2305,6 +2378,9 @@ function RateLimitProviderProfileRow({
           <RateLimitProviderProfileStatusBadges
             profile={profile}
             planLabel={planLabel}
+            shownOnStrip={shownOnStrip}
+            checkedForStrip={checkedForStrip}
+            onSetShownOnStrip={onSetShownOnStrip}
           />
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
@@ -2331,9 +2407,6 @@ function RateLimitProviderProfileRow({
           profileEnablementPending={profileEnablementPending}
           profileEnablementDisabledReason={profileEnablementDisabledReason}
           onSetProfileEnabled={onSetProfileEnabled}
-          shownOnStrip={shownOnStrip}
-          checkedForStrip={checkedForStrip}
-          onSetShownOnStrip={onSetShownOnStrip}
         />
       </div>
       <RateLimitProviderProfileUsageMessage
@@ -2401,12 +2474,27 @@ function isRevealTargetFor(
 function RateLimitProviderProfileStatusBadges({
   profile,
   planLabel,
+  shownOnStrip,
+  checkedForStrip,
+  onSetShownOnStrip,
 }: {
   readonly profile: ProviderProfile;
   readonly planLabel: string | null;
+  readonly shownOnStrip: boolean;
+  readonly checkedForStrip: boolean;
+  /** `null` hides the eye: the strip is off screen, or the provider is off it. */
+  readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
 }): ReactNode {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      {onSetShownOnStrip === null ? null : (
+        <StatusBarEyeToggle
+          profile={profile}
+          shownOnStrip={shownOnStrip}
+          checkedForStrip={checkedForStrip}
+          onSetShownOnStrip={onSetShownOnStrip}
+        />
+      )}
       <AccentDot
         profileId={profile.profileId}
         accentColor={profile.accentColor}
@@ -2419,15 +2507,9 @@ function RateLimitProviderProfileStatusBadges({
         {profileDisplayLabel(profile)}
       </span>
       {planLabel !== null ? (
-        <Badge variant="secondary" className="font-normal">
-          {planLabel}
-        </Badge>
+        <Badge variant="secondary">{planLabel}</Badge>
       ) : null}
-      {!profile.enabled ? (
-        <Badge variant="outline" className="font-normal">
-          Disabled
-        </Badge>
-      ) : null}
+      {!profile.enabled ? <Badge variant="outline">Disabled</Badge> : null}
     </div>
   );
 }
@@ -2844,17 +2926,13 @@ function TraycerAccountCards({
                     keeps its account name, its Active state and the whole
                     usage body underneath; only the tier goes. */}
                 {isMobileApp() ? null : (
-                  <Badge variant="secondary" className="font-normal">
+                  <Badge variant="secondary">
                     {subscriptionPlanLabel(
                       account.subscription.subscriptionStatus,
                     )}
                   </Badge>
                 )}
-                {active ? (
-                  <Badge variant="outline" className="font-normal">
-                    Active
-                  </Badge>
-                ) : null}
+                {active ? <Badge variant="outline">Active</Badge> : null}
               </div>
               <ProfileUsageUpdatedLabel
                 updatedAt={
@@ -2937,7 +3015,7 @@ function RateLimitErrorMessage({
       <ReportIssueAction
         context={reportContext}
         presentation="link"
-        className="h-auto p-0 text-current"
+        className={undefined}
       />
     </div>
   );

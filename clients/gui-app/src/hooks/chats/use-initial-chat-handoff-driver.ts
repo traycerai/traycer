@@ -16,16 +16,16 @@ import {
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import {
-  inlineImageHashesFromSession,
-  inlineLocalImageHashes,
-} from "@/lib/composer/composer-image-inlining";
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
+} from "@/lib/composer/image-atoms";
+import { submitHostHeldImageHashes } from "@/lib/composer/submit-host-held-image-hashes";
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import {
-  planAttachmentsByHash,
-  resolveSendContentByHash,
-  sendAttachmentsByHashSupported,
-} from "@/lib/composer/attachments-by-hash";
-import { useHostBinding } from "@/lib/host";
-import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+  draftImageInliningNeeded,
+  prepareDraftImageInlining,
+} from "@/lib/drafts/draft-image-inlining";
 import {
   nextHandoffTransition,
   type HandoffStep,
@@ -51,12 +51,24 @@ export interface InitialChatHandoffDriverOptions {
   readonly nodeId: string;
   readonly scope: InitialChatHandoffScope;
   readonly profileUserId: string | null;
+  /**
+   * This chat's own live stream's draft-blob bridge capability, as a GETTER.
+   *
+   * A getter rather than a boolean for the same reason `useChatComposerSubmit`
+   * takes one: the flag is a property of the stream at the moment the message
+   * is dispatched, and the resend's dispatch can be several renders after this
+   * hook was called - the handoff waits for `snapshotLoaded`, for `canAct`, and
+   * for its own byte resolution. A boolean captured at mount would answer for
+   * the session as it was before any of that.
+   */
+  readonly getDraftBlobBridgeSupported: () => boolean;
 }
 
 export function useInitialChatHandoffDriver(
   options: InitialChatHandoffDriverOptions,
 ): void {
-  const { handle, nodeId, scope, profileUserId } = options;
+  const { handle, nodeId, scope, profileUserId, getDraftBlobBridgeSupported } =
+    options;
   const handoff = useInitialChatHandoffStore((state) =>
     selectInitialChatHandoff(state, scope),
   );
@@ -88,7 +100,11 @@ export function useInitialChatHandoffDriver(
     messages,
     snapshotLoaded,
   } = chatSnapshot;
-  const sendContent = useSeededSendContent(handoff);
+  const sendContent = useSeededSendContent(
+    handoff,
+    nodeId,
+    getDraftBlobBridgeSupported,
+  );
 
   useEffect(() => {
     const state = handle.store.getState();
@@ -128,120 +144,119 @@ export function useInitialChatHandoffDriver(
 }
 
 /**
- * The handoff's content in the shape THIS HOST takes.
+ * The handoff's content in the shape THIS stream takes.
  *
- * The composers register the hash-only document — that is what keeps base64 out
- * of `localStorage` under this key and what lets the handoff root those bytes
- * against GC — so deciding the wire shape has to happen somewhere, and the
- * resend is the only place that knows the message is actually going out.
+ * The landing composer registers the HASH-ONLY document - that is what keeps
+ * base64 out of `localStorage` under this key and what lets the handoff root
+ * those bytes against GC - so the wire shape has to be decided somewhere, and
+ * the resend is the only place that knows the message is actually going out.
  *
- * TWO SHAPES, and the negotiated `chat.subscribe` minor picks between them. At
- * `@1.11` the host materializes a hash-only node out of this account's draft
- * blob tier before the dangling-hash guard runs, so the resend ships hashes and
- * the image never crosses the relay a second time; below it the bytes go back
- * inline, exactly as before.
+ * TWO SHAPES, and `getDraftBlobBridgeSupported()` plus this host's confirmed
+ * blob custody pick between them, through exactly the seam an ordinary send
+ * uses ({@link submitHostHeldImageHashes} + {@link draftImageInliningNeeded}).
+ * A hash the bridge can carry AND this host is confirmed to hold for THIS
+ * account ships bare, and the image never crosses the relay a second time;
+ * everything else is resolved back to `b64content`, exactly as before.
  *
- * DELIBERATELY NOT the same gate the create used, and it must not be read as
- * one: the create asked about `epic.create@1.2` and this asks about
- * `chat.subscribe@1.11`. They are different methods on different lines, so a
- * host can advertise one and not the other, and a create that shipped hashes
- * can be followed by a resend that inlines. That asymmetry is harmless in the
- * direction it actually occurs, because inlining always works — what would not
- * be harmless is assuming the create's answer here and shipping hashes to a
- * `@1.10` stream on the strength of it.
+ * WHY THE CUSTODY CHECK AND NOT THE FLAG ALONE. The hashes this resend sees are
+ * not only the ones the create sent by hash - the handoff records the fully
+ * hash-only document on purpose, so it also names images the create INLINED,
+ * whose bytes the host was never given. Shipping one of those bare because the
+ * stream *could* have carried it is a dangling hash, and the custody set is what
+ * separates the two. It is owner-keyed: a `null` owner (no signed-in account in
+ * this window) confirms nothing, so every node inlines - which is the correct
+ * answer rather than a degenerate one.
  *
- * The hashes this resend sees are ALSO not only the ones the create sent by
- * hash. The handoff records the fully hash-only document on purpose (see
- * above), so it names the images the create INLINED as well; those are hashes
- * whose bytes the create could not confirm on the host, and this resend simply
- * asks again. `resolveSendContentByHash` is best effort, so a hash that is
- * still unconfirmable is inlined from this window if it can be and left
- * hash-only if it cannot.
+ * `null` means "not ready yet, do not send": the inline shape needs an await -
+ * a partition read, a `drafts.readBlob`, a cloud fetch. That await settling is
+ * what re-renders this hook and lets the transition fire, so the send is delayed
+ * rather than dropped.
  *
- * `null` means "not ready yet, do not send": the shape needs an await — a
- * session-cold byte read, or the upload that puts the hashes where the host can
- * find them. That await settling is what re-renders this hook and lets the
- * transition fire, so the send is delayed rather than dropped.
- *
- * A legacy v3 handoff — already fully inlined, written before this change —
- * takes the fast path unchanged: it has no hash-only node, so there is nothing
- * to resolve, nothing to upload and nothing to wait for.
+ * A legacy v3 handoff - already fully inlined, written before any of this - and
+ * an image-free prompt both take the FAST PATH below: no hash-only node means
+ * nothing to decide, no state, no extra render.
  */
 function useSeededSendContent(
   handoff: InitialChatHandoff | null,
+  nodeId: string,
+  getDraftBlobBridgeSupported: () => boolean,
 ): JsonContent | null {
   const content = handoff?.content ?? null;
   const key = handoff?.key ?? null;
   // The handoff's OWN host - the machine the chat was created on and is bound
-  // to for life - not the window's effective one. The gate asks about that
-  // host's stream, and the upload has to land in that host's blob tier.
+  // to for life - not the window's effective one. Both the custody memo and the
+  // host byte leg are per host, and this is the host the resend goes to.
   const hostId = handoff?.hostId ?? null;
-  // Resolved through the binding directly rather than through
-  // `useHostClientForHostId`, whose `null` branch falls back to
-  // `useHostClient()` and THROWS where no host runtime is mounted. This driver
-  // legitimately renders bare - a chat tile under test, a shell the layout
-  // mounts without a provider - and the image seam is the only thing here that
-  // wants a client, so it must not make the whole driver's mountability a
-  // property of its own data needs. A handoff always names a host, so the
-  // `null` branch is only ever the no-handoff render.
-  const binding = useHostBinding();
-  const client = useMemo(
-    () => (hostId === null ? null : resolveNamedHostClient(binding, hostId)),
-    [binding, hostId],
-  );
-  const plan = useMemo(
-    () => (content === null ? null : planAttachmentsByHash(content)),
+  // Structural, so memoizing is safe: it asks about the recorded document's
+  // shape, never about custody. The live questions are all inside the effect.
+  const nothingToDecide = useMemo(
+    () => content === null || hashOnlyImageHashes(content).length === 0,
     [content],
-  );
-  const byHash =
-    plan !== null &&
-    hostId !== null &&
-    client !== null &&
-    plan.eligible.length > 0 &&
-    sendAttachmentsByHashSupported(hostId);
-  // Computed in render, not in an effect: the overwhelmingly common case is the
-  // create and the resend happening in one session, where every hash is still
-  // session-cached and going through state would cost the send an extra render.
-  // Skipped entirely on the by-hash path, which has no synchronous answer.
-  const fromSession = useMemo(
-    () =>
-      content === null || byHash ? null : inlineImageHashesFromSession(content),
-    [byHash, content],
   );
   const [resolved, setResolved] = useState<{
     readonly key: string;
     readonly content: JsonContent;
   } | null>(null);
   useEffect(() => {
-    if (content === null || key === null || fromSession !== null) return;
+    if (content === null || key === null || nothingToDecide) return;
+    // Recomputed, never captured - the same contract the submit path states.
+    // A `drafts.putBlob` confirmed while this resolution runs should let its
+    // node travel bare; a confirmation invalidated in that window must not.
+    const readHeld = (): ReadonlySet<string> =>
+      submitHostHeldImageHashes({
+        surfaceKey: nodeId,
+        incarnation: null,
+        content,
+        hostId,
+        bridgeSupported: getDraftBlobBridgeSupported(),
+        ownerUserId: currentDraftBlobOwnerId(),
+      });
+    const needed = draftImageInliningNeeded(content, readHeld());
+    if (needed.length === 0) {
+      // Every hash-only node is in the host's custody: the recorded document IS
+      // the wire shape, and no byte ever leaves this window.
+      setResolved({ key, content });
+      return;
+    }
     let cancelled = false;
-    const prepared =
-      byHash && hostId !== null && client !== null && plan !== null
-        ? resolveSendContentByHash({ hostId, client, content, plan })
-        : inlineLocalImageHashes(content);
-    // Two-argument `then`, so the failure arm answers only the READ failing.
-    void prepared.then(
-      (inlined) => {
+    void prepareDraftImageInlining({
+      initialHashes: needed,
+      target: draftImageByteTargetForHost(hostId),
+      // The handoff's content is FROZEN - no editor owns it, nothing appends to
+      // it while the reads run - so this re-read is constant and the reconcile
+      // loop settles in one pass. The shared function is still the right one:
+      // its other half, the synchronous `commit` contract, is what keeps this
+      // rewrite in the same step as the final custody read.
+      readRequiredHashes: () => draftImageInliningNeeded(content, readHeld()),
+      commit: (base64ByHash) => {
         if (cancelled) return;
-        setResolved({ key, content: inlined });
+        setResolved({
+          key,
+          content: inlineHashOnlyImageBytes(content, base64ByHash),
+        });
       },
-      () => {
-        // The store (or the upload) could not be reached at all. Send what we
-        // have rather than stalling the handoff forever: a hash the host cannot
-        // resolve comes back as the existing dangling-hash rejection, which
-        // surfaces as a failed send and restores the prompt to the composer — a
-        // visible failure the user can act on, and the honest outcome when the
-        // bytes are genuinely unreachable.
-        if (cancelled) return;
-        setResolved({ key, content });
-      },
-    );
+    }).catch(() => {
+      // No byte source could be reached at all. Send what we have rather than
+      // stalling the handoff forever: a hash the host cannot resolve comes back
+      // as the existing dangling-hash rejection, which surfaces as a failed send
+      // and restores the prompt to the composer - a visible failure the user can
+      // act on, and the honest outcome when the bytes are genuinely unreachable.
+      if (cancelled) return;
+      setResolved({ key, content });
+    });
     return () => {
       cancelled = true;
     };
-  }, [byHash, client, content, fromSession, hostId, key, plan]);
-  if (fromSession !== null) return fromSession;
-  // Key-matched so a handoff replaced while its read was in flight (a second
+  }, [
+    content,
+    getDraftBlobBridgeSupported,
+    hostId,
+    key,
+    nodeId,
+    nothingToDecide,
+  ]);
+  if (nothingToDecide) return content;
+  // Key-matched so a handoff replaced while its reads were in flight (a second
   // create in the same epic) can never send the previous one's message.
   return resolved !== null && resolved.key === key ? resolved.content : null;
 }
@@ -257,10 +272,10 @@ interface ApplyInitialChatHandoffStepInput {
   ) => void;
   readonly scope: InitialChatHandoffScope;
   /**
-   * The handoff's content with its image hashes inlined — see
-   * {@link useSeededSendContent}. `null` while those bytes are still being read
-   * back, which holds the send rather than sending a document the host cannot
-   * resolve.
+   * The handoff's content in the shape this stream takes - see
+   * {@link useSeededSendContent}. `null` while its bytes are still being
+   * resolved, which HOLDS the send rather than shipping a document the host
+   * cannot resolve.
    */
   readonly sendContent: JsonContent | null;
   readonly state: ChatSessionState;
@@ -301,10 +316,8 @@ function applyInitialChatHandoffStep(
       ) {
         return;
       }
-      // The handoff is registered hash-only; this send is where those bytes go
-      // back inline. `null` means the read has not settled — hold the send, do
-      // not fall back to the hash-only document, which the host would reject.
-      // The read settling re-renders the driver and this transition fires again.
+      // Its images are still being resolved. Holding is the whole point of the
+      // `null`: the transition fires again when that settles.
       if (input.sendContent === null) return;
       const sender: UserMessageSender = {
         type: "user",
@@ -319,12 +332,6 @@ function applyInitialChatHandoffStep(
         content: input.sendContent,
         sender,
         settings: input.handoff.settings,
-        // The create's own intent. Ignored on the deferred path (this send is a
-        // duplicate of the seeded queue item), and load-bearing on every
-        // synchronous one, where this resend can beat the host's initial turn:
-        // the host then materializes it against the worktree the create already
-        // made and adopts it, instead of running the turn in the source
-        // checkout.
         worktreeIntent: input.handoff.worktreeIntent,
       });
       if (sent === null) return;

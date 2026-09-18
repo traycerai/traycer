@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
+import {
+  A2A_PERMISSION_MODE_INSTRUCTION,
+  AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION,
+} from "@traycer/protocol/agent/agent-selection-guide-format";
+import type { AgentSelectionGuideResponse } from "@traycer/protocol/host";
 import { buildAgentSelectionGuideCommand } from "../agent-selection-guide";
 import { callHostRpc } from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
@@ -44,22 +48,46 @@ beforeEach(() => {
 });
 
 describe("buildAgentSelectionGuideCommand", () => {
-  it("includes the canonical permission invariant in JSON and human output", async () => {
-    const response = {
-      status: "not_found" as const,
-      message: "No agent selection guide found.",
-    };
-    rpcMock.mockResolvedValue(response);
+  const responses: ReadonlyArray<
+    readonly [string, AgentSelectionGuideResponse]
+  > = [
+    [
+      "not_found",
+      { status: "not_found", message: "No agent selection guide found." },
+    ],
+    [
+      "found",
+      {
+        status: "found",
+        sources: [
+          {
+            kind: "global",
+            path: "/Users/me/.traycer/agent-selection-guide.md",
+            priority: 1,
+            content: "Choose the appropriate agent.",
+          },
+        ],
+      },
+    ],
+  ];
 
-    const result = await buildAgentSelectionGuideCommand({
-      epicId: "epic_1",
-      senderAgentId: "agent_parent",
-    })(makeCtx());
+  it.each(responses)(
+    "includes the canonical scope and permission invariants in JSON and human output for %s responses",
+    async (_status, response) => {
+      rpcMock.mockResolvedValue(response);
 
-    expect(result.data).toEqual({
-      ...response,
-      permissionModeInstruction: A2A_PERMISSION_MODE_INSTRUCTION,
-    });
-    expect(result.human).toContain(A2A_PERMISSION_MODE_INSTRUCTION);
-  });
+      const result = await buildAgentSelectionGuideCommand({
+        epicId: "epic_1",
+        senderAgentId: "agent_parent",
+      })(makeCtx());
+
+      expect(result.data).toEqual({
+        ...response,
+        scopeInstruction: AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION,
+        permissionModeInstruction: A2A_PERMISSION_MODE_INSTRUCTION,
+      });
+      expect(result.human).toContain(AGENT_SELECTION_GUIDE_SCOPE_INSTRUCTION);
+      expect(result.human).toContain(A2A_PERMISSION_MODE_INSTRUCTION);
+    },
+  );
 });

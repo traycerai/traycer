@@ -9,12 +9,13 @@
  *
  * - `1.9` is mainline's windowed line as the `v1.3.x` staging builds shipped
  *   it (delivery placement, Antigravity anchors), frozen;
- * - `1.10` is provider fallback, minted above it;
- * - `1.11` changes NO frame shape - it binds the SAME three schema instances
- *   as `1.10`, by reference, so it carries the fallback surface too. The
- *   fallback floor is therefore a `>=` check against `FALLBACK_MINOR`, not an
- *   equality against the line ceiling: the ceiling moves with every new
- *   minor, but a minor that reuses `1.10`'s schemas is not a new surface line.
+ * - `1.10` is provider fallback, minted above it, frozen as the staging
+ *   builds shipped it;
+ * - `1.11` is the shell host on a resume trigger and on the queued
+ *   managed-command item, minted above that;
+ * - `1.13` is the `auto` permission mode, minted above THAT. It carries the
+ *   whole fallback and shell-host surface too - what it holds back from `1.11`
+ *   is the queue and approval-card shape, pinned in `chat-subscribe.test.ts`.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -32,11 +33,15 @@ import {
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
-const LATEST_MINOR = 11;
-// The fallback surface first ships at `1.10` and `1.11` reuses `1.10`'s
-// schemas unchanged, so "carries fallback" is a floor, not an equality
-// against the ceiling - see the module doc.
+// The minor each surface was minted on. A line carries a surface from its own
+// minor UPWARD - `1.13` is not "not the shell-host line", it is a later one
+// that inherits it - so these are thresholds, not equalities. Written as `===`
+// they assert that the newest line has LOST the surface below it.
 const FALLBACK_MINOR = 10;
+const SHELL_HOST_MINOR = 11;
+const DRAFT_IMAGE_CAUSE_MINOR = 12;
+const AUTO_MINOR = 13;
+const LIVE_MINOR = AUTO_MINOR;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -80,6 +85,49 @@ const FALLBACK_CLIENT_NEEDLES = fallbackActions.map((action) =>
   JSON.stringify(action),
 );
 const PLACEMENT_NEEDLE = '"deliveryPlacement":';
+// The approval card's transient judge stage. `reason` would be the other half,
+// but that key name is shared with unrelated frames; `reviewing` is unique to
+// the card, and the two are added and frozen together.
+const AUTO_APPROVAL_NEEDLE = '"reviewing":';
+
+// The two shapes the shell host rides, found structurally rather than by a
+// `"hostId":` needle - the chat record's own `hostId` is on every line. A
+// resume trigger's `managedCommand` is the object carrying `commandId` and
+// `monitoring` with no `description` (the tool-call identity has one); the
+// queued managed-command item is the object carrying `queueItemId` beside
+// `commandId`.
+function shellShapes(schema: z.ZodType): {
+  shapes: number;
+  withHost: number;
+} {
+  const tally = { shapes: 0, withHost: 0 };
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties !== null && typeof properties === "object") {
+      const keys = new Set(Object.keys(properties));
+      const isTriggerShell =
+        keys.has("commandId") &&
+        keys.has("monitoring") &&
+        !keys.has("description");
+      const isQueuedShell = keys.has("queueItemId") && keys.has("commandId");
+      if (isTriggerShell || isQueuedShell) {
+        tally.shapes += 1;
+        if (keys.has("hostId")) tally.withHost += 1;
+      }
+    }
+    for (const value of Object.values(record)) visit(value);
+  };
+  for (const io of ["input", "output"] as const) {
+    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+  }
+  return tally;
+}
 
 const unionArmsSchema = z.object({
   oneOf: z
@@ -109,9 +157,12 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.11 (a line added later cannot drop out)", () => {
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    expect(chatSubscribeLine.latestMinor).toBe(LATEST_MINOR);
+  it("covers chat.subscribe@1.0 through @1.13 (a line added later cannot drop out)", () => {
+    // RESTATED on purpose: this is the change-detector for the line SET, so a
+    // derived list would assert the registry against itself. When a new minor
+    // lands, extending this by hand is the acknowledgement.
+    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
 
   it("derives the fallback vocabulary it searches for (5 notice kinds, 2 actions, 1 background kind)", () => {
@@ -127,7 +178,10 @@ describe("chat.subscribe line surfaces", () => {
     describe(`chat.subscribe@1.${minor}`, () => {
       const { contract } = chatSubscribeLine.versions[minor];
       const carriesFallback = minor >= FALLBACK_MINOR;
+      const carriesShellHost = minor >= SHELL_HOST_MINOR;
+      const carriesAuto = minor >= AUTO_MINOR;
       const carriesPlacement = minor >= 9;
+      const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {
         const text = schemaText(contract.serverFrameSchema);
@@ -155,6 +209,27 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           actionAckPropertyNames(contract.serverFrameSchema).includes("token"),
         ).toBe(carriesFallback);
+      });
+
+      it(`actionAck ${carriesRefusalCause ? "carries" : "has no"} the draft-image refusal cause`, () => {
+        expect(
+          actionAckPropertyNames(contract.serverFrameSchema).includes("cause"),
+        ).toBe(carriesRefusalCause);
+      });
+
+      it(`server frames ${carriesShellHost ? "carry" : "hold back"} the shell host on every shell shape`, () => {
+        const { shapes, withHost } = shellShapes(contract.serverFrameSchema);
+        // Every line reaches a resume trigger through its chat tree, so the
+        // walk must find something - a zero here means the finder is wrong,
+        // not that the line is clean.
+        expect(shapes).toBeGreaterThan(0);
+        expect(withHost).toBe(carriesShellHost ? shapes : 0);
+      });
+
+      it(`server frames ${carriesAuto ? "carry" : "hold back"} the approval card's judge stage`, () => {
+        expect(
+          schemaText(contract.serverFrameSchema).includes(AUTO_APPROVAL_NEEDLE),
+        ).toBe(carriesAuto);
       });
     });
   }

@@ -194,12 +194,12 @@ export class BrowserViewManager {
   >();
   private readonly popups: BrowserViewPopups;
   private readonly debugSessions: BrowserViewDebugSessions;
-  private readonly windows: BrowserViewWindowAttachment;
   private readonly entryFactory: BrowserViewEntryFactory;
   private readonly provisioning: BrowserViewProvisioning;
   // Collaborators are part of the manager's public surface: the IPC layer
   // calls them directly (`manager.find.find(...)`) rather than through
   // pass-through methods that add no policy.
+  readonly windows: BrowserViewWindowAttachment;
   readonly annotations: BrowserViewAnnotationHost;
   readonly find: BrowserViewFind;
   readonly chords: BrowserViewChords;
@@ -615,6 +615,7 @@ export class BrowserViewManager {
 
   dispose(): void {
     this.offWindowChange();
+    this.windows.dispose();
     this.offDownloadChange();
     this.offCertificateError();
     for (const entry of Array.from(this.entries.guestValues())) {
@@ -703,9 +704,6 @@ export class BrowserViewManager {
       this.annotations.end(entry, "tile-close");
     }
     this.entries.bindSurface(entry, key);
-    if (previousSurface !== null && previousSurface.windowId !== key.windowId) {
-      this.windows.detachResetListenerIfUnused(previousSurface.windowId);
-    }
   }
 
   private detachEntrySurface(entry: BrowserViewEntry): void {
@@ -716,7 +714,6 @@ export class BrowserViewManager {
     this.entries.detachSurface(entry);
     entry.surfaceBindingId = null;
     entry.rendererResetPending = false;
-    this.windows.detachResetListenerIfUnused(surface.windowId);
     // LAST, once every field the reading depends on has moved: `viewed` is
     // read off the entry now (H10), so a detach that emitted nothing would
     // leave the host believing a tile is still showing this guest. `attachSurface`
@@ -759,6 +756,8 @@ export class BrowserViewManager {
     }
     this.annotations.end(entry, "navigation");
     entry.requestedUrl = url;
+    entry.navigationAttempt += 1;
+    const attempt = entry.navigationAttempt;
     entry.status = "loading";
     entry.statusReason = null;
     entry.certificateError = null;
@@ -770,7 +769,14 @@ export class BrowserViewManager {
         error: describeLogError(err),
         url,
       });
-      if (this.entries.isCurrent(entry)) {
+      // Settle only the attempt that failed. `loadURL` rejects for the OLDER
+      // of two overlapping navigations (ERR_ABORTED) after the newer one has
+      // already set `loading`; an entry-identity check alone would report
+      // `ready` for a page still in flight.
+      if (
+        this.entries.isCurrent(entry) &&
+        entry.navigationAttempt === attempt
+      ) {
         this.setStatus(entry, "ready", "Navigation failed");
       }
       throw err;
@@ -778,8 +784,24 @@ export class BrowserViewManager {
   }
 
   private reloadEntry(entry: BrowserViewEntry): void {
-    this.setStatus(entry, "loading", null);
+    this.startNavigationAttempt(entry);
     entry.webContents.reload();
+  }
+
+  /**
+   * Opens a new loading episode for a host-driven reload or history move.
+   * `setStatus` dedupes on (status, reason), so a move issued while the entry
+   * is ALREADY loading would bump the attempt and tell nobody - and the
+   * renderer's stall clock, keyed on the attempt, would keep running down
+   * for the old episode. Emit unconditionally instead.
+   */
+  private startNavigationAttempt(entry: BrowserViewEntry): void {
+    entry.navigationAttempt += 1;
+    if (entry.status !== "loading" || entry.statusReason !== null) {
+      this.setStatus(entry, "loading", null);
+      return;
+    }
+    this.emitStatus(entry);
   }
 
   private moveEntryInHistory(
@@ -804,7 +826,7 @@ export class BrowserViewManager {
       this.emitStatus(entry);
       return;
     }
-    this.setStatus(entry, "loading", null);
+    this.startNavigationAttempt(entry);
     try {
       if (direction === "back") {
         navigationHistory.goBack();
@@ -816,7 +838,9 @@ export class BrowserViewManager {
         error: describeLogError(err),
         webContentsId: entry.webContents.id,
       });
-      this.emitStatus(entry);
+      // Nothing will commit for a move that threw synchronously; re-emitting
+      // `loading` here left the tile spinning for good.
+      this.setStatus(entry, "ready", "Navigation failed");
     }
   }
 
@@ -964,6 +988,7 @@ export class BrowserViewManager {
       canGoBack: readings.canGoBack,
       canGoForward: readings.canGoForward,
       zoomPercent: readings.zoomPercent,
+      navigationAttempt: entry.navigationAttempt,
       viewed: entry.surface !== null && entry.desiredVisible,
     };
     this.send(
@@ -1050,40 +1075,68 @@ export class BrowserViewManager {
     return settled.promise;
   }
 
+  /**
+   * Every step runs, and the entry ALWAYS leaves the registry, whatever an
+   * earlier step throws. This path is the `destroyed` handler of a guest that
+   * may already be gone - a renderer restart takes its `<webview>` with it -
+   * and a destroyed WebContents' native getters throw "Object has been
+   * destroyed" instead of degrading. A throw that escaped here left the entry
+   * registered behind a rejected `closePromise`, every later ensure of the
+   * same tab chained behind that rejection (provisioning's "wait for the
+   * in-flight close" branch), and the session was wedged until the app
+   * relaunched. A failed step is a WARN line, never a reason to keep the
+   * corpse: the close resolves because the guest is gone from the registry,
+   * which is the fact the waiters read.
+   */
   private async destroyEntry(entry: BrowserViewEntry): Promise<void> {
-    this.viewport.forget(entry);
     const surface = entry.surface;
     const keyId = surface === null ? null : entryKeyId(surface);
+    const step = (name: string, run: () => void): void => {
+      try {
+        run();
+      } catch (error) {
+        log.warn("[browser-view] view destroy step failed", {
+          keyId,
+          step: name,
+          error: describeLogError(error),
+        });
+      }
+    };
+    step("viewport", () => this.viewport.forget(entry));
     log.info("[browser-view] view destroy started", {
       keyId,
       status: entry.status,
     });
-    this.destroyDevToolsWindow(entry);
-    this.annotations.failPendingForEntry(entry);
+    step("devtools", () => this.destroyDevToolsWindow(entry));
+    step("annotations", () => this.annotations.failPendingForEntry(entry));
     this.entries.detachSurface(entry);
-    if (surface !== null) {
-      this.windows.detachResetListenerIfUnused(surface.windowId);
-    }
     const webContents = entry.webContents;
-    for (const [event, handler] of Object.entries(entry.listeners)) {
-      webContents.off(event, handler);
-    }
-    entry.annotationSession?.dispose("tile-close");
+    step("listeners", () => {
+      for (const [event, handler] of Object.entries(entry.listeners)) {
+        webContents.off(event, handler);
+      }
+    });
+    step("annotation-session", () => {
+      entry.annotationSession?.dispose("tile-close");
+    });
     entry.annotationSession = null;
-    this.pip.forget(entry);
+    step("pip", () => this.pip.forget(entry));
     // Disposing the session ends every lease this guest handed out; the fields
     // go with it so nothing can release into the next incarnation's session.
     entry.seedLease = null;
     entry.agentCdpLease = null;
-    entry.debugSession?.dispose();
+    step("debug-session", () => {
+      entry.debugSession?.dispose();
+    });
     entry.debugSession = null;
-    this.releaseRendererGuest(
-      entry.identity.registrationId,
-      entry.identity.lifecycleWindowId,
+    step("renderer-guest", () =>
+      this.releaseRendererGuest(
+        entry.identity.registrationId,
+        entry.identity.lifecycleWindowId,
+      ),
     );
     this.entries.remove(entry);
-    this.releaseIsolatedSessionStorage(entry);
-    this.windows.detachResetListenerIfUnused(entry.identity.lifecycleWindowId);
+    step("isolated-storage", () => this.releaseIsolatedSessionStorage(entry));
     log.info("[browser-view] view destroy requested", { keyId });
   }
 

@@ -4,22 +4,20 @@ import { toast } from "sonner";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
-import type { ImagePreparationSession } from "@/lib/composer/composer-image-preparation";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import {
-  deleteImage,
+  deleteImageBytesUnchecked,
   getImageBytes,
   imageHashKeys,
   releaseSession,
   sessionObjectUrl,
-} from "@/lib/composer/composer-image-store";
+} from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import * as idb from "idb-keyval";
 
 import {
   makeHandle,
-  makeTestPreparationSession,
   NO_MENTION_ROOTS,
   NOOP_FILE_DROPS,
 } from "./use-landing-composer-paste-test-helpers";
@@ -47,7 +45,7 @@ vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
 });
 
 // In-memory stand-in for idb-keyval so `putImage` can persist + read back bytes
-// without a real IndexedDB. Mirrors the composer-image-store unit test.
+// without a real IndexedDB. Mirrors the landing-image-store unit test.
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
 function idbStringKey(key: IDBValidKey): string {
@@ -85,10 +83,8 @@ let urlCounter = 0;
 // inside a `renderHook` callback, which would re-create the hook's
 // `imageIngest` memo on every render) and shared across every
 // `useLandingComposerPaste` call in a given test.
-let preparationSession: ImagePreparationSession;
 
 beforeEach(async () => {
-  preparationSession = makeTestPreparationSession();
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
   URL.revokeObjectURL = vi.fn();
   vi.mocked(idb.set).mockImplementation((key, value) => {
@@ -98,7 +94,7 @@ beforeEach(async () => {
   const hashes = await imageHashKeys();
   await Promise.all(
     hashes.map(async (hash) => {
-      await deleteImage(hash);
+      await deleteImageBytesUnchecked(hash);
       releaseSession(hash);
     }),
   );
@@ -128,7 +124,6 @@ describe("useLandingComposerPaste", () => {
         disabled: true,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -155,7 +150,6 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -198,7 +192,6 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -230,7 +223,6 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
 
@@ -279,7 +271,6 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        preparationSession,
       }),
     );
     const file = new File(["hello"], "shot.png", { type: "image/png" });

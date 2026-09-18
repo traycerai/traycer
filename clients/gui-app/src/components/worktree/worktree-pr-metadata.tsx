@@ -124,7 +124,7 @@ function WorktreePrPill(props: {
       asChild
       variant="outline"
       className={cn(
-        "group/pr-pill gap-1.5 rounded-full px-2 font-medium",
+        "group/pr-pill rounded-full",
         props.flexible && "min-w-0 shrink",
         PR_STATE_PILL_CLASS[props.reference.state],
       )}
@@ -158,8 +158,8 @@ function WorktreePrOverflow(props: {
     <Popover>
       <Badge
         asChild
-        variant="outline"
-        className="cursor-pointer border-border bg-background font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+        variant="muted"
+        className="cursor-pointer border-border bg-background hover:bg-foreground/5 hover:text-foreground"
       >
         <PopoverTrigger
           aria-label={`Show ${count} more pull request${count === 1 ? "" : "s"}`}

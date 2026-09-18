@@ -226,10 +226,20 @@ async function probeWithinDeadline(
   // Never issue a request the budget has no room for. This is also what makes
   // the clamped sleep above terminate rather than re-probe at the deadline.
   if (remaining <= 0) return "deadline";
-  let expiry: number | null = null;
+  // `window.setTimeout`, not the ambient one, so the handle is a plain number
+  // rather than a platform-dependent object.
+  //
+  // A `number` rather than `number | null`, and that is a fix to the TYPE, not
+  // a silenced check. The executor of `new Promise` runs SYNCHRONOUSLY during
+  // construction, so the handle is always written before the `try` below is
+  // entered - the nullable spelling described a state this function cannot be
+  // in, which is why the `expiry !== null` that used to guard the clear could
+  // never fire. `0` is not a handle any browser mints, and clearing an unknown
+  // handle is a no-op, so even the one path that could leave it unwritten - an
+  // executor that throws, which rejects the promise rather than throwing here -
+  // still clears safely.
+  let expiry = 0;
   const expired = new Promise<ProbeReading>((resolve) => {
-    // `window.setTimeout`, not the ambient one, so the handle is a plain
-    // number rather than a platform-dependent object.
     expiry = window.setTimeout(() => {
       resolve("deadline");
     }, remaining);
@@ -237,7 +247,7 @@ async function probeWithinDeadline(
   try {
     return await Promise.race([probe(client, epicId), expired]);
   } finally {
-    if (expiry !== null) window.clearTimeout(expiry);
+    window.clearTimeout(expiry);
   }
 }
 

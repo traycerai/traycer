@@ -46,9 +46,10 @@ import {
 } from "@/lib/chats/pending-chat-creations";
 import { isRecoverableLatestForkRefusal } from "@/lib/chats/recoverable-fork-refusal";
 import { reportEpicCreateRefusal } from "@/lib/epics/report-epic-create-refusal";
-import { imageHashesFromContent } from "@/lib/composer/composer-image-inlining";
+import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
 import {
-  forgetConfirmedBlobs,
+  currentDraftBlobOwnerId,
+  invalidateDraftBlobConfirmations,
   putDraftBlobs,
 } from "@/lib/drafts/draft-blob-transport";
 import {
@@ -294,14 +295,14 @@ export function useEpicCreateChatForHostClient(
       if (client === null || hostId === null) return response;
       const content = variables.initialMessage?.content ?? null;
       if (content === null) return response;
-      const hashes = imageHashesFromContent(content);
+      const hashes = hashOnlyImageHashes(content);
       if (hashes.length === 0) return response;
       // Retracted before the re-upload, exactly as on `epic.create`'s twin:
       // this refusal is the only evidence the client gets that its ack memo is
       // wrong, and a hash whose re-upload fails here must not keep reading as
       // confirmed to the next message that carries it.
-      forgetConfirmedBlobs(hostId, hashes);
-      await putDraftBlobs(hostId, client, hashes);
+      invalidateDraftBlobConfirmations(hostId, hashes);
+      await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
       return redispatch();
     },
     options: {

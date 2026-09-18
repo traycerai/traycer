@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { LazyMotion, domMax } from "motion/react";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { THEME_PRESETS, type ThemePreset } from "@/lib/theme-presets";
 import {
   DEFAULT_COMPOSER_LAYOUT,
@@ -25,6 +26,7 @@ import {
   type LeaderState,
 } from "@/providers/keybinding-context";
 import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
+import { cn } from "@/lib/utils";
 import "@/index.css";
 
 // Manual visual-QA fixture for the reasoning slider / Fast leader-badge
@@ -35,11 +37,11 @@ import "@/index.css";
 // is not an automated regression check.
 
 type ThemeModeChoice = "light" | "dark";
-type ReasoningOptionCount = 2 | 3 | 6 | 10;
+type ReasoningOptionCount = 2 | 3 | 4 | 6 | 10;
 
-// `traycer-green`'s accent (`#257174`) is the closest built-in preset to a
-// teal reference primary - see `lib/theme-presets.ts`.
-const DEFAULT_PRESET: ThemePreset = "traycer-green";
+// Start with the neutral palette shown in the feedback; controls retain the
+// preset switch for checking filled-text contrast across actual app themes.
+const DEFAULT_PRESET: ThemePreset = "neutral";
 
 function themeModeFromSelect(value: string): ThemeModeChoice {
   return value === "light" ? "light" : "dark";
@@ -59,15 +61,28 @@ function reasoningControlFromSelect(
 function optionCountFromSelect(value: string): ReasoningOptionCount {
   if (value === "2") return 2;
   if (value === "3") return 3;
+  if (value === "4") return 4;
   return value === "10" ? 10 : 6;
 }
+
+const PREVIEW_LEVEL_LABELS: Readonly<
+  Record<ReasoningOptionCount, readonly string[]>
+> = {
+  2: ["Low", "High"],
+  3: ["Low", "Medium", "High"],
+  4: ["Low", "Medium", "High", "Extra High"],
+  6: ["Off", "Low", "Medium", "High", "Extra High", "Max"],
+  10: Array.from({ length: 10 }, (_, index) =>
+    index === 9 ? "Extended reasoning budget" : `Level ${index + 1}`,
+  ),
+};
 
 function levelOptions(
   count: ReasoningOptionCount,
 ): ReadonlyArray<ReasoningLevelOption> {
-  return Array.from({ length: count }, (_, index) => ({
+  return PREVIEW_LEVEL_LABELS[count].map((label, index) => ({
     id: `level-${index + 1}`,
-    label: `Level ${index + 1}`,
+    label,
     description: null,
   }));
 }
@@ -194,6 +209,7 @@ function Controls(props: ControlsProps): ReactNode {
         >
           <option value="2">2 levels</option>
           <option value="3">3 levels</option>
+          <option value="4">4 levels (Grok order)</option>
           <option value="6">6 levels</option>
           <option value="10">10 levels</option>
         </select>
@@ -225,7 +241,8 @@ export function Fixture(): ReactNode {
   const [preset, setPreset] = useState<ThemePreset>(DEFAULT_PRESET);
   const [control, setControl] =
     useState<ComposerReasoningFooterControl>("slider");
-  const [optionCount, setOptionCount] = useState<ReasoningOptionCount>(6);
+  const [optionCount, setOptionCount] = useState<ReasoningOptionCount>(4);
+  const [narrow, setNarrow] = useState(false);
   const [fastPresent, setFastPresent] = useState(true);
   const [altHeld, setAltHeld] = useState(false);
   const options = useMemo(() => levelOptions(optionCount), [optionCount]);
@@ -238,11 +255,15 @@ export function Fixture(): ReactNode {
   // `theme-applier.ts` owns the document element's theme attributes, so the
   // fixture drives it through the store rather than poking the DOM itself.
   useEffect(() => {
-    useSettingsStore.getState().setTheme(mode);
+    useSettingsStore.setState({ theme: mode });
   }, [mode]);
 
   useEffect(() => {
-    useSettingsStore.getState().setThemePreset(preset);
+    useThemeLibraryStore.setState({
+      selected: { light: null, dark: null },
+      draft: null,
+    });
+    useSettingsStore.setState({ themePreset: preset });
   }, [preset]);
 
   useEffect(() => {
@@ -265,41 +286,76 @@ export function Fixture(): ReactNode {
     : null;
 
   const leaderState = altHeld ? ALT_HELD_BY_PICKER : ALT_NOT_HELD;
+  const selectedIndex = options.findIndex(
+    (option) => option.id === reasoningValue,
+  );
 
   return (
-    <div className="min-h-safe-dvh bg-background p-8 text-foreground">
-      <Controls
-        mode={mode}
-        onModeChange={setMode}
-        preset={preset}
-        onPresetChange={setPreset}
-        control={control}
-        onControlChange={setControl}
-        optionCount={optionCount}
-        onOptionCountChange={(count) => {
-          setOptionCount(count);
-          setReasoningValue("level-1");
-        }}
-        fastPresent={fastPresent}
-        onFastPresentChange={setFastPresent}
-        altHeld={altHeld}
-        onAltHeldChange={setAltHeld}
-      />
+    <div className="min-h-safe-dvh bg-background p-5 text-foreground sm:p-8">
+      <div className="mx-auto max-w-6xl">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          A smaller reasoning slider
+        </h1>
+        <p className="mb-6 mt-2 text-ui-sm text-muted-foreground">
+          Compact slider with the selected level aligned to the right edge.
+        </p>
+        <Controls
+          mode={mode}
+          onModeChange={setMode}
+          preset={preset}
+          onPresetChange={setPreset}
+          control={control}
+          onControlChange={setControl}
+          optionCount={optionCount}
+          onOptionCountChange={(count) => {
+            setOptionCount(count);
+            setReasoningValue("level-1");
+          }}
+          fastPresent={fastPresent}
+          onFastPresentChange={setFastPresent}
+          altHeld={altHeld}
+          onAltHeldChange={setAltHeld}
+        />
 
-      <p className="mt-4 text-ui-xs text-muted-foreground">
-        Selected: {reasoningValue}
-        {" · "}
-        Service tier: {serviceTierValue === "" ? "none" : serviceTierValue}
-      </p>
-
-      <div className="mt-4 max-w-sm rounded-lg border border-border bg-popover shadow-sm">
-        <LeaderHeldContext.Provider value={leaderState}>
-          <HarnessModelPickerModelSettingsFooter
-            pickerOpen
-            reasoning={reasoning}
-            serviceTier={serviceTier}
+        <label className="my-5 flex items-center gap-2 text-ui-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={narrow}
+            onChange={(event) => setNarrow(event.target.checked)}
           />
-        </LeaderHeldContext.Provider>
+          Narrow picker
+        </label>
+
+        <div className="max-w-md">
+          <div
+            className={cn(
+              "overflow-visible rounded-lg border border-border bg-popover shadow-sm",
+              narrow && "w-[85%]",
+            )}
+          >
+            <div className="px-3 py-3">
+              <div className="rounded-md bg-foreground/5 px-3 py-2 text-ui-xs text-muted-foreground">
+                Search models
+              </div>
+              <div className="mt-3 flex items-center justify-between rounded-md bg-foreground/8 px-3 py-2 text-ui-sm">
+                <span>Selected model</span>
+                <span aria-hidden="true">✓</span>
+              </div>
+            </div>
+            <LeaderHeldContext.Provider value={leaderState}>
+              <HarnessModelPickerModelSettingsFooter
+                pickerOpen
+                reasoning={reasoning}
+                serviceTier={serviceTier}
+              />
+            </LeaderHeldContext.Provider>
+          </div>
+        </div>
+        <p className="mt-8 text-ui-xs text-muted-foreground">
+          Current level: {options[selectedIndex]?.label ?? reasoningValue}.
+          Fast: {serviceTierValue === "" ? "off" : "on"}. Hold the hint checkbox
+          to show shortcut placement. The 10-level option includes a long label.
+        </p>
       </div>
     </div>
   );

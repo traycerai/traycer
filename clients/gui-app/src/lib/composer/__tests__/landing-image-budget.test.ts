@@ -9,9 +9,21 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
   LANDING_IMAGE_BUDGET_BYTES,
+  LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
+  registerExtraImageRootSource,
   reserveLandingImageBudget,
+  tryReserveLandingImageResidency,
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import {
+  awaitLandingImageSizes,
+  imageHashKeys,
+  imageStore,
+  putImage,
+  setLandingImageSizesHydratedForTests,
+} from "@/lib/composer/landing-image-store";
+import { set as idbSet } from "idb-keyval";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -89,6 +101,223 @@ describe("reserveLandingImageBudget", () => {
     resetLandingImageBudgetReservationsForTesting();
     draftRuntimeRegistry.resetForTesting();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
+  // One source, installed once: `registerExtraImageRootSource` has no
+  // withdrawal, so the tests below drive it by emptying the array instead.
+  const extraRoots: string[] = [];
+  registerExtraImageRootSource({ hashes: () => extraRoots });
+
+  it("charges an extra root's MEASURED bytes against the cap (DRIVE RED)", async () => {
+    // Extra roots are hash-only by construction - an annotation crop, a
+    // composer or new-chat row, a stash entry - so nothing about them declares
+    // a size, and they were counted as zero while the sweep dutifully protected
+    // their bytes. The roots and the usage sum have to be the same set.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const bytes = new Uint8Array(512).fill(7);
+    extraRoots.push(await putImage(bytes));
+
+    // Exactly the cap once those 512 bytes are counted.
+    const exact = reserveLandingImageBudget(null, [
+      { hash: "d".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 512 },
+    ]);
+    expect(exact).not.toBeNull();
+    exact?.release();
+
+    // One byte past it.
+    expect(
+      reserveLandingImageBudget(null, [
+        { hash: "e".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 511 },
+      ]),
+    ).toBeNull();
+    extraRoots.length = 0;
+  });
+
+  it("charges a resident root it has not MEASURED at the per-image ceiling", async () => {
+    // Bytes written by a build before the size table existed. Unknown must not
+    // mean free while the partition is holding them; the store measures them at
+    // the next start, and until then the ceiling is the honest bound.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const roots = 13;
+    expect(roots * LANDING_IMAGE_MAX_BYTES_PER_IMAGE).toBeGreaterThan(
+      LANDING_IMAGE_BUDGET_BYTES,
+    );
+    for (let index = 0; index < roots; index += 1) {
+      const hash = `${index}`.padStart(64, "b");
+      await idbSet(hash, new Uint8Array(8).fill(index), imageStore());
+      extraRoots.push(hash);
+    }
+    // Enumerating the partition is what makes them "resident" to the store.
+    await imageHashKeys();
+
+    expect(
+      reserveLandingImageBudget(null, [{ hash: "c".repeat(64), bytes: 1 }]),
+    ).toBeNull();
+    extraRoots.length = 0;
+  });
+
+  it("charges a root at the ceiling until the partition has been measured (DRIVE RED)", async () => {
+    // Cold start: the presence set is seeded by the same startup pass that
+    // measures sizes, so before it finishes "no bytes here" is what it says
+    // about every restored image. Reading that as free admitted a paste on top
+    // of a full partition.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const roots = 13;
+    for (let index = 0; index < roots; index += 1) {
+      extraRoots.push(`${index}`.padStart(64, "c"));
+    }
+    // The partition has never been measured, and nothing here declares a size.
+    setLandingImageSizesHydratedForTests(false);
+
+    expect(
+      reserveLandingImageBudget(null, [{ hash: "e".repeat(64), bytes: 1 }]),
+    ).toBeNull();
+
+    // Once the pass has run, the same roots are known to hold nothing.
+    setLandingImageSizesHydratedForTests(true);
+    const admitted = reserveLandingImageBudget(null, [
+      { hash: "e".repeat(64), bytes: 1 },
+    ]);
+    expect(admitted).not.toBeNull();
+    admitted?.release();
+    extraRoots.length = 0;
+  });
+
+  it("does not charge a reservation the root sum is already charging (DRIVE RED)", async () => {
+    // The bytes landed and something references them, so they are a root - and
+    // a root is charged. Leaving the reservation charged too refuses work that
+    // fits, for as long as the caller holds it.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const bytes = new Uint8Array(512).fill(3);
+    const hash = await putImage(bytes);
+    extraRoots.push(hash);
+
+    // Reserving the SAME hash that is now rooted costs nothing new, and must
+    // not make the next admission see 1024 bytes of usage for 512 real ones.
+    const held = reserveLandingImageBudget(null, [
+      { hash, bytes: bytes.byteLength },
+    ]);
+    expect(held).not.toBeNull();
+    const exact = reserveLandingImageBudget(null, [
+      { hash: "f".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 512 },
+    ]);
+    expect(exact).not.toBeNull();
+    exact?.release();
+    held?.release();
+    extraRoots.length = 0;
+  });
+
+  it("hands an anonymous slot's charge to the hash once its bytes land (DRIVE RED)", async () => {
+    // A batch reserves before it has hashed anything. The first item lands and
+    // something roots it - so the root sum charges those bytes - while the slot
+    // that stood for it is still held for a slower sibling. Charging both
+    // refuses pastes that fit, for as long as the slow one takes.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const batch = reserveLandingImageBudget(null, [
+      { hash: null, bytes: 512 },
+      { hash: null, bytes: 512 },
+    ]);
+    expect(batch).not.toBeNull();
+
+    const bytes = new Uint8Array(512).fill(9);
+    const hash = await putImage(bytes);
+    extraRoots.push(hash);
+    batch?.settleStored(0, hash);
+
+    // 512 rooted + 512 still outstanding = 1024, not 1536.
+    const exact = reserveLandingImageBudget(null, [
+      { hash: "a".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 1024 },
+    ]);
+    expect(exact).not.toBeNull();
+    exact?.release();
+    batch?.release();
+    extraRoots.length = 0;
+  });
+
+  it("settles the slot of the item that landed, not the first unnamed one (DRIVE RED)", async () => {
+    // A batch's writes run concurrently, so the fast item can settle while a
+    // slower, LARGER sibling is still outstanding. Settling "the first unnamed
+    // slot" moved the big slot's charge onto the small item's hash - and when
+    // that hash was already rooted, the difference vanished from the ledger
+    // entirely and the next admission saw capacity that does not exist.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const duplicate = new Uint8Array(1024).fill(4);
+    const duplicateHash = await putImage(duplicate);
+    extraRoots.push(duplicateHash);
+
+    const batch = reserveLandingImageBudget(null, [
+      { hash: null, bytes: 4096 },
+      { hash: null, bytes: 1024 },
+    ]);
+    expect(batch).not.toBeNull();
+    // The SECOND candidate is the one that landed, and its bytes are already a
+    // root - so settling it frees 1024 of outstanding charge, not 4096.
+    batch?.settleStored(1, duplicateHash);
+
+    // 1024 rooted + 4096 still outstanding. One byte more than the remainder
+    // must not fit.
+    expect(
+      reserveLandingImageBudget(null, [
+        {
+          hash: "a".repeat(64),
+          bytes: LANDING_IMAGE_BUDGET_BYTES - 1024 - 4096 + 1,
+        },
+      ]),
+    ).toBeNull();
+    batch?.release();
+    extraRoots.length = 0;
+  });
+
+  it("keeps charging a reservation whose root is charging ZERO for it (DRIVE RED)", async () => {
+    // A root whose bytes this partition does not hold costs nothing - that is
+    // what makes a dangling reference free. Dropping its reservation on the
+    // grounds that "a root exists" therefore made those bytes free twice over,
+    // which is how a stash restoring a missing crop could be admitted on top of
+    // a full partition.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    const missingHash = "c".repeat(64);
+    extraRoots.push(missingHash);
+    // Rooted, absent: charged zero by the root sum.
+    const restoring = tryReserveLandingImageResidency([
+      { hash: missingHash, bytes: 4096 },
+    ]);
+    expect(restoring).not.toBeNull();
+
+    expect(
+      reserveLandingImageBudget(null, [
+        { hash: "d".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 4096 + 1 },
+      ]),
+    ).toBeNull();
+    const fits = reserveLandingImageBudget(null, [
+      { hash: "d".repeat(64), bytes: LANDING_IMAGE_BUDGET_BYTES - 4096 },
+    ]);
+    expect(fits).not.toBeNull();
+    fits?.release();
+    restoring?.release();
+    extraRoots.length = 0;
+  });
+
+  it("charges nothing for a DANGLING root with no bytes anywhere", () => {
+    // An annotation record whose crop was reclaimed still names its hash. The
+    // ceiling would be a permanent tax for bytes nobody holds, and no later
+    // measurement could ever retire it.
+    for (let index = 0; index < 13; index += 1) {
+      extraRoots.push(`${index}`.padStart(64, "f"));
+    }
+
+    const admitted = reserveLandingImageBudget(null, [
+      { hash: "c".repeat(64), bytes: 1 },
+    ]);
+    expect(admitted).not.toBeNull();
+    admitted?.release();
+    extraRoots.length = 0;
   });
 
   it("charges zero for a candidate hash that is already a live root", () => {
@@ -588,5 +817,66 @@ describe("landing-image-budget module isolation", () => {
     // Sanity: re-importing the store is still possible after isolation; this
     // does not assert registration timing (covered in import-cycle suite).
     budget.resetLandingImageBudgetReservationsForTesting();
+  });
+});
+
+/**
+ * §3.1: an unmeasured root is charged the PREPARED ceiling, not the old 5 MiB
+ * paste refusal.
+ *
+ * Preparation resizes and re-encodes rather than refusing, so the largest thing
+ * that can BE in the store is `PREPARED_IMAGE_MAX_BYTES` (3.75 MiB). Charging
+ * the old 5 MiB over-charges every unmeasured root by 33%, and charging the
+ * SOURCE ceiling would over-charge by 13× - both refuse pastes that fit, and
+ * only on a cold start, which is the hardest window to reproduce by hand.
+ *
+ * Measured at the last free byte rather than asserted as a refusal: a wrong
+ * constant fails as surely as a missing one.
+ */
+describe("image byte budget: an unmeasured root on a cold start", () => {
+  it("is charged the prepared ceiling, and one byte more is refused", async () => {
+    const budget = await import("@/lib/composer/landing-image-budget");
+    const store = await import("@/lib/composer/landing-image-store");
+    const { PREPARED_IMAGE_MAX_BYTES } =
+      await import("@/lib/composer/prompt-stash-image-preparation");
+
+    // Bytes present, size not yet measured, hydration pass not finished: the
+    // "unknown because we have not looked yet" case.
+    const hash = await store.putImage(new Uint8Array([1, 2, 3]));
+    store.setLandingImageSizesHydratedForTests(false);
+    store.__resetMeasuredLandingImageSizesForTests();
+    registerExtraImageRootSource({ hashes: () => [hash] });
+
+    const free = budget.LANDING_IMAGE_BUDGET_BYTES - PREPARED_IMAGE_MAX_BYTES;
+    const exact = budget.tryReserveLandingImageBudget([
+      { hash: null, bytes: free },
+    ]);
+    expect(exact).not.toBeNull();
+    exact?.release();
+    const overBy1 = budget.tryReserveLandingImageBudget([
+      { hash: null, bytes: free + 1 },
+    ]);
+    expect(overBy1).toBeNull();
+    overBy1?.release();
+  });
+
+  it("is charged ZERO once hydrated and the bytes are demonstrably absent", async () => {
+    // The second arm, and the reason the first cannot stand alone: with the
+    // hydration gate deleted, a cold store and an absent hash look identical
+    // from the outside, so the pin above would still pass. Here the partition
+    // has looked and found nothing, and an absent root must cost nothing -
+    // charging the ceiling for bytes nobody holds is a tax no measurement can
+    // ever retire.
+    const budget = await import("@/lib/composer/landing-image-budget");
+    const store = await import("@/lib/composer/landing-image-store");
+
+    store.setLandingImageSizesHydratedForTests(true);
+    registerExtraImageRootSource({ hashes: () => ["f".repeat(64)] });
+
+    const whole = budget.tryReserveLandingImageBudget([
+      { hash: null, bytes: budget.LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(whole).not.toBeNull();
+    whole?.release();
   });
 });

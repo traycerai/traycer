@@ -1,4 +1,4 @@
-import { tryReserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
+import { tryReserveLandingImageResidency } from "@/lib/composer/landing-image-budget";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import type { DraftDocument } from "@traycer/protocol/host";
 import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
@@ -15,7 +15,7 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { blobHashesOfDocument } from "@/lib/drafts/draft-write-codec";
 import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
-import { putImageBytesAtHash } from "@/lib/composer/composer-image-store";
+import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
 import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
 import type { ClosedHeaderTab } from "./history";
 
@@ -107,7 +107,16 @@ async function prepareHostDraft(
     return true;
   if (hashes.some((hash) => !images.has(hash)))
     throw new Error("The draft's images are not available yet.");
-  const reservation = tryReserveLandingImageBudget(
+  // RESIDENCY admission, for the same reason the landing stash import needs
+  // it: these bytes are about to be written into the partition, and ordinary
+  // admission charges nothing for a candidate whose hash is already a live
+  // root. That is right for a root whose bytes are here and wrong for one
+  // that is rooted while ABSENT - a closed draft's own record still names the
+  // hash - so this recovery wrote megabytes for free and the partition
+  // finished above its budget. Nothing is settled below: the document that
+  // will root these hashes is not installed until every write has landed, so
+  // the slots stay charged for the whole batch.
+  const reservation = tryReserveLandingImageResidency(
     [...images].map(([hash, image]) => ({
       hash,
       bytes: image.bytes.byteLength,

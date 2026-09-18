@@ -3,7 +3,10 @@ import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
 import {
   DEFAULT_COMPOSER_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
+  selectStatusBarShown,
   useLayoutStore,
+  type StatusBarLayoutPreferences,
+  type UsageControlsPlacement,
 } from "@/stores/settings/layout-store";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.layout);
@@ -45,7 +48,7 @@ describe("useLayoutStore", () => {
         },
         resources: {
           enabled: true,
-          metrics: ["cpu", "memory", "processes"],
+          metrics: ["cpu", "processes"],
           scope: "host-tree",
         },
       });
@@ -206,7 +209,7 @@ describe("useLayoutStore", () => {
         },
         resources: {
           enabled: true,
-          metrics: ["cpu", "memory", "processes"],
+          metrics: ["cpu", "processes"],
           scope: "host-tree",
         },
       });
@@ -613,14 +616,15 @@ describe("useLayoutStore", () => {
       const { toggleStatusBarResourceMetric } = useLayoutStore.getState();
 
       toggleStatusBarResourceMetric("cpu");
-      toggleStatusBarResourceMetric("memory");
       toggleStatusBarResourceMetric("processes");
       expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([]);
 
       toggleStatusBarResourceMetric("ramShare");
+      toggleStatusBarResourceMetric("memory");
       toggleStatusBarResourceMetric("cpu");
       expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
         "cpu",
+        "memory",
         "ramShare",
       ]);
     });
@@ -755,6 +759,38 @@ describe("useLayoutStore", () => {
       useLayoutStore.getState().setStatusBarShowModeWord(true);
 
       expect(useLayoutStore.getState().statusBar).toBe(before);
+    });
+
+    // The one predicate every strip-dependent surface reads: a desktop
+    // viewport answers from `placement`, a mobile one from `mobileFooter`
+    // alone, so each half is shown ignoring the other's preference.
+    describe("selectStatusBarShown", () => {
+      function stateWith(
+        placement: UsageControlsPlacement,
+        mobileFooter: boolean,
+      ): { readonly statusBar: StatusBarLayoutPreferences } {
+        return {
+          statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement, mobileFooter },
+        };
+      }
+
+      it("shows the strip on a desktop viewport exactly under the status-bar placement", () => {
+        expect(
+          selectStatusBarShown(stateWith("status-bar", false), false),
+        ).toBe(true);
+        expect(selectStatusBarShown(stateWith("header", true), false)).toBe(
+          false,
+        );
+      });
+
+      it("shows the strip on a mobile viewport exactly when the footer switch is on", () => {
+        expect(selectStatusBarShown(stateWith("header", true), true)).toBe(
+          true,
+        );
+        expect(selectStatusBarShown(stateWith("status-bar", false), true)).toBe(
+          false,
+        );
+      });
     });
   });
 

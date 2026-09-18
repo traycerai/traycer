@@ -3,10 +3,12 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
   contentBlockSchemaPreFallback,
+  contentBlockSchemaPreBrowser,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreSettlement,
+  contentBlockSchemaPreShellHost,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -214,8 +216,9 @@ export const userMessageSchemaV18 = z
     sessionAnchor: chatSessionAnchorSchema.nullable(),
   })
   .superRefine(userMessageSenderKindRefine);
-// There is no user-message delta in 1.9 or 1.10. Alias the frozen schema until
-// a newer contract needs its own extension (including the sender-kind check).
+// There is no user-message delta in 1.9, 1.10 or 1.11. Alias the frozen schema
+// until a newer contract needs its own extension (including the sender-kind
+// check).
 export const userMessageSchema = userMessageSchemaV18;
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
@@ -663,6 +666,64 @@ export const assistantMessageSchemaPreFallback = z.object({
 export const messageSchemaPreFallback = z.discriminatedUnion("role", [
   userMessageSchema,
   assistantMessageSchemaPreFallback,
+]);
+
+// ── Wire-freeze variant (pre-shell-host, `chat.subscribe@1.10`) ─────────────
+// Hand-frozen copy of `assistantMessageSchema` as the frozen `1.10` line ships
+// it: the complete live shape - `turnProfile` included - with `blocks` swapped
+// for `contentBlockSchemaPreShellHost`, so that line never observes the host a
+// resume trigger's shell runs on, which `1.11` added. The user branch needs no
+// freeze for the same reason `1.9`'s does not.
+//
+// Field-for-field hand copy, NOT `.extend()`: see
+// `assistantMessageSchemaPreImage` for why a released line must not follow the
+// live shape by reference.
+export const assistantMessageSchemaPreShellHost = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchema,
+  blocks: z.array(contentBlockSchemaPreShellHost),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  envCredentialVar: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+  turnProfile: assistantTurnProfileSchema.optional(),
+});
+
+export const messageSchemaPreShellHost = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchemaPreShellHost,
+]);
+
+// ── Wire-freeze variant (pre-browser, `chat.subscribe@1.11`-`@1.12`) ───────
+// These lines include the shell-host fields but predate the browser-session
+// enrichment. Keep the assistant block union hand-bound to the pre-browser
+// copy so a live text block cannot widen either released line.
+export const assistantMessageSchemaPreBrowser = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchema,
+  blocks: z.array(contentBlockSchemaPreBrowser),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  envCredentialVar: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+  turnProfile: assistantTurnProfileSchema.optional(),
+});
+
+export const messageSchemaPreBrowser = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchemaPreBrowser,
 ]);
 
 export const messageSchemaV18 = z.discriminatedUnion("role", [

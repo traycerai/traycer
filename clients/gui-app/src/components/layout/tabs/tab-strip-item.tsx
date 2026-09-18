@@ -468,7 +468,12 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       : {
           modifier,
           index,
-          hint: leaderHint(leaderDigitFor(index), "to switch to", displayName),
+          hint: leaderHint(
+            leaderDigitFor(index),
+            modifier,
+            "to switch to",
+            displayName,
+          ),
         };
   const control = (
     <ContextMenu>
@@ -521,7 +526,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
                 testId={`tab-close-${tab.kind}-${tab.id}`}
                 onClose={() => onClose(displayTab)}
                 leaderBadge={leaderBadge}
-                active={isActive}
                 disabled={!canClose}
               />
             }
@@ -724,7 +728,6 @@ interface TabTrailingSlotProps {
   testId: string;
   onClose: () => void;
   leaderBadge: LeaderBadge | null;
-  active: boolean;
   disabled: boolean;
 }
 
@@ -733,7 +736,7 @@ interface TabTrailingSlotProps {
  * The title's tooltip anchor keeps a stable width across hover.
  */
 function TabTrailingSlot(props: TabTrailingSlotProps) {
-  const { label, testId, onClose, leaderBadge, active, disabled } = props;
+  const { label, testId, onClose, leaderBadge, disabled } = props;
   const showLeader = leaderBadge !== null;
   return (
     <span
@@ -760,7 +763,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
         <Button
           type="button"
           size="icon-sm"
-          variant="ghost"
+          variant="muted"
           aria-label={label}
           data-testid={testId}
           disabled={disabled}
@@ -769,11 +772,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
             event.stopPropagation();
             onClose();
           }}
-          className={cn(
-            "header-tab-close-button size-5 text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag]",
-            active &&
-              "text-foreground/70 hover:bg-accent hover:text-accent-foreground",
-          )}
+          className="header-tab-close-button size-5 [-webkit-app-region:no-drag]"
         >
           <X className="size-3" />
         </Button>

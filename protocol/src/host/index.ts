@@ -4,6 +4,7 @@ export * from "./asset-stream-schemas";
 export * from "./browser";
 export * from "./chat-fallback";
 export * from "./chat-fork";
+export * from "./chat-search";
 export * from "./comments";
 export * from "./config";
 export * from "./diagnostics";
@@ -59,6 +60,8 @@ export {
   worktreeDeleteUpgradeV10ToV11,
   worktreeDeleteUpgradeV11ToV12,
   worktreeListHoldersV10,
+  worktreeListHoldersV11,
+  worktreeListHoldersUpgradeV10ToV11,
   worktreeListAllForHostV10,
   worktreeListAllForHostV12,
   worktreeListAllForHostV11,
@@ -83,8 +86,10 @@ export {
   worktreeListBindingsForEpicV10,
   worktreeListBindingsForEpicV11,
   worktreeListBindingsForEpicV12,
+  worktreeListBindingsForEpicV13,
   worktreeListBindingsForEpicUpgradeV10ToV11,
   worktreeListBindingsForEpicUpgradeV11ToV12,
+  worktreeListBindingsForEpicUpgradeV12ToV13,
   worktreeListByWorkspacePathsV10,
   worktreeListByWorkspacePathsV11,
   worktreeListByWorkspacePathsV12,
@@ -115,6 +120,7 @@ export {
   workspaceScriptsSchema,
   worktreeBusyErrorDetailsSchema,
   worktreeHoldersChangedErrorDetailsSchema,
+  worktreeBusyChatTierSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
   worktreeBusyHolderSchema,
@@ -141,6 +147,8 @@ export {
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
+  worktreeListHoldersRequestSchemaV11,
+  worktreeListHoldersResponseSchemaV11,
   worktreeHostEntrySchema,
   worktreeHostEntryOwnerSchema,
   worktreeBranchStatusSchema,
@@ -177,6 +185,7 @@ export {
   worktreeListBranchesRequestSchema,
   worktreeListBranchesResponseSchema,
   worktreeListBindingsForEpicRequestSchema,
+  worktreeListBindingsForEpicRequestSchemaV13,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
@@ -221,6 +230,7 @@ export {
   type WorkspaceScripts,
   type WorktreeBusyErrorDetails,
   type WorktreeHoldersChangedErrorDetails,
+  type WorktreeBusyChatTier,
   type WorktreeBusyHoldKind,
   type WorktreeBusyHolder,
   type WorktreeBusyHolderActivity,
@@ -244,6 +254,8 @@ export {
   type WorktreeDeleteResponse,
   type WorktreeListHoldersRequest,
   type WorktreeListHoldersResponse,
+  type WorktreeListHoldersRequestV11,
+  type WorktreeListHoldersResponseV11,
   type WorktreeHostEntry,
   type WorktreeHostEntryOwner,
   type WorktreeBranchStatus,
@@ -281,6 +293,7 @@ export {
   type WorktreeListBranchesRequest,
   type WorktreeListBranchesResponse,
   type WorktreeListBindingsForEpicRequest,
+  type WorktreeListBindingsForEpicRequestV13,
   type WorktreeListBindingsForEpicResponse,
   type WorktreeListBindingsForEpicResponseV11,
   type WorktreeListBindingsForEpicResponseV12,

@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   IStreamSession,
   ServerFrameHandler,
+  StatusChangeHandler,
+  StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   DraftDocument,
@@ -12,10 +14,12 @@ import type {
 } from "@traycer/protocol/host";
 import {
   DraftMirrorSession,
+  type DraftDeleteOutcome,
   type DraftDirtyWrite,
   type DraftMirrorSink,
   type DraftsHostRpc,
   type DraftsStreamSubscribe,
+  type PendingHostDelete,
 } from "@/lib/drafts/draft-mirror-session";
 import {
   applyComposerHostDelete,
@@ -37,9 +41,22 @@ import {
   collectLandingDirtyWrites,
   landingDraftIsDirty,
   landingDraftRememberSynced,
+  rememberLandingBlobsOnHost,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { cloudDraftsDirectoryIsVisible } from "@/lib/drafts/cloud-drafts-visibility";
+import {
+  hostWithholdsDraftBlobs,
+  isDraftBlobConfirmed,
+  putDraftBlobs,
+  resetDraftBlobTransportForTests,
+  type DraftBlobClient,
+} from "@/lib/drafts/draft-blob-transport";
+import { putImage } from "@/lib/composer/landing-image-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 
 const HOST_ID = "host-1";
 const SCOPE_ID = "scp_testdraftsscopeid000001";
@@ -57,6 +74,7 @@ function landingDocument(input: {
     revision: input.revision,
     lastTouchedAt: 1,
     workspace: null,
+    supersedes: null,
     ownerHostId: HOST_ID,
     origin: "own",
     adoption: { state: "adopted", hostId: HOST_ID },
@@ -103,6 +121,7 @@ function landingWrite(
     revision,
     lastTouchedAt: 1,
     workspace: null,
+    supersedes: null,
     portable: {
       content: EMPTY_DOC,
       selection: null,
@@ -127,10 +146,13 @@ function unsupportedError(method: string): HostRpcError {
 function createStreamHarness(): {
   readonly client: DraftsStreamSubscribe;
   readonly emit: (frame: DraftsSubscribeServerFrameV10) => void;
+  /** Drive the session's own status handler - how a reconnect is staged. */
+  readonly emitStatus: (status: StreamConnectionStatus) => void;
   readonly sent: Array<{ readonly kind: string; readonly draftIds?: unknown }>;
   readonly subscribeCalls: { count: number };
 } {
   let onFrame: ServerFrameHandler | null = null;
+  let onStatus: StatusChangeHandler | null = null;
   const subscribeCalls = { count: 0 };
   const sent: Array<{ readonly kind: string; readonly draftIds?: unknown }> =
     [];
@@ -145,7 +167,9 @@ function createStreamHarness(): {
     onServerFrame: (handler) => {
       onFrame = handler;
     },
-    onStatusChange: () => undefined,
+    onStatusChange: (handler) => {
+      onStatus = handler;
+    },
     requestReconnect: () => undefined,
     close: () => undefined,
     getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),
@@ -153,6 +177,9 @@ function createStreamHarness(): {
   return {
     emit: (frame) => {
       onFrame?.(frame, null);
+    },
+    emitStatus: (status) => {
+      onStatus?.(status, null, null);
     },
     sent,
     subscribeCalls,
@@ -171,11 +198,15 @@ function createRpc(handlers: {
     write: DraftWrite,
   ) => Promise<{ readonly draft: DraftDocument }>;
   readonly delete: (draftId: string) => Promise<{ readonly deleted: boolean }>;
+  readonly retract?: (
+    draftId: string,
+  ) => Promise<{ readonly retracted: boolean }>;
 }): DraftsHostRpc {
   return {
     list: handlers.list,
     upsert: handlers.upsert,
     delete: handlers.delete,
+    retract: handlers.retract ?? (() => Promise.resolve({ retracted: true })),
   };
 }
 
@@ -196,6 +227,11 @@ function createSink(options: {
     readonly draftId: string;
     readonly hostRevision: number;
   }>;
+  readonly settles: ReadonlyArray<{
+    readonly hostId: string;
+    readonly draftId: string;
+    readonly outcome: DraftDeleteOutcome;
+  }>;
 } {
   const upserts: DraftDocument[] = [];
   const deletes: string[] = [];
@@ -204,15 +240,26 @@ function createSink(options: {
     readonly draftId: string;
     readonly hostRevision: number;
   }> = [];
+  const settles: Array<{
+    readonly hostId: string;
+    readonly draftId: string;
+    readonly outcome: DraftDeleteOutcome;
+  }> = [];
   return {
     upserts,
     deletes,
     scopes,
     synced,
+    settles,
     isDirty: (draftId) => options.dirty.has(draftId),
     isDeletePending: (draftId) => options.pendingDeletes?.has(draftId) ?? false,
-    pendingDeleteIdsForHost: () => [...(options.pendingDeletes ?? [])],
-    completeDelete: (draftId) => {
+    pendingDeletesForHost: () =>
+      [...(options.pendingDeletes ?? [])].map((draftId) => ({
+        draftId,
+        retract: false,
+      })),
+    settleDelete: (hostId, draftId, outcome) => {
+      settles.push({ hostId, draftId, outcome });
       options.pendingDeletes?.delete(draftId);
     },
     applyUpsert:
@@ -250,9 +297,91 @@ function createSink(options: {
   };
 }
 
+beforeEach(() => {
+  installFreshIndexedDb();
+});
+
+/**
+ * A minimal sink for exercising `pendingDeletesForHost` / `settleDelete`
+ * against a caller-owned, mutable list of pending retract/delete entries -
+ * used by the `drafts.retract` bootstrap-retry tests, where the interesting
+ * behavior is entirely in which entries settle and what the rpc records.
+ */
+function createRetractTrackingSink(
+  pendingEntries: PendingHostDelete[],
+): DraftMirrorSink & {
+  readonly settles: ReadonlyArray<{
+    readonly hostId: string;
+    readonly draftId: string;
+    readonly outcome: DraftDeleteOutcome;
+  }>;
+} {
+  const settles: Array<{
+    readonly hostId: string;
+    readonly draftId: string;
+    readonly outcome: DraftDeleteOutcome;
+  }> = [];
+  return {
+    settles,
+    isDirty: (_draftId) => {
+      void _draftId;
+      return false;
+    },
+    isDeletePending: (_draftId) => {
+      void _draftId;
+      return false;
+    },
+    pendingDeletesForHost: (_hostId) => {
+      void _hostId;
+      return [...pendingEntries];
+    },
+    settleDelete: (hostId, draftId, outcome) => {
+      settles.push({ hostId, draftId, outcome });
+      const index = pendingEntries.findIndex(
+        (entry) => entry.draftId === draftId,
+      );
+      if (index !== -1) pendingEntries.splice(index, 1);
+    },
+    applyUpsert: (_document) => {
+      void _document;
+      return Promise.resolve();
+    },
+    applyDelete: (_draftId) => {
+      void _draftId;
+    },
+    collectDirtyWrites: (_hostId) => {
+      void _hostId;
+      return Promise.resolve([]);
+    },
+    rememberSynced: (_draftId, _hostRevision, _collectedGeneration) => {
+      void _draftId;
+      void _hostRevision;
+      void _collectedGeneration;
+    },
+    prepareWrite: (_hostId, write) => {
+      void _hostId;
+      return Promise.resolve(write);
+    },
+    dropAbsentFromList: (_hostId, _listedIds) => {
+      void _hostId;
+      void _listedIds;
+    },
+    adoptUnadoptedLandingDrafts: (_hostId, _wanted) => {
+      void _hostId;
+      void _wanted;
+      return Promise.resolve();
+    },
+    applyCloudScope: (_hostId, _scopeId) => {
+      void _hostId;
+      void _scopeId;
+    },
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   useComposerDraftStore.setState({ drafts: {} });
+  resetDraftBlobTransportForTests();
 });
 
 describe("DraftMirrorSession", () => {
@@ -408,6 +537,257 @@ describe("DraftMirrorSession", () => {
     await vi.waitFor(() => {
       expect(sink.upserts.map((row) => row.draftId)).toEqual(["d1"]);
     });
+  });
+
+  it("abandons the REST of a bootstrap when the session closes inside a row's apply (DRIVE RED)", async () => {
+    // A close lands inside row 1's own blob read. Row 1 is correctly dropped by
+    // the apply's own guard, but without a per-row guard the loop carried on
+    // and row 2 was applied by a session that no longer owns the window - which
+    // on a sign-out or account switch installs one account's private draft
+    // under another. The apply cannot see that: by then it is a fresh call with
+    // a fresh capture.
+    const first = landingDocument({ draftId: "d1", revision: 2 });
+    const second = landingDocument({ draftId: "d2", revision: 3 });
+    const applied: string[] = [];
+    const dropped: string[] = [];
+    let closeSession: () => void = () => undefined;
+    const sink = createSink({
+      dirty: new Set(),
+      writes: [],
+      applyUpsert: (document) => {
+        applied.push(document.draftId);
+        if (document.draftId === "d1") closeSession();
+        return Promise.resolve();
+      },
+      dropAbsentFromList: (_hostId, _listedIds) => {
+        dropped.push(_hostId);
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([first, second], 9, [{ draftId: "t1", revision: 4 }]),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    closeSession = () => {
+      session.close();
+    };
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(applied).toEqual(["d1"]);
+    });
+    // Everything downstream of the loop is a mutation by a session that lost
+    // the window, so none of it may run either.
+    expect(sink.synced).toEqual([]);
+    expect(sink.deletes).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("abandons a bootstrap when the ACCOUNT switches mid-listing, with no close at all (DRIVE RED)", async () => {
+    // Closing is how a sign-out reaches this session, and it does - eventually.
+    // The teardown is asynchronous, so between the switch and the close this
+    // session is open, on its original generation, and still applying: row 1's
+    // own apply correctly drops its bytes, and row 2 then installs account A's
+    // text under account B with every guard answering "carry on".
+    const first = landingDocument({ draftId: "d1", revision: 2 });
+    const second = landingDocument({ draftId: "d2", revision: 3 });
+    const applied: string[] = [];
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "a" },
+    });
+    const sink = createSink({
+      dirty: new Set(),
+      writes: [],
+      applyUpsert: (document) => {
+        applied.push(document.draftId);
+        if (document.draftId === "d1") {
+          useAuthStore.setState({
+            status: "signed-in",
+            contextMetadata: { userId: "user-b", username: "b" },
+          });
+        }
+        return Promise.resolve();
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([first, second], 9, EMPTY_LIST_TOMBSTONES),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(applied).toEqual(["d1"]);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // Row 2 is never applied, and nothing below the loop runs either.
+    expect(applied).toEqual(["d1"]);
+    expect(sink.synced).toEqual([]);
+    session.close();
+  });
+
+  it("abandons a bootstrap when the session closes in the hop OUT of the row loop (DRIVE RED)", async () => {
+    // Every row is dirty, so the loop awaits nothing and its own post-apply
+    // guard never runs. Awaiting the loop still yields, and a close landing in
+    // that hop used to reach the tombstones and the absence sweep - which is
+    // how a superseded bootstrap drops rows a newer one installed.
+    const dirty = landingDocument({ draftId: "d1", revision: 2 });
+    const dropped: string[] = [];
+    let closeSession: () => void = () => undefined;
+    const sink = createSink({
+      dirty: new Set(["d1"]),
+      writes: [],
+      dropAbsentFromList: (hostId, _listedIds) => {
+        dropped.push(hostId);
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([dirty], 9, [{ draftId: "t1", revision: 4 }]),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    // The close lands while the row loop is running - synchronously, from the
+    // dirty check, so the only guard left between it and the sink mutations is
+    // the one on the far side of the loop's own await.
+    closeSession = () => {
+      session.close();
+    };
+    let closed = false;
+    const dirtyIds = new Set(["d1"]);
+    Object.defineProperty(sink, "isDirty", {
+      value: (draftId: string): boolean => {
+        if (!closed) {
+          closed = true;
+          closeSession();
+        }
+        return dirtyIds.has(draftId);
+      },
+    });
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(closed).toBe(true);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sink.deletes).toEqual([]);
+    expect(sink.synced).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("abandons a bootstrap when the session closes inside the LAST row's apply (DRIVE RED)", async () => {
+    // The per-row guard above is at the TOP of the iteration, so it never runs
+    // again after the final row: closing during the last apply still reached
+    // `rememberIncomingSynced`, the tombstones and the absence sweep. An
+    // absence sweep from a superseded bootstrap drops rows a NEWER bootstrap
+    // already installed, which is the same cross-account failure one step
+    // later.
+    const only = landingDocument({ draftId: "d1", revision: 2 });
+    const applied: string[] = [];
+    const dropped: string[] = [];
+    let closeSession: () => void = () => undefined;
+    const sink = createSink({
+      dirty: new Set(),
+      writes: [],
+      applyUpsert: (document) => {
+        applied.push(document.draftId);
+        closeSession();
+        return Promise.resolve();
+      },
+      dropAbsentFromList: (hostId, _listedIds) => {
+        dropped.push(hostId);
+      },
+    });
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () =>
+          Promise.resolve(
+            listResponse([only], 9, [{ draftId: "t1", revision: 4 }]),
+          ),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: stream.client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    closeSession = () => {
+      session.close();
+    };
+    session.start();
+
+    await vi.waitFor(() => {
+      expect(applied).toEqual(["d1"]);
+    });
+    // Drain the microtask the apply's continuation is queued on, so a missing
+    // post-await guard has actually run its mutations by the time we look.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sink.synced).toEqual([]);
+    expect(sink.deletes).toEqual([]);
+    expect(dropped).toEqual([]);
   });
 
   it("drops a subscribe upsert of an omitted list id whose storeSeq is not newer", async () => {
@@ -595,6 +975,7 @@ describe("DraftMirrorSession", () => {
 
   it("treats a missing drafts.delete capability as a completed deletion", async () => {
     const pendingDeletes = new Set(["d1"]);
+    const sink = createSink({ dirty: new Set(), writes: [], pendingDeletes });
     const session = new DraftMirrorSession({
       hostId: HOST_ID,
       rpc: createRpc({
@@ -606,12 +987,353 @@ describe("DraftMirrorSession", () => {
         delete: () => Promise.reject(unsupportedError("drafts.delete")),
       }),
       streamClient: createStreamHarness().client,
-      sink: createSink({ dirty: new Set(), writes: [], pendingDeletes }),
+      sink,
       timing: { debounceMs: 0, maxWaitMs: 0 },
       now: () => 0,
     });
     await expect(session.deleteOnHost("d1")).resolves.toBe(true);
     expect(pendingDeletes).toEqual(new Set());
+    expect(sink.settles).toEqual([
+      { hostId: HOST_ID, draftId: "d1", outcome: "unsupported" },
+    ]);
+  });
+
+  it("reports deleteOnHostOutcome as deleted when the host removed its row", async () => {
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: createStreamHarness().client,
+      sink: createSink({ dirty: new Set(), writes: [] }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await expect(session.deleteOnHostOutcome("d1")).resolves.toBe("deleted");
+    session.close();
+  });
+
+  it("reports deleteOnHostOutcome as absent when the host does not hold the row, while deleteOnHost still resolves true", async () => {
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.resolve({ deleted: false }),
+      }),
+      streamClient: createStreamHarness().client,
+      sink: createSink({ dirty: new Set(), writes: [] }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await expect(session.deleteOnHostOutcome("d1")).resolves.toBe("absent");
+    await expect(session.deleteOnHost("d2")).resolves.toBe(true);
+    session.close();
+  });
+
+  it("reports deleteOnHostOutcome as failed when the rpc rejects", async () => {
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.reject(new Error("transport error")),
+      }),
+      streamClient: createStreamHarness().client,
+      sink: createSink({ dirty: new Set(), writes: [] }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await expect(session.deleteOnHostOutcome("d1")).resolves.toBe("failed");
+    session.close();
+  });
+
+  it("reports deleteOnHostOutcome as unsupported when the drafts capability is missing", async () => {
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.reject(unsupportedError("drafts.delete")),
+      }),
+      streamClient: createStreamHarness().client,
+      sink: createSink({ dirty: new Set(), writes: [] }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await expect(session.deleteOnHostOutcome("d1")).resolves.toBe(
+      "unsupported",
+    );
+    session.close();
+  });
+
+  it("settles a bootstrap-retried pending delete as absent when the host does not hold the row", async () => {
+    const pendingDeletes = new Set(["d1"]);
+    const sink = createSink({ dirty: new Set(), writes: [], pendingDeletes });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.resolve({ deleted: false }),
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "d1", outcome: "absent" },
+      ]);
+    });
+    expect(pendingDeletes).toEqual(new Set());
+    session.close();
+  });
+
+  it("settles a bootstrap-retried pending delete as deleted when the host removed its row", async () => {
+    const pendingDeletes = new Set(["d1"]);
+    const sink = createSink({ dirty: new Set(), writes: [], pendingDeletes });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "d1", outcome: "deleted" },
+      ]);
+    });
+    expect(pendingDeletes).toEqual(new Set());
+    session.close();
+  });
+
+  it("leaves a bootstrap-retried pending delete unsettled when the rpc rejects", async () => {
+    const pendingDeletes = new Set(["d1"]);
+    const sink = createSink({ dirty: new Set(), writes: [], pendingDeletes });
+    let deleteAttempted = false;
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => {
+          deleteAttempted = true;
+          return Promise.reject(new Error("transport error"));
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(deleteAttempted).toBe(true);
+    });
+    expect(sink.settles).toEqual([]);
+    expect(pendingDeletes).toEqual(new Set(["d1"]));
+    session.close();
+  });
+
+  it("retries a pending retract with drafts.retract at bootstrap and settles deleted", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+      { draftId: "d1", retract: false },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    const retractCalls: string[] = [];
+    const deleteCalls: string[] = [];
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: (draftId) => {
+          deleteCalls.push(draftId);
+          return Promise.resolve({ deleted: true });
+        },
+        retract: (draftId) => {
+          retractCalls.push(draftId);
+          return Promise.resolve({ retracted: true });
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "r1", outcome: "deleted" },
+        { hostId: HOST_ID, draftId: "d1", outcome: "deleted" },
+      ]);
+    });
+    expect(retractCalls).toEqual(["r1"]);
+    expect(deleteCalls).toEqual(["d1"]);
+    session.close();
+  });
+
+  it("retries a pending retract with drafts.retract at bootstrap and settles absent", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+      { draftId: "d1", retract: false },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    const retractCalls: string[] = [];
+    const deleteCalls: string[] = [];
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: (draftId) => {
+          deleteCalls.push(draftId);
+          return Promise.resolve({ deleted: true });
+        },
+        retract: (draftId) => {
+          retractCalls.push(draftId);
+          return Promise.resolve({ retracted: false });
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "r1", outcome: "absent" },
+        { hostId: HOST_ID, draftId: "d1", outcome: "deleted" },
+      ]);
+    });
+    expect(retractCalls).toEqual(["r1"]);
+    expect(deleteCalls).toEqual(["d1"]);
+    session.close();
+  });
+
+  it("a host without drafts.retract settles the retract unsupported without tearing the session down", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    const retractCalls: string[] = [];
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({
+              draftId: write.draftId,
+              revision: write.revision + 1,
+            }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+        retract: (draftId) => {
+          retractCalls.push(draftId);
+          if (draftId === "r1") {
+            return Promise.reject(unsupportedError("drafts.retract"));
+          }
+          return Promise.resolve({ retracted: true });
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(sink.settles).toEqual([
+        { hostId: HOST_ID, draftId: "r1", outcome: "unsupported" },
+      ]);
+    });
+    // The retract capability being missing does not tear the whole drafts
+    // session down: a fresh retract still reaches the rpc instead of being
+    // short-circuited to "unsupported" by a wrongly-flipped capability flag.
+    await expect(session.retractOnHostOutcome("r2")).resolves.toBe("deleted");
+    expect(retractCalls).toEqual(["r1", "r2"]);
+    session.close();
+  });
+
+  it("a transport failure leaves the retract pending", async () => {
+    const pendingEntries: PendingHostDelete[] = [
+      { draftId: "r1", retract: true },
+    ];
+    const sink = createRetractTrackingSink(pendingEntries);
+    let retractCalls = 0;
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.resolve({ deleted: true }),
+        retract: () => {
+          retractCalls += 1;
+          return Promise.reject(new Error("transport error"));
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => {
+      expect(retractCalls).toBeGreaterThanOrEqual(1);
+    });
+    expect(sink.settles).toEqual([]);
+    await expect(session.retractOnHostOutcome("r1")).resolves.toBe("failed");
+    expect(sink.settles).toEqual([]);
+    session.close();
   });
 
   it("does not erase a composer draft synced to host A when host B bootstraps", async () => {
@@ -640,6 +1362,7 @@ describe("DraftMirrorSession", () => {
           syncedGeneration: 1,
           ownerHostId: null,
           origin: null,
+          supersedes: null,
           publication: null,
         },
       },
@@ -649,8 +1372,12 @@ describe("DraftMirrorSession", () => {
     const sink: DraftMirrorSink = {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
       isDeletePending: () => false,
-      pendingDeleteIdsForHost: () => [],
-      completeDelete: () => undefined,
+      pendingDeletesForHost: () => [],
+      settleDelete: (_hostId, _draftId, _outcome) => {
+        void _hostId;
+        void _draftId;
+        void _outcome;
+      },
       applyUpsert: (document) => {
         applyComposerHostDocument(document);
         return Promise.resolve();
@@ -679,6 +1406,7 @@ describe("DraftMirrorSession", () => {
       revision: 4,
       lastTouchedAt: 1,
       workspace: null,
+      supersedes: null,
       ownerHostId: "host-a",
       origin: "own",
       adoption: { state: "adopted", hostId: "host-a" },
@@ -781,6 +1509,7 @@ describe("DraftMirrorSession", () => {
           syncedGeneration: 1,
           ownerHostId: null,
           origin: null,
+          supersedes: null,
           publication: null,
         },
       },
@@ -789,8 +1518,12 @@ describe("DraftMirrorSession", () => {
     const sink: DraftMirrorSink = {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
       isDeletePending: () => false,
-      pendingDeleteIdsForHost: () => [],
-      completeDelete: () => undefined,
+      pendingDeletesForHost: () => [],
+      settleDelete: (_hostId, _draftId, _outcome) => {
+        void _hostId;
+        void _draftId;
+        void _outcome;
+      },
       applyUpsert: (document) => {
         applyComposerHostDocument(document);
         return Promise.resolve();
@@ -858,6 +1591,7 @@ describe("DraftMirrorSession", () => {
         revision: 6,
         lastTouchedAt: 2,
         workspace: null,
+        supersedes: null,
         ownerHostId: HOST_ID,
         origin: "own",
         adoption: { state: "adopted", hostId: HOST_ID },
@@ -982,8 +1716,12 @@ describe("DraftMirrorSession", () => {
     const upserted: string[] = [];
     const sink: DraftMirrorSink = {
       isDeletePending: () => false,
-      pendingDeleteIdsForHost: () => [],
-      completeDelete: () => undefined,
+      pendingDeletesForHost: () => [],
+      settleDelete: (_hostId, _draftId, _outcome) => {
+        void _hostId;
+        void _draftId;
+        void _outcome;
+      },
       isDirty: (draftId) => landingDraftIsDirty(draftId),
       applyUpsert: () => Promise.resolve(),
       applyDelete: () => undefined,
@@ -1003,6 +1741,7 @@ describe("DraftMirrorSession", () => {
               composerMode: draft.composerMode,
               workspace: draft.workspace,
               closed: draft.closed,
+              supersedes: draft.supersedes,
             }),
           })),
         ),
@@ -1487,5 +2226,185 @@ describe("DraftMirrorSession", () => {
     expect(sent).toEqual([first]);
     expect(deletes).toEqual([draftId]);
     session.close();
+  });
+
+  // ─── F6: close() fences the blob memo ───────────────────────────────────
+
+  const BLOB_HOST = "host-close-fence";
+  const BLOB_OWNER = "owner-close-fence";
+
+  it("F6 (10): close() fences a late putBlob acknowledgement - a confirmation that lands after close is not recorded", async () => {
+    // Real bytes, a real upload dispatched, `close()` called while it is
+    // still on the wire, and only THEN the response resolves.
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const hash = await putImage(bytes);
+    let releaseUpload: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
+
+    const uploadPromise = putDraftBlobs(BLOB_HOST, client, [hash], BLOB_OWNER);
+    // The request has dispatched (it is parked on `gate`, inside the
+    // client's own `request` call) by the time we get here - synchronous up
+    // to its first await, same as every other upload-in-flight fixture in
+    // this suite.
+
+    const session = new DraftMirrorSession({
+      hostId: BLOB_HOST,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: () => Promise.reject(new Error("not used")),
+        delete: () => Promise.reject(new Error("not used")),
+      }),
+      streamClient: createStreamHarness().client,
+      sink: createSink({ dirty: new Set(), writes: [] }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.close();
+
+    releaseUpload();
+    const confirmed = await uploadPromise;
+
+    // Reported UNCONFIRMED, not "confirmed but unmemoized". `close()` fenced
+    // the acknowledgement, and the caller's own bookkeeping is the landing
+    // draft's `confirmedHostBlobHashes` - the set that decides whether the
+    // local bytes may be evicted. A digest here would let the only copy go.
+    expect(confirmed).toEqual([]);
+    // The memo agrees: the send gate must not trust bytes on a connection this
+    // client has stopped talking to.
+    expect(isDraftBlobConfirmed(BLOB_HOST, hash, BLOB_OWNER)).toBe(false);
+  });
+
+  it("a reconnect re-bootstrap re-probes the capability memos, not just the confirmations (DRIVE RED)", async () => {
+    // A host that comes back on a reconnect can be a host that came back on a
+    // new BUILD - a restart is how an upgrade lands. Acquisition already
+    // re-probes for exactly that reason, and the reconnect path re-lists
+    // without re-acquiring, so a host that GAINED `drafts.putBlob` stayed
+    // short-circuited until the whole tile hierarchy unmounted.
+    const host = "host-rebootstrap-capability";
+    const hash = await putImage(new Uint8Array([13, 14, 15, 16]));
+
+    // The host answers "I do not have these methods" once.
+    let withholds = true;
+    const request = ((_method, _params) =>
+      withholds
+        ? Promise.reject(unsupportedError("drafts.putBlob"))
+        : Promise.resolve({
+            ok: true as const,
+          })) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
+    expect(await putDraftBlobs(host, client, [hash], BLOB_OWNER)).toEqual([]);
+    expect(hostWithholdsDraftBlobs(host)).toBe(true);
+
+    // The host restarts into a build that has them, and the mirror re-lists.
+    const stream = createStreamHarness();
+    const session = new DraftMirrorSession({
+      hostId: host,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: () => Promise.reject(new Error("not used")),
+        delete: () => Promise.reject(new Error("not used")),
+      }),
+      streamClient: stream.client,
+      sink: createSink({ dirty: new Set(), writes: [] }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await Promise.resolve();
+    // The FIRST `open` is the subscribe itself, which `start()` already listed
+    // for; the second is the reconnect that re-bootstraps.
+    stream.emitStatus("open");
+    stream.emitStatus("open");
+    await Promise.resolve();
+
+    expect(hostWithholdsDraftBlobs(host)).toBe(false);
+    withholds = false;
+    expect(await putDraftBlobs(host, client, [hash], BLOB_OWNER)).toEqual([
+      hash,
+    ]);
+    session.close();
+  });
+
+  it("F6 consequence: a fenced acknowledgement never reaches a landing draft's confirmedHostBlobHashes", async () => {
+    // The memo is not the only consumer of `putDraftBlobs`' answer.
+    // `rememberLandingBlobsOnHost` feeds that same array into the set
+    // `landingDraftPinsLocalImageBytes` reads, and a draft whose every hash is
+    // in it stops pinning its local bytes - so an acknowledgement from a
+    // retired conversation would let the LRU discard the only copy of the
+    // image. This asserts the value at the boundary the eviction gate reads.
+    const bytes = new Uint8Array([9, 10, 11, 12]);
+    const hash = await putImage(bytes);
+    let releaseUpload: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
+    const host = "host-close-fence-eviction";
+
+    const uploadPromise = putDraftBlobs(host, client, [hash], BLOB_OWNER);
+    const session = new DraftMirrorSession({
+      hostId: host,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, EMPTY_LIST_TOMBSTONES)),
+        upsert: () => Promise.reject(new Error("not used")),
+        delete: () => Promise.reject(new Error("not used")),
+      }),
+      streamClient: createStreamHarness().client,
+      sink: createSink({ dirty: new Set(), writes: [] }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.close();
+
+    releaseUpload();
+    const confirmed = await uploadPromise;
+
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    rememberLandingBlobsOnHost(draftId, confirmed);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === draftId)?.confirmedHostBlobHashes,
+    ).toEqual([]);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  });
+
+  it("F6 positive control: without close(), the identical sequence DOES confirm", async () => {
+    const bytes = new Uint8Array([5, 6, 7, 8]);
+    const hash = await putImage(bytes);
+    let releaseUpload: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
+
+    const uploadPromise = putDraftBlobs(
+      "host-close-fence-control",
+      client,
+      [hash],
+      BLOB_OWNER,
+    );
+    releaseUpload();
+    const confirmed = await uploadPromise;
+
+    expect(confirmed).toEqual([hash]);
+    expect(
+      isDraftBlobConfirmed("host-close-fence-control", hash, BLOB_OWNER),
+    ).toBe(true);
   });
 });

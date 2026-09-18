@@ -36,12 +36,9 @@ export function ManagedCommandActionButton(props: {
     >
       <Button
         type="button"
-        variant="ghost"
+        variant="muted"
         size="icon"
-        className={cn(
-          "size-6 text-muted-foreground hover:text-foreground",
-          props.className,
-        )}
+        className={cn("size-6", props.className)}
         aria-label={props.ariaLabel}
         aria-pressed={props.pressed}
         data-testid={props.testId}
