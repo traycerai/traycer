@@ -1,7 +1,7 @@
 import { GitBranch } from "lucide-react";
 import { HOVER_PREVIEW_SCROLL_CLASS } from "@/components/ui/hover-preview-surface";
 import { cn } from "@/lib/utils";
-import { CopyPathButton } from "./copy-path-button";
+import { CopyPathButton } from "@/components/copy-path-button";
 import type { WorkspaceRunItem } from "./workspace-run-item";
 import {
   importedWorktreeSourceBranch,
@@ -104,7 +104,11 @@ function HoverListDetail(props: {
       >
         {props.runPath}
       </span>
-      <CopyPathButton path={props.runPath} testId="workspace-hover-copy-path" />
+      <CopyPathButton
+        path={props.runPath}
+        ariaLabel="Copy folder path"
+        testId="workspace-hover-copy-path"
+      />
     </span>
   );
 }
