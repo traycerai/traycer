@@ -30,7 +30,10 @@ import {
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import { useFallbackRunManualRung } from "./use-fallback-actions";
-import { useChatLastFailedAttempt } from "./use-last-failed-attempt";
+import {
+  useChatFallbackTraversalIsLive,
+  useChatLastFailedAttempt,
+} from "./use-last-failed-attempt";
 import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
 
@@ -51,14 +54,21 @@ import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-o
  *
  * ## What decides whether these appear
  *
- * Not this component, and deliberately. `lastFailedAttempt` is defined by the
- * HOST iff its own manual-rung guard chain would admit something - the latest
- * attempt is a terminal failure, nothing is running, no traversal holds
- * dispatch, and any terminal traversal record settled as a failure. Three of
- * those four cannot be checked in a renderer without racing, and a second copy
- * disagrees on exactly the frames that matter. So the rule here is short:
- * render what the host named, on the row the host named, and let
- * `chat.fallback.runManualRung` answer `rung_unavailable` for the rest.
+ * Mostly not this component, and deliberately. `lastFailedAttempt` is defined
+ * by the HOST iff its own manual-rung guard chain would admit something - the
+ * latest attempt is a terminal failure, nothing is running, and any terminal
+ * traversal record settled as a failure. Those cannot be checked in a renderer
+ * without racing, and a second copy disagrees on exactly the frames that
+ * matter. So the rule here is short: render what the host named, on the row the
+ * host named, and let `chat.fallback.runManualRung` answer `rung_unavailable`
+ * for the rest.
+ *
+ * That list used to carry a fourth item - "no traversal holds dispatch" - and
+ * this component genuinely needed no gating of its own while it held. It does
+ * not hold any more: the grace card was given manual rungs, so the host now
+ * defines the field during a `hold` as well, for the card. `ManualRungActions`
+ * below carries the one gate that costs us, and its comment says why the row
+ * cannot simply share the field.
  *
  * That also answers "hides them once a later turn exists": a later turn means
  * the host stops defining the value, and the affordances clear. There is no
@@ -111,8 +121,36 @@ function ManualRungActions({
 }) {
   const client = useHostClientForHostId(hostId);
   const attempt = useChatLastFailedAttempt({ epicId, chatId, hostId });
+  const traversalIsLive = useChatFallbackTraversalIsLive({
+    epicId,
+    chatId,
+    hostId,
+  });
 
   if (attempt === undefined) return null;
+  // While a traversal is live the COMPOSER's card owns these affordances, and
+  // this row must not offer a second copy of them.
+  //
+  // This gate is the price of the grace card's own rungs. The doc above still
+  // says `lastFailedAttempt` means "no traversal holds dispatch" - that WAS the
+  // host's whole guard chain, and it is why this component was written with no
+  // hiding logic. Giving the countdown card manual rungs required the host to
+  // define the field during a `hold` too, and this row reads the same field, so
+  // it came back on with it: a `Switch…` here, EMPHASISED for rate_limit and
+  // billing, directly above a countdown card offering its own.
+  //
+  // Two copies would be bad enough. The one that must not be reachable is this
+  // one: `ManualRungAffordances` builds this surface's menu `preparing={false}`
+  // - "No hold to take: there is no countdown here to freeze" - so a pick made
+  // here does NOT freeze the window it is now racing. The user opens the menu,
+  // the grace window expires under the popover, the ladder commits, and the
+  // pick lands `rung_unavailable`. That race is precisely what the choice lease
+  // exists to prevent, and the card's menu is the surface that takes it.
+  //
+  // Nothing is lost while the card is up, and nothing has to be remembered:
+  // `pendingFallback` clearing is the same frame that ends the traversal, so
+  // this row returns exactly when it becomes the only surface again.
+  if (traversalIsLive) return null;
   // The row must be the one the host is describing. A transcript holding three
   // failed attempts offers these once, not three times - and a legacy record
   // (no turn identity, so no `turnId` prop) never reaches this component at
