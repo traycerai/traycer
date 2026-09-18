@@ -211,7 +211,10 @@ vi.mock(
   },
 );
 
-import { setTestEpicSessionHostClientResolver } from "@/lib/registries/test-support/epic-session-controller-test-support";
+import {
+  closeTestEpicTab,
+  setTestEpicSessionHostClientResolver,
+} from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   clearSessionCreatedEpics,
@@ -1196,7 +1199,7 @@ describe("<TestEpicSessionTab />", () => {
     };
   }
 
-  it("cancels a pending backoff attempt when the provider unmounts, so the stale rung never rebuilds a session with nothing left mounted", async () => {
+  it("closing the tab cancels a pending backoff attempt exactly once; unmounting the provider alone does not, so the stale rung never rebuilds a session with nothing left mounted", async () => {
     vi.useFakeTimers();
     try {
       const fixture = createEpicSessionFixture("lanes");
@@ -1229,7 +1232,7 @@ describe("<TestEpicSessionTab />", () => {
           const retryTransportSpy = vi.spyOn(rebuiltHandle, "retryTransport");
 
           // Denies the rebuilt (not-yet-healthy) handle - delayed, not
-          // immediate, so a pending timer is armed at the moment of unmount.
+          // immediate, so a pending timer is armed before the tab closes.
           act(() => {
             reprobeCallbacks.callbacks.at(1)?.();
           });
@@ -1238,8 +1241,18 @@ describe("<TestEpicSessionTab />", () => {
           expect(cancelSpy()).not.toBeNull();
           expect(cancelSpy()).not.toHaveBeenCalled();
 
+          // The tab stays open across the unmount - a backgrounded pane, not
+          // a closed one - so the ladder is scoped to the tab's MEMBERSHIP,
+          // not the provider's mount lifecycle. Unmounting the surface alone
+          // must not cancel it.
           view.unmount();
+          await act(() => Promise.resolve());
+          expect(cancelSpy()).not.toHaveBeenCalled();
 
+          // Closing the epic's last open tab is what cancels the ladder.
+          act(() => {
+            closeTestEpicTab("epic-plan-restricted-unmount-cancel");
+          });
           expect(cancelSpy()).toHaveBeenCalledTimes(1);
 
           await act(async () => {
@@ -1348,7 +1361,13 @@ describe("<TestEpicSessionTab />", () => {
   // `handleHostClients` stamping; imported-unseen `markSeen`" untested list.
   // The stamp is read by imperative callers OUTSIDE this subtree (the DnD
   // reparent commit); nothing in this suite reads it today.
-  it("stamps handleHostClients only after mount (absent during the render that first publishes the handle), and re-stamps it across a re-point", async () => {
+  //
+  // The controller stamps `handleHostClients` itself, SYNCHRONOUSLY, before it
+  // publishes a handle (`restampHostClient` runs before `publishSnapshots`'s
+  // `emit()`), so the stamp is already present in the very render that first
+  // sees a non-null handle - there is no long-mounted provider effect that
+  // has to catch up afterward.
+  it("stamps handleHostClients before the render that first publishes the handle (present, not absent), and re-stamps it across a re-point", async () => {
     const EPIC_ID = "epic-host-client-stamp";
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
@@ -1378,9 +1397,9 @@ describe("<TestEpicSessionTab />", () => {
               handle !== null &&
               stampedAtFirstHandleRender === "not-observed-yet"
             ) {
-              // Read in the SAME render that first publishes this handle,
-              // before any effect from this commit - including the
-              // provider's own stamping effect - has had a chance to run.
+              // Read in the SAME render that first publishes this handle.
+              // The controller stamps before it publishes, so this is
+              // expected to be PRESENT already, not absent.
               stampedAtFirstHandleRender = handleHostClients.get(handle);
             }
           }}
@@ -1395,7 +1414,9 @@ describe("<TestEpicSessionTab />", () => {
       if (firstHandle === undefined) {
         throw new Error("expected a published handle");
       }
-      expect(stampedAtFirstHandleRender).toBeUndefined();
+      expect(stampedAtFirstHandleRender).toBe(
+        resolveSessionHostClient("host-create"),
+      );
 
       await act(() => Promise.resolve());
       expect(handleHostClients.get(firstHandle)).toBe(
@@ -2113,13 +2134,15 @@ describe("<TestEpicSessionTab />", () => {
     ).toBeUndefined();
   });
 
-  it("two mounted tabs of ONE epic re-point once: the loser adopts the winner's handle instead of parking in establishing", async () => {
-    // A duplicated tab mounts a second provider for the same epic; both share
-    // the registry's mounted handle, so both start the A -> B re-point with
-    // their own candidate. `replaceMounted` lets exactly one win. The loser
-    // used to dispose its candidate and return - past a deadline `settled`
-    // had already disarmed - and present `establishing` forever on the old
-    // handle the winner had just disposed.
+  it("two mounted tabs of ONE epic re-point once: exactly one candidate is built, and both tabs land on the same replacement handle without either parking in establishing", async () => {
+    // A duplicated tab mounts a second provider for the same epic, but one
+    // entry per epic means there is exactly ONE controller run per epic: a
+    // host change builds a SINGLE re-point candidate no matter how many
+    // surfaces are attached, and every mounted tab observes that one entry's
+    // published handle. There is no "winner" and no "loser" any more - the
+    // old race (two candidates, one adopting the other's handle, the loser
+    // briefly parking in `establishing` past its own deadline) cannot occur
+    // because only one candidate is ever built.
     const streams: ControlledEpicStream[] = [];
     const handlesA: OpenEpicStoreHandle[] = [];
     const handlesB: OpenEpicStoreHandle[] = [];
@@ -2167,10 +2190,10 @@ describe("<TestEpicSessionTab />", () => {
       hostState.id = "host-b";
       view.rerender(body());
     });
-    // Both providers start a candidate toward host-b.
-    await waitFor(() => expect(streams).toHaveLength(3));
+    // Exactly ONE candidate is built for the shared entry toward host-b -
+    // two streams total, never three.
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    // The first candidate to load its snapshot wins the atomic replacement.
     act(() => {
       deliverSnapshot(streams[1], "room-a");
     });
@@ -2178,36 +2201,28 @@ describe("<TestEpicSessionTab />", () => {
       expect(handlesA.at(-1)).not.toBe(handlesA[0]);
       expect(handlesB.at(-1)).not.toBe(handlesB[0]);
     });
-    // Both providers publish the SAME replacement, the losing candidate is
-    // disposed, and the registry holds exactly one entry.
+    // Both providers publish the SAME replacement, and the registry holds
+    // exactly one entry.
     expect(handlesB.at(-1)).toBe(handlesA.at(-1));
-    expect(streams[2].closeCount).toBe(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    // Neither tab ever parks in `establishing` on the way to `ready`.
     await waitFor(() => {
       expect(presentationsA.at(-1)?.kind).toBe("ready");
       expect(presentationsB.at(-1)?.kind).toBe("ready");
     });
-    // The losing candidate's snapshot arriving later changes nothing.
-    act(() => {
-      deliverSnapshot(streams[2], "room-a");
-    });
-    await act(() => Promise.resolve());
-    expect(handlesB.at(-1)).toBe(handlesA.at(-1));
-    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
   });
 
-  it("retryRepoint on the LOSER of a sibling re-point adoption reaches the WINNER's client", async () => {
-    // Base (before the fix): `adoptWinner` disposes the loser's own
-    // candidate (clearing its provider-local `epicStreamClientRef`) and then
-    // adopts the sibling's handle without ever writing this provider's ref -
-    // so the loser's silence gate reads "not silent" regardless of what the
-    // WINNER's actual client reports, and Retry on the loser never forces a
-    // reconnect.
-    // ONE FAKE PER OPEN, not one shared across the epic: the claim is that
-    // the loser reaches the WINNER's client, and a single client makes
-    // "reached the winner" and "reached its own disposed candidate"
-    // indistinguishable - which is exactly the wrong implementation this pin
-    // has to exclude.
+  it("retryRepoint from EITHER tab's presentation reaches the one live session's stream client", async () => {
+    // Base (before the fix): two mounted providers each built their own
+    // candidate, `adoptWinner` disposed the loser's without ever writing the
+    // loser provider's own ref, and Retry on the loser never reached the
+    // client the session actually held. One entry per epic removes the
+    // winner/loser distinction entirely: both tabs read the SAME entry, so
+    // a retry issued from EITHER tab's presentation has to reach the one
+    // client the entry holds after the re-point.
+    // ONE FAKE PER OPEN, not one shared across the epic: this still pins that
+    // the client reached is the SESSION's live client, not some incidental
+    // shared default that would pass for the wrong reason.
     const fakes: FakeStreamClient[] = [];
     fakeDurableStreamTransports().opener = (_hostId) => {
       const client = new FakeStreamClient(true);
@@ -2268,10 +2283,9 @@ describe("<TestEpicSessionTab />", () => {
       hostState.id = "host-b";
       view.rerender(body());
     });
-    await waitFor(() => expect(streams).toHaveLength(3));
+    // One entry, one candidate: two streams total, never three.
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    // The first candidate (tab-a's, streams[1]) wins; tab-b's (streams[2])
-    // is disposed and ADOPTS tab-a's handle - tab-b is the loser here.
     act(() => {
       deliverSnapshot(streams[1], "room-a");
     });
@@ -2280,46 +2294,39 @@ describe("<TestEpicSessionTab />", () => {
       expect(handlesB.at(-1)).not.toBe(handlesB[0]);
     });
     expect(handlesB.at(-1)).toBe(handlesA.at(-1));
-    expect(streams[2].closeCount).toBe(1);
     await waitFor(() => {
       expect(presentationsA.at(-1)?.kind).toBe("ready");
       expect(presentationsB.at(-1)?.kind).toBe("ready");
     });
 
     // Opens happen inside `createHandle`, in the same order as the stream
-    // factory calls above: [0] the original shared handle, [1] tab-a's
-    // candidate (the winner), [2] tab-b's (the loser, whose transport the
-    // adoption closed). The closed flags are asserted rather than assumed.
-    expect(fakes).toHaveLength(3);
-    const winnerClient = fakes[1];
-    const loserClient = fakes[2];
-    expect(loserClient.isClosed()).toBe(true);
-    expect(winnerClient.isClosed()).toBe(false);
-    const winnerReconnect = vi.spyOn(winnerClient, "reconnectAll");
-    const loserReconnect = vi.spyOn(loserClient, "reconnectAll");
+    // factory calls above: [0] the original shared handle, [1] the entry's
+    // one re-point candidate - now the session's only live client.
+    expect(fakes).toHaveLength(2);
+    const liveClient = fakes[1];
+    expect(liveClient.isClosed()).toBe(false);
+    const liveReconnect = vi.spyOn(liveClient, "reconnectAll");
 
-    // BOTH report silent, so a gate that read the loser's own disposed client
-    // would force on it and this pin would catch that too.
-    winnerClient.silentFor = true;
-    loserClient.silentFor = true;
+    // Retry from tab-b's presentation reaches the live client when it
+    // reports silent.
+    liveClient.silentFor = true;
     act(() => {
       presentationsB.at(-1)?.retry();
     });
-    expect(winnerReconnect).toHaveBeenCalledTimes(1);
-    expect(winnerReconnect).toHaveBeenCalledWith("epic-retry", {
+    expect(liveReconnect).toHaveBeenCalledTimes(1);
+    expect(liveReconnect).toHaveBeenCalledWith("epic-retry", {
       probeFirst: false,
       wakeProbe: null,
     });
-    expect(loserReconnect).not.toHaveBeenCalled();
 
-    winnerReconnect.mockClear();
-    winnerClient.silentFor = false;
-    loserClient.silentFor = false;
+    // Retry from tab-a's presentation reaches the SAME live client, and does
+    // not force a reconnect once it no longer reports silent.
+    liveReconnect.mockClear();
+    liveClient.silentFor = false;
     act(() => {
-      presentationsB.at(-1)?.retry();
+      presentationsA.at(-1)?.retry();
     });
-    expect(winnerReconnect).not.toHaveBeenCalled();
-    expect(loserReconnect).not.toHaveBeenCalled();
+    expect(liveReconnect).not.toHaveBeenCalled();
   });
 
   /**
@@ -3140,7 +3147,7 @@ describe("<TestEpicSessionTab />", () => {
     });
   });
 
-  it("releases desktop epic ownership when the provider unmounts", async () => {
+  it("releases desktop epic ownership when the tab closes, not when the provider merely unmounts", async () => {
     const calls: {
       readonly claims: string[];
       readonly releases: string[];
@@ -3180,7 +3187,17 @@ describe("<TestEpicSessionTab />", () => {
     });
     expect(calls.claims).toEqual(["tab-cleanup:epic-session-test"]);
 
+    // Desktop ownership is claimed per TAB and released when the tab leaves
+    // `openTabOrder`, not when a surface showing it unmounts - the tab is
+    // still open (a backgrounded pane), so unmounting alone must release
+    // nothing.
     view.unmount();
+    await act(() => Promise.resolve());
+    expect(calls.releases).toEqual([]);
+
+    act(() => {
+      closeTestEpicTab("tab-cleanup");
+    });
 
     await waitFor(() => {
       expect(calls.releases).toEqual(["tab-cleanup"]);

@@ -6,7 +6,7 @@ import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta
 import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
@@ -175,11 +175,11 @@ function installControlledFactory(): ReadonlyArray<ControlledStream> {
 
 function renderToasts() {
   return render(
-    <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+    <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
       <EpicSessionGate fallback={null}>
         <EpicConnectionToasts epicId={EPIC_ID} />
       </EpicSessionGate>
-    </EpicSessionProvider>,
+    </TestEpicSessionTab>,
   );
 }
 
