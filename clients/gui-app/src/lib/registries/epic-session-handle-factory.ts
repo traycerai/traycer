@@ -1,6 +1,7 @@
 import {
   spawnEpicRuntimeWorker,
   type EpicRuntimeBodyReturnTarget,
+  type EpicRuntimeWorkerHandle,
 } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import { createProcessBackedAccountingPort } from "@/stores/epics/open-epic/runtime/process-backed-accounting-port";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
@@ -282,6 +283,22 @@ export function createEpicSessionHandle(
   // Scoped to the whole span rather than to the worker spawn the symptom
   // pointed at: the leak is a property of the WINDOW between acquiring the
   // socket and handing back its owner, not of any one call inside it.
+  //
+  // The SOCKET was only half of it. A spawn that succeeded and a later step
+  // that threw - the store construction, the projection attach, the health
+  // callback - left a live worker thread with no owner: the rollback below
+  // closed the transport and rethrew, and nothing else ever held a reference
+  // that could end the worker. Its books went with it, because the spawner
+  // deregisters them from its own `dispose`. So the run's worker is tracked in
+  // a slot the rollback can reach.
+  //
+  // The ACCOUNTING port needs no arm of its own, and a defensive one would
+  // assert a leak that does not exist: it registers nothing at construction -
+  // its only `registerBooks` caller is `main-accounting-bridge`, driven by the
+  // worker's own `accounting/books` event - so a port whose spawn threw before
+  // returning is inert, and every port that did register is released by the
+  // worker dispose below.
+  let spawnedRuntimeWorker: EpicRuntimeWorkerHandle | null = null;
   try {
     // The four typed stream clients are NOT built here any more. They are the
     // method-typed zod decode this relocation exists to move, so the worker
@@ -465,6 +482,7 @@ export function createEpicSessionHandle(
       hostId,
       windowLabel: epicId,
     });
+    spawnedRuntimeWorker = runtimeWorker;
 
     const created = createOpenEpicStore({
       epicId,
@@ -629,8 +647,21 @@ export function createEpicSessionHandle(
     });
     return handle;
   } catch (error: unknown) {
+    // BEFORE the transport close, and the order is the same one
+    // `EpicRuntimeWorkerHandle.detach` states: `dispose()` detaches first so
+    // the worker is told about every real session it opened, and closing the
+    // socket ahead of it kills those sessions before they can be reported.
+    // The escaping handle's own `dispose` composes the two in this order for
+    // the same reason.
+    //
+    // `null` on a spawn that never returned - there is nothing to end then,
+    // and the accounting port it was to be given is inert (see the slot's
+    // comment above).
+    spawnedRuntimeWorker?.dispose();
     // Idempotent, and the handle's own paths are too, so a later `dispose` on a
-    // handle that never escaped cannot double-close.
+    // handle that never escaped cannot double-close. The worker dispose above
+    // is idempotent too, so a handle that escaped and is disposed later does
+    // not double-terminate its thread.
     closeSessionTransport("construction-failed");
     throw error;
   }
