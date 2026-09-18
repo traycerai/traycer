@@ -141,4 +141,32 @@ describe("CustomizeSearch", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(useCustomizeStore.getState().search.query).toBe("");
   });
+  // Review w2, finding 3: results must render through the real Popover
+  // machinery (collision-aware positioning against the safe viewport), not a
+  // plain `absolute top-full` box that can end up below the viewport when
+  // the bar sits at a bottom corner.
+  it("results render through the real, collision-aware Popover and never take focus from the input", () => {
+    const instance = micInstance();
+    useCustomizeStore.getState().register(instance);
+    render(<CustomizeSearch unreachable={new Set()} />);
+    const input = screen.getByRole("combobox", {
+      name: "Search layout settings",
+    });
+    input.focus();
+
+    fireEvent.change(input, { target: { value: "mic" } });
+
+    const listbox = screen.getByRole("listbox", { name: "Layout settings" });
+    const content = listbox.closest("[data-customize-editor]");
+    expect(content).not.toBeNull();
+    // The collision-driven max-height machinery: Radix's own
+    // `--radix-popover-content-available-height` custom property, read by
+    // this element's own max-height, not a fixed `50svh` box.
+    expect(content?.className).toContain(
+      "var(--radix-popover-content-available-height)",
+    );
+    // `onOpenAutoFocus` is prevented: opening the results never steals focus
+    // away from the search field.
+    expect(document.activeElement).toBe(input);
+  });
 });

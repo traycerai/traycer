@@ -1,4 +1,11 @@
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CustomizeOverlay } from "@/components/customize/customize-overlay";
 import { getCustomizeSetting } from "@/lib/customize/catalog";
@@ -277,5 +284,215 @@ describe("CustomizeOverlay", () => {
 
     expect(useCustomizeStore.getState().popoverKey).toBeNull();
     expect(useCustomizeStore.getState().session).not.toBeNull();
+  });
+  // Review w2, finding 1: removing the target behind an OPEN popover must
+  // land focus on the overlay's own chosen destination (the nearest
+  // remaining proxy) and KEEP it there through Radix's own, separately
+  // timed close-autofocus callback - not have that later callback's
+  // first-proxy fallback override it.
+  it("removing the node behind an open popover keeps focus on the overlay's chosen destination through Radix's delayed close-autofocus", async () => {
+    const nodeA = fixtureNode({ x: 0, y: 0, width: 24, height: 24 });
+    const nodeB = fixtureNode({ x: 50, y: 0, width: 24, height: 24 });
+    const nodeC = fixtureNode({ x: 100, y: 0, width: 24, height: 24 });
+    const a = instance("composer.mic", nodeA);
+    const b = instance("tabs.home", nodeB);
+    const c = instance("chat.minimapSide", nodeC);
+    useCustomizeStore.getState().register(a);
+    useCustomizeStore.getState().register(b);
+    useCustomizeStore.getState().register(c);
+    render(<CustomizeOverlay />);
+    await waitFor(() =>
+      expect(document.querySelectorAll("[data-customize-proxy]")).toHaveLength(
+        3,
+      ),
+    );
+
+    act(() => {
+      useCustomizeStore.setState({
+        popoverKey: b.key,
+        activeKey: b.key,
+        invoker: b.key,
+      });
+    });
+
+    act(() => {
+      useCustomizeStore.getState().unregister(b.key, nodeB);
+    });
+
+    await waitFor(() => expect(document.activeElement).toBe(proxyFor(c.key)));
+
+    // Give Radix's own (asynchronous, separately timed) close-autofocus
+    // callback room to fire, then confirm it did not later move focus to A.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(document.activeElement).toBe(proxyFor(c.key));
+    expect(document.activeElement).not.toBe(proxyFor(a.key));
+  });
+
+  // Review w2, finding 2: the overlay's own outside-click listener already
+  // excludes the bar, but Radix's Popover runs its OWN, separate dismissal
+  // path (pointer/focus-outside detection against its portalled content),
+  // which is not gated by that listener at all.
+  describe("interaction with an open popover while the bar is present", () => {
+    it("clicking the bar's search field does not dismiss the open popover", async () => {
+      const a = instance(
+        "composer.mic",
+        fixtureNode({ x: 0, y: 0, width: 24, height: 24 }),
+      );
+      useCustomizeStore.getState().register(a);
+      useCustomizeStore.setState({ popoverKey: a.key, invoker: a.key });
+      render(<CustomizeOverlay />);
+      const search = document.querySelector<HTMLInputElement>(
+        "[data-customize-search]",
+      );
+      expect(search).not.toBeNull();
+      if (search === null)
+        throw new Error("search input not found in the rendered bar");
+
+      await userEvent.setup().click(search);
+      expect(document.activeElement).toBe(search);
+      expect(useCustomizeStore.getState().popoverKey).toBe(a.key);
+    });
+
+    it("an actual click outside the editor still closes the open popover", () => {
+      const a = instance(
+        "composer.mic",
+        fixtureNode({ x: 0, y: 0, width: 24, height: 24 }),
+      );
+      useCustomizeStore.getState().register(a);
+      useCustomizeStore.setState({ popoverKey: a.key, invoker: a.key });
+      render(<CustomizeOverlay />);
+      const outside = document.createElement("div");
+      document.body.appendChild(outside);
+
+      act(() => {
+        fireEvent.pointerDown(outside);
+        fireEvent.click(outside);
+      });
+
+      expect(useCustomizeStore.getState().popoverKey).toBeNull();
+      outside.remove();
+    });
+  });
+
+  // Review w2, finding 4: search selection lives in `search.activeIndex`,
+  // which stays set even when `activeKey` is null (an absent setting or any
+  // preset result). The first Escape must clear that selection, not the
+  // query - the query is a second Escape's job.
+  it("Escape clears an active preset selection before it clears the query", () => {
+    render(<CustomizeOverlay />);
+    const search = document.querySelector<HTMLInputElement>(
+      "[data-customize-search]",
+    );
+    expect(search).not.toBeNull();
+    if (search === null)
+      throw new Error("search input not found in the rendered bar");
+
+    act(() => {
+      fireEvent.change(search, { target: { value: "compact preset" } });
+    });
+    act(() => {
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+    });
+    expect(useCustomizeStore.getState().search.activeIndex).toBe(0);
+    expect(useCustomizeStore.getState().activeKey).toBeNull();
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+
+    expect(useCustomizeStore.getState().search.query).toBe("compact preset");
+    expect(useCustomizeStore.getState().search.activeIndex).toBe(-1);
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+
+    expect(useCustomizeStore.getState().search.query).toBe("");
+  });
+
+  // Review w2, finding 5: proxies are a single composite for Tab purposes.
+  // Exactly one carries a real tab stop at a time (a roving tabindex), it
+  // moves with arrow-key focus, and Tab leaves the whole composite instead
+  // of walking every proxy.
+  it("exactly one proxy is a tab stop, arrow keys move it, and Tab leaves the composite toward the bar", async () => {
+    const nodeA = fixtureNode({ x: 0, y: 0, width: 24, height: 24 });
+    const nodeB = fixtureNode({ x: 50, y: 0, width: 24, height: 24 });
+    const a = instance("composer.mic", nodeA);
+    const b = instance("tabs.home", nodeB);
+    useCustomizeStore.getState().register(a);
+    useCustomizeStore.getState().register(b);
+    render(<CustomizeOverlay />);
+    const proxies = [
+      ...document.querySelectorAll<HTMLButtonElement>("[data-customize-proxy]"),
+    ];
+    expect(proxies).toHaveLength(2);
+    const tabStops = () => proxies.filter((proxy) => proxy.tabIndex === 0);
+    expect(tabStops()).toHaveLength(1);
+
+    const firstProxy = proxies[0];
+    const secondProxy = proxies[1];
+    act(() => {
+      firstProxy.focus();
+    });
+
+    act(() => {
+      firstProxy.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    });
+
+    await waitFor(() => expect(tabStops()).toHaveLength(1));
+    expect(tabStops()[0]).toBe(secondProxy);
+    expect(firstProxy.tabIndex).toBe(-1);
+
+    const user = userEvent.setup();
+    await user.tab();
+
+    expect(document.activeElement).not.toBe(firstProxy);
+    expect(document.activeElement).not.toBe(secondProxy);
+    expect(
+      document.activeElement?.closest("[data-customize-bar]"),
+    ).not.toBeNull();
+  });
+
+  // Review w2, finding 7: a search-highlighted proxy must show its name
+  // label even though DOM focus stays in the search input the whole time.
+  it("a search-highlighted proxy's label stays shown while the search input keeps focus", () => {
+    const node = fixtureNode({ x: 0, y: 0, width: 24, height: 24 });
+    const a = instance("composer.mic", node);
+    useCustomizeStore.getState().register(a);
+    render(<CustomizeOverlay />);
+    const search = document.querySelector<HTMLInputElement>(
+      "[data-customize-search]",
+    );
+    expect(search).not.toBeNull();
+    if (search === null)
+      throw new Error("search input not found in the rendered bar");
+    search.focus();
+
+    act(() => {
+      fireEvent.change(search, { target: { value: "mic" } });
+    });
+    act(() => {
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+    });
+
+    expect(useCustomizeStore.getState().activeKey).toBe(a.key);
+    expect(document.activeElement).toBe(search);
+    const label = getCustomizeSetting("composer.mic").label;
+    // `[data-slot="tooltip-content"]` is this codebase's own wrapper marker
+    // (`src/components/ui/tooltip.tsx`), not a Radix internal to guess at.
+    const tooltips = [
+      ...document.querySelectorAll('[data-slot="tooltip-content"]'),
+    ];
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent.includes(label)),
+    ).toBe(true);
   });
 });

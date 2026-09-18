@@ -174,7 +174,7 @@ export function CustomizeBar({
             <Grip />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent>
+        <DropdownMenuContent data-customize-editor>
           {(
             ["Top left", "Top right", "Bottom left", "Bottom right"] as const
           ).map((corner) => (

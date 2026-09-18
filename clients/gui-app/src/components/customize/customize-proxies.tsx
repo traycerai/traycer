@@ -28,12 +28,27 @@ export function CustomizeProxies({
   rects: ReadonlyMap<InstanceKey, DOMRect>;
 }) {
   useCustomizeLayout();
+  const activeKey = useCustomizeStore((state) => state.activeKey);
+  const [lastFocusedKey, setLastFocusedKey] = useState<InstanceKey | null>(
+    null,
+  );
+  const visible = instances.filter((instance) => rects.has(instance.key));
+  const tabStop =
+    visible.find((instance) => instance.key === activeKey) ??
+    visible.find((instance) => instance.key === lastFocusedKey) ??
+    visible[0];
   return (
     <TooltipProvider delayDuration={250} skipDelayDuration={500}>
       {instances.map((instance) => {
         const rect = rects.get(instance.key);
         return rect ? (
-          <Proxy key={instance.key} instance={instance} rect={rect} />
+          <Proxy
+            key={instance.key}
+            instance={instance}
+            rect={rect}
+            tabIndex={tabStop.key === instance.key ? 0 : -1}
+            onFocused={() => setLastFocusedKey(instance.key)}
+          />
         ) : null;
       })}
     </TooltipProvider>
@@ -42,9 +57,13 @@ export function CustomizeProxies({
 function Proxy({
   instance,
   rect,
+  tabIndex,
+  onFocused,
 }: {
   instance: HotspotInstance;
   rect: DOMRect;
+  tabIndex: number;
+  onFocused: () => void;
 }) {
   useCustomizeOptionsRegistry();
   const options = getCustomizeOptions(instance);
@@ -56,11 +75,12 @@ function Proxy({
   const active = useCustomizeStore((state) => state.activeKey === instance.key);
   const [focused, setFocused] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const labelOpen = active || focused || hovered;
   const label = getCustomizeSetting(instance.settingId).label;
 
   return (
     <Tooltip
-      open={focused || hovered}
+      open={labelOpen}
       onOpenChange={(open) => {
         if (window.matchMedia("(hover: hover) and (pointer: fine)").matches)
           setHovered(open);
@@ -72,6 +92,7 @@ function Proxy({
           {...attributes}
           {...listeners}
           type="button"
+          tabIndex={tabIndex}
           data-customize-proxy={instance.key}
           aria-label={`Customize ${label}, ${state}`}
           aria-describedby={
@@ -94,6 +115,7 @@ function Proxy({
           }}
           onFocus={() => {
             setFocused(true);
+            onFocused();
             useCustomizeStore.getState().setActive(instance.key);
           }}
           onBlur={() => setFocused(false)}
@@ -108,7 +130,7 @@ function Proxy({
           }}
         />
       </TooltipTrigger>
-      <TooltipContent>
+      <TooltipContent data-customize-editor>
         {label} · {state}
         {instance.condition ? (
           <span id={`${instance.key}-condition`}> — {instance.condition}</span>
@@ -116,7 +138,7 @@ function Proxy({
       </TooltipContent>
       {instance.condition ? (
         <span
-          id={focused || hovered ? undefined : `${instance.key}-condition`}
+          id={labelOpen ? undefined : `${instance.key}-condition`}
           className="sr-only"
         >
           {instance.condition}

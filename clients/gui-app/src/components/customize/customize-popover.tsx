@@ -36,6 +36,7 @@ export function CustomizePopover({
 }: {
   rects: ReadonlyMap<string, DOMRect>;
 }) {
+  const session = useCustomizeStore((state) => state.session);
   const key = useCustomizeStore((state) => state.popoverKey);
   const instance = useCustomizeStore((state) =>
     key ? state.instances.get(key) : undefined,
@@ -64,9 +65,22 @@ export function CustomizePopover({
         data-customize-keyboard={!isCustomizePointerInput() || undefined}
         data-customize-editor
         className="pointer-events-auto max-h-[70svh] overflow-y-auto"
+        onInteractOutside={(event) => {
+          if (
+            event.target instanceof Element &&
+            event.target.closest("[data-customize-editor]")
+          )
+            event.preventDefault();
+        }}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          focusCustomizeInvoker();
+          // Removal recovery belongs to the overlay; delayed Radix teardown
+          // must not override its nearest-proxy destination.
+          if (
+            useCustomizeStore.getState().session === session &&
+            findCustomizeProxy(instance.key)
+          )
+            focusCustomizeInvoker();
         }}
       >
         <PopoverTitle>

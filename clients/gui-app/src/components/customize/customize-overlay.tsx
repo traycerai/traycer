@@ -121,7 +121,8 @@ function LiveOverlay({ pointerEntry }: { pointerEntry: boolean }) {
   }, [instances, selected, measurements]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
-      if (!useCustomizeStore.getState().popoverKey)
+      const { popoverKey, activeKey } = useCustomizeStore.getState();
+      if (!popoverKey && !activeKey)
         document
           .querySelector<HTMLInputElement>("[data-customize-search]")
           ?.focus();

@@ -1,6 +1,11 @@
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useId, useMemo, useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -114,111 +119,126 @@ export function CustomizeSearch({
   };
   return (
     <div className="relative min-w-0 flex-1 basis-1/4">
-      <Input
-        data-customize-search
-        role="combobox"
-        aria-label="Search layout settings"
-        placeholder="Search layout settings"
-        aria-expanded={search.query.length > 0}
-        aria-controls={`${id}-results`}
-        aria-autocomplete="list"
-        aria-activedescendant={
-          search.activeIndex >= 0 && results[search.activeIndex]
-            ? `${id}-${search.activeIndex}`
-            : undefined
-        }
-        value={search.query}
-        onChange={(event) => {
-          useCustomizeStore.getState().setSearch(event.target.value, -1);
-          useCustomizeStore.getState().setActive(null);
-          if (!reported.current && event.target.value) {
-            reported.current = true;
-            Analytics.getInstance().track(
-              AnalyticsEvent.LayoutEditorSearchUsed,
-              null,
-            );
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            if (results.length) {
-              let index =
-                (search.activeIndex +
-                  (event.key === "ArrowDown" ? 1 : -1) +
-                  results.length) %
-                results.length;
-              if (search.activeIndex < 0)
-                index = event.key === "ArrowDown" ? 0 : results.length - 1;
-              highlight(index);
+      <Popover open={search.query.length > 0} modal={false}>
+        <PopoverAnchor asChild>
+          <Input
+            data-customize-search
+            role="combobox"
+            aria-label="Search layout settings"
+            placeholder="Search layout settings"
+            aria-expanded={search.query.length > 0}
+            aria-controls={`${id}-results`}
+            aria-autocomplete="list"
+            aria-activedescendant={
+              search.activeIndex >= 0 && results[search.activeIndex]
+                ? `${id}-${search.activeIndex}`
+                : undefined
             }
-          }
-          if (event.key === "Enter") {
-            const result = results[Math.max(0, search.activeIndex)];
-            if (results.length) {
-              event.preventDefault();
-              open(result);
-            }
-          }
-        }}
-      />
-      {search.query ? (
-        <div className="absolute top-full z-10 mt-2 max-h-[50svh] w-full min-w-full overflow-y-auto rounded-lg border bg-popover p-2 text-popover-foreground shadow-md">
-          <div id={`${id}-results`} role="listbox" aria-label="Layout settings">
-            {results.map((result, index) => {
-              const instance =
-                result.kind === "setting" ? resolve(result.setting) : null;
-              const label =
-                result.kind === "setting"
-                  ? result.setting.label
-                  : `${LAYOUT_PRESET_LABELS[result.preset]} preset`;
-              return (
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  key={
-                    result.kind === "setting"
-                      ? result.setting.id
-                      : result.preset
-                  }
-                  id={`${id}-${index}`}
-                  role="option"
-                  aria-selected={index === search.activeIndex}
-                  className={cn(
-                    "w-full cursor-pointer rounded-md p-2 text-left text-ui-sm",
-                    index === search.activeIndex && "bg-foreground/8",
-                  )}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    highlight(index);
-                    open(result);
-                  }}
-                >
-                  <span className="block font-medium">{label}</span>
-                  {result.kind === "setting" ? (
-                    <span className="block text-ui-xs text-muted-foreground">
-                      {result.setting.absent.where} ·{" "}
-                      {resultState(instance, chatTab)}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-          {!results.length ? (
-            <div className="text-ui-sm">
-              No settings match ‘{search.query}’
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => useCustomizeStore.getState().setSearch("", -1)}
-              >
-                Clear
-              </Button>
+            value={search.query}
+            onChange={(event) => {
+              useCustomizeStore.getState().setSearch(event.target.value, -1);
+              useCustomizeStore.getState().setActive(null);
+              if (!reported.current && event.target.value) {
+                reported.current = true;
+                Analytics.getInstance().track(
+                  AnalyticsEvent.LayoutEditorSearchUsed,
+                  null,
+                );
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                if (results.length) {
+                  let index =
+                    (search.activeIndex +
+                      (event.key === "ArrowDown" ? 1 : -1) +
+                      results.length) %
+                    results.length;
+                  if (search.activeIndex < 0)
+                    index = event.key === "ArrowDown" ? 0 : results.length - 1;
+                  highlight(index);
+                }
+              }
+              if (event.key === "Enter") {
+                const result = results[Math.max(0, search.activeIndex)];
+                if (results.length) {
+                  event.preventDefault();
+                  open(result);
+                }
+              }
+            }}
+          />
+        </PopoverAnchor>
+        {search.query ? (
+          <PopoverContent
+            data-customize-editor
+            side="bottom"
+            align="start"
+            className="pointer-events-auto max-h-[min(50svh,var(--radix-popover-content-available-height))] w-(--radix-popover-trigger-width) overflow-y-auto"
+            onOpenAutoFocus={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
+            <div
+              id={`${id}-results`}
+              role="listbox"
+              aria-label="Layout settings"
+            >
+              {results.map((result, index) => {
+                const instance =
+                  result.kind === "setting" ? resolve(result.setting) : null;
+                const label =
+                  result.kind === "setting"
+                    ? result.setting.label
+                    : `${LAYOUT_PRESET_LABELS[result.preset]} preset`;
+                return (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    key={
+                      result.kind === "setting"
+                        ? result.setting.id
+                        : result.preset
+                    }
+                    id={`${id}-${index}`}
+                    role="option"
+                    aria-selected={index === search.activeIndex}
+                    className={cn(
+                      "w-full cursor-pointer rounded-md p-2 text-left text-ui-sm",
+                      index === search.activeIndex && "bg-foreground/8",
+                    )}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      highlight(index);
+                      open(result);
+                    }}
+                  >
+                    <span className="block font-medium">{label}</span>
+                    {result.kind === "setting" ? (
+                      <span className="block text-ui-xs text-muted-foreground">
+                        {result.setting.absent.where} ·{" "}
+                        {resultState(instance, chatTab)}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
-          ) : null}
-        </div>
-      ) : null}
+            {!results.length ? (
+              <div className="text-ui-sm">
+                No settings match ‘{search.query}’
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => useCustomizeStore.getState().setSearch("", -1)}
+                >
+                  Clear
+                </Button>
+              </div>
+            ) : null}
+          </PopoverContent>
+        ) : null}
+      </Popover>
     </div>
   );
 }

@@ -34,6 +34,14 @@
   transform: none;
 }
 
-:root [data-customize-editor][data-customize-keyboard] {
+:root [data-customize-editor][data-customize-keyboard],
+:root[data-customize-keyboard] [data-customize-editor],
+:root[data-reduce-panel-motion] [data-customize-editor] {
   animation-duration: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-customize-editor] {
+    animation-duration: 0ms;
+  }
 }

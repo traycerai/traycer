@@ -8,7 +8,7 @@ function escape(): void {
   if (state.popoverKey) {
     state.closePopover();
     focusCustomizeInvoker();
-  } else if (state.activeKey) {
+  } else if (state.search.activeIndex >= 0 || state.activeKey) {
     state.setActive(null);
     state.setSearch(state.search.query, -1);
   } else if (state.search.query) state.setSearch("", -1);
