@@ -19,6 +19,9 @@ import {
  * accelerator -> the page; the app renderer's keybinding registry is never in
  * the chain. Every chord that must still mean something in that state is
  * listed here, and nowhere else. Anything absent belongs to the page.
+ * Text-history conventions are always page-owned: `isTextHistoryShortcut`
+ * guards both native and streamed matching before physical app chords, so
+ * undo/redo also survive a keyboard-layout collision or an app rebind.
  *
  * Two dispositions, and the `command` field is the whole distinction:
  *

@@ -51,13 +51,26 @@ export interface MountedController {
   readonly setRequestCloseTab: (value: (() => void) | null) => void;
 }
 
+/** `mountController`'s tunable seams. */
+export interface MountControllerOptions {
+  /**
+   * `null` is "host platform unknown" - passes keyboard events through
+   * untranslated. A caller exercising `screencastHistoryKey` translation
+   * passes its own closure, typically over a `let` the test mutates between
+   * a keyDown and its matching keyUp.
+   */
+  readonly readHostIsMac: () => boolean | null;
+}
+
 /**
  * The controller driven through real DOM events on a real overlay button, so
  * pointer capture, the arm buffer and the correlation seam all run as they do
  * in the tile. The image stands in for whatever surface the plane renders -
  * only its box matters to normalization.
  */
-export function mountController(): MountedController {
+export function mountController(
+  options: MountControllerOptions | undefined,
+): MountedController {
   const sent: BrowserScreencastClientFrame[] = [];
   let videoPainting = false;
   let requestNewTab: (() => void) | null = null;
@@ -74,6 +87,7 @@ export function mountController(): MountedController {
     const imeInputRef = useRef<HTMLInputElement | null>(null);
     const controllerRef = useRef<ScreencastController | null>(null);
     controllerRef.current ??= createScreencastController({
+      readHostIsMac: options?.readHostIsMac ?? (() => null),
       readControlPlaneRttMs: () => null,
       readRequestNewTab: () => requestNewTab,
       readRequestCloseTab: () => requestCloseTab,
