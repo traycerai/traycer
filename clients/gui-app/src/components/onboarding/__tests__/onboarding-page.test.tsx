@@ -671,6 +671,30 @@ describe("OnboardingPage", () => {
     dialog.remove();
   });
 
+  it("skips the tour on Escape from its own controls, and leaves an open picker's Escape alone", () => {
+    renderPage(false);
+
+    const picker = document.createElement("div");
+    picker.setAttribute("data-slot", "popover-content");
+    picker.setAttribute("data-state", "open");
+    document.body.append(picker);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useOnboardingStore.getState().completedAt).toBeNull();
+    picker.remove();
+
+    // Escape does what Skip does, and the tour IS the screen - so an Escape
+    // aimed at one of its own buttons is still aimed at the tour.
+    fireEvent.keyDown(screen.getByTestId("onboarding-skip"), { key: "Escape" });
+
+    expect(useOnboardingStore.getState().completedAt).toEqual(
+      expect.any(Number),
+    );
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: "/draft/new",
+      replace: true,
+    });
+  });
+
   // Input inside an act is not navigation: only the deliberate gestures swap
   // the step, and the block the eye is on is the SAME element afterwards.
   it("keeps the act stable for in-step input", async () => {
