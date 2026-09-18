@@ -9,6 +9,7 @@ import {
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 
 const Coachmark = lazy(() =>
   import("@/components/onboarding/onboarding-coachmark").then((module) => ({
@@ -33,9 +34,18 @@ export function SettingsSetupGuide(props: {
   // guide follows it, the way Continue would - but only from the section the
   // step was being shown in, so a reader who wandered to another section by
   // hand is not pulled back, and never on a render that changed nothing.
+  //
+  // Only while Settings is actually presented: a Settings tab stays mounted
+  // behind a task tab, and `navigateToSettingsSection` re-activates it, which
+  // would steal the route from the task the reader is in. The comparison
+  // baseline is left untouched while hidden, so the flip is still seen - and
+  // followed - the moment the surface is shown again. The modal has no pane
+  // around it, and the context's default (`true`) counts that as presented.
+  const presented = usePaneVisible();
   const editor = availability.customizeEditor;
   const previousEditor = useRef(editor);
   useEffect(() => {
+    if (!presented) return;
     const before = previousEditor.current;
     previousEditor.current = editor;
     if (before === editor || active === null || customizing) return;
@@ -48,7 +58,7 @@ export function SettingsSetupGuide(props: {
     if (was.section === props.section && now.section !== props.section) {
       navigateToSettingsSection(now.section);
     }
-  }, [editor, availability, active, customizing, props.section]);
+  }, [editor, availability, active, customizing, presented, props.section]);
   // Nothing on unmount: development roots render under StrictMode, whose mount
   // probe runs every effect's cleanup once, which would clear the guide the
   // moment it started. `activeSetup` is session-local presence, so a closed

@@ -278,18 +278,45 @@ describe("Settings modal, Layout section, editor available", () => {
     expect(revealRequests).toEqual([]);
   });
 
-  it("keeps the full Layout page at a narrow window with the switch on", async () => {
-    useSettingsStore.setState({ visualLayoutEditorEnabled: true });
-    setWidth(500);
-    mount("/");
+  it("keeps the full Layout page when the window narrows below md with the switch on", async () => {
+    // Below md the two-pane modal is never opened fresh (phones go straight to
+    // the full-page section), so the case is a modal that is ALREADY open on
+    // Layout when the switch goes on and the window is narrow at the same time.
+    const listeners = new Set<() => void>();
+    const original = window.matchMedia;
+    window.matchMedia = (query: string): MediaQueryList => {
+      const list = original.call(window, query);
+      list.addEventListener = (
+        _type: string,
+        listener: EventListenerOrEventListenerObject,
+      ): void => {
+        listeners.add(() => {
+          if (typeof listener === "function") listener(new Event("change"));
+          else listener.handleEvent(new Event("change"));
+        });
+      };
+      return list;
+    };
+    try {
+      mount("/");
+      await openModalAt("layout");
+      const dialog = await screen.findByRole("dialog", { name: "Settings" });
+      await within(dialog).findByTestId("layout-presets-group");
 
-    // Below md the two-pane modal never opens (phones route straight to the
-    // full-page section), so the section store is what a wide modal would read:
-    // set it directly and assert the panel a wide-then-narrow window shows.
-    useSettingsSectionStore.setState({ section: "layout" });
-    await waitFor(() => expect(modalProbe.current).not.toBeNull());
-    expect(useSettingsSectionStore.getState().section).toBe("layout");
-    expect(revealRequests).toEqual([]);
+      act(() => {
+        setWidth(500);
+        for (const listener of listeners) listener();
+        useSettingsStore.setState({ visualLayoutEditorEnabled: true });
+      });
+
+      // Switch on but window narrow: the editor is unavailable, so Layout stays
+      // exactly as it was and nothing is moved or revealed.
+      expect(within(dialog).getByTestId("layout-presets-group")).toBeTruthy();
+      expect(useSettingsSectionStore.getState().section).toBe("layout");
+      expect(revealRequests).toEqual([]);
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });
 
