@@ -521,6 +521,9 @@ export const setupCardWindowIdentitySchema = z.object({
    * worktree the transcript pins to the top.
    */
   hasCreatingEvent: z.boolean(),
+  /** Whole-log placement: fork-created worktrees belong after inherited history.
+   * Optional for hosts predating this field; a range can omit the fork event. */
+  isGenesisPin: z.boolean().optional(),
 });
 export type SetupCardWindowIdentity = z.infer<
   typeof setupCardWindowIdentitySchema

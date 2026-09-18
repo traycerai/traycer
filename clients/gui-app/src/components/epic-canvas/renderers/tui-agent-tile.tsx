@@ -304,6 +304,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
           agentId={sessionId}
           viewTabId={props.viewTabId}
@@ -822,6 +823,7 @@ function TuiAgentTileLive(
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
           agentId={sessionId}
           viewTabId={props.viewTabId}
@@ -845,6 +847,7 @@ function TuiAgentTileLive(
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
           agentId={props.node.id}
           viewTabId={props.viewTabId}
@@ -867,6 +870,7 @@ function TuiAgentTileLive(
   return (
     <TerminalAgentTileShell tileId={props.tileId}>
       <TerminalAgentPreLaunchToolbar
+        owningTileInstanceId={props.node.instanceId}
         hostId={hostId}
         hostClient={hostClient}
         epicId={epicId}
@@ -1108,6 +1112,7 @@ function buildForkTarget(input: {
 }
 
 interface TerminalAgentPreLaunchToolbarProps {
+  readonly owningTileInstanceId: string;
   readonly hostId: string;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
@@ -1394,6 +1399,7 @@ function TerminalAgentPreLaunchToolbar(
           downward Popover overlay, so it never reflows the terminal below. */}
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.owningTileInstanceId}
           hostId={props.hostId}
           agentId={props.agent.id}
           viewTabId={props.viewTabId}
@@ -1440,6 +1446,7 @@ function TerminalAgentPreLaunchToolbar(
  *    yet. Returns null (no empty strip) when there is no notice to show.
  */
 function TerminalAgentWorktreeNotice(props: {
+  readonly owningTileInstanceId: string;
   readonly hostId: string;
   readonly agentId: string;
   readonly viewTabId: string;
@@ -1474,7 +1481,11 @@ function TerminalAgentWorktreeNotice(props: {
   // Register the running setup PTY as a background canvas tab so it auto-appears
   // in the canvas and survives a host/GUI restart (the host keeps no terminal
   // state across restarts - persistence comes only from a saved canvas tab).
-  useTuiSetupTerminalTabRegisterDriver({ binding, viewTabId: props.viewTabId });
+  useTuiSetupTerminalTabRegisterDriver({
+    binding,
+    viewTabId: props.viewTabId,
+    owningTileInstanceId: props.owningTileInstanceId,
+  });
   const model = useMemo(
     () =>
       buildTuiAgentSetupCardModel(binding, { epicId, ownerId: props.agentId }),

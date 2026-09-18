@@ -723,6 +723,34 @@ describe("buildSetupCardRows", () => {
  * placeholder.
  */
 describe("buildSetupCardRows against the host's whole-log partition", () => {
+  it("trusts the host's published isGenesisPin: false over a cold setup-only slice's own (mis)reading", () => {
+    // A cold GUI range that only ever hydrates the setup events themselves
+    // never sees the `chat.forked` event that disqualifies a genesis pin -
+    // that event materializes its OWN row, entirely outside this window's
+    // events. Left to `isGenesisSetupWindow` alone (windowIndex 0, no
+    // creating event, no fork event in this slice) the client would
+    // misread this as genesis. The host derives the flag from the WHOLE
+    // log and publishes it on the identity precisely so the client never
+    // has to: an EXACT match carries the host's identity through unchanged,
+    // so the published `false` must win outright.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 1_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+          isGenesisPin: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].isGenesisPin).toBe(false);
+  });
+
   it("splits a merged local window back across the host's own anchors", () => {
     const rows = buildSetupCardRows(
       [
@@ -918,6 +946,13 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
     // Numbered PAST the host's list: a lifecycle it has not published yet.
     expect(rows[0].windowIndex).toBe(1);
     expect(rows[0].createdAt).toBe(9_000);
+    // This is the FIRST (only) window the local partition of this slice can
+    // see, so a naive local `isGenesisSetupWindow` call - windowIndex 0, no
+    // creating event, no fork in the slice - would misread it as genesis.
+    // It sits after a non-empty wholeLog window, so it cannot be: a "live"
+    // window is always hardcoded `isGenesisPin: false` rather than trusting
+    // the local (mis-numbered) computation.
+    expect(rows[0].isGenesisPin).toBe(false);
   });
 
   it("still anchors a cold-opening tail that precedes closedAt", () => {
