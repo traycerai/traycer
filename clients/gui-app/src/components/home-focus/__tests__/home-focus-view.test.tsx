@@ -763,10 +763,37 @@ describe("<HomeFocusView /> nesting inside a task", () => {
     expect(actionsMock.openTask).toHaveBeenCalledWith("epic-1");
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-agent-body"));
-    expect(actionsMock.openAgent).toHaveBeenCalledWith("epic-1", "chat-1");
+    // `agentRow`'s default `hostId: null` - the row carries no host here.
+    expect(actionsMock.openAgent).toHaveBeenCalledWith(
+      "epic-1",
+      "chat-1",
+      null,
+    );
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-job-body"));
     expect(actionsMock.openBackground).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the agent's row with its OWN host when the row names one", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "impl", hostId: "host-a" }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    fireEvent.click(screen.getByTestId("home-focus-task-group-agent-body"));
+    expect(actionsMock.openAgent).toHaveBeenCalledWith(
+      "epic-1",
+      "chat-1",
+      "host-a",
+    );
   });
 
   it("names the agent that started a chat instead of indenting it again", () => {

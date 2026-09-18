@@ -137,7 +137,11 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           is not by itself a decision to show anything. Whether a report is
           ever presented is the strip's call, and it gates on `isMobileApp()`
           so the row stays absent on desktop exactly as it always has been. */}
-      <MobileCurrentTileBar epicId={epicId} tile={selection.ref} />
+      <MobileCurrentTileBar
+        epicId={epicId}
+        tabId={tabId}
+        tile={selection.ref}
+      />
       <div className="relative min-h-0 flex-1">
         <TabBodySelectedContext.Provider value>
           <ActiveTabBody

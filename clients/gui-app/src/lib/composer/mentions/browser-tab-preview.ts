@@ -42,5 +42,10 @@ export async function fetchBrowserTabPreviewImage(
     mimeType: "image/jpeg",
     size: null,
     b64content: preview.screenshotBase64,
+    // Nothing here has classified these bytes - they are whatever the owning
+    // host's capture produced, announced as JPEG. The composer's pending-image
+    // sweep picks this node up like any other inline one and re-stamps the flag
+    // from the preparer's verdict; until it does, inline is the safe answer.
+    byHashEligible: false,
   };
 }

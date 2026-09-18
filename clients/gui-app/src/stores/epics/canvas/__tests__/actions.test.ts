@@ -1325,8 +1325,9 @@ describe("instanceId / content-id decoupling", () => {
     const rootBefore = previewed.root;
 
     // Rename matches by content id and updates the open tab in place,
-    // touching only tilesByInstanceId.
-    const renamed = renameArtifact(previewed, SPEC_A.id, "Renamed Spec");
+    // touching only tilesByInstanceId. `null` host scope is the shared
+    // (not host-bound) document-edit case.
+    const renamed = renameArtifact(previewed, SPEC_A.id, "Renamed Spec", null);
     expect(renamed.root).toBe(rootBefore);
     const pane = rootPane(renamed);
     const tab = paneTabRefs(renamed, pane)[0];
@@ -1347,7 +1348,12 @@ describe("instanceId / content-id decoupling", () => {
     };
     const previewed = openPreview(createEmptyCanvas(), terminal);
 
-    const renamed = renameArtifact(previewed, terminal.id, "Custom shell");
+    const renamed = renameArtifact(
+      previewed,
+      terminal.id,
+      "Custom shell",
+      terminal.hostId,
+    );
     const tab = paneTabRefs(renamed, rootPane(renamed))[0];
     expect(tab).toMatchObject({
       name: "Custom shell",

@@ -47,13 +47,50 @@ const terminalSessions = vi.hoisted<{
     | ReadonlyArray<{ sessionId: string; status: string; sessionKind: string }>
     | undefined;
 }>(() => ({ value: undefined }));
-// The tab-scoped client - an opaque non-null sentinel stands in for "the tab
-// host resolved"; set to `null` to model the unresolved-directory window.
-const tabClient = vi.hoisted<{ value: object | null }>(() => ({ value: {} }));
+// The tab-scoped client. It stands in for "the tab host resolved", and it
+// carries `getActiveHostId` because the card CALLS it: Retry on a provision
+// failure resumes the queue that failure paused, and it resolves the chat's
+// live session through (epicId, ownerId, hostId). An opaque `{}` sentinel used
+// to be enough and is exactly the shape that hides a newly-read member until
+// run time - so the stub names what the card reads. Set to `null` to model the
+// unresolved-directory window.
+const tabClient = vi.hoisted<{
+  value: { readonly getActiveHostId: () => string | null } | null;
+}>(() => ({ value: { getActiveHostId: () => "host-1" } }));
 // Captures the client argument `SetupCardSegment` threads into the retry hook,
 // so a test can assert Retry routes through the SAME tab client as the others.
 const retryClientArg = vi.hoisted<{ value: object | null | "unset" }>(() => ({
   value: "unset",
+}));
+
+// The chat session the provision-failure Retry resumes. That arm chains
+// `queue.resume` after a successful `worktree.create`, reaching the queue
+// through the registry. Like `tabClient` above, the stub NAMES the members the
+// card reads (`queue.status`, `resumeQueue`) instead of being a partial cast -
+// the shape that hides a newly-read member until run time. `value: null` models
+// a chat with no live session (the tile was closed).
+const resumeQueue = vi.hoisted(() => vi.fn());
+const peekedSession = vi.hoisted<{
+  value: {
+    readonly store: {
+      readonly getState: () => {
+        readonly queue: { readonly status: string };
+        readonly resumeQueue: () => void;
+      };
+    };
+  } | null;
+}>(() => ({ value: null }));
+const peekArgs = vi.hoisted<{ value: readonly unknown[] | null }>(() => ({
+  value: null,
+}));
+
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  getChatSessionRegistry: () => ({
+    peek: (...args: readonly unknown[]) => {
+      peekArgs.value = args;
+      return peekedSession.value;
+    },
+  }),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -160,8 +197,17 @@ beforeEach(() => {
   createMutate.mockReset();
   errorToast.mockReset();
   terminalSessions.value = undefined;
-  tabClient.value = {};
+  tabClient.value = { getActiveHostId: () => "host-1" };
   retryClientArg.value = "unset";
+  resumeQueue.mockReset();
+  peekArgs.value = null;
+  // Paused by default: that is the state a provision failure leaves the queue
+  // in, and it is the case the resume exists for.
+  peekedSession.value = {
+    store: {
+      getState: () => ({ queue: { status: "paused" }, resumeQueue }),
+    },
+  };
 });
 
 afterEach(() => {
@@ -473,6 +519,119 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
       undefined,
       expect.objectContaining({ title: "Worktree re-provision failed" }),
     );
+  });
+
+  /**
+   * The provision failure PAUSED the queue, so re-provisioning without
+   * resuming leaves the seeded prompt parked behind a failure that no longer
+   * exists - one gesture that only half works. The resume is scoped to this arm
+   * on purpose: a `retrySetup` pause is the user's own, and a queue that is not
+   * paused is never touched.
+   */
+  function renderProvisionFailure(): void {
+    renderCard(
+      viewModel("failed", [
+        workspace({
+          state: "failed",
+          worktreePath: null,
+          errorMessage: "git worktree add failed",
+          retryFolderIntent: {
+            kind: "worktree" as const,
+            workspacePath: "/repo",
+            repoIdentifier: null,
+            isPrimary: true,
+            branch: {
+              type: "new" as const,
+              name: "traycer/fresh-fox",
+              source: "main",
+              carryUncommittedChanges: false,
+            },
+            scripts: null,
+          },
+        }),
+      ]),
+    );
+  }
+
+  function clickRetryCreation(): void {
+    fireEvent.click(screen.getByRole("button", { name: "Retry creation" }));
+  }
+
+  // Annotated rather than inferred: a bare `[]` in a hoisted const widens to
+  // `never[]`, which is not assignable to the empty TUPLE `CreateMutateOptions`
+  // declares ("may have more elements"). The inline literals in the cases above
+  // are contextually typed by the parameter and so never hit this.
+  const ALL_OK_RESPONSE: {
+    binding: { entries: [] };
+    perEntry: CreatePerEntryResult[];
+  } = {
+    binding: { entries: [] },
+    perEntry: [
+      {
+        workspacePath: "/repo",
+        ok: true,
+        worktreePath: "/worktrees/fresh-fox",
+        branch: "traycer/fresh-fox",
+        errorMessage: null,
+      },
+    ],
+  };
+
+  it("resumes the paused queue once after a successful re-provision, for the chat session it names", () => {
+    renderProvisionFailure();
+    clickRetryCreation();
+    // Not before the RPC resolves - a resume on click would restart the turn
+    // against a worktree that still does not exist.
+    expect(resumeQueue).not.toHaveBeenCalled();
+
+    createMutate.mock.calls[0][1]?.onSuccess(ALL_OK_RESPONSE);
+    expect(resumeQueue).toHaveBeenCalledTimes(1);
+    // Resolved through (epicId, ownerId, tab hostId), not a default host.
+    expect(peekArgs.value).toEqual([EPIC_ID, OWNER_ID, "host-1"]);
+  });
+
+  it("does not resume when the re-provision came back with a failed entry", () => {
+    renderProvisionFailure();
+    clickRetryCreation();
+
+    createMutate.mock.calls[0][1]?.onSuccess({
+      binding: { entries: [] },
+      perEntry: [
+        {
+          workspacePath: "/repo",
+          ok: false,
+          worktreePath: null,
+          branch: "traycer/fresh-fox",
+          errorMessage:
+            "traycer/fresh-fox is already checked out in /elsewhere",
+        },
+      ],
+    });
+    expect(errorToast).toHaveBeenCalled();
+    expect(resumeQueue).not.toHaveBeenCalled();
+  });
+
+  it("leaves a queue that is not paused alone", () => {
+    peekedSession.value = {
+      store: {
+        getState: () => ({ queue: { status: "idle" }, resumeQueue }),
+      },
+    };
+    renderProvisionFailure();
+    clickRetryCreation();
+
+    createMutate.mock.calls[0][1]?.onSuccess(ALL_OK_RESPONSE);
+    expect(resumeQueue).not.toHaveBeenCalled();
+  });
+
+  it("never resumes on the script-failure retrySetup arm", () => {
+    renderCard(viewModel("cancelled", [workspace({ state: "cancelled" })]));
+    expand();
+    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+
+    expect(retryMutate).toHaveBeenCalledTimes(1);
+    expect(createMutate).not.toHaveBeenCalled();
+    expect(resumeQueue).not.toHaveBeenCalled();
   });
 
   it("renders the provision failure reason on the failed card", () => {

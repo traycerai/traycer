@@ -3322,9 +3322,9 @@ function registerMonitorCommand(program: Command): void {
 // command-registration smoke test) so `buildProgram()` consumers don't
 // trigger `parseAsync` against `process.argv`. The check matches
 // argv[1] against this file's basename which is robust across both the
-// tsx dev path and a bundled `bun --compile` binary where argv[1] is
+// tsx dev path and the compiled SEA binary (`build:sea`) where argv[1] is
 // the CLI invocation itself - including the Windows `traycer.exe`
-// suffix produced by `bun build --compile --target=bun-windows-x64`.
+// suffix.
 const entryArgv = typeof process !== "undefined" ? process.argv[1] : undefined;
 if (isTraycerCliEntrypoint(entryArgv)) {
   const entryLogger = createCliLogger(config.environment);

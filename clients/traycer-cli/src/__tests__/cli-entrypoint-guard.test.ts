@@ -8,8 +8,7 @@ import {
 // `traycer-cli/src/index.ts` is what gates the auto `parseAsync` so
 // `import { buildProgram }` from a test never triggers commander
 // against `process.argv`. Before this fixup the regex only matched
-// `traycer` (no extension) so a Windows SEA binary
-// (`bun build --compile --target=bun-windows-x64` → `traycer.exe`)
+// `traycer` (no extension) so the Windows SEA binary (`traycer.exe`)
 // was treated as "this module was imported, do nothing" and the CLI
 // silently no-op'd in production.
 //

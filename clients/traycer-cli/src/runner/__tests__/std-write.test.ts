@@ -40,10 +40,11 @@ interface WorkerRun {
   readonly error: Error | null;
 }
 
-// `bun` rather than the vitest host process: the CLI ships as a
-// `bun --compile` binary, so bun is the runtime whose flush-on-exit behaviour
-// has to hold. (Node truncates identically here, but pinning the shipped
-// runtime is what makes this test evidence about the artifact we release.)
+// `bun` rather than the vitest host process: bun runs this CLI's tree and
+// dev paths, and its flush quirks are what `std-write.ts` works around.
+// (Node truncates identically here. The released binary is a Node SEA built
+// by `build:sea`, so this worker is evidence about bun, not about the
+// released artifact.)
 function runWorker(payloadBytes: number): Promise<WorkerRun> {
   return new Promise((resolve) => {
     execFile(

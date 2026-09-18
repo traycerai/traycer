@@ -36,10 +36,18 @@ import {
 } from "@/lib/worktree/pending-epic-create-seeds";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 
+/**
+ * The marker is keyed per `(epicId, chatId)` pair, so this suite has to name
+ * one. `null` is the terminal-agent landing create's shape and is the simplest
+ * pair to hold here: the burst guard reads the EPIC-level `seedRows` predicate,
+ * which does not look at the chat id.
+ */
+const SEED_CHAT_ID = null;
+
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
-  clearEpicCreateSeedPending("epic-1");
+  clearEpicCreateSeedPending("epic-1", SEED_CHAT_ID);
 });
 
 function entry(branch: string): WorktreeHostEntryV16 {
@@ -263,7 +271,16 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
     { epicId: "epic-1" },
   );
 
-  markEpicCreateSeedPending("epic-1");
+  // `seedRows` on the burst's OWN host is what the three assertions below mean
+  // by "marked, not refetched": the guard is host-aware, and an entry on
+  // another host would not (and must not) suppress this listing.
+  markEpicCreateSeedPending("epic-1", SEED_CHAT_ID, {
+    hostId: mockLocalHostEntry.hostId,
+    seededMessageId: null,
+    seedRows: true,
+    heldForDeferredCreate: false,
+    release: () => {},
+  });
   act(() => {
     invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
       root: true,
@@ -275,7 +292,7 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
   expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle");
   expect(requests).toBe(1);
 
-  clearEpicCreateSeedPending("epic-1");
+  clearEpicCreateSeedPending("epic-1", SEED_CHAT_ID);
   act(() => {
     invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
       root: true,
@@ -285,6 +302,67 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
   await waitFor(() => {
     expect(requests).toBe(2);
   });
+});
+
+it("does not suppress a host's binding listing for an epic seeded on a different host", async () => {
+  let requests = 0;
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "worktree.listBindingsForEpic": () => {
+          requests += 1;
+          return { rows: [], folderlessCwd: "/tmp/epic-1" };
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  const queryClient = createAppQueryClient();
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  const { result } = renderHook(
+    () =>
+      useWorktreeListBindingsForEpicForClient({
+        client,
+        epicId: "epic-1",
+        enabled: true,
+      }),
+    { wrapper: Wrapper },
+  );
+  await waitFor(() => {
+    expect(result.current.isSuccess).toBe(true);
+  });
+  expect(requests).toBe(1);
+
+  markEpicCreateSeedPending("epic-1", SEED_CHAT_ID, {
+    hostId: "host-other",
+    seededMessageId: null,
+    seedRows: true,
+    heldForDeferredCreate: true,
+    release: () => {},
+  });
+  act(() => {
+    invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
+      root: true,
+      worktreePaths: new Set(),
+    });
+  });
+  await waitFor(() => {
+    expect(requests).toBe(2);
+  });
+  clearEpicCreateSeedPending("epic-1", SEED_CHAT_ID);
 });
 
 /**

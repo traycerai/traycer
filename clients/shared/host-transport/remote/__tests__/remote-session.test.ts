@@ -110,6 +110,10 @@ import {
   type RemoteSessionOptions,
 } from "../remote-session";
 import { RemoteStreamClient } from "../remote-stream-client";
+import {
+  getNegotiatedStreamMethodVersion,
+  resetNegotiatedStreamVersions,
+} from "../../negotiated-stream-version-registry";
 import { LogicalStream } from "../logical-stream";
 import {
   NOISE_HANDSHAKE_TIMEOUT_MS,
@@ -2682,6 +2686,54 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       } finally {
         stream.close();
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "publishes the negotiated stream method version to the host-keyed registry (remote plane)",
+    async () => {
+      // This suite's `RemoteSession` is the `clients/shared` adapter
+      // (imported above from `../remote-session`), not the bare protocol
+      // core - its constructor hard-codes `onNegotiatedStreamMethodVersions`
+      // to `recordNegotiatedStreamMethodVersions` and its options type omits
+      // the field entirely, so a caller cannot override it. That is exactly
+      // the production wiring this test pins: the remote plane publishes to
+      // the SAME host-keyed registry the local `WsStreamClient` plane does
+      // (see `ws-stream-client.test.ts`'s sibling assertion).
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      // This registry is a module-level singleton shared across the whole
+      // suite, so a sibling test's own "host-1" recording (e.g. the one two
+      // cases above) can still be live here - reset first rather than
+      // asserting a pre-handshake `null` that would be a false negative.
+      resetNegotiatedStreamVersions();
+
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(
+          () =>
+            expect(
+              getNegotiatedStreamMethodVersion("host-1", "cursor.subscribe"),
+            ).not.toBeNull(),
+          WAIT,
+        );
+        expect(
+          getNegotiatedStreamMethodVersion("host-1", "cursor.subscribe"),
+        ).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
+      } finally {
+        session.close();
+        resetNegotiatedStreamVersions();
       }
     },
     TEST_BUDGET_MS,

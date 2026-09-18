@@ -38,13 +38,25 @@ import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta
 
 const mocks = vi.hoisted(() => ({
   handle: { current: null as OpenedStoreForTest | null },
-  chatCalls: [] as { readonly chatId: string; readonly title: string }[],
-  tuiCalls: [] as { readonly tuiAgentId: string; readonly title: string }[],
+  chatCalls: [] as {
+    readonly chatId: string;
+    readonly title: string;
+    readonly hostId: string | null;
+  }[],
+  tuiCalls: [] as {
+    readonly tuiAgentId: string;
+    readonly title: string;
+    readonly hostId: string | null;
+  }[],
   artifactCalls: [] as {
     readonly artifactId: string;
     readonly title: string;
   }[],
   terminalCalls: [] as { readonly sessionId: string; readonly title: string }[],
+  /** The `{hostId}` target each `useEpicRecordMutationClient()(...)` call
+   * resolved, in call order - lets a test pin that the terminal rename
+   * client follows the caller-supplied hostId, not the ambient session. */
+  recordMutationClientCalls: [] as { readonly hostId: string | null }[],
   settleAs: "success",
   /**
    * One settle function per `mutateAsync` call, in call order - a queue
@@ -88,10 +100,15 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicRenameChat: () => ({
     mutateAsync: makeMutateAsync(
-      (variables: { readonly chatId: string; readonly title: string }) => {
+      (variables: {
+        readonly chatId: string;
+        readonly title: string;
+        readonly hostId: string | null;
+      }) => {
         mocks.chatCalls.push({
           chatId: variables.chatId,
           title: variables.title,
+          hostId: variables.hostId,
         });
       },
     ),
@@ -101,10 +118,15 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicRenameTuiAgent: () => ({
     mutateAsync: makeMutateAsync(
-      (variables: { readonly tuiAgentId: string; readonly title: string }) => {
+      (variables: {
+        readonly tuiAgentId: string;
+        readonly title: string;
+        readonly hostId: string | null;
+      }) => {
         mocks.tuiCalls.push({
           tuiAgentId: variables.tuiAgentId,
           title: variables.title,
+          hostId: variables.hostId,
         });
       },
     ),
@@ -126,10 +148,26 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
 
+// The terminal rename client now resolves through the caller-supplied
+// `hostId` (`useEpicRecordMutationClient`), not the ambient session client -
+// mocked here as its own seam so a test can pin which target it was asked to
+// resolve, independent of `useTerminalRenameFor`'s own mock above (which
+// ignores whatever client it is constructed with).
+vi.mock("@/hooks/epic/use-epic-record-mutation-client", () => ({
+  useEpicRecordMutationClient:
+    () =>
+    (target: { readonly hostId: string | null }): null => {
+      mocks.recordMutationClientCalls.push(target);
+      return null;
+    },
+}));
+
 import { useSwitcherRename } from "@/components/epic-canvas/mobile/use-switcher-rename";
 
 const EPIC_ID = "epic-1";
 const HOST_ID = "host-1";
+/** A same-id clone's host, distinct from the local projection's `HOST_ID`. */
+const OTHER_HOST_ID = "host-2";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -257,6 +295,7 @@ describe("useSwitcherRename", () => {
     mocks.tuiCalls = [];
     mocks.artifactCalls = [];
     mocks.terminalCalls = [];
+    mocks.recordMutationClientCalls = [];
     mocks.pendingSettles = [];
     mocks.settleAs = "success";
     mocks.handle.current?.dispose();
@@ -267,7 +306,9 @@ describe("useSwitcherRename", () => {
     const handle = newSession();
     mocks.handle.current = handle;
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, HOST_ID),
+    );
 
     act(() => {
       result.current("artifact", id, "  Trimmed title  ");
@@ -312,7 +353,9 @@ describe("useSwitcherRename", () => {
     mocks.handle.current = handle;
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, HOST_ID),
+    );
 
     act(() => {
       result.current("artifact", id, "Failed rename");
@@ -340,7 +383,9 @@ describe("useSwitcherRename", () => {
     // whether retire actually ran post-unmount.
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, HOST_ID),
+    );
 
     act(() => {
       result.current("artifact", id, "Unmount-race rename");
@@ -380,7 +425,9 @@ describe("useSwitcherRename", () => {
     // after both settle proves BOTH stamps were retired, not just one.
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, HOST_ID),
+    );
 
     act(() => {
       result.current("artifact", id, "First");
@@ -422,7 +469,9 @@ describe("useSwitcherRename", () => {
     const handle = newSession();
     mocks.handle.current = handle;
     const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
-    const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, HOST_ID),
+    );
 
     // AWAITED: the overlay stamp is minted by the worker's queue, so the
     // mutation fires only after that round trip resolves. A synchronous `act`
@@ -432,7 +481,9 @@ describe("useSwitcherRename", () => {
       await flushMicrotasks();
     });
 
-    expect(mocks.chatCalls).toEqual([{ chatId, title: "New chat name" }]);
+    expect(mocks.chatCalls).toEqual([
+      { chatId, title: "New chat name", hostId: HOST_ID },
+    ]);
     expect(mocks.artifactCalls).toEqual([]);
     expect(mocks.tuiCalls).toEqual([]);
     unmount();
@@ -479,7 +530,9 @@ describe("useSwitcherRename", () => {
       ],
       null,
     );
-    const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, HOST_ID),
+    );
 
     // AWAITED for the same reason the chat arm above is.
     await act(async () => {
@@ -488,15 +541,30 @@ describe("useSwitcherRename", () => {
     });
 
     expect(mocks.tuiCalls).toEqual([
-      { tuiAgentId: "agent-1", title: "New agent name" },
+      { tuiAgentId: "agent-1", title: "New agent name", hostId: HOST_ID },
     ]);
     unmount();
+  });
+
+  it("resolves the terminal rename client through the caller-supplied hostId, not the ambient session client", () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    renderHook(() => useSwitcherRename(EPIC_ID, HOST_ID));
+
+    // `useEpicSessionHostClient` (mocked to `null` for this whole suite) is
+    // no longer what `useTerminalRenameFor` is built from - the hook must
+    // resolve through `useEpicRecordMutationClient()({hostId})` instead, so
+    // the caller-supplied host is what decides the client even though the
+    // ambient session client stays null throughout this file.
+    expect(mocks.recordMutationClientCalls).toEqual([{ hostId: HOST_ID }]);
   });
 
   it("a raw terminal never stamps the overlay - it routes to the terminal mutation only", () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, HOST_ID),
+    );
 
     act(() => {
       result.current("terminal", "session-1", "New terminal name");
@@ -508,6 +576,64 @@ describe("useSwitcherRename", () => {
     expect(mocks.artifactCalls).toEqual([]);
     expect(mocks.chatCalls).toEqual([]);
     expect(mocks.tuiCalls).toEqual([]);
+    unmount();
+  });
+
+  // A same-id clone on another host must not receive this rename's overlay:
+  // there is no local row on `OTHER_HOST_ID` for `beginRenameMutation` to
+  // patch, so the RPC must still fire (scoped to the caller's own hostId)
+  // while the LOCAL projection's row - hosted on `HOST_ID` - stays untouched.
+  it("skips the optimistic overlay for a chat whose local projection is bound to ANOTHER host than the one this rename targets", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
+    // Give the local projection an explicit owner host distinct from the
+    // rename's target: a same-id row this session actually holds, for
+    // `HOST_ID`, while the rename below targets `OTHER_HOST_ID`.
+    handle.store.getState().applyChatRecords(
+      [
+        {
+          chatId,
+          ownerUserId: "user-a",
+          originHostId: HOST_ID,
+          title: "Local projection chat",
+          isTitleEditedByUser: false,
+          parentChatId: null,
+          createdAt: 1,
+          updatedAt: 2,
+          archived: false,
+          archivedAt: null,
+          runSettingsSummary: "claude",
+          revision: 1,
+          visibility: "private",
+          origin: "own",
+          docResident: false,
+        },
+      ],
+      null,
+    );
+    const { result, unmount } = renderHook(() =>
+      useSwitcherRename(EPIC_ID, OTHER_HOST_ID),
+    );
+
+    await act(async () => {
+      result.current("chat", chatId, "Renamed on the other host");
+      await flushMicrotasks();
+    });
+
+    // The RPC still fires, scoped to the rename's own target host.
+    expect(mocks.chatCalls).toEqual([
+      {
+        chatId,
+        title: "Renamed on the other host",
+        hostId: OTHER_HOST_ID,
+      },
+    ]);
+    // No overlay stamp: the local projection's row (bound to `HOST_ID`)
+    // never shows the other host's in-flight title.
+    expect(handle.store.getState().chats.byId[chatId]?.title).toBe(
+      "Local projection chat",
+    );
     unmount();
   });
 });

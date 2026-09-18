@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostRequestDispatchOptions,
+  HostRequester,
+} from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import {
@@ -11,6 +14,8 @@ import { reconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
+import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
 import {
   forgetBlobUnsupportedHost,
   forgetConfirmedDraftBlobs,
@@ -88,20 +93,31 @@ const HOST = "host-blobs";
 // they did before the memo existed.
 const OWNER = "user-blobs";
 
-/** A client that counts calls and lets the test decide each response's fate. */
+/**
+ * A client that counts calls and lets the test decide each response's fate.
+ *
+ * Both members answer, and `requestWithOptions` delegates rather than
+ * duplicating: `drafts.putBlob` rides the KEYED member now, so a fake that
+ * counted only `request` would report zero calls for every put in this file.
+ * The options are ignored here on purpose - the dispatch SHAPE is pinned in its
+ * own describe below, and mixing that claim into these cases would make a
+ * change to the key fail tests that are about retries and digests.
+ */
 function countingClient(
   respond: (sha256: string) => Promise<{ readonly ok: boolean }>,
 ): { readonly client: DraftBlobClient; calls: () => number } {
   let calls = 0;
+  const request = (async (_method, params) => {
+    calls += 1;
+    const { sha256 } = params as { readonly sha256: string };
+    const result = await respond(sha256);
+    return result.ok
+      ? { ok: true as const }
+      : { ok: false as const, reason: "digest-mismatch" as const };
+  }) as HostRequester<HostRpcRegistry>["request"];
   const client: DraftBlobClient = {
-    request: (async (_method, params) => {
-      calls += 1;
-      const { sha256 } = params as { readonly sha256: string };
-      const result = await respond(sha256);
-      return result.ok
-        ? { ok: true as const }
-        : { ok: false as const, reason: "digest-mismatch" as const };
-    }) as HostRequester<HostRpcRegistry>["request"],
+    request,
+    requestWithOptions: (method, params) => request(method, params),
   };
   return { client, calls: () => calls };
 }
@@ -162,20 +178,22 @@ describe("draft blob transport", () => {
   it("treats a withheld blob store as an old host, not a failure", async () => {
     const hash = await putImage(pngBytes());
     let calls = 0;
-    const client: Pick<HostRequester<HostRpcRegistry>, "request"> = {
-      request: (_method, _params) => {
-        calls += 1;
-        return Promise.reject(
-          new HostRpcError({
-            code: "E_HOST_UNSUPPORTED",
-            message: "old",
-            requestId: "r",
-            method: "drafts.putBlob",
-            fatalDetails: null,
-          }),
-        );
-      },
+    const request: HostRequester<HostRpcRegistry>["request"] = (
+      _method,
+      _params,
+    ) => {
+      calls += 1;
+      return Promise.reject(
+        new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: "old",
+          requestId: "r",
+          method: "drafts.putBlob",
+          fatalDetails: null,
+        }),
+      );
     };
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     const first = await putDraftBlobs(HOST, client, [hash], OWNER);
     expect(first).toEqual([]);
     expect(calls).toBe(1);
@@ -191,25 +209,27 @@ describe("draft blob transport", () => {
 
   it("digest-mismatch skips the hash and does not confirm it", async () => {
     const hash = await putImage(pngBytes());
-    const client = {
-      request: ((_method, _params) =>
-        Promise.resolve({
-          ok: false as const,
-          reason: "digest-mismatch" as const,
-        })) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = ((_method, _params) =>
+      Promise.resolve({
+        ok: false as const,
+        reason: "digest-mismatch" as const,
+      })) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     const confirmed = await putDraftBlobs(HOST, client, [hash], OWNER);
     expect(confirmed).toEqual([]);
   });
 
   it("skips a hash the landing store does not hold", async () => {
     let calls = 0;
-    const client = {
-      request: ((_method, _params) => {
-        calls += 1;
-        return Promise.resolve({ ok: true as const });
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    // BOTH members count. The upload goes through `requestWithOptions` (it
+    // carries the blob's idempotency key and the enlarged response budget), so
+    // a double that only counted `request` would report zero calls whether the
+    // skip worked or not - passing for the wrong reason.
+    const request = ((_method, _params) => {
+      calls += 1;
+      return Promise.resolve({ ok: true as const });
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     const confirmed = await putDraftBlobs(
       HOST,
       client,
@@ -221,13 +241,12 @@ describe("draft blob transport", () => {
   });
 
   it("readBlob missing collapses to no local bytes", async () => {
-    const client = {
-      request: ((_method, _params) =>
-        Promise.resolve({
-          ok: false as const,
-          reason: "missing" as const,
-        })) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = ((_method, _params) =>
+      Promise.resolve({
+        ok: false as const,
+        reason: "missing" as const,
+      })) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     const images = await readDraftBlobsIntoLocalStore(HOST, client, [
       "ab".repeat(32),
     ]);
@@ -258,13 +277,12 @@ describe("draft blob transport", () => {
       },
     );
 
-    const client: DraftBlobClient = {
-      request: ((_method, _params) =>
-        Promise.resolve({
-          ok: true as const,
-          bytesBase64: bytesToBase64(bytes),
-        })) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = ((_method, _params) =>
+      Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(bytes),
+      })) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
 
@@ -295,13 +313,12 @@ describe("draft blob transport", () => {
       },
     );
 
-    const client: DraftBlobClient = {
-      request: ((_method, _params) =>
-        Promise.resolve({
-          ok: true as const,
-          bytesBase64: bytesToBase64(bytes),
-        })) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = ((_method, _params) =>
+      Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(bytes),
+      })) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
 
@@ -323,15 +340,14 @@ describe("draft blob transport", () => {
     const hash = await sha256HexOfBytes(bytes);
     signedInAs("user-a");
 
-    const client: DraftBlobClient = {
-      request: ((_method, _params) => {
-        signedInAs("user-b");
-        return Promise.resolve({
-          ok: true as const,
-          bytesBase64: bytesToBase64(bytes),
-        });
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = ((_method, _params) => {
+      signedInAs("user-b");
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(bytes),
+      });
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const images = await readDraftBlobsIntoLocalStore(HOST, client, [hash]);
 
@@ -448,12 +464,14 @@ describe("draft blob transport", () => {
     const gate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    const client: DraftBlobClient = {
-      request: async (_method, _params) => {
-        await gate;
-        throw unsupportedError("drafts.putBlob");
-      },
+    const request: HostRequester<HostRpcRegistry>["request"] = async (
+      _method,
+      _params,
+    ) => {
+      await gate;
+      throw unsupportedError("drafts.putBlob");
     };
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const firstCall = putDraftBlobs(HOST, client, [hash], OWNER);
     // The reconnect re-bootstrap lands while the refusal is still on the wire.
@@ -468,10 +486,11 @@ describe("draft blob transport", () => {
 
   it("a refusal on the CURRENT epoch still marks the host - positive control", async () => {
     const hash = await putImage(pngBytes());
-    const client: DraftBlobClient = {
-      request: (_method, _params) =>
-        Promise.reject(unsupportedError("drafts.putBlob")),
-    };
+    const request: HostRequester<HostRpcRegistry>["request"] = (
+      _method,
+      _params,
+    ) => Promise.reject(unsupportedError("drafts.putBlob"));
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     expect(await putDraftBlobs(HOST, client, [hash], OWNER)).toEqual([]);
     expect(hostWithholdsDraftBlobs(HOST)).toBe(true);
@@ -503,12 +522,14 @@ describe("draft blob transport", () => {
     const gate = new Promise<void>((resolve) => {
       releaseRead = resolve;
     });
-    const client: DraftBlobClient = {
-      request: async (_method, _params) => {
-        await gate;
-        throw unsupportedError("drafts.readBlob");
-      },
+    const request: HostRequester<HostRpcRegistry>["request"] = async (
+      _method,
+      _params,
+    ) => {
+      await gate;
+      throw unsupportedError("drafts.readBlob");
     };
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const reading = readDraftBlobsIntoLocalStore(HOST, client, [hash]);
     forgetConfirmedDraftBlobs(HOST);
@@ -519,10 +540,11 @@ describe("draft blob transport", () => {
   });
 
   it("a readBlob refusal on the CURRENT epoch still marks the host - positive control", async () => {
-    const client: DraftBlobClient = {
-      request: (_method, _params) =>
-        Promise.reject(unsupportedError("drafts.readBlob")),
-    };
+    const request: HostRequester<HostRpcRegistry>["request"] = (
+      _method,
+      _params,
+    ) => Promise.reject(unsupportedError("drafts.readBlob"));
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     expect(
       (await readDraftBlobsIntoLocalStore(HOST, client, ["cd".repeat(32)]))
@@ -644,5 +666,148 @@ describe("draft blob transport", () => {
     } finally {
       capture.stop();
     }
+  });
+});
+
+/**
+ * PORTED with the keyed dispatch (§8 of the merge resolution). Every OTHER fake
+ * in this file answers both members identically - which is what keeps those
+ * cases about digests, retries and epochs - so none of them can observe WHICH
+ * member a dispatch used. That observation lives here and nowhere else.
+ * `drafts.putBlob` now rides
+ * `requestWithOptions` (digest key + the extended budget) while the read path
+ * still uses `request`, and a rejection alone proves nothing: both loops in
+ * `draft-blob-transport.ts` catch a non-capability error and return the
+ * accumulated result, so an empty result is the same observation whether the
+ * intended member answered `ok: false` or the other member threw. Recording the
+ * member is what makes a dispatch that moved to the other one fail on the log
+ * rather than on an empty result.
+ */
+type RecordedMember = "request" | "requestWithOptions";
+
+type RecordedCall = {
+  readonly member: RecordedMember;
+  readonly method: string;
+  readonly params: unknown;
+  readonly options: HostRequestDispatchOptions | undefined;
+};
+
+function recordingClient(
+  respond: (method: string, params: unknown) => Promise<unknown>,
+): { client: DraftBlobClient; calls: RecordedCall[] } {
+  const calls: RecordedCall[] = [];
+  const request = ((method, params) => {
+    calls.push({ member: "request", method, params, options: undefined });
+    return respond(method, params);
+  }) as HostRequester<HostRpcRegistry>["request"];
+  const requestWithOptions = ((method, params, options) => {
+    calls.push({ member: "requestWithOptions", method, params, options });
+    return respond(method, params);
+  }) as HostRequester<HostRpcRegistry>["requestWithOptions"];
+  return { client: { request, requestWithOptions }, calls };
+}
+
+function putBlobDispatchOptions(sha256: string): HostRequestDispatchOptions {
+  return {
+    idempotencyKey: sha256,
+    responseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+    requiredHostMethodVersion: null,
+    signal: undefined,
+  };
+}
+
+describe("draft blob transport: dispatch shape and positive controls", () => {
+  // The positive control for `digest-mismatch skips the hash`. Without it that
+  // case asserts "not confirmed" with nothing in the suite proving confirmation
+  // is reachable at all - a wiring fault that broke every put would read green.
+  it("an ok putBlob confirms the hash, through the KEYED member", async () => {
+    const hash = await putImage(pngBytes());
+    const { client, calls } = recordingClient(() =>
+      Promise.resolve({ ok: true as const }),
+    );
+
+    const confirmed = await putDraftBlobs(HOST, client, [hash], OWNER);
+
+    expect(confirmed).toEqual([hash]);
+    expect(calls).toEqual([
+      {
+        member: "requestWithOptions",
+        method: "drafts.putBlob",
+        params: { sha256: hash, bytesBase64: bytesToBase64(pngBytes()) },
+        options: putBlobDispatchOptions(hash),
+      },
+    ]);
+  });
+
+  // A retried put with no idempotency key is a duplicate upload the host cannot
+  // recognise. The memo and the in-flight join cover the CLIENT's repeats; they
+  // say nothing about a TRANSPORT replay of one dispatch.
+  it("putBlob never falls back to the unbudgeted request member", async () => {
+    const hash = await putImage(pngBytes());
+    const { client, calls } = recordingClient(() =>
+      Promise.resolve({ ok: true as const }),
+    );
+
+    await putDraftBlobs(HOST, client, [hash], OWNER);
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(
+      calls.every(
+        (call) =>
+          call.method !== "drafts.putBlob" ||
+          call.member === "requestWithOptions",
+      ),
+    ).toBe(true);
+  });
+
+  // The positive control for `readBlob missing collapses to no local bytes`,
+  // and deliberately `…ForRecovery` rather than `…IntoLocalStore`: the latter
+  // installs through `putImageBytesAtHash`, which re-hashes and refuses a
+  // mismatch, so a positive there needs the real digest of the served bytes -
+  // and learning it via `putImage` would seed the local store and short-circuit
+  // the RPC this case exists to observe. The two share `readDraftBlobs`
+  // entirely; what is left uncovered is the store gate, which is
+  // `landing-image-store`'s own invariant.
+  it("an ok readBlob yields the decoded bytes, through the PLAIN member", async () => {
+    const sha256 = "ab".repeat(32);
+    const { client, calls } = recordingClient(() =>
+      Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(pngBytes()),
+      }),
+    );
+
+    const images = await readDraftBlobsForRecovery(HOST, client, [sha256]);
+
+    expect(calls).toEqual([
+      {
+        member: "request",
+        method: "drafts.readBlob",
+        params: { sha256 },
+        options: undefined,
+      },
+    ]);
+    expect(images.size).toBe(1);
+    expect(Array.from(images.get(sha256)?.bytes ?? [])).toEqual(
+      Array.from(pngBytes()),
+    );
+  });
+
+  // Upstream pins the OWNER dimension of the join (`two owners do not share one
+  // upload flight`) and the digest join itself, but never the HOST dimension -
+  // and host is the OUTER key of `inFlightBlobUploads`.
+  it("negative control: the same hash on DIFFERENT hosts is two bodies", async () => {
+    const hash = await putImage(pngBytes());
+    const { client, calls } = recordingClient(() =>
+      Promise.resolve({ ok: true as const }),
+    );
+
+    await Promise.all([
+      putDraftBlobs("host-a", client, [hash], OWNER),
+      putDraftBlobs("host-b", client, [hash], OWNER),
+    ]);
+
+    const puts = calls.filter((call) => call.method === "drafts.putBlob");
+    expect(puts).toHaveLength(2);
   });
 });
