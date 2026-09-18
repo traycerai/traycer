@@ -11,10 +11,9 @@ import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
 import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
-import {
-  tileRenameKind,
-  useSwitcherRename,
-} from "@/components/epic-canvas/mobile/use-switcher-rename";
+import { tileRenameKind } from "@/components/epic-canvas/mobile/use-switcher-rename";
+import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
+import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import {
   useEpicPermissionRole,
@@ -32,6 +31,7 @@ import type {
 
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
+  readonly tabId: string;
   readonly tile: EpicCanvasTileRef;
 }
 
@@ -79,7 +79,7 @@ function MobileCurrentTileBarBody(
     readonly browserPresentation: BrowserTabPresentation | null;
   },
 ) {
-  const { epicId, tile, browserPresentation } = props;
+  const { epicId, tabId, tile, browserPresentation } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
   // other kind (mirrors the tab strip). `useHostClientForHostId(null)` returns
@@ -120,13 +120,20 @@ function MobileCurrentTileBarBody(
   );
   const editable =
     renameKind !== null && canMutate && chatWriteRoute !== "unavailable";
-  const rename = useSwitcherRename(epicId, tile.hostId);
+  const rename = useRenameCanvasTab(epicId, tabId);
+  const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const handleCommit = useCallback(
     (next: string) => {
       if (renameKind === null) return;
-      rename(renameKind, tile.id, next);
+      const trimmed = next.trim();
+      if (trimmed.length === 0) return;
+      if (tile.type === "terminal") {
+        renameTerminal.mutate({ sessionId: tile.id, title: trimmed });
+        return;
+      }
+      rename(tile, trimmed);
     },
-    [rename, renameKind, tile.id],
+    [rename, renameKind, renameTerminal, tile],
   );
   // A chat is the one tile kind whose own stream can be away while its content
   // stays on screen with nothing said about it. Terminals already overlay

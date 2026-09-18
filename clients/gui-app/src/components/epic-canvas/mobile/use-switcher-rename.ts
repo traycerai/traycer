@@ -41,21 +41,14 @@ export function tileRenameKind(ref: EpicCanvasTileRef): SwitcherRowKind | null {
 }
 
 /**
- * Fires the canonical rename mutation for a renameable kind: the same host RPCs
- * the desktop sidebar rows drive, so every mobile rename affordance - list rows
- * and the current-tile title alike - lands through one path.
+ * Renames a mobile switcher list row through the same mutations as the desktop
+ * sidebar. Current-tile titles use `useRenameCanvasTab`, which also maintains
+ * the tile's saved name.
  *
  * `nodeId` is the content id for agents and artifacts, the session id for a raw
  * terminal.
  *
- * ## Why this stamps an overlay now
- *
- * This hook had NO local update: it fired the RPC and waited. That was not a
- * mobile product decision - `useIsMobileViewport()` is a 768px media query, so
- * the same user on the same device got different persistence feedback either
- * side of a window drag. The overlay is what removes that width dependency;
- * the wide-viewport twin is `use-rename-canvas-tab.ts`, and the two must stay
- * observably identical (the resize test is 1.1's acceptance criterion).
+ * The overlay keeps the list's title current until the host's record arrives.
  *
  * A raw `terminal` is deliberately excluded: it is a host session rather than
  * an epic node, has no row in the projection to patch, and its own rename
