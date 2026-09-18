@@ -62,6 +62,16 @@ export type AnalyticsBlocker =
    * kind costs a minor.
    */
   | "refused:local-store-unavailable"
+  /**
+   * `epic.create@1.2` / `epic.createChat@1.2`: the host could not find bytes
+   * for an image hash the request referenced, in the epic store or in the
+   * requester's draft tier. Its own member rather than a re-use of the one
+   * above, exactly as the rule there says: the `refused:` prefix carries the
+   * KIND, so the funnel keeps telling "no usable local store" from "the bytes
+   * were not where we said they were" - two refusals with different remedies
+   * (a rebind the person performs, versus a re-upload the client performs).
+   */
+  | "refused:missing-attachment-bytes"
   | "unknown";
 
 export type AnalyticsCommand =

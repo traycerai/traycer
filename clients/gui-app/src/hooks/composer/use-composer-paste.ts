@@ -15,6 +15,16 @@ import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { isHostStorableImageMimeType } from "@/lib/composer/host-storable-image-formats";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { PREPARED_IMAGE_SOURCE_CEILING } from "@/lib/composer/composer-image-preparation-session";
+import {
+  createComposerImagePreparationSession,
+  prepareComposerImageBytesOrRefuse,
+  showImageTooLargeToast,
+  type ImagePreparationSession,
+  type PreparedComposerImage,
+} from "@/lib/composer/composer-image-preparation";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import {
   holdPendingIngestImageHash,
   mintPendingIngestHolderId,
@@ -45,11 +55,16 @@ import {
 
 export const IMAGE_MIME_PREFIX = "image/";
 /**
- * Re-exported from the capacity authority rather than restated: the budget
- * charges an unmeasured root at exactly this ceiling, so the two numbers moving
- * apart would silently change what the budget admits.
+ * The only size a paste refuses outright, and it is a SOURCE bound: anything
+ * under it is resized and re-encoded to fit rather than turned away.
+ *
+ * This replaces the old per-image ceiling at the FILTER. That ceiling has not
+ * gone away — it moved to the OUTPUT (`PREPARED_IMAGE_MAX_BYTES`), which is
+ * what preparation guarantees and what the budget then charges. Keeping the
+ * old bound here as well would refuse, before any decode, exactly the images
+ * preparation exists to make attachable.
  */
-export const MAX_IMAGE_BYTES = LANDING_IMAGE_MAX_BYTES_PER_IMAGE;
+export const MAX_IMAGE_SOURCE_BYTES = PREPARED_IMAGE_SOURCE_CEILING;
 export const IMAGE_READ_TIMEOUT_MS = 15_000;
 /**
  * Bound on a single file/URL's `fileDrops` round trip. Without this, a
@@ -162,61 +177,33 @@ function withResolutionTimeout<T>(
   });
 }
 
-function readFileAsDataUrl(file: File, signal: AbortSignal): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    let settled = false;
-    const cleanup = (): void => {
-      window.clearTimeout(timeout);
-      signal.removeEventListener("abort", abort);
-      reader.onerror = null;
-      reader.onload = null;
-      reader.onabort = null;
-    };
-    const fail = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    const abort = (): void => {
-      reader.abort();
-      fail(new Error("Image read was cancelled"));
-    };
-    const timeout = window.setTimeout(() => {
-      reader.abort();
-      fail(new Error("Timed out while reading image"));
-    }, IMAGE_READ_TIMEOUT_MS);
-    reader.onerror = () => {
-      fail(reader.error ?? new Error("Failed to read image"));
-    };
-    reader.onabort = () => {
-      fail(new Error("Image read was cancelled"));
-    };
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        fail(new Error("Image reader returned non-string result"));
-        return;
-      }
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(result);
-    };
-    if (signal.aborted) {
-      abort();
-      return;
-    }
-    signal.addEventListener("abort", abort, { once: true });
-    reader.readAsDataURL(file);
-  });
+/**
+ * A file's raw bytes, under upstream's own deadline+abort bound rather than a
+ * second hand-rolled one.
+ *
+ * Bytes, not a data URL: preparation works on bytes, so reading base64 first
+ * would make one extra full copy of the image and then throw it away. The two
+ * paths that still need base64 encode it from the PREPARED bytes instead,
+ * which is what the node has to carry anyway.
+ */
+function readFileBytes(file: File, signal: AbortSignal): Promise<ImageBytes> {
+  return withAbortableDeadline(
+    file.arrayBuffer().then((buffer) => new Uint8Array(buffer)),
+    IMAGE_READ_TIMEOUT_MS,
+    signal,
+    () => `Reading ${file.name || "image"} timed out`,
+  );
 }
 
 /**
- * `onOversized` lets each surface observe the 5MB rejection (which is
- * user-visible via the toast here) without the shared filter knowing surface
- * names; it receives no file details so nothing sensitive can leak into it.
+ * `onOversized` lets each surface observe the rejection (which is user-visible
+ * via the toast here) without the shared filter knowing surface names; it
+ * receives no file details so nothing sensitive can leak into it.
+ *
+ * The only size refused here is the SOURCE ceiling, checked against
+ * `File.size` so an enormous paste never reaches a decoder at all. Everything
+ * under it is preparation's problem, and preparation is what decides whether
+ * it can be made to fit.
  */
 export function collectImages(
   files: ReadonlyArray<File>,
@@ -225,19 +212,8 @@ export function collectImages(
   const accepted: File[] = [];
   for (const file of files) {
     if (!file.type.startsWith(IMAGE_MIME_PREFIX)) continue;
-    if (file.size > MAX_IMAGE_BYTES) {
-      reportableErrorToast(
-        "Image too large",
-        {
-          description: `${file.name || "Image"} exceeds the 5MB limit.`,
-        },
-        {
-          title: "Image exceeded the size limit",
-          message: null,
-          code: null,
-          source: "Chat composer",
-        },
-      );
+    if (file.size > MAX_IMAGE_SOURCE_BYTES) {
+      showImageTooLargeToast(file.name);
       onOversized();
       continue;
     }
@@ -246,39 +222,96 @@ export function collectImages(
   return accepted;
 }
 
+export interface PrepareComposerImageBytesArgs {
+  readonly session: ImagePreparationSession;
+  readonly bytes: ImageBytes;
+  /** Names the file in the refusal toast, and rides onto the prepared image. */
+  readonly fileName: string;
+  readonly mimeType: string;
+  /** The surface's own analytics hook; the toast is raised here. */
+  readonly onRefused: () => void;
+}
+
+/**
+ * Prepares one already-read image, reporting a refusal the way a paste does:
+ * one toast naming the file, and `onRefused` for the surface's own analytics.
+ * `null` means the image cannot be made to fit and must not be attached.
+ */
+export async function prepareComposerImageBytes(
+  args: PrepareComposerImageBytesArgs,
+): Promise<PreparedComposerImage | null> {
+  const prepared = await prepareComposerImageBytesOrRefuse(
+    args.session,
+    args.bytes,
+    args.fileName,
+    args.mimeType,
+  );
+  if (prepared.kind === "prepared") return prepared.image;
+  showImageTooLargeToast(args.fileName);
+  args.onRefused();
+  return null;
+}
+
+/** `prepareComposerImageBytes` for a File the surface has not read yet. */
+export async function prepareComposerImageFile(
+  session: ImagePreparationSession,
+  file: File,
+  signal: AbortSignal,
+  onRefused: () => void,
+): Promise<PreparedComposerImage | null> {
+  const bytes = await readFileBytes(file, signal);
+  return prepareComposerImageBytes({
+    session,
+    bytes,
+    fileName: file.name || "image",
+    mimeType: file.type || "image/png",
+    onRefused,
+  });
+}
+
 async function filesToImageAttrs(
   files: ReadonlyArray<File>,
   signal: AbortSignal,
+  session: ImagePreparationSession,
 ): Promise<ComposerImageConversionResult> {
   // This base64 ingest serves only chat / new-conversation surfaces.
-  const accepted = collectImages(files, () => {
+  const trackRejected = (): void => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
       surface: "chat",
       blocker: "invalid_input",
     });
-  });
+  };
+  const accepted = collectImages(files, trackRejected);
   if (accepted.length === 0) return { attrs: [] };
-  const results = await Promise.all(
-    accepted.map(async (file) => {
-      const dataUrl = await readFileAsDataUrl(file, signal);
-      return {
-        id: uuidv4(),
-        fileName: file.name || "image",
-        b64content: base64PayloadFromDataUrl(dataUrl),
-        mimeType: file.type || "image/png",
-        size: file.size > 0 ? file.size : null,
-      } satisfies ImageAttachmentAttrs;
-    }),
-  );
+  const attrs: ImageAttachmentAttrs[] = [];
+  // Serial, and on the MOUNT's session: one decode/encode at a time, so a
+  // multi-image paste peaks at one image's memory rather than the batch's, and
+  // a second paste arriving mid-conversion queues behind this one instead of
+  // decoding alongside it.
+  for (const file of accepted) {
+    signal.throwIfAborted();
+    const prepared = await prepareComposerImageFile(
+      session,
+      file,
+      signal,
+      trackRejected,
+    );
+    if (prepared === null) continue;
+    attrs.push({
+      id: uuidv4(),
+      fileName: prepared.fileName,
+      b64content: bytesToBase64(prepared.bytes),
+      mimeType: prepared.mimeType,
+      // The PREPARED size and type, never the source's: this is what the node
+      // carries, what the budget reads back, and what is actually sent.
+      size: prepared.byteLength > 0 ? prepared.byteLength : null,
+      byHashEligible: prepared.byHashEligible,
+    } satisfies ImageAttachmentAttrs);
+  }
   // No reserved capacity to hand off - this surface has no landing-style
   // budget, so there is nothing for `runImageIngest` to release.
-  return { attrs: results };
-}
-
-function base64PayloadFromDataUrl(dataUrl: string): string {
-  const commaIndex = dataUrl.indexOf(",");
-  return commaIndex < 0 ? dataUrl : dataUrl.slice(commaIndex + 1);
+  return { attrs };
 }
 
 /**
@@ -796,9 +829,17 @@ export function useComposerPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
 ): UseComposerPasteResult {
+  // One session per mount: each `attachImageFiles` call is its own background
+  // job and they do not await one another, so the session is what keeps two
+  // pastes into the same composer from decoding at the same time.
+  const preparationSession = useMemo(
+    () => createComposerImagePreparationSession(),
+    [],
+  );
   const imageIngest = useMemo(
     (): ComposerImageIngest => ({
-      convert: filesToImageAttrs,
+      convert: (files, signal) =>
+        filesToImageAttrs(files, signal, preparationSession),
       onSettled: (accepted) => {
         accepted.forEach(() => {
           Analytics.getInstance().track(AnalyticsEvent.AttachmentAdded, {
@@ -828,7 +869,7 @@ export function useComposerPasteAdapter(
         );
       },
     }),
-    [],
+    [preparationSession],
   );
   return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
 }
@@ -857,20 +898,41 @@ function hostStorableImage(file: File): boolean {
 async function hashImageAttrsFromFiles(
   files: ReadonlyArray<File>,
   signal: AbortSignal,
+  session: ImagePreparationSession,
 ): Promise<ComposerImageConversionResult> {
-  const accepted = collectImages(files, () => {
+  const trackRejected = (): void => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
       surface: "chat",
       blocker: "invalid_input",
     });
-  });
+  };
+  const accepted = collectImages(files, trackRejected);
   if (accepted.length === 0) return { attrs: [] };
   const storable = accepted.filter(hostStorableImage);
   // Reserved BEFORE any bytes are written, against this partition's live roots
   // plus every other outstanding reservation, exactly as landing does. The hash
   // is unknown until `putImage` hashes the bytes, so each candidate reserves
   // anonymously.
+  //
+  // The charge is the SOURCE size capped at the per-image ceiling, because the
+  // bytes this path can actually store are bounded by that ceiling and not by
+  // the file: preparation runs below and every arm that reaches `putImage` -
+  // the re-encode and the fallback alike - has already refused anything over
+  // `PREPARED_IMAGE_MAX_BYTES`. Uncapped, a 30 MB photo reserved 30 MB of a
+  // 64 MiB budget to store at most 3.75 MiB, and two of them refused the batch
+  // outright as `rate_limit`. That was a live over-charge rather than a
+  // conservative one: `MAX_IMAGE_SOURCE_BYTES` admits files far above the
+  // ceiling, so source size stopped being an upper bound on what lands.
+  //
+  // This is the one reservation site that charges a source size at all - the
+  // other three (`use-landing-composer-paste`, and both in
+  // `use-composer-pending-image-ingest`) charge a prepared `byteLength`,
+  // because they prepare before reserving. The order is kept here on purpose:
+  // preparation is the expensive part, and reserving first is what stops N
+  // concurrent batches from all decoding before any of them learns there is no
+  // room. `settleStored` below replaces this estimate with the real charge the
+  // moment the hash exists.
   const reservation =
     storable.length === 0
       ? null
@@ -878,7 +940,10 @@ async function hashImageAttrsFromFiles(
           null,
           storable.map((file) => ({
             hash: null,
-            bytes: file.size > 0 ? file.size : 0,
+            bytes: Math.min(
+              file.size > 0 ? file.size : 0,
+              LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
+            ),
           })),
         );
   if (storable.length > 0 && reservation === null) {
@@ -908,17 +973,26 @@ async function hashImageAttrsFromFiles(
         // when the budget refused this batch - and writing it this way narrows
         // the handle for the settlement below.
         if (reservation === null) return null;
-        // Both awaits are bounded AND abort-responsive. `throwIfAborted` after
-        // the fact is not enough: it only runs once the promise settles, so a
-        // stall held the send gate open forever and no cancellation could
-        // settle it.
-        const buffer = await withAbortableDeadline(
-          file.arrayBuffer(),
-          IMAGE_READ_TIMEOUT_MS,
+        // PREPARED before the store, so the hash addresses bytes that already
+        // satisfy the output policy. Preparation runs on this mount's session,
+        // so the decodes across this batch queue even though the reads and
+        // writes around them stay parallel.
+        //
+        // The read inside it is bounded AND abort-responsive, as is the store
+        // wait below. `throwIfAborted` after the fact is not enough: it only
+        // runs once the promise settles, so a stall held the send gate open
+        // forever and no cancellation could settle it.
+        const prepared = await prepareComposerImageFile(
+          session,
+          file,
           signal,
-          () => `Reading ${file.name || "image"} timed out`,
+          trackRejected,
         );
-        const bytes = new Uint8Array(buffer);
+        // Refused outright: it cannot be made to fit, and the toast has
+        // already named it. Its reservation slot is left unsettled and the
+        // batch handle releases it with the rest.
+        if (prepared === null) return null;
+        const bytes = prepared.bytes;
         // Checked BEFORE `putImage` is called, not after it settles. The
         // argument to `withAbortableDeadline` is evaluated eagerly, so a
         // cancellation landing in the gap between the read finishing and this
@@ -967,20 +1041,31 @@ async function hashImageAttrsFromFiles(
         }
         return {
           id: uuidv4(),
-          fileName: file.name || "image",
+          fileName: prepared.fileName,
           hash,
-          mimeType: file.type || "image/png",
-          size: file.size > 0 ? file.size : null,
+          mimeType: prepared.mimeType,
+          size: prepared.byteLength > 0 ? prepared.byteLength : null,
+          byHashEligible: prepared.byHashEligible,
         };
       }
       // The format fallback: today's inline conversion, for this file only.
-      const dataUrl = await readFileAsDataUrl(file, signal);
+      // Still PREPARED - the ceiling is about the bytes that travel, not about
+      // which channel they travel on - but it stays inline, and preparation's
+      // own verdict on eligibility is what says so.
+      const preparedInline = await prepareComposerImageFile(
+        session,
+        file,
+        signal,
+        trackRejected,
+      );
+      if (preparedInline === null) return null;
       return {
         id: uuidv4(),
-        fileName: file.name || "image",
-        b64content: base64PayloadFromDataUrl(dataUrl),
-        mimeType: file.type || "image/png",
-        size: file.size > 0 ? file.size : null,
+        fileName: preparedInline.fileName,
+        b64content: bytesToBase64(preparedInline.bytes),
+        mimeType: preparedInline.mimeType,
+        size: preparedInline.byteLength > 0 ? preparedInline.byteLength : null,
+        byHashEligible: preparedInline.byHashEligible,
       };
     }),
   );
@@ -1026,13 +1111,19 @@ export function useComposerHashPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
 ): UseComposerPasteResult {
+  // One session per mount, for the reason the base64 adapter has one.
+  const preparationSession = useMemo(
+    () => createComposerImagePreparationSession(),
+    [],
+  );
   const imageIngest = useMemo(
     (): ComposerImageIngest => ({
       // No `disabled` gate, unlike `useLandingComposerPaste`: none of the three
       // chat surfaces suppresses ingest today, and adding a parameter that is
       // `false` at every call site would be a seam with nothing behind it. Add
       // one when a surface actually needs to refuse a mid-submit paste.
-      convert: hashImageAttrsFromFiles,
+      convert: (files, signal) =>
+        hashImageAttrsFromFiles(files, signal, preparationSession),
       onSettled: (accepted) => {
         if (accepted.length === 0) {
           // Converted but not inserted (the editor went away): any stored bytes
@@ -1071,7 +1162,7 @@ export function useComposerHashPasteAdapter(
         scheduleLandingImageReconcile();
       },
     }),
-    [],
+    [preparationSession],
   );
   return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
 }

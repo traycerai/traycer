@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
-import { CopyPathButton } from "./copy-path-button";
+import { CopyPathButton } from "@/components/copy-path-button";
 import { FolderLocationControl } from "./folder-location-control";
 import { FolderBranchControl } from "./folder-branch-control";
 import {
@@ -101,7 +101,11 @@ export function FolderRow(props: {
           </TooltipWrapper>
         ) : null}
         {runPath === null ? null : (
-          <CopyPathButton path={runPath} testId="folder-copy-path" />
+          <CopyPathButton
+            path={runPath}
+            ariaLabel="Copy folder path"
+            testId="folder-copy-path"
+          />
         )}
         {item.metadataPending ? (
           <span

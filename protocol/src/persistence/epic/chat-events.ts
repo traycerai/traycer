@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
+import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import {
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
@@ -252,4 +253,121 @@ export function importedProvenance(
     if (parsed.success) return parsed.data;
   }
   return null;
+}
+
+/**
+ * Typed reading of a `send.failed` event's `metadata` bag when that failure was
+ * a QUEUED item's preparation failing - the host could not assemble what the
+ * turn needs, so the item will not run and the queue is paused.
+ *
+ * Same shape of contract as `chatImportedMetadataSchema` above, for the same
+ * reason: `metadata` is an untyped bag on the wire, so this schema is the parse
+ * contract the writer and every reader agree on rather than a wire shape.
+ * Nothing about the WIRE changes to carry this - the event, its broadcast and
+ * its snapshot replay all already exist. What did not exist is one definition
+ * of what the bag holds.
+ *
+ * `code` is deliberately an open `string` and NOT an enum. This bag already
+ * carries the host's other preparation-failure codes, so a closed enum here
+ * would make every existing one fail the parse - a contract that recognises
+ * only the newest member is worse than the untyped bag it replaced. Readers
+ * compare against the literal they care about (`"MISSING_ATTACHMENT_BYTES"`).
+ *
+ * `missingHashes` is REQUIRED, and the writer supplies `[]` for a code that
+ * names no hashes. That is what keeps `null` meaning exactly one thing - *not a
+ * queued preparation failure, or malformed* - instead of also meaning "a
+ * preparation failure whose code happens not to carry hashes". An optional key
+ * would have collapsed those two into one answer.
+ *
+ * `queueItemId` and `messageId` look like duplicates of fields the EVENT
+ * already carries at top level. They are not, and the difference is load-
+ * bearing: BOTH come from the QUEUED ITEM, which always has them
+ * (`ChatQueuedPromptItem.messageId` is `z.string()`), whereas the event's
+ * top-level `messageId` is `string | null` and answers a different question -
+ * *is there a persisted message row to anchor this event to*. A preparation
+ * that fails before the queued message is persisted writes `null` there and
+ * still has a perfectly good item id to name.
+ *
+ * So these are the ITEM's identity, and carrying them makes the function
+ * TOTAL: either you have a complete, actionable failure or you have `null`,
+ * with no nullable field in between for a caller to narrow before it can
+ * re-upload bytes or resume a queue. Taking both from the same `item` is also
+ * what keeps them consistent with each other by construction. A reader that
+ * only wants to key a transcript row should still prefer the event's own
+ * fields - that is what they are for.
+ */
+export const queuedPreparationFailureMetadataSchema = z.object({
+  code: z.string().min(1),
+  queueItemId: z.string().min(1),
+  messageId: z.string().min(1),
+  // The persistence layer's content-address vocabulary, shared with the draft
+  // tier's own schemas - the host's `draftBlobSha256Schema` is its twin over
+  // the same regex. A second hash shape is how the "which bytes are missing"
+  // set and the blob address space drift apart.
+  missingHashes: z.array(sha256HexSchema),
+});
+export type QueuedPreparationFailureMetadata = z.infer<
+  typeof queuedPreparationFailureMetadataSchema
+>;
+
+/**
+ * The queued-preparation failure a `send.failed` event describes, or `null`.
+ *
+ * Takes the bag rather than the event because both callers already hold one and
+ * the discrimination they need is on the CONTENT: a `send.failed` may come from
+ * any number of paths, and only the ones written through
+ * {@link queuedPreparationFailureMetadataSchema} are this. Check
+ * `event.type === "send.failed"` yourself before calling if that matters to you.
+ *
+ * NEVER THROWS. `null` covers the bag being absent, the keys being missing, and
+ * any value being malformed, with no way to tell those apart - by design, and
+ * the same degrade `importedProvenance` makes one paragraph up. The caller's
+ * question is "is there an actionable preparation failure here, and what is
+ * missing", and every one of those cases answers it the same way: no. Throwing
+ * would cost the whole transcript to report a bag the host wrote badly.
+ *
+ * SO `null` MEANS, CONCRETELY: not a preparation failure at all - a refusal
+ * that REMOVED the item, or a speculative preparation on a synthetic item that
+ * was never queued (the headless landing probe, the received-agent interrupt
+ * restart, Steer Now's temporary item) - or a malformed bag. A `send.failed`
+ * carrying `MISSING_ATTACHMENT_BYTES` and an ACTIONABLE preparation failure are
+ * NOT the same set, and the headless probe is exactly the seeded-create landing
+ * flow hash-only attachments are about, so this is not a corner.
+ *
+ * THE INVARIANT A READER MAY RELY ON, and it is an APPEND-TIME one: a NON-NULL
+ * parse means that WHEN THE EVENT WAS APPENDED the named `queueItemId` was in
+ * the queue and the queue was paused. It says nothing about now. This event is
+ * durable and replayed in every snapshot, so a reader meets it again on each
+ * resnapshot and reconnect, by which time the user may have cancelled the row
+ * or resumed the queue by hand.
+ *
+ * So a reader acting on a non-null parse must re-check the LIVE queue state -
+ * the item is still present, the queue is still paused - before acting, AND
+ * AGAIN AFTER ANY `await`. The second half is the one that gets skipped: an
+ * upload is a round trip, and the state this parse describes can change while
+ * it is in flight, so a check performed only before the await has expired by
+ * the time its result is used. Treat a non-null parse as "this is the failure
+ * that happened", never as "this is what the queue looks like".
+ *
+ * That invariant is the WRITER's to keep and cannot be recovered here - a bag
+ * for an unqueued item is byte-identical to one for a queued item, so no
+ * amount of parsing distinguishes them. The host gates on queue membership at
+ * the append (`failQueuedPromptPreparation`), which is the only place that
+ * knows. Do not try to re-derive it in this function or in a reader; a
+ * `queueItemId`-shaped heuristic here would be a second, weaker decider for a
+ * question already answered correctly upstream.
+ *
+ * Concretely, because the obvious heuristic is worse than no heuristic: the
+ * host's `"initial:"` id prefix is AMBIGUOUS BY CONSTRUCTION. It means "this
+ * item came from a create's initial message", NOT "this item is synthetic" -
+ * the durable seeded queue item and the headless probe mint the byte-identical
+ * id for the same message. Filtering that prefix here would suppress the bag
+ * for the seeded drain, which is the primary case this contract serves, while
+ * doing nothing about the probe.
+ */
+export function queuedPreparationFailureFromEventMetadata(
+  metadata: Record<string, unknown> | null,
+): QueuedPreparationFailureMetadata | null {
+  const parsed = queuedPreparationFailureMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : null;
 }

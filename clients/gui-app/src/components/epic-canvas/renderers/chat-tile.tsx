@@ -197,6 +197,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
@@ -207,6 +208,7 @@ import {
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
+import { useEpicCreateSeedHoldDriver } from "@/hooks/chats/use-epic-create-seed-hold-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
@@ -2105,16 +2107,37 @@ function useChatTileSessionViewModel(
   // detection, failed-send restoration, sending→consumed transitions
   // (via acceptedActions or via persisted messages), and the
   // waitingChat→sendMessage→markSending hop.
+  // Read from the STORE at submit time, not from the projected boolean below.
+  // The projection is a value from the last committed render and a ref of it is
+  // the last committed effect; a stream transition to a non-bridging session
+  // can be queued in the store while an image preparation is mid-flight, and
+  // neither copy knows it yet. The send gate's whole job is to answer "can this
+  // session resolve a bare hash", and only the store can answer it at the
+  // moment it is asked.
+  const getDraftBlobBridgeSupported = useCallback(
+    () => handle.store.getState().draftBlobBridgeSupported,
+    [handle.store],
+  );
+  // Declared HERE rather than beside its other readers further down: the
+  // initial-chat handoff driver below consumes it too, and a `const` used above
+  // its declaration is a TDZ error rather than a hoist. Nothing about the
+  // reasoning above changes with the position - it is still read at submit
+  // time, from the store.
   useInitialChatHandoffDriver({
     handle,
     nodeId: node.id,
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
+    getDraftBlobBridgeSupported,
   });
   useChatSetupFailureRestoreDriver({
     handle,
     nodeId: node.id,
   });
+  // Ends the create-time binding-seed hold once THIS chat's worktree
+  // provisioning has an outcome. A no-op for every tile whose (epic, chat) pair
+  // did not register one, which is every chat but a just-created one.
+  useEpicCreateSeedHoldDriver({ handle });
   // Surface the server-spawned setup terminal in the Terminals sidebar while it
   // runs - its PTY isn't created via the renderer, so nothing else refetches
   // `terminal.list`.
@@ -2148,6 +2171,23 @@ function useChatTileSessionViewModel(
   const turnStopBusy = stopPending || composerActiveTurnStatus === "stopping";
   const stopDisabled = !canAct || turnStopBusy;
   const chatActions = useChatActions(handle);
+  // The queued-drain missing-hash arm. Mounted here because this is where the
+  // three things it needs already meet: the chat's durable `events`, its
+  // `queue`, and `resumeQueue`. Scoped to the TAB's host - the chat is bound to
+  // it for life, and the blob tier the re-upload has to land in is that host's.
+  const repairHostId = useTabHostId();
+  const repairHostClient = useTabHostClient();
+  useQueuedPromptBlobRepair({
+    hostId: repairHostId,
+    client: repairHostClient,
+    events: state.events,
+    queue: state.queue,
+    // The tile's own eligibility. Repairing is an OWNER action - it uploads
+    // into the author's staging tier and resumes the queue - so a read-only
+    // collaborator viewing this chat must not start one.
+    canAct,
+    resumeQueue: chatActions.resumeQueue,
+  });
   const restoreActionPending = useMemo(
     () =>
       Object.values(state.pendingActions).some(
@@ -2557,6 +2597,10 @@ function useChatTileSessionViewModel(
       worktreeBinding: state.worktreeBinding,
       revertOnEditOpen: uiState.revertOnEditOpen,
       queuedCount: state.queue.items.length,
+      // The same getter the composer's submit and the handoff driver take, and
+      // for the same reason: an edit's image preparation is asynchronous, so the
+      // capability has to be read where it is used rather than captured here.
+      getDraftBlobBridgeSupported,
     });
 
   // Switching hosts clones the chat from the latest checkpoint available to
@@ -3259,17 +3303,6 @@ function useChatTileSessionViewModel(
     state.autoPermissionModeProtocolSupported;
   const getActiveTurnForSteer = useCallback(
     () => handle.store.getState().activeTurn,
-    [handle.store],
-  );
-  // Read from the STORE at submit time, not from the projected boolean below.
-  // The projection is a value from the last committed render and a ref of it is
-  // the last committed effect; a stream transition to a non-bridging session
-  // can be queued in the store while an image preparation is mid-flight, and
-  // neither copy knows it yet. The send gate's whole job is to answer "can this
-  // session resolve a bare hash", and only the store can answer it at the
-  // moment it is asked.
-  const getDraftBlobBridgeSupported = useCallback(
-    () => handle.store.getState().draftBlobBridgeSupported,
     [handle.store],
   );
   const lowerTurn = useMemo(

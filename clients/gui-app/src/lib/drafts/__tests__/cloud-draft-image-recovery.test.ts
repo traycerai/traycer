@@ -104,7 +104,7 @@ function recordingClient(handle: FakeHandler): {
     calls.push({ method, params });
     return handle(method, params);
   }) as FakeRequest;
-  return { client: { request }, calls };
+  return { client: { request, requestWithOptions: request }, calls };
 }
 
 /** A client that answers every `epic.readCloudChatPayload` the same way. */
