@@ -219,8 +219,13 @@ import {
   __getOpenEpicRegistryForTests,
   EpicSessionPresentationContext,
   getEpicSessionHandleHostId,
+  handleHostClients,
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
+import {
+  PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS,
+  PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
+} from "@/lib/host/plan-restricted-session-rebuild-backoff";
 import {
   __setEpicRuntimeWorkerFactoryForTests,
   getEpicRuntimeWorkerFactoryOverride,
@@ -970,6 +975,254 @@ describe("<EpicSessionProvider />", () => {
       }
     } finally {
       fixture.dispose();
+    }
+  });
+
+  // ── Plan-restriction backoff ladder: how the provider WIRES it ────────────
+  // Oracle for the risk review's "Plan-restriction backoff ladder as the
+  // provider wires it (one controller per provider, cancel on scope change,
+  // on Retry, on original-host; `markHealthy` gate)." The ladder ITSELF -
+  // the 1m/2m/4m/8m/15m progression, `markHealthy`, `cancel`, first-owner
+  // ordering - is already exhaustively pinned in isolation by
+  // `lib/host/__tests__/plan-restricted-session-rebuild-backoff.test.ts`.
+  // What that file cannot see is whether the PROVIDER actually calls into it
+  // at the right moments; the test just above this one only exercises the
+  // ladder's very first (synchronous, attempt-zero) rung, which is
+  // indistinguishable from "no ladder at all" - a rebuild-on-every-denial
+  // provider would pass it too.
+  it("keeps one ladder across successive denials, delaying a second one until the first rung elapses, then resets once the rebuilt replica proves healthy", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = createEpicSessionFixture("lanes");
+      try {
+        installManifestDerivedWorker();
+        const seenHandles: OpenEpicStoreHandle[] = [];
+        const view = render(
+          <EpicSessionProvider
+            epicId="epic-plan-restricted-ladder"
+            tabId="epic-plan-restricted-ladder"
+          >
+            <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+          </EpicSessionProvider>,
+        );
+        try {
+          await act(() => Promise.resolve());
+          fixture.openLaneStreams(0);
+          fixture.deliverLaneSnapshots(0);
+          await act(() => Promise.resolve());
+          const firstHandle = seenHandles.at(-1);
+          expect(firstHandle?.store.getState().snapshotLoaded).toBe(true);
+
+          // Attempt zero runs synchronously and rebuilds.
+          act(() => {
+            reprobeCallbacks.callbacks.at(0)?.();
+          });
+          await act(() => Promise.resolve());
+          expect(fixture.opens.state).toBe(2);
+          const secondHandle = seenHandles.at(-1);
+          expect(secondHandle).not.toBe(firstHandle);
+
+          // A second denial before the rebuilt replica has loaded - it has
+          // not proven healthy, so `markHealthy` never ran for it and this
+          // attempt is delayed rather than immediate.
+          act(() => {
+            reprobeCallbacks.callbacks.at(1)?.();
+          });
+          await act(() => Promise.resolve());
+          expect(fixture.opens.state).toBe(2);
+
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(
+              PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS,
+            );
+          });
+          expect(fixture.opens.state).toBe(3);
+          const thirdHandle = seenHandles.at(-1);
+          expect(thirdHandle).not.toBe(secondHandle);
+
+          // This time let the rebuilt replica actually load on an open
+          // transport before denying it again - `markHealthy` resets the
+          // ladder, so the NEXT denial is immediate again instead of
+          // continuing at the ladder's next (2x) rung.
+          fixture.openLaneStreams(2);
+          fixture.deliverLaneSnapshots(2);
+          await act(() => Promise.resolve());
+          expect(thirdHandle?.store.getState().snapshotLoaded).toBe(true);
+
+          act(() => {
+            reprobeCallbacks.callbacks.at(2)?.();
+          });
+          await act(() => Promise.resolve());
+          expect(fixture.opens.state).toBe(4);
+        } finally {
+          view.unmount();
+        }
+      } finally {
+        fixture.dispose();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retryRepoint cancels a pending backoff attempt, so the stale rung never rebuilds a session the user already retried", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = createEpicSessionFixture("lanes");
+      try {
+        installManifestDerivedWorker();
+        const seenHandles: OpenEpicStoreHandle[] = [];
+        const presentations: Array<EpicSessionPresentation | null> = [];
+        const view = render(
+          <EpicSessionProvider
+            epicId="epic-plan-restricted-retry-cancel"
+            tabId="epic-plan-restricted-retry-cancel"
+          >
+            <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+            <PresentationProbe
+              onPresentation={(presentation) =>
+                presentations.push(presentation)
+              }
+            />
+          </EpicSessionProvider>,
+        );
+        try {
+          await act(() => Promise.resolve());
+          fixture.openLaneStreams(0);
+          fixture.deliverLaneSnapshots(0);
+          await act(() => Promise.resolve());
+
+          act(() => {
+            reprobeCallbacks.callbacks.at(0)?.();
+          });
+          await act(() => Promise.resolve());
+          const rebuiltHandle = seenHandles.at(-1);
+          if (rebuiltHandle === undefined) {
+            throw new Error("expected a rebuilt handle");
+          }
+          const retryTransportSpy = vi.spyOn(rebuiltHandle, "retryTransport");
+
+          // Denies the rebuilt (not-yet-healthy) handle - delayed, not
+          // immediate.
+          act(() => {
+            reprobeCallbacks.callbacks.at(1)?.();
+          });
+          await act(() => Promise.resolve());
+          expect(retryTransportSpy).not.toHaveBeenCalled();
+
+          // The user presses Retry before the delayed rung fires.
+          act(() => {
+            presentations.at(-1)?.retry();
+          });
+          await act(() => Promise.resolve());
+
+          // Even waiting out the FULL max backoff, the cancelled timer never
+          // fires - a fresh `request()` after a Retry starts its own ladder
+          // from attempt zero, but nothing here re-requested one.
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(
+              PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
+            );
+          });
+          expect(retryTransportSpy).not.toHaveBeenCalled();
+        } finally {
+          view.unmount();
+        }
+      } finally {
+        fixture.dispose();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── `handleHostClients` stamping ──────────────────────────────────────────
+  // Oracle for the risk review's "`releaseMounted` on unmount;
+  // `handleHostClients` stamping; imported-unseen `markSeen`" untested list.
+  // The stamp is read by imperative callers OUTSIDE this subtree (the DnD
+  // reparent commit); nothing in this suite reads it today.
+  it("stamps handleHostClients only after mount (absent during the render that first publishes the handle), and re-stamps it across a re-point", async () => {
+    const EPIC_ID = "epic-host-client-stamp";
+    markEpicCreatedThisSession(EPIC_ID, "host-create");
+    const streams: ControlledEpicStream[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const renderedHandles: Array<OpenEpicStoreHandle | null> = [];
+    let stampedAtFirstHandleRender: unknown = "not-observed-yet";
+    const view = render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <RenderCapturingHandleProbe
+          onRender={(handle) => {
+            renderedHandles.push(handle);
+            if (
+              handle !== null &&
+              stampedAtFirstHandleRender === "not-observed-yet"
+            ) {
+              // Read in the SAME render that first publishes this handle,
+              // before any effect from this commit - including the
+              // provider's own stamping effect - has had a chance to run.
+              stampedAtFirstHandleRender = handleHostClients.get(handle);
+            }
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+    try {
+      await act(() => Promise.resolve());
+      const firstHandle = renderedHandles.find(
+        (handle): handle is OpenEpicStoreHandle => handle !== null,
+      );
+      if (firstHandle === undefined) {
+        throw new Error("expected a published handle");
+      }
+      expect(stampedAtFirstHandleRender).toBeUndefined();
+
+      await act(() => Promise.resolve());
+      expect(handleHostClients.get(firstHandle)).toBe(
+        resolveSessionHostClient("host-create"),
+      );
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(
+          <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+            <RenderCapturingHandleProbe
+              onRender={(handle) => renderedHandles.push(handle)}
+            />
+          </EpicSessionProvider>,
+        );
+      });
+      expect(streams).toHaveLength(2);
+      act(() => {
+        deliverSnapshot(streams[1], "room-a");
+      });
+      await act(() => Promise.resolve());
+
+      const mountedHandle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+      if (mountedHandle === null) {
+        throw new Error("expected a mounted handle");
+      }
+      expect(getEpicSessionHandleHostId(mountedHandle)).toBe("host-b");
+      // Followed the re-point: the NEW handle is stamped with the NEW
+      // host's client, not left holding the create host's.
+      expect(handleHostClients.get(mountedHandle)).toBe(
+        resolveSessionHostClient("host-b"),
+      );
+    } finally {
+      view.unmount();
     }
   });
 
