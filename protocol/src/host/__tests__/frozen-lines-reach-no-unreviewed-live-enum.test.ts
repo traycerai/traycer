@@ -7,6 +7,7 @@ import {
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
 } from "@traycer/protocol/host/provider-schemas";
+import { providerSettingsTabSchema } from "@traycer/protocol/host/provider-native-schemas";
 
 /**
  * Which fields of a RELEASED `providers.list` line still read a LIVE enum?
@@ -193,6 +194,10 @@ type ZodNodeDef = z.core.$ZodTypeDef & {
   readonly innerType?: z.ZodType;
   readonly element?: z.ZodType;
   readonly valueType?: z.ZodType;
+  // A record has TWO child schemas and zod stores both on the def. Omitting
+  // `keyType` here is not a missing convenience - it is the walk silently
+  // skipping a child, which is the one failure mode this guard cannot have.
+  readonly keyType?: z.ZodType;
   readonly shape?: Readonly<Record<string, z.ZodType>>;
   readonly options?: readonly z.ZodType[];
 };
@@ -257,8 +262,20 @@ function collectEnums(
       return;
     }
     case "record": {
+      // BOTH children, with distinct markers. Walking only the value was this
+      // guard's own named hole: the `default:` note below lists "a `z.record`
+      // whose KEY is the enum" as a way to go vacuously green, and `record` is
+      // a HANDLED kind, so the throw down there never fires for it - the key
+      // enum was just dropped in silence. Today every record on these rows is
+      // `tools[].inputSchema` (`key=string`, `value=unknown`), so this walks
+      // nothing new; it is here for the row that binds an enum-keyed record
+      // later, which is precisely the case the list cannot be trusted to catch
+      // by inspection.
       if (def.valueType) {
         collectEnums(def.valueType, `${path}{}`, found, depth + 1);
+      }
+      if (def.keyType) {
+        collectEnums(def.keyType, `${path}{key}`, found, depth + 1);
       }
       return;
     }
@@ -328,6 +345,36 @@ describe("released providers.list lines reach no UNREVIEWED live enum", () => {
     expect(liveEnumPaths(providersListResponseSchema).length).toBeGreaterThan(
       ACCEPTED_LIVE_ENUM_PATHS.length,
     );
+  });
+
+  it("sees an enum used as a record KEY, not just as a record value", () => {
+    // Raised in review, and it was this guard's own documented hole: the
+    // `default:` branch names "a `z.record` whose KEY is the enum" as a way to
+    // pass vacuously, but `record` is a HANDLED kind, so that throw never fires
+    // for it - the walk simply skipped the key in silence.
+    //
+    // No row binds an enum-keyed record today (every record on these rows is
+    // `tools[].inputSchema`, `key=string`), which is exactly why this needs a
+    // synthetic fixture: there is no natural one to notice the omission with,
+    // and "no current row does this" is how a latent hole stays open.
+    // `providerSettingsTabSchema` is imported directly rather than plucked out
+    // of `enumsOf(...)`, for two reasons. `z.record` needs a key typed as a
+    // `$ZodRecordKey`, which the map's `z.ZodType` values are not; and pinning
+    // a NAMED live enum makes the fixture say which declaration it is proving
+    // reachable, instead of whichever one the walk happened to yield first.
+    // It is live by construction - the head row binds this very object, which
+    // `the head row is NOT subject to this rule` above depends on too.
+    const keyed = z.object({
+      byTab: z.record(providerSettingsTabSchema, z.string()),
+    });
+    expect(liveEnumPaths(keyed)).toEqual(["byTab{key}"]);
+
+    // The value side still works, and the two are told apart by their marker -
+    // so a future failure names which half of the record leaked.
+    const valued = z.object({
+      byName: z.record(z.string(), providerSettingsTabSchema),
+    });
+    expect(liveEnumPaths(valued)).toEqual(["byName{}"]);
   });
 
   it("detects a leaf that is live rather than merely enum-shaped", () => {
