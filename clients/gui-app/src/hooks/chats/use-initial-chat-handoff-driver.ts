@@ -182,7 +182,19 @@ function useSeededSendContent(
   getDraftBlobBridgeSupported: () => boolean,
 ): JsonContent | null {
   const content = handoff?.content ?? null;
-  const key = handoff?.key ?? null;
+  // The per-REGISTRATION identity, and deliberately not `handoff.key`. The key
+  // is `[userId, epicId]`, and a second create in the same epic REPLACES the
+  // entry under that same key - so a key match is true across exactly the
+  // replacement it was introduced to exclude. The resolved content of handoff A
+  // would still pass the guard below while the driver dispatched B's
+  // `messageId` and `clientActionId`, which is A's message sent as B's.
+  //
+  // `clientActionId` is pre-minted per submit (`RegisterInitialChatHandoffInput`
+  // declares it a required `string`), so it changes with every registration. A
+  // persisted record from before that field falls back to the key, which is no
+  // weaker there than what this did for every record until now.
+  const identity =
+    handoff === null ? null : (handoff.clientActionId ?? handoff.key);
   // The handoff's OWN host - the machine the chat was created on and is bound
   // to for life - not the window's effective one. Both the custody memo and the
   // host byte leg are per host, and this is the host the resend goes to.
@@ -194,11 +206,11 @@ function useSeededSendContent(
     [content],
   );
   const [resolved, setResolved] = useState<{
-    readonly key: string;
+    readonly identity: string;
     readonly content: JsonContent;
   } | null>(null);
   useEffect(() => {
-    if (content === null || key === null || nothingToDecide) return;
+    if (content === null || identity === null || nothingToDecide) return;
     // Recomputed, never captured - the same contract the submit path states.
     // A `drafts.putBlob` confirmed while this resolution runs should let its
     // node travel bare; a confirmation invalidated in that window must not.
@@ -215,7 +227,7 @@ function useSeededSendContent(
     if (needed.length === 0) {
       // Every hash-only node is in the host's custody: the recorded document IS
       // the wire shape, and no byte ever leaves this window.
-      setResolved({ key, content });
+      setResolved({ identity, content });
       return;
     }
     let cancelled = false;
@@ -231,7 +243,7 @@ function useSeededSendContent(
       commit: (base64ByHash) => {
         if (cancelled) return;
         setResolved({
-          key,
+          identity,
           content: inlineHashOnlyImageBytes(content, base64ByHash),
         });
       },
@@ -242,7 +254,7 @@ function useSeededSendContent(
       // and restores the prompt to the composer - a visible failure the user can
       // act on, and the honest outcome when the bytes are genuinely unreachable.
       if (cancelled) return;
-      setResolved({ key, content });
+      setResolved({ identity, content });
     });
     return () => {
       cancelled = true;
@@ -251,14 +263,17 @@ function useSeededSendContent(
     content,
     getDraftBlobBridgeSupported,
     hostId,
-    key,
+    identity,
     nodeId,
     nothingToDecide,
   ]);
   if (nothingToDecide) return content;
-  // Key-matched so a handoff replaced while its reads were in flight (a second
-  // create in the same epic) can never send the previous one's message.
-  return resolved !== null && resolved.key === key ? resolved.content : null;
+  // Identity-matched so a handoff replaced while its reads were in flight (a
+  // second create in the same epic) can never send the previous one's message.
+  // The identity is per REGISTRATION, not the store key the replacement reuses.
+  return resolved !== null && resolved.identity === identity
+    ? resolved.content
+    : null;
 }
 
 interface ApplyInitialChatHandoffStepInput {

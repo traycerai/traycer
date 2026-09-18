@@ -37,7 +37,7 @@
  *  - the cross-partition move re-writes bytes an earlier writer already
  *    admitted, so it cannot raise the bound.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -51,6 +51,70 @@ const GUI_APP_ROOT = join(import.meta.dirname, "..", "..", "..", "..");
 
 function readSource(relativePath: string): string {
   return readFileSync(join(GUI_APP_ROOT, relativePath), "utf8");
+}
+
+/** Production `.ts`/`.tsx` under `src`, tests and their directories excluded. */
+function productionSources(): string[] {
+  const found: string[] = [];
+  const walk = (relativeDir: string): void => {
+    for (const entry of readdirSync(join(GUI_APP_ROOT, relativeDir), {
+      withFileTypes: true,
+    })) {
+      const relativePath = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name === "__tests__" || entry.name === "node_modules") {
+          continue;
+        }
+        walk(relativePath);
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry.name)) continue;
+      if (/\.(test|spec)\.tsx?$/.test(entry.name)) continue;
+      found.push(relativePath);
+    }
+  };
+  walk("src");
+  return found;
+}
+
+/**
+ * Every production module that imports the `putImage` BINDING from the store.
+ *
+ * Keyed on the import rather than on the call text for two reasons. A bare
+ * `putImage(` also matches `putImageBytesAtHash(` and matches the word inside a
+ * comment or a doc example - a dozen files in this tree mention it without
+ * calling it. And the import is what a new writer cannot avoid writing: there
+ * is no way to reach the function without naming it here.
+ *
+ * The `^import` anchor is what keeps a commented-out import from counting: this
+ * repo writes block comments with a leading ` * `, so a statement at column
+ * zero is a real one.
+ *
+ * ## Why `putImageBytesAtHash` callers are not in this population
+ *
+ * They also write bytes into the partition (cloud draft recovery, the draft
+ * blob transport, the stash restore, tab recovery), and they are deliberately
+ * out of scope for the CEILING. That function only stores bytes whose SHA-256
+ * already matches a hash some document names, so it re-materializes a blob one
+ * of the writers below already minted rather than minting a new one - it cannot
+ * introduce a size that none of these ceilings allowed. It is the same argument
+ * `landing-image-move.ts` carries in the list, and the reason its `bound` is
+ * not its own number.
+ *
+ * Their transport caps are looser than this ceiling (cloud recovery refuses
+ * above `MAX_RENDERED_PAYLOAD_BYTES`, 16 MiB), which is an outer bound on the
+ * FETCH and not a claim that blobs that size exist. If a writer is ever added
+ * that mints a blob larger than every ceiling here, it is the writer that has
+ * to appear below, not the re-materializer.
+ */
+function actualPutImageCallers(): string[] {
+  const importsPutImage =
+    /^import\s*\{[^}]*\bputImage\b[^}]*\}\s*from\s*["'][^"']*landing-image-store["']/m;
+  return productionSources().filter((relativePath) => {
+    if (relativePath === "src/lib/composer/landing-image-store.ts")
+      return false;
+    return importsPutImage.test(readSource(relativePath));
+  });
 }
 
 /**
@@ -126,13 +190,39 @@ describe("the landing per-image ceiling bounds every writer", () => {
     // writer with a larger ceiling would raise the bound and nothing else in
     // the tree would notice; this reds until it is added to WRITERS with its
     // ceiling named.
+    //
+    // The enumeration runs over the TREE, not over `WRITERS`. Asserting that
+    // each declared path calls `putImage` only proves the list contains no
+    // strangers - it is satisfied by a list of one, and says nothing about the
+    // writer somebody adds next week, which is the entire population this file
+    // exists to bound. The set has to be built from source and compared both
+    // ways.
     const store = readSource("src/lib/composer/landing-image-store.ts");
     expect(store).toContain("export async function putImage(");
 
-    const declared = new Set(WRITERS.map((writer) => writer.path));
-    for (const path of declared) {
-      expect(readSource(path), path).toContain("putImage(");
-    }
-    expect(declared.size).toBe(WRITERS.length);
+    const declared = [...new Set(WRITERS.map((writer) => writer.path))].sort();
+    expect(declared.length).toBe(WRITERS.length);
+    expect(actualPutImageCallers().sort()).toEqual(declared);
+  });
+
+  it("the enumeration discriminates - it is not matching every file it reads", () => {
+    // The control this file needs, and the one its previous version lacked: an
+    // enumeration that accidentally matched everything, or nothing, would still
+    // satisfy a set comparison written against whatever it returned that day.
+    //
+    // `cloud-draft-image-recovery.ts` is the sharpest negative available. It
+    // genuinely writes bytes into this partition, it mentions `putImage` in
+    // prose, and it imports `putImageBytesAtHash` from the very same module -
+    // so a predicate keyed on the module path, on the word, or on any prefix
+    // of the binding name would pull it in. Only one keyed on the exact
+    // `putImage` binding leaves it out.
+    const recovery = "src/lib/drafts/cloud-draft-image-recovery.ts";
+    expect(readSource(recovery)).toContain("putImage");
+    expect(actualPutImageCallers()).not.toContain(recovery);
+
+    // And the walk really did read the tree, rather than returning an empty set
+    // that would make the comparison above vacuous.
+    expect(productionSources().length).toBeGreaterThan(500);
+    expect(productionSources()).toContain(recovery);
   });
 });

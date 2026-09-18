@@ -785,11 +785,20 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   // T4 format fallback: a declared MIME type outside the host's storable set
-  // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes today's inline path,
-  // for that file alone, which is exactly what still routes through
-  // `FileReader.readAsDataURL` rather than `arrayBuffer()`/`putImage`.
+  // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes the inline path for that
+  // file alone, and still arrives as `b64content` with a null `hash`.
+  //
+  // The MECHANISM under that contract changed and this test moved with it:
+  // every paste now reads `file.arrayBuffer()`, and the inline-vs-hash verdict
+  // is made AFTER the read by `prepareComposerImageBytesOrRefuse` - a format it
+  // cannot model (BMP is named in its own docblock) lands in the catch and is
+  // the only producer of `byHashEligible: false`. `FileReader.readAsDataURL`
+  // has no production call site left anywhere in the app, so injecting the
+  // delay there pinned a path that no longer exists: the read never started,
+  // and the test failed at its own harness rather than at an assertion. What is
+  // asserted below - inline bytes, no hash - is unchanged.
   it("keeps a declared-BMP paste inline on the edit composer (format fallback)", async () => {
-    const delayedReader = installDelayedFileReader();
+    const delayedRead = installDelayedArrayBufferRead();
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
@@ -798,7 +807,7 @@ describe("<UserMessageBody /> agent messages", () => {
     });
 
     fireEvent.paste(editor, { clipboardData: clipboardWithFiles([bmp]) });
-    delayedReader.resolveNext("data:image/bmp;base64,AQID");
+    delayedRead.resolveNext(new Uint8Array([1, 2, 3]));
     await screen.findByRole("button", { name: "Open Image#1: legacy.bmp" });
     // Wait for the GATE, not the chip - the same two-state-updates gap the
     // storable-PNG sibling below documents. The fallback path takes it too:
@@ -822,10 +831,10 @@ describe("<UserMessageBody /> agent messages", () => {
     ]);
   });
 
-  // T4: a storable PNG paste no longer reads through `FileReader` at all - it
-  // reads `file.arrayBuffer()` and `putImage`s the bytes. The "blocked until
-  // it finishes" contract still holds; only the mechanism under it changed,
-  // so the delay is now injected at `arrayBuffer()`, not `readAsDataURL`.
+  // T4: a storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
+  // bytes; `FileReader` is not involved on any paste path any more. The
+  // "blocked until it finishes" contract still holds; only the mechanism under
+  // it changed, so the delay is injected at `arrayBuffer()`.
   it("blocks edit submission until a pasted image finishes reading", async () => {
     const delayedRead = installDelayedArrayBufferRead();
     const onSubmit = vi.fn<(content: JsonContent) => void>();
@@ -1599,40 +1608,19 @@ function dataTransferWithFiles(files: ReadonlyArray<File>) {
   };
 }
 
-interface DelayedFileReaderControl {
-  readonly resolveNext: (dataUrl: string) => void;
-}
-
-function installDelayedFileReader(): DelayedFileReaderControl {
-  const pending: FileReader[] = [];
-  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
-    this: FileReader,
-    _blob: Blob,
-  ) {
-    pending.push(this);
-  });
-  return {
-    resolveNext: (dataUrl) => {
-      const reader = pending.shift();
-      if (reader === undefined) throw new Error("expected pending file read");
-      Object.defineProperty(reader, "result", {
-        configurable: true,
-        value: dataUrl,
-      });
-      reader.dispatchEvent(new ProgressEvent("load"));
-    },
-  };
-}
-
 interface DelayedArrayBufferReadControl {
   readonly resolveNext: (bytes: Uint8Array) => void;
 }
 
 /**
- * T4's twin of {@link installDelayedFileReader}: a storable-format paste
- * (PNG/JPEG/GIF/WebP/SVG) reads `file.arrayBuffer()` directly, never
- * `FileReader.readAsDataURL` - that FileReader path survives only for the
- * format FALLBACK (a declared MIME type outside the host's storable set).
+ * Hold a paste's byte read open so the gate it arms can be observed.
+ *
+ * This is now the ONLY read seam in the composer: every paste reads
+ * `file.arrayBuffer()`, whatever its declared type, and the hash-vs-inline
+ * verdict is taken afterwards from what the preparer could actually encode.
+ * Its former twin injected at `FileReader.readAsDataURL` for the format
+ * fallback; that was retired with the last production call site of
+ * `FileReader`, so the fallback test drives this seam too.
  */
 function installDelayedArrayBufferRead(): DelayedArrayBufferReadControl {
   const pending: Array<(value: ArrayBuffer) => void> = [];

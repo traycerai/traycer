@@ -61,7 +61,7 @@ import {
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
 import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
-import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
+import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   landingPlacementHostId,
@@ -938,10 +938,14 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // ACCEPTED IMPERFECTION: process exit (quit or crash) during the sub-second
       // ingest window omits that paste's still-pending image from the serialized
       // draft, because its b64 node has not yet converted to a hash.
+      // The caret goes with the strip: positions count nodes, so a draft
+      // persisted mid-ingest would otherwise restore its caret against a
+      // document one node shorter than the one those positions were measured
+      // in.
       partialize: (state) => ({
         drafts: state.drafts.map((draft) => ({
           ...draft,
-          content: stripBase64ImageNodes(draft.content),
+          ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
       }),
@@ -1104,25 +1108,30 @@ useLandingDraftStore.subscribe((state) => {
 function projectLandingDraftForDesktop(
   draft: LandingDraftTab,
 ): DesktopPerWindowLandingDraft {
+  // T6: emit the real hash-only editor JSON, the cursor, and the edit time.
+  // Desktop serialization seam [Mechanism A]: strip a paste's still-pending b64
+  // node first so the projected draft is hash-only — this covers BOTH the store
+  // subscription and the [B1] empty-inbound guard re-projection (both route
+  // through here). Same narrowed accepted imperfection as the persist
+  // `partialize`, and the same caret rule: a strip that removes a node shifts
+  // every position after it, so the selection is taken from the stripped pair
+  // rather than from `draft` directly.
+  const stripped = stripBase64ImageNodesWithSelection(
+    draft.content,
+    draft.selection,
+  );
   return {
     id: draft.id,
-    // T6: emit the real hash-only editor JSON, the cursor, and the edit time.
-    // Desktop serialization seam [Mechanism A]: strip a paste's still-pending b64
-    // node first so the projected draft is hash-only — this covers BOTH the store
-    // subscription and the [B1] empty-inbound guard re-projection (both route
-    // through here). Same narrowed accepted imperfection as the persist
-    // `partialize`. `content` is plain JSON already; the walker reproduces it as a
+    // `content` is plain JSON already; the walker reproduces it as a
     // `DesktopJsonValue` without a cast (`JsonContent`'s `unknown`-valued attrs
     // are not structurally assignable to `DesktopJsonValue`).
-    content: landingDraftContentToDesktopValue(
-      stripBase64ImageNodes(draft.content),
-    ),
+    content: landingDraftContentToDesktopValue(stripped.content),
     // `DraftSelection` lacks an index signature, so rebuild it as a fresh
     // record literal (numbers) to satisfy `DesktopJsonValue` without a cast.
     selection:
-      draft.selection === null
+      stripped.selection === null
         ? null
-        : { from: draft.selection.from, to: draft.selection.to },
+        : { from: stripped.selection.from, to: stripped.selection.to },
     lastTouchedAt: draft.lastTouchedAt,
     settings: chatRunSettingsToDesktopValue(draft.settings),
     composerMode: draft.composerMode,

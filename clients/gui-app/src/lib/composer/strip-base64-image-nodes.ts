@@ -35,7 +35,57 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
 
 export function stripBase64ImageNodes(content: JsonContent): JsonContent {
-  return stripBase64ImageNode(content) ?? EMPTY_LANDING_DRAFT_CONTENT;
+  const stripped = stripBase64ImageNode(content);
+  if (stripped === null) return EMPTY_LANDING_DRAFT_CONTENT;
+  // A `doc` requires at least one block child, so a document whose only child
+  // was a legacy `attachmentGroup` of pending b64 nodes strips to `content: []`
+  // - a shape the editor's own schema rejects. It is not a bad draft, it is an
+  // unopenable one: `useEditor` throws while building it, so the composer that
+  // restores this draft fails to mount rather than coming up empty.
+  //
+  // The `null` arm above is the same answer for a root that was stripped away
+  // entirely; this one covers a root that SURVIVED with nothing left inside it,
+  // which is the case the `??` could not see because an empty doc is not null.
+  if (stripped.type === "doc" && (stripped.content?.length ?? 0) === 0) {
+    return EMPTY_LANDING_DRAFT_CONTENT;
+  }
+  return stripped;
+}
+
+/**
+ * The strip, with the caret decision that has to travel WITH it.
+ *
+ * A selection is a pair of ProseMirror positions, and positions count nodes -
+ * so dropping a pending image node ahead of the caret shifts every position
+ * after it. Persisting the stripped document beside the unstripped caret
+ * restores it somewhere else in the text, or out of range entirely.
+ *
+ * Every seam that strips for serialization also persists a caret, so the two
+ * decisions are made here together rather than left for each seam to remember
+ * separately - three of them did not, in three different files.
+ *
+ * The caret is DROPPED rather than rebased, on purpose. Rebasing needs real
+ * positions, which needs the schema and a built document; this runs inside a
+ * `partialize`, on plain JSON, for a case that only arises when the process
+ * exits inside the sub-second ingest window. That window already loses the
+ * image itself (the accepted imperfection above), so a lost caret in the same
+ * window costs nothing next to the risk of restoring a wrong one. It is
+ * conservative in the other direction too: the caret goes even when the removed
+ * node sat AFTER it and its positions would have survived.
+ */
+export function stripBase64ImageNodesWithSelection<TSelection>(
+  content: JsonContent,
+  selection: TSelection | null,
+): { readonly content: JsonContent; readonly selection: TSelection | null } {
+  // The strip runs unconditionally, and the predicate decides the CARET only.
+  // Short-circuiting the walk on `!containsBase64ImageNodes` looks equivalent
+  // and is not: the walker also drops an `attachmentGroup` that is already
+  // empty, which has no b64 node to detect. Skipping it there would quietly
+  // start persisting a shape these seams have always removed.
+  return {
+    content: stripBase64ImageNodes(content),
+    selection: containsBase64ImageNodes(content) ? null : selection,
+  };
 }
 
 /**

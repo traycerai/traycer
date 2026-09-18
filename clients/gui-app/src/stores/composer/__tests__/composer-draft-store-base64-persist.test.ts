@@ -117,6 +117,50 @@ describe("composer draft store: base64 strip at the persist boundary", () => {
     expect(live.content).toEqual(content);
   });
 
+  it("drops the caret when the strip removes a node, and keeps it when it does not", () => {
+    // A selection is a pair of ProseMirror positions, and positions count
+    // nodes. The persisted document is one node shorter than the one these
+    // positions were measured in, so carrying the caret across restores it
+    // somewhere else in the text on the next launch - or out of range.
+    //
+    // Both halves matter. Dropping the caret unconditionally would be its own
+    // regression (every ordinary draft would forget where the user was), so the
+    // control below is the same assertion for a draft with nothing to strip.
+    const pendingId = "chat-caret-after-pending-image";
+    const caret = { from: 4, to: 4 };
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(pendingId, pendingB64ImageDoc(), caret);
+
+    const options = useComposerDraftStore.persist.getOptions();
+    const partialized = options.partialize?.(useComposerDraftStore.getState());
+    expect(partialized).toBeDefined();
+    if (partialized === undefined) return;
+
+    // Stripped: the caret cannot be trusted against the shorter document.
+    expect(partialized.drafts[pendingId]?.selection).toBeNull();
+    // ...and the in-memory draft still has both the node and the caret, which
+    // is what the live editor is actually pointing at.
+    const live = useComposerDraftStore.getState().drafts[pendingId];
+    expect(live?.selection).toEqual(caret);
+    expect(containsB64String(live?.content)).toBe(true);
+
+    // The CONTROL: nothing pending, nothing removed, caret preserved.
+    const cleanId = "chat-caret-with-nothing-to-strip";
+    useComposerDraftStore.getState().setSnapshot(
+      cleanId,
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "hi" }] },
+        ],
+      },
+      caret,
+    );
+    const afterClean = options.partialize?.(useComposerDraftStore.getState());
+    expect(afterClean?.drafts[cleanId]?.selection).toEqual(caret);
+  });
+
   it("carries a hash-only node through the persisted shape unchanged (nothing to strip)", () => {
     const taskId = "chat-with-hash-only-image";
     const content: JsonContent = {

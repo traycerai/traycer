@@ -32,7 +32,10 @@ import {
 } from "@/lib/composer/pending-ingest-image-roots";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { reserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
+import {
+  LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
+  reserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
 import {
   Analytics,
   AnalyticsEvent,
@@ -911,6 +914,25 @@ async function hashImageAttrsFromFiles(
   // plus every other outstanding reservation, exactly as landing does. The hash
   // is unknown until `putImage` hashes the bytes, so each candidate reserves
   // anonymously.
+  //
+  // The charge is the SOURCE size capped at the per-image ceiling, because the
+  // bytes this path can actually store are bounded by that ceiling and not by
+  // the file: preparation runs below and every arm that reaches `putImage` -
+  // the re-encode and the fallback alike - has already refused anything over
+  // `PREPARED_IMAGE_MAX_BYTES`. Uncapped, a 30 MB photo reserved 30 MB of a
+  // 64 MiB budget to store at most 3.75 MiB, and two of them refused the batch
+  // outright as `rate_limit`. That was a live over-charge rather than a
+  // conservative one: `MAX_IMAGE_SOURCE_BYTES` admits files far above the
+  // ceiling, so source size stopped being an upper bound on what lands.
+  //
+  // This is the one reservation site that charges a source size at all - the
+  // other three (`use-landing-composer-paste`, and both in
+  // `use-composer-pending-image-ingest`) charge a prepared `byteLength`,
+  // because they prepare before reserving. The order is kept here on purpose:
+  // preparation is the expensive part, and reserving first is what stops N
+  // concurrent batches from all decoding before any of them learns there is no
+  // room. `settleStored` below replaces this estimate with the real charge the
+  // moment the hash exists.
   const reservation =
     storable.length === 0
       ? null
@@ -918,7 +940,10 @@ async function hashImageAttrsFromFiles(
           null,
           storable.map((file) => ({
             hash: null,
-            bytes: file.size > 0 ? file.size : 0,
+            bytes: Math.min(
+              file.size > 0 ? file.size : 0,
+              LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
+            ),
           })),
         );
   if (storable.length > 0 && reservation === null) {

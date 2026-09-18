@@ -3585,15 +3585,24 @@ export function createChatSessionStoreWithNotificationDependencies(
         // reconcile passes above just ran, folded after them so a send whose
         // restoration has been waiting since before the reconnect keeps the
         // slot. Whoever loses keeps its document, exactly as the two passes
-        // above do: the notice is the rendering, `lastCopies` is the copy.
+        // above do: the notice is the rendering, the prompt is the copy.
         //
         // The fold can produce SEVERAL losers - one reconnect can settle many
         // stranded cancels and only the first can have the slot - which is
         // precisely why they are accumulated rather than carried singly.
+        //
+        // The document is built HERE, beside the notice, rather than by mapping
+        // the accumulated sends at the state patch below. Both orders record the
+        // same prompts, but only this one puts the construction in the same
+        // block as the notice it belongs to - which is exactly what
+        // `last-copy-notice-producer-scan` reads, and what it could not see
+        // when the two halves sat in different scopes. It also makes this arm
+        // the same TYPE as the two it is spread beside, instead of the only one
+        // needing a `.map` at the seam.
         const cancelRestorationsForSnapshot = cancelSettlement.honoured.reduce<{
           slot: FailedSendRestorationState | null;
           readonly notices: ChatErrorNotice[];
-          readonly lastCopies: UnrecoverableSend[];
+          readonly appendedLastCopyPrompts: UnrecoverableSendPrompt[];
         }>(
           (carried, honoured) => {
             const awarded = awardCancelRestorationSlot(
@@ -3603,18 +3612,20 @@ export function createChatSessionStoreWithNotificationDependencies(
             );
             if (awarded.notice !== null) carried.notices.push(awarded.notice);
             if (awarded.lastCopy !== null) {
-              carried.lastCopies.push(awarded.lastCopy);
+              carried.appendedLastCopyPrompts.push(
+                unrecoverableSendPrompt(awarded.lastCopy),
+              );
             }
             return {
               slot: awarded.failedSendRestoration,
               notices: carried.notices,
-              lastCopies: carried.lastCopies,
+              appendedLastCopyPrompts: carried.appendedLastCopyPrompts,
             };
           },
           {
             slot: settled.failedSendRestoration,
             notices: [],
-            lastCopies: [],
+            appendedLastCopyPrompts: [],
           },
         );
         const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
@@ -3823,9 +3834,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           lastCopyPrompts: withLastCopyPrompts(state.lastCopyPrompts, [
             ...pending.appendedLastCopyPrompts,
             ...settled.appendedLastCopyPrompts,
-            ...cancelRestorationsForSnapshot.lastCopies.map(
-              unrecoverableSendPrompt,
-            ),
+            ...cancelRestorationsForSnapshot.appendedLastCopyPrompts,
           ]),
           restore: restoreSettlement.restore,
           settledRestoreCompletions:
