@@ -630,8 +630,8 @@ export function forkableAssistantMessageId(
 /**
  * The chat's most recent completed-turn fork boundary, or `null` when none
  * exists yet — the agent has never replied, or its only assistant rows are
- * still live. The host-switch fork gesture anchors on this: it means "fork the
- * chat as it stands", not a specific message the user pointed at.
+ * still live. This selects an explicit reply boundary; latest-checkpoint
+ * forks instead let the destination host choose from its available history.
  */
 export function latestForkableAssistantMessageId(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -647,9 +647,8 @@ export function latestForkableAssistantMessageId(
  * The same boundary, brought forward past one the host already named.
  *
  * The windowed line reads that boundary off `chatTranscriptDerived`, which the
- * host recomputes per SNAPSHOT - while the gate in front of the gesture
- * (`composerActiveTurnStatus`) is cleared by a LIVE `turnStateChanged` frame.
- * Between the two there is a window in which the gesture is allowed and the
+ * host recomputes per SNAPSHOT - while the UI shows a completed turn from a
+ * LIVE `turnStateChanged` frame. Between the two there is a window in which the
  * boundary still names the PREVIOUS turn, so a fork silently omits the turn the
  * user just watched finish. Two clocks, and only one of them ticks live.
  *

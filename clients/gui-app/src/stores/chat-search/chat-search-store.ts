@@ -37,9 +37,36 @@ export interface ChatSearchState {
    * advance it.
    */
   readonly dateAnchorMs: number;
+  /**
+   * A query handed to the dialog by another surface, waiting for the panel to
+   * pick it up. One-shot: the panel copies it into its own input state and
+   * calls {@link ChatSearchState.consumeInitialQuery}, so the next ⌘⇧F opens
+   * empty. Only {@link ChatSearchState.openWith} ever sets it - an open from
+   * the chord or the palette leaves it `null`, which is what keeps a query
+   * from one surface out of an unrelated later search.
+   */
+  readonly initialQuery: string | null;
   /** `now` is only read on a closed -> open transition. */
   readonly setOpen: (open: boolean, now: number) => void;
   readonly toggleOpen: (now: number) => void;
+  /**
+   * Open the dialog on a query another surface already has, in a scope it
+   * names - the sidebar's "All tasks", History's "Open in Search chats".
+   *
+   * Unlike {@link ChatSearchState.setOpen} this re-anchors the date presets
+   * even when the dialog is already open: it is a new search being handed
+   * over, not a redundant open, and its relative window is measured from the
+   * hand-off.
+   */
+  readonly openWith: (
+    handoff: {
+      readonly query: string;
+      readonly scope: ChatSearchScopeChoice;
+    },
+    now: number,
+  ) => void;
+  /** Clears the parked query once the panel has read it. */
+  readonly consumeInitialQuery: () => void;
   readonly setScope: (scope: ChatSearchScopeChoice) => void;
   readonly setRoleFilter: (roleFilter: ChatSearchRoleFilter) => void;
   readonly setDatePreset: (
@@ -57,9 +84,15 @@ const INITIAL = {
   roleFilter: "any",
   datePreset: "any",
   dateAnchorMs: 0,
+  initialQuery: null,
 } as const satisfies Pick<
   ChatSearchState,
-  "open" | "scope" | "roleFilter" | "datePreset" | "dateAnchorMs"
+  | "open"
+  | "scope"
+  | "roleFilter"
+  | "datePreset"
+  | "dateAnchorMs"
+  | "initialQuery"
 >;
 
 /**
@@ -79,6 +112,14 @@ export const useChatSearchStore = create<ChatSearchState>((set) => ({
   ...INITIAL,
   setOpen: (open, now) => set((state) => openTransition(state, open, now)),
   toggleOpen: (now) => set((state) => openTransition(state, !state.open, now)),
+  openWith: (handoff, now) =>
+    set({
+      open: true,
+      scope: handoff.scope,
+      dateAnchorMs: now,
+      initialQuery: handoff.query,
+    }),
+  consumeInitialQuery: () => set({ initialQuery: null }),
   setScope: (scope) => set({ scope }),
   setRoleFilter: (roleFilter) => set({ roleFilter }),
   setDatePreset: (datePreset, now) => set({ datePreset, dateAnchorMs: now }),

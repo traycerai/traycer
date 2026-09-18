@@ -6,9 +6,8 @@
  * and opens results on that host. Results are host-local, so there is no
  * cross-host merge here.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { SearchIcon } from "lucide-react";
 import {
   CHAT_SEARCH_MAX_QUERY_CHARS,
@@ -35,8 +34,7 @@ import {
   type ChatSearchOpenTarget,
 } from "@/components/chat-search/chat-search-results-view";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useChatSearchHost } from "@/hooks/chats/use-chat-search-host";
 import {
   useChatSearchResults,
   type ChatSearchBaseRequest,
@@ -49,7 +47,7 @@ import {
   chatSearchDateRange,
 } from "@/lib/chat-search/chat-search-results";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostClient } from "@/lib/host";
 import { useActiveEpicId } from "@/stores/epics/canvas/canvas-selectors";
 import {
   useChatSearchStore,
@@ -62,11 +60,12 @@ const ROLE_OPTIONS: ReadonlyArray<{
   readonly value: ChatSearchRoleFilter;
   readonly label: string;
 }> = [
-  { value: "any", label: "Anyone" },
-  // The filter reads authorship of prompts only; assistant text, notices and
-  // cards match under every choice.
-  { value: "human", label: "People" },
-  { value: "agent", label: "Agents" },
+  { value: "any", label: "All messages" },
+  // Whose words: only the prompts this user typed, or only the agent's
+  // replies. Notices, cards and prompts sent by other agents match under
+  // "All messages" alone.
+  { value: "human", label: "Your messages" },
+  { value: "assistant", label: "Agent replies" },
 ];
 
 const DATE_OPTIONS: ReadonlyArray<{
@@ -87,27 +86,6 @@ interface Paging {
   readonly messageCursors: ReadonlyArray<string>;
 }
 
-/**
- * Whether a request can be sent to the effective host at all. A query on a
- * host with no dialable row, or before its handshake has named its methods, is
- * disabled by `useHostQueries` and never answers - so it must not read as
- * "loading". `methodUnsupported` is a host that answered the handshake without
- * the method; the other unsupported signal (an `E_HOST_UNSUPPORTED` answer) is
- * read off the search status, after the request it came from.
- */
-function useChatSearchHost(
-  hostId: string | null,
-  client: HostClient<HostRpcRegistry> | null,
-): { readonly hostReachable: boolean; readonly methodUnsupported: boolean } {
-  const methodSupport = useHostMethodSupport(hostId, "chat.search");
-  const readiness = useReactiveHostReadiness(client);
-  return {
-    hostReachable:
-      hostId !== null && readiness.canExecute && methodSupport !== null,
-    methodUnsupported: methodSupport === false,
-  };
-}
-
 export function ChatSearchPanel(props: { readonly onClose: () => void }) {
   const { onClose } = props;
   const hostId = useEffectiveHostId();
@@ -125,8 +103,28 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
   const setScope = useChatSearchStore((state) => state.setScope);
   const setRoleFilter = useChatSearchStore((state) => state.setRoleFilter);
   const setDatePreset = useChatSearchStore((state) => state.setDatePreset);
+  const consumeInitialQuery = useChatSearchStore(
+    (state) => state.consumeInitialQuery,
+  );
 
-  const [query, setQuery] = useState("");
+  // A query handed over by another surface (`openWith`), taken once: the panel
+  // copies it into its own input state and clears it from the store, so a
+  // later ⌘⇧F opens empty. Seeded at mount, which is the ordinary case - the
+  // hand-off is what opened the dialog - and subscribed after it, so one that
+  // arrives while the dialog is ALREADY open lands in the input rather than
+  // sitting parked for the next unrelated search.
+  const [query, setQuery] = useState(
+    () => useChatSearchStore.getState().initialQuery ?? "",
+  );
+  useEffect(() => {
+    consumeInitialQuery();
+    return useChatSearchStore.subscribe((state, previous) => {
+      const parked = state.initialQuery;
+      if (parked === null || parked === previous.initialQuery) return;
+      setQuery(parked);
+      consumeInitialQuery();
+    });
+  }, [consumeInitialQuery]);
   // Capped at the protocol's limit as well as on the input: a pasted block
   // past it would otherwise make every request an invalid-argument error.
   const debouncedQuery = useDebouncedValue(
@@ -312,7 +310,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
         >
           <SelectTrigger
             size="sm"
-            aria-label="Prompt author"
+            aria-label="Message filter"
             className="w-auto"
           >
             <SelectValue />
