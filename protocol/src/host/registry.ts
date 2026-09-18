@@ -1019,6 +1019,7 @@ import {
   downgradeProviderCliStateListToV60,
   downgradeProviderCliStateListToV70,
   downgradeProviderCliStateListToV80,
+  parseProvidersListResponseForFrozenLine,
   providersInstallPackVersionRequestSchema,
   providersInstallPackVersionResponseSchema,
   providersRemovePackVersionRequestSchema,
@@ -2848,10 +2849,13 @@ export const providersListDowngradeV9ToV8 = defineDowngradePath<
   // Drops Antigravity rows and strips `profiles[].apiKey` - see the helper.
   downgradeResponse: (response) => ({
     ok: true,
-    value: providersListResponseSchemaV80.parse({
-      ...response,
-      providers: downgradeProviderCliStateListToV80(response.providers),
-    }),
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV80,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV80(response.providers),
+      },
+    ),
   }),
 });
 
@@ -2867,10 +2871,13 @@ export const providersListDowngradeV9ToV7 = defineDowngradePath<
   }),
   downgradeResponse: (response) => ({
     ok: true,
-    value: providersListResponseSchemaV70.parse({
-      ...response,
-      providers: downgradeProviderCliStateListToV70(response.providers),
-    }),
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV70,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV70(response.providers),
+      },
+    ),
   }),
 });
 
@@ -3009,10 +3016,13 @@ export const providersListDowngradeV8ToV7 = defineDowngradePath<
   }),
   downgradeResponse: (response) => ({
     ok: true,
-    value: providersListResponseSchemaV70.parse({
-      ...response,
-      providers: downgradeProviderCliStateListToV70(response.providers),
-    }),
+    value: parseProvidersListResponseForFrozenLine(
+      providersListResponseSchemaV70,
+      {
+        ...response,
+        providers: downgradeProviderCliStateListToV70(response.providers),
+      },
+    ),
   }),
 });
 

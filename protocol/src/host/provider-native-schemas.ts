@@ -2256,6 +2256,14 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE: ProviderNativeCa
 // written down. Whoever opens v8.0 needs a projection back and has to make them
 // again:
 //
+// THE PROJECTION IS BACK - `../frozen-line-projection.ts`. v8.0, v9.0, v9.1 and
+// v9.2 all opened in the interval and none of them brought it, so the gap this
+// note predicted was real and stayed open across four lines. Cut 1 below is now
+// general rather than per-field: every array on a frozen line keeps the members
+// that line can represent and drops the rest, which covers `supportedTabs` and
+// the 28 other array-of-enum leaves measured on `providers.list@7.0` at once.
+// Cuts 2 and 3 remain the reparse's job, unchanged.
+//
 // 1. FILTER `supportedTabs` before the parse; never reparse it. `z.array(enum)`
 //    rejects a whole array over one unknown member, the capability object fails
 //    with it, and the `.catch()` on the pre-image state then serves the empty
@@ -2267,3 +2275,64 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE: ProviderNativeCa
 // 3. Drop the Skills `inspect` / `edit` / `update` actionScopes. The pre-image
 //    table does not model them, and a live descriptor that advertises them must
 //    not leak those keys into the pre-image shape.
+
+// ── Frozen settings tabs for the RELEASED providers.list lines ─────────────
+//
+// Note the deliberate difference from the `...V70Preimage` enum directly above:
+// that one has six members, this one has seven. They are not two names for one
+// thing. The pre-image is v7.0 BEFORE the version-manager group - a bridge
+// shape - whereas this is the tab list v7.0 actually RELEASED, and the released
+// baseline settles which is which: `released-baseline-surface.json` carries
+// `modelProviders` in the `providers.list` 7.0 AND 8.0 response bytes. Freezing
+// the released lines against the six-member pre-image would therefore not be a
+// freeze at all, it would be a silent narrowing of two shipped wires. The same
+// Preimage-vs-real split already exists one layer up for
+// `providerCliStateSchemaV70Preimage` vs `providerCliStateSchemaV70`.
+//
+// One declaration serves 7.0, 8.0, 9.0 and 9.1 because all four released the
+// same seven members - the byte comparison of the 7.0 and 8.0 baselines is
+// exact - exactly as `providerLoginCapabilitySchemaV70` serves several lines.
+//
+// This pin is byte-identical to the live enum TODAY, and that is the point: it
+// changes no snapshot and no wire now, and it stops the EIGHTH member from
+// reaching four already-shipped lines the day someone adds one.
+export const providerSettingsTabSchemaV70 = z.enum([
+  "general",
+  "env",
+  "usage",
+  "mcp",
+  "plugins",
+  "skills",
+  "modelProviders",
+]);
+export type ProviderSettingsTabV70 = z.infer<
+  typeof providerSettingsTabSchemaV70
+>;
+
+/**
+ * Frozen `nativeCapabilities` for the released `providers.list` lines: the live
+ * descriptor with the settings-tab enum pinned.
+ *
+ * `.extend()` reaches exactly ONE level, which is why this pins the tab list
+ * and not the enums nested inside `mcp` / `plugins` / `skills` /
+ * `modelProviders`. That limit is not an oversight and not a claim those are
+ * safe - it is the same limit that left `managedVersions.sharedWithProviders`
+ * live when `providerCliStateSchemaV91` pinned `providerId`. What keeps the
+ * rest honest is no longer a promise in a comment: `frozen-lines-reach-no-live-enum.test.ts`
+ * enumerates every enum each released row can still reach and fails on any one
+ * that is not on its reviewed list, so the next leaf added to this subtree is
+ * named by a test rather than found by a reader.
+ *
+ * `supportedTabs` is pinned FIRST among them because it is the leaf with the
+ * worst blast radius that has actually grown: it sits in an array under this
+ * object's whole-object `.catch(DEFAULT)`, so one unknown member costs a peer
+ * its MCP, Plugins and Skills tabs together - and it grew once already, when
+ * `modelProviders` landed.
+ */
+export const providerNativeCapabilitiesSchemaV70 =
+  providerNativeCapabilitiesSchema.extend({
+    supportedTabs: z.array(providerSettingsTabSchemaV70),
+  });
+export type ProviderNativeCapabilitiesV70 = z.infer<
+  typeof providerNativeCapabilitiesSchemaV70
+>;
