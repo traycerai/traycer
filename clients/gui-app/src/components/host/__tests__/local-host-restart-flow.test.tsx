@@ -52,6 +52,24 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     clientForHostIdMock.current(hostId),
 }));
 
+// `HostRestartSessions` (mounted inside `LocalHostRestartFlow`'s confirm
+// dialog) calls `useFocusModel()`, which pulls in `useMergedNotificationRows`
+// -> ... -> `resolveSubtreeHostClient(binding, effectiveHostId)` from
+// `@/lib/host` - the SAME narrowly-mocked module above, whose fixture has no
+// `hostId`/`hostClient` (this suite only ever needed `directory`). That falls
+// through to `binding.hostClient.createRequesterForHostId(...)`, throwing on
+// the missing `hostClient` the instant either restart dialog opens. This
+// suite is about dispatch behaviour, not the sessions list or the wider
+// notification/auth/browser stack `useFocusModel` also reaches into, so it is
+// mocked at its own leaf - same boundary as `useHostDirectoryList` and
+// `useHostClientForHostId` above - rather than reconstructing that whole
+// binding.
+vi.mock("@/hooks/home-focus/use-focus-model", async () => {
+  const { EMPTY_FOCUS_MODEL } =
+    await import("@/lib/home-focus/build-focus-model");
+  return { useFocusModel: () => EMPTY_FOCUS_MODEL };
+});
+
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),

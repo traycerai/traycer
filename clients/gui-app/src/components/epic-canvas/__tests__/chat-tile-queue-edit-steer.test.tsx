@@ -15,12 +15,18 @@ import type { ComponentProps } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
-import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  ChatComposerSideChatInput,
+  ChatComposerSubmitInput,
+} from "@/components/chat/composer/chat-composer";
+import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -110,7 +116,12 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
     typeof import("@/hooks/epic/use-epic-chat-mutations")
   >()),
   useEpicCreateChatForHost: () => ({
-    mutate: vi.fn(),
+    mutate: (
+      request: CreateChatMutationInput,
+      callbacks: CreateChatCallbacksCapture,
+    ) => {
+      createChatCapture.calls.push({ request, callbacks });
+    },
     isPending: false,
   }),
 }));
@@ -148,8 +159,10 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 
 const submitCapture: {
   onSubmitMessage: ((input: ChatComposerSubmitInput) => boolean) | null;
+  onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
 } = {
   onSubmitMessage: null,
+  onSideChat: null,
 };
 
 vi.mock("@/components/chat/composer/chat-composer", async (importActual) => {
@@ -161,6 +174,7 @@ vi.mock("@/components/chat/composer/chat-composer", async (importActual) => {
     props: ComponentProps<typeof actual.ChatComposer>,
   ) {
     submitCapture.onSubmitMessage = props.onSubmitMessage;
+    submitCapture.onSideChat = props.onSideChat;
     return <actual.ChatComposer {...props} />;
   }
   return {
@@ -168,6 +182,27 @@ vi.mock("@/components/chat/composer/chat-composer", async (importActual) => {
     ChatComposer: ChatComposerCapture,
   };
 });
+
+/**
+ * `startSideChatFromComposer` (chat-tile.tsx) bridges `startSideChat`'s
+ * `createChat` seam onto `useEpicCreateChatForHost().mutate` - capturing calls
+ * here, instead of a bare `vi.fn()`, is what lets the tests below drive
+ * success/failure by hand and assert what happens in between (decision 14
+ * refinement: the queue's edit pill clears synchronously on accept; the
+ * captured queue item is cancelled only from a successful create).
+ */
+interface CreateChatCallbacksCapture {
+  readonly onSuccess: (result: {
+    chatId: string;
+    initialTurnStarted?: boolean;
+  }) => void;
+  readonly onError: (error: HostRpcError) => void;
+}
+interface CreateChatCall {
+  readonly request: CreateChatMutationInput;
+  readonly callbacks: CreateChatCallbacksCapture;
+}
+const createChatCapture: { calls: CreateChatCall[] } = { calls: [] };
 
 const EPIC_ID = "epic-queue-edit-steer";
 const CHAT_ARTIFACT = {
@@ -195,6 +230,56 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   agentMode: "regular",
   profileId: null,
 };
+const SIDE_CHAT_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "why is this slow?" }],
+    },
+  ],
+};
+
+function queuedPromptItem(
+  queueItemId: string,
+  content: JsonContent,
+): ChatQueuedPromptItem {
+  return {
+    kind: "prompt",
+    queueItemId,
+    messageId: `message-${queueItemId}`,
+    message: { kind: "user", content, browserAnnotations: [] },
+    sender: { type: "user", userId: "owner-1" },
+    settings: QUEUED_SETTINGS,
+    accountContext: { type: "PERSONAL" as const },
+    delivery: "next_turn",
+    status: "pending",
+    targetTurnId: null,
+    steerRequest: null,
+    fallbackReason: null,
+    createdAt: 2,
+    updatedAt: 2,
+  };
+}
+
+// `@testing-library/jest-dom` (`toHaveAttribute`) is not wired into this
+// repo's vitest setup (see `fallback-behavior-group.test.tsx`'s AX8 note) -
+// read the attribute by hand instead.
+function editingPillQueueItemId(): string | null {
+  return screen
+    .getByTestId("queue-edit-draft-pill")
+    .getAttribute("data-queue-item-id");
+}
+
+function unrelatedCreateChatError(): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message: "host unreachable",
+    requestId: "req-side-chat-cancel",
+    method: "epic.createChat",
+    fatalDetails: null,
+  });
+}
 
 const epicHarness = createEpicSessionTestHarness(EPIC_ID);
 const chatHarness = createChatHarness();
@@ -268,6 +353,7 @@ function createChatHarness(): {
       sent.length = 0;
       callbacks = null;
       submitCapture.onSubmitMessage = null;
+      submitCapture.onSideChat = null;
     },
   };
 }
@@ -398,6 +484,8 @@ beforeEach(() => {
   });
   resetFocusedComposerControlsForTests();
   submitCapture.onSubmitMessage = null;
+  submitCapture.onSideChat = null;
+  createChatCapture.calls.length = 0;
   epicHarness.install(seedDocWithChat, "editor");
   chatHarness.install("owner", []);
 });
@@ -549,6 +637,228 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     expect(
       chatHarness.sent.some((frame) => frame.kind === "queueSteerNow"),
     ).toBe(false);
+  });
+});
+
+/**
+ * `startSideChatFromComposer` (chat-tile.tsx): `/btw` from a queue-row edit
+ * must release the edit it started - the "Editing" pill clears SYNCHRONOUSLY
+ * on accept (matching the composer's own immediate draft clear), and the
+ * queue item captured at that moment is cancelled only once the create
+ * actually SUCCEEDS. Cancellation reads the value captured at accept time,
+ * never a live read of `editingQueueItemId` in the success callback, so a
+ * delayed success can never clobber a NEW edit started while the create was
+ * still pending.
+ */
+describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refinement)", () => {
+  it("clears the edit pill synchronously on accept and cancels the captured queue item only once the side chat create succeeds", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      queuedPromptItem("queue-edit-target", QUEUED_CONTENT),
+    ]);
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    await waitFor(() => {
+      expect(editingPillQueueItemId()).toBe("queue-edit-target");
+    });
+
+    await waitFor(() => {
+      expect(submitCapture.onSideChat).not.toBeNull();
+    });
+    const onSideChat = submitCapture.onSideChat;
+    if (onSideChat === null) {
+      throw new Error("expected ChatTile to wire onSideChat");
+    }
+
+    act(() => {
+      const accepted = onSideChat({
+        content: SIDE_CHAT_CONTENT,
+        settings: QUEUED_SETTINGS,
+      });
+      expect(accepted).toBe(true);
+    });
+
+    // Cleared synchronously on accept - before the create has resolved at all.
+    expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+    expect(createChatCapture.calls).toHaveLength(1);
+    expect(chatHarness.sent.some((frame) => frame.kind === "queueCancel")).toBe(
+      false,
+    );
+
+    act(() => {
+      createChatCapture.calls[0].callbacks.onSuccess({
+        chatId: "side-chat-1",
+        initialTurnStarted: false,
+      });
+    });
+
+    expect(chatHarness.sent).toContainEqual(
+      expect.objectContaining({
+        kind: "queueCancel",
+        queueItemId: "queue-edit-target",
+      }),
+    );
+  });
+
+  it("does not cancel any queue item for an ordinary (non-edit) side chat", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      queuedPromptItem("queue-untouched", QUEUED_CONTENT),
+    ]);
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    await waitFor(() => {
+      expect(submitCapture.onSideChat).not.toBeNull();
+    });
+    const onSideChat = submitCapture.onSideChat;
+    if (onSideChat === null) {
+      throw new Error("expected ChatTile to wire onSideChat");
+    }
+
+    act(() => {
+      const accepted = onSideChat({
+        content: SIDE_CHAT_CONTENT,
+        settings: QUEUED_SETTINGS,
+      });
+      expect(accepted).toBe(true);
+    });
+
+    expect(createChatCapture.calls).toHaveLength(1);
+
+    act(() => {
+      createChatCapture.calls[0].callbacks.onSuccess({
+        chatId: "side-chat-2",
+        initialTurnStarted: false,
+      });
+    });
+
+    expect(chatHarness.sent.some((frame) => frame.kind === "queueCancel")).toBe(
+      false,
+    );
+  });
+
+  it("retains the queued item (no cancellation) when the side chat create fails", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      queuedPromptItem("queue-retained", QUEUED_CONTENT),
+    ]);
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    await waitFor(() => {
+      expect(editingPillQueueItemId()).toBe("queue-retained");
+    });
+
+    await waitFor(() => {
+      expect(submitCapture.onSideChat).not.toBeNull();
+    });
+    const onSideChat = submitCapture.onSideChat;
+    if (onSideChat === null) {
+      throw new Error("expected ChatTile to wire onSideChat");
+    }
+
+    act(() => {
+      const accepted = onSideChat({
+        content: SIDE_CHAT_CONTENT,
+        settings: QUEUED_SETTINGS,
+      });
+      expect(accepted).toBe(true);
+    });
+
+    // The pill still clears on accept, regardless of the eventual outcome -
+    // the composer's own draft clears immediately too, independent of the
+    // create's result.
+    expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+
+    expect(createChatCapture.calls).toHaveLength(1);
+    act(() => {
+      createChatCapture.calls[0].callbacks.onError(unrelatedCreateChatError());
+    });
+
+    expect(chatHarness.sent.some((frame) => frame.kind === "queueCancel")).toBe(
+      false,
+    );
+    // The queued item itself is untouched by the failed side chat.
+    expect(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    ).not.toBeNull();
+  });
+
+  it("does not let a stale side-chat success touch a NEW edit started while the create was pending", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      queuedPromptItem("queue-a", QUEUED_CONTENT),
+      queuedPromptItem("queue-b", QUEUED_CONTENT),
+    ]);
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    const editButtons = (): HTMLElement[] =>
+      screen.getAllByRole("button", { name: "Edit queued message" });
+
+    fireEvent.click(editButtons()[0]);
+    await waitFor(() => {
+      expect(editingPillQueueItemId()).toBe("queue-a");
+    });
+
+    await waitFor(() => {
+      expect(submitCapture.onSideChat).not.toBeNull();
+    });
+    const onSideChatForA = submitCapture.onSideChat;
+    if (onSideChatForA === null) {
+      throw new Error("expected ChatTile to wire onSideChat");
+    }
+
+    act(() => {
+      const accepted = onSideChatForA({
+        content: SIDE_CHAT_CONTENT,
+        settings: QUEUED_SETTINGS,
+      });
+      expect(accepted).toBe(true);
+    });
+
+    expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+    expect(createChatCapture.calls).toHaveLength(1);
+
+    // Start a NEW edit on a DIFFERENT queued item while A's create is still
+    // pending - this is the exact overlap the refinement guards against.
+    fireEvent.click(editButtons()[1]);
+    await waitFor(() => {
+      expect(editingPillQueueItemId()).toBe("queue-b");
+    });
+
+    act(() => {
+      createChatCapture.calls[0].callbacks.onSuccess({
+        chatId: "side-chat-a",
+        initialTurnStarted: false,
+      });
+    });
+
+    // Only the CAPTURED item (A) is cancelled - B, the live edit, is untouched.
+    const queueCancelFrames = chatHarness.sent.filter(
+      (frame) => frame.kind === "queueCancel",
+    );
+    expect(queueCancelFrames).toHaveLength(1);
+    expect(queueCancelFrames[0]).toMatchObject({
+      kind: "queueCancel",
+      queueItemId: "queue-a",
+    });
+
+    // B's edit pill is still showing - A's stale success must not have
+    // cleared or otherwise touched the CURRENT edit target.
+    expect(editingPillQueueItemId()).toBe("queue-b");
   });
 });
 
