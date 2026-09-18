@@ -148,6 +148,7 @@ function currentAvailabilityContext(): SettingsAvailabilityContext {
     featureSettings: null,
     mobileApp: false,
     mobileFooter: false,
+    customizeEditor: false,
   };
 }
 

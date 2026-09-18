@@ -5,7 +5,12 @@ import {
 import { create } from "zustand";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { persist } from "zustand/middleware";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  basePersistOptions,
+  installCrossWindowRehydrate,
+  persistKey,
+  STORE_KEYS,
+} from "@/lib/persist";
 import {
   DEFAULT_PERMISSION,
   DEFAULT_COMPOSER_MODE,
@@ -43,6 +48,7 @@ import {
   type NotificationChimeSound,
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
+import { mergeOrder } from "@/lib/order-merge";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 import {
@@ -214,6 +220,14 @@ export const DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS: ReadonlyArray<ContextBreak
   CONTEXT_USAGE_ROW_KEYS;
 
 /**
+ * The canonical row order, which is the breakdown's own. Same list as the
+ * default SELECTION above and not the same thing: that one is which rows are
+ * on, this one is the sequence they are drawn in whether or not they are.
+ */
+export const DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER: ReadonlyArray<ContextBreakdownField> =
+  CONTEXT_USAGE_ROW_KEYS;
+
+/**
  * How the unpinned context chip draws the remaining percentage: the sentence
  * (`75% context left`), a circular gauge with the number inside, or the gauge
  * on its own with the number left to the label.
@@ -380,8 +394,32 @@ export interface SettingsState {
    * `pinContextUsageBreakdown` is on.
    */
   pinnedContextBreakdownFields: ReadonlyArray<ContextBreakdownField>;
+  /**
+   * The order those rows are drawn in - a COMPLETE order over every field,
+   * including the ones not currently selected, which is what makes it survive
+   * unchecking a field and checking it again.
+   *
+   * Deliberately separate from `pinnedContextBreakdownFields`, which is the
+   * selected SET and stays canonically ordered on every write. One list cannot
+   * be both: a set that also carried order would lose an unselected field's
+   * place the moment it left, and the strip prints
+   * `order.filter((field) => fields.includes(field))`.
+   *
+   * Structural like the layout store's four order fields: no density preset
+   * writes it, and `resetLayoutToDefaults` is what puts it back.
+   */
+  pinnedContextBreakdownOrder: ReadonlyArray<ContextBreakdownField>;
   /** Shape of the unpinned context chip. */
   contextIndicatorStyle: ContextIndicatorStyle;
+  /**
+   * The in-place "Customize" layout editor, while both it and the Layout page
+   * exist side by side. Device-local and opt-in: with it off nothing about
+   * Settings › Layout changes, and with it on the desktop-width Layout rows
+   * fold into Appearance. Narrow windows keep the full Layout page either way,
+   * which is why the availability fact derived from this - not the flag
+   * itself - is what a panel or the search index gates on.
+   */
+  visualLayoutEditorEnabled: boolean;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   /**
@@ -460,7 +498,16 @@ export interface SettingsState {
   setPinnedContextBreakdownFields: (
     fields: ReadonlyArray<ContextBreakdownField>,
   ) => void;
+  /**
+   * The complete row order. Repaired through `mergeOrder` on the way in, the
+   * same as on rehydration, so a drag that names a stale field or omits a new
+   * one still leaves a complete order behind.
+   */
+  setPinnedContextBreakdownOrder: (
+    order: ReadonlyArray<ContextBreakdownField>,
+  ) => void;
   setContextIndicatorStyle: (style: ContextIndicatorStyle) => void;
+  setVisualLayoutEditorEnabled: (value: boolean) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -509,7 +556,9 @@ type PersistedSettingsState = Pick<
   | "notificationChimeSounds"
   | "homeTabEnabled"
   | "pinnedContextBreakdownFields"
+  | "pinnedContextBreakdownOrder"
   | "contextIndicatorStyle"
+  | "visualLayoutEditorEnabled"
 >;
 
 type SetFn = (
@@ -592,7 +641,9 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     notificationChimeSounds: state.notificationChimeSounds,
     homeTabEnabled: state.homeTabEnabled,
     pinnedContextBreakdownFields: state.pinnedContextBreakdownFields,
+    pinnedContextBreakdownOrder: state.pinnedContextBreakdownOrder,
     contextIndicatorStyle: state.contextIndicatorStyle,
+    visualLayoutEditorEnabled: state.visualLayoutEditorEnabled,
   };
 }
 
@@ -646,7 +697,9 @@ export const useSettingsStore = create<SettingsState>()(
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
       homeTabEnabled: false,
       pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+      pinnedContextBreakdownOrder: DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
       contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
+      visualLayoutEditorEnabled: false,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -832,7 +885,22 @@ export const useSettingsStore = create<SettingsState>()(
             next.length === 0 ? DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS : next,
         });
       },
+      setPinnedContextBreakdownOrder: (order) => {
+        const next = mergeOrder(order, CONTEXT_USAGE_ROW_KEYS);
+        set((s) =>
+          s.pinnedContextBreakdownOrder.length === next.length &&
+          s.pinnedContextBreakdownOrder.every(
+            (field, index) => field === next[index],
+          )
+            ? s
+            : { pinnedContextBreakdownOrder: next },
+        );
+      },
       setContextIndicatorStyle: makeSetter(set, "contextIndicatorStyle"),
+      setVisualLayoutEditorEnabled: makeSetter(
+        set,
+        "visualLayoutEditorEnabled",
+      ),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -930,11 +998,27 @@ export const useSettingsStore = create<SettingsState>()(
             resolvePersistedPinnedContextBreakdownFields(
               persisted.pinnedContextBreakdownFields,
             ),
+          // Always a COMPLETE order, so a build that adds a breakdown row
+          // merges it in beside its neighbours rather than leaving the strip
+          // unable to place it.
+          pinnedContextBreakdownOrder: mergeOrder(
+            Array.isArray(persisted.pinnedContextBreakdownOrder)
+              ? persisted.pinnedContextBreakdownOrder
+              : [],
+            CONTEXT_USAGE_ROW_KEYS,
+          ),
           contextIndicatorStyle: isContextIndicatorStyle(
             persisted.contextIndicatorStyle,
           )
             ? persisted.contextIndicatorStyle
             : DEFAULT_CONTEXT_INDICATOR_STYLE,
+          // Narrowed for `homeTabEnabled`'s reason: this flag swaps a whole
+          // settings page for an editor, so a truthy non-boolean rehydrating
+          // as-is would hand the editor to someone who never asked for it.
+          visualLayoutEditorEnabled:
+            typeof merged.visualLayoutEditorEnabled === "boolean"
+              ? merged.visualLayoutEditorEnabled
+              : false,
         };
       },
     },
@@ -948,6 +1032,17 @@ export const useSettingsStore = create<SettingsState>()(
  */
 export function isHomeTabEnabled(): boolean {
   return useSettingsStore.getState().homeTabEnabled;
+}
+
+/**
+ * Non-hook read of the Customize switch, for the framework-free seams that
+ * gate on it (the tab store's kind registry and the keybinding dispatcher).
+ * Components read it reactively - through
+ * `useSettingsAvailabilityContext().customizeEditor` where the viewport also
+ * has a say, which is everywhere a settings row is drawn or indexed.
+ */
+export function isVisualLayoutEditorEnabled(): boolean {
+  return useSettingsStore.getState().visualLayoutEditorEnabled;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1251,24 +1346,19 @@ function resolvePersistedAgentTabSurfacing(
   return DEFAULT_AGENT_TAB_SURFACING;
 }
 
-let crossWindowSyncInstalled = false;
-
 /**
  * Rehydrate this store when another window writes its persisted key (or
- * clears storage entirely - a `null` event key). Exported and guarded
- * (idempotent, no-op outside a DOM) rather than a bare module-scope
- * `window.addEventListener`, so it is callable from app bootstrap and from a
- * test without relying on import order to have wired it up.
+ * clears storage entirely - a `null` event key). Still exported under its own
+ * name rather than inlined at the call below, so it is callable from app
+ * bootstrap and from a test without relying on import order to have wired it
+ * up; the mechanism itself now lives in `lib/persist` because the layout and
+ * left-panel stores need exactly the same one.
  */
 export function initSettingsCrossWindowSync(): void {
-  if (crossWindowSyncInstalled) return;
-  if (typeof window === "undefined") return;
-  crossWindowSyncInstalled = true;
-  window.addEventListener("storage", (event) => {
-    if (event.key === null || event.key === persistKey(STORE_KEYS.settings)) {
-      void useSettingsStore.persist.rehydrate();
-    }
-  });
+  installCrossWindowRehydrate(
+    useSettingsStore,
+    persistKey(STORE_KEYS.settings),
+  );
 }
 
 initSettingsCrossWindowSync();

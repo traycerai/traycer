@@ -198,6 +198,7 @@ describe("<OpeningBehaviorPanel /> search targets", () => {
         featureSettings: null,
         mobileApp: false,
         mobileFooter: false,
+        customizeEditor: false,
       },
       container,
     );

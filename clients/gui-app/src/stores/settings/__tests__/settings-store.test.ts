@@ -3,14 +3,17 @@ import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
+import { CONTEXT_USAGE_ROW_KEYS } from "@/components/chat/context-usage";
 import {
   DEFAULT_AGENT_OFFICE_VIEW,
   DEFAULT_CONTEXT_INDICATOR_STYLE,
   DEFAULT_LINK_OPEN_SETTINGS,
   DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+  DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
   DEFAULT_TILE_PLACEMENT_SETTINGS,
   DEFAULT_NAVIGATOR_RESOURCE_METRICS,
   DEFAULT_WORKTREE_BRANCH_PREFIX,
+  isVisualLayoutEditorEnabled,
   linkOpenModeForKind,
   tilePlacementForCategory,
   useSettingsStore,
@@ -37,6 +40,7 @@ function resetSettingsStore(): void {
     navigatorResourceMetrics: DEFAULT_NAVIGATOR_RESOURCE_METRICS,
     pinContextUsageBreakdown: false,
     pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+    pinnedContextBreakdownOrder: DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
     contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
     chatTurnMinimapSide: "right",
     agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
@@ -51,6 +55,7 @@ function resetSettingsStore(): void {
     startPageWallpaper: null,
     showGreeting: true,
     showRecentHistory: true,
+    visualLayoutEditorEnabled: false,
   });
 }
 
@@ -1394,6 +1399,70 @@ describe("useSettingsStore", () => {
     await Promise.resolve();
 
     expect(useSettingsStore.getState().showGreeting).toBe(false);
+  });
+
+  it("starts the pinned breakdown order on the canonical order", () => {
+    expect(useSettingsStore.getState().pinnedContextBreakdownOrder).toEqual(
+      DEFAULT_PINNED_CONTEXT_BREAKDOWN_ORDER,
+    );
+  });
+
+  it("keeps the pinned breakdown order complete through a partial write", () => {
+    const [first, second] = CONTEXT_USAGE_ROW_KEYS;
+
+    // A caller naming two fields is not narrowing the order to two - the order
+    // is complete by construction, so the rest merge back in beside their
+    // canonical neighbours. The swap the caller DID ask for survives; where
+    // the unnamed rows land is `mergeOrder`'s neighbour rule, not this field's
+    // business.
+    useSettingsStore.getState().setPinnedContextBreakdownOrder([second, first]);
+
+    const order = useSettingsStore.getState().pinnedContextBreakdownOrder;
+    expect(order.length).toBe(CONTEXT_USAGE_ROW_KEYS.length);
+    expect(new Set(order)).toEqual(new Set(CONTEXT_USAGE_ROW_KEYS));
+    expect(order.indexOf(second)).toBeLessThan(order.indexOf(first));
+  });
+
+  it("repairs a hand-edited pinned breakdown order on rehydrate", async () => {
+    const [first] = CONTEXT_USAGE_ROW_KEYS;
+
+    await rehydrateFrom({
+      pinnedContextBreakdownOrder: ["not-a-row", first, first],
+    });
+
+    const order = useSettingsStore.getState().pinnedContextBreakdownOrder;
+    expect(order.length).toBe(CONTEXT_USAGE_ROW_KEYS.length);
+    expect(order[0]).toBe(first);
+    // The SELECTED set is untouched by any of this: it is a different field.
+    expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual(
+      DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+    );
+  });
+
+  it("starts with the Customize switch off and persists a flip", async () => {
+    expect(useSettingsStore.getState().visualLayoutEditorEnabled).toBe(false);
+    expect(isVisualLayoutEditorEnabled()).toBe(false);
+
+    useSettingsStore.getState().setVisualLayoutEditorEnabled(true);
+    expect(isVisualLayoutEditorEnabled()).toBe(true);
+
+    const persisted: unknown = JSON.parse(
+      window.localStorage.getItem("traycer-gui-app:settings") ?? "{}",
+    );
+    expect(persisted).toMatchObject({
+      state: { visualLayoutEditorEnabled: true },
+    });
+
+    await rehydrateFrom({ visualLayoutEditorEnabled: true });
+    expect(useSettingsStore.getState().visualLayoutEditorEnabled).toBe(true);
+  });
+
+  it("rehydrates a non-boolean Customize switch as off", async () => {
+    // Same narrowing `homeTabEnabled` gets: this flag swaps a whole settings
+    // page, so a truthy string must not turn the editor on.
+    await rehydrateFrom({ visualLayoutEditorEnabled: "yes" });
+
+    expect(useSettingsStore.getState().visualLayoutEditorEnabled).toBe(false);
   });
 
   it("treats a storage event with a null key (localStorage.clear()) as a rehydrate signal too", async () => {

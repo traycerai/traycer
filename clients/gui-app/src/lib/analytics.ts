@@ -274,6 +274,12 @@ export type AnalyticsProvider =
 
 export type AnalyticsRole = "editor" | "owner" | "viewer";
 
+/**
+ * Which scene a Customize session edits: the user's real app chrome, or the
+ * sample workspace tab that guarantees a populated chat to edit against.
+ */
+export type AnalyticsLayoutEditorScene = "in_place" | "sample_workspace";
+
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
@@ -331,11 +337,23 @@ export type AnalyticsSetting =
   | "layout.composer.compactButton"
   | "layout.composer.reasoningIndicator"
   | "layout.composer.reasoningFooterControl"
+  // Element ORDER, one id per reorderable surface. Separate from the
+  // visibility ids above because a reorder and a hide answer different
+  // questions about the same element, and a single `layout.composer.mic`
+  // carrying both would make neither series readable.
+  | "layout.composer.toolbarOrder"
+  | "layout.composer.dockOrder"
+  | "layout.statusBar.segmentOrder"
+  | "layout.statusBar.resourceSide"
   | "layout.sidebar.resourceMetrics"
   | "linkOpen"
   | "browserSearchEngine"
   | "pinContextUsageBreakdown"
   | "pinnedContextBreakdownFields"
+  // The ORDER of the pinned breakdown rows, which is a complete order over
+  // every field and not the selected subset `pinnedContextBreakdownFields`
+  // carries.
+  | "pinnedContextBreakdownOrder"
   | "pointerCursors"
   | "preventSleepWhileRunning"
   | "quoteReplyEnabled"
@@ -358,6 +376,7 @@ export type AnalyticsSetting =
   | "themePreset"
   | "uiFontFamily"
   | "uiFontSize"
+  | "visualLayoutEditorEnabled"
   | "voiceInputEnabled"
   | "voiceLanguage";
 
@@ -517,6 +536,8 @@ export enum AnalyticsEvent {
   VoiceTranscriptionFailed = "voice_transcription_failed",
   SettingsOpened = "settings_opened",
   SettingChanged = "setting_changed",
+  LayoutEditorOpened = "layout_editor_opened",
+  LayoutEditorSearchUsed = "layout_editor_search_used",
   UpdateDownloadStarted = "update_download_started",
   UpdateDownloadSucceeded = "update_download_succeeded",
   UpdateRestartRequested = "update_restart_requested",
@@ -955,6 +976,16 @@ export interface AnalyticsEventProperties {
     readonly section: AnalyticsSettingsSection;
     readonly setting: AnalyticsSetting;
   };
+  /**
+   * A Customize session started. `source` is the entry point that started it;
+   * `scene` is what is being edited, which is a separate question - the same
+   * palette entry reaches the real app or the sample workspace depending on
+   * whether a chat exists to point at.
+   */
+  readonly [AnalyticsEvent.LayoutEditorOpened]: SourceProperties & {
+    readonly scene: AnalyticsLayoutEditorScene;
+  };
+  readonly [AnalyticsEvent.LayoutEditorSearchUsed]: null;
   readonly [AnalyticsEvent.UpdateDownloadStarted]: SourceProperties;
   readonly [AnalyticsEvent.UpdateDownloadSucceeded]: null;
   readonly [AnalyticsEvent.UpdateRestartRequested]: SourceProperties;
@@ -1266,11 +1297,16 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.composer.compactButton": true,
     "layout.composer.reasoningIndicator": true,
     "layout.composer.reasoningFooterControl": true,
+    "layout.composer.toolbarOrder": true,
+    "layout.composer.dockOrder": true,
+    "layout.statusBar.segmentOrder": true,
+    "layout.statusBar.resourceSide": true,
     "layout.sidebar.resourceMetrics": true,
     linkOpen: true,
     browserSearchEngine: true,
     pinContextUsageBreakdown: true,
     pinnedContextBreakdownFields: true,
+    pinnedContextBreakdownOrder: true,
     pointerCursors: true,
     preventSleepWhileRunning: true,
     quoteReplyEnabled: true,
@@ -1293,6 +1329,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     tilePlacement: true,
     uiFontFamily: true,
     uiFontSize: true,
+    visualLayoutEditorEnabled: true,
     voiceInputEnabled: true,
     voiceLanguage: true,
   } satisfies Record<AnalyticsSetting, true>),
@@ -1670,6 +1707,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.SettingChanged],
     ["source", "section", "setting"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.LayoutEditorOpened], ["source", "scene"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ReportIssueBlocked],
     ["report_type", "blocked_action"],
@@ -1723,6 +1761,7 @@ const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
   AnalyticsEvent.CommentReopened,
   AnalyticsEvent.CommentDeleted,
   AnalyticsEvent.VoiceDictationCancelled,
+  AnalyticsEvent.LayoutEditorSearchUsed,
   AnalyticsEvent.UpdateDownloadSucceeded,
   AnalyticsEvent.ReportIssuePublicOpenAttempted,
 ]);
@@ -1812,6 +1851,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     [AnalyticsEvent.OnboardingStarted],
     "mode",
     new Set(["first_run", "replay"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.LayoutEditorOpened],
+    "scene",
+    new Set(["in_place", "sample_workspace"]),
   ),
   ...eventValueEntries(
     [

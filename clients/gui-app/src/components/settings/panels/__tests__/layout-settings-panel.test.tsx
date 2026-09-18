@@ -1511,6 +1511,7 @@ describe("<LayoutSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: false,
         mobileFooter: false,
+        customizeEditor: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(true);
       const { container } = render(<LayoutSettingsPanel />);
@@ -1525,6 +1526,7 @@ describe("<LayoutSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: true,
         mobileFooter: false,
+        customizeEditor: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(false);
       const { container } = render(<LayoutSettingsPanel />);
@@ -1542,6 +1544,7 @@ describe("<LayoutSettingsPanel />", () => {
         featureSettings: null,
         mobileApp: true,
         mobileFooter: true,
+        customizeEditor: false,
       };
       expect(isStatusBarControlsAvailable(context)).toBe(true);
       const { container } = render(<LayoutSettingsPanel />);

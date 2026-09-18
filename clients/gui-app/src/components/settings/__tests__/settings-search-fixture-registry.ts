@@ -76,6 +76,7 @@ function notificationsHost(options: {
     featureSettings: null,
     mobileApp: false,
     mobileFooter: false,
+    customizeEditor: false,
   };
 }
 
@@ -84,6 +85,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: false,
   mobileFooter: false,
+  customizeEditor: false,
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
