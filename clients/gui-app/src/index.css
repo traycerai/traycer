@@ -9,7 +9,9 @@
 @import "./styles/theme-surfaces.css";
 @import "./styles/window-chrome.css";
 
-@custom-variant dark (&:is(.dark *));
+/* `theme-base-dark` (theme-fallback.css) re-declares the dark palette on a
+   subtree, so the variant has to follow it there too. */
+@custom-variant dark (&:is(.dark *, .theme-base-dark *));
 /* Window Controls Overlay: active only when Chromium reports the
    native title-bar controls are visible (toggled by
    `syncDocumentWindowControlsOverlayClass`). Mac fullscreen autohide
