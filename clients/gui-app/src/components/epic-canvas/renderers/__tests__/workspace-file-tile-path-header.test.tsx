@@ -7,6 +7,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -173,6 +174,11 @@ describe("<WorkspaceFileTile /> path header", () => {
 
     await user.keyboard("{Enter}");
     expect(writeText).toHaveBeenCalledWith(POSIX_ABSOLUTE_PATH);
+    // CodeRabbit finding: a static aria-label never announces the copy to a
+    // screen reader - it must swap to "Copied" on success.
+    await waitFor(() => {
+      expect(copyButton.getAttribute("aria-label")).toBe("Copied");
+    });
   });
 
   it("resolves the drive-letter absolute path for a Windows workspace, in both the disclosure and the copy", () => {

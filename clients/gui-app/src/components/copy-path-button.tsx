@@ -31,7 +31,7 @@ export function CopyPathButton(props: {
     >
       <button
         type="button"
-        aria-label={props.ariaLabel}
+        aria-label={copied ? "Copied" : props.ariaLabel}
         data-testid={props.testId}
         onClick={(event) => {
           event.stopPropagation();

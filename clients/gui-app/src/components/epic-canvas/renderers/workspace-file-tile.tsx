@@ -314,6 +314,7 @@ function WorkspaceImageFileTile(props: {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceMediaFileToolbar
+          workspacePath={node.workspacePath}
           filePath={node.filePath}
           svgToggle={props.svgToggle}
           openExternally={null}
@@ -335,6 +336,7 @@ function WorkspaceImageFileTile(props: {
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
       <WorkspaceMediaFileToolbar
+        workspacePath={node.workspacePath}
         filePath={node.filePath}
         svgToggle={props.svgToggle}
         openExternally={
@@ -419,6 +421,7 @@ function WorkspaceDocumentFileTile(props: {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceMediaFileToolbar
+          workspacePath={node.workspacePath}
           filePath={node.filePath}
           svgToggle={null}
           openExternally={null}
@@ -465,6 +468,7 @@ function WorkspaceDocumentFileTile(props: {
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
       <WorkspaceMediaFileToolbar
+        workspacePath={node.workspacePath}
         filePath={node.filePath}
         svgToggle={null}
         openExternally={
@@ -528,6 +532,7 @@ function OpenExternallyIconButton(props: {
  * `WorkspaceFileToolbar` below, the text/markdown tile's toolbar.
  */
 function WorkspaceMediaFileToolbar(props: {
+  readonly workspacePath: string;
   readonly filePath: string;
   readonly svgToggle: ReactNode;
   readonly openExternally: {
@@ -540,9 +545,10 @@ function WorkspaceMediaFileToolbar(props: {
       className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
       data-testid="workspace-file-toolbar"
     >
-      <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
-        {props.filePath}
-      </StartTruncatedText>
+      <WorkspaceFilePath
+        workspacePath={props.workspacePath}
+        filePath={props.filePath}
+      />
       {props.svgToggle}
       {props.openExternally !== null ? (
         <OpenExternallyIconButton
