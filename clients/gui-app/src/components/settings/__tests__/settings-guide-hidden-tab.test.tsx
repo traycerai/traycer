@@ -6,13 +6,15 @@
  * still sees availability flip while nobody is looking at it. Following the
  * step then would call `navigateToSettingsSection`, which re-activates Settings
  * and steals the route from the task. These tests mount the real
- * `TopLevelTabHost` with a real Settings surface and a task tab.
+ * `TopLevelTabHost` with a real Settings surface and a task tab - stacked, and
+ * side by side in a split.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
+  type AnyRouter,
   createMemoryHistory,
   createRootRoute,
   createRoute,
@@ -185,6 +187,47 @@ function seed(): void {
   }));
 }
 
+function seedSplit(focusedSide: "left" | "right"): void {
+  seed();
+  useTabsStore.setState({
+    items: [
+      {
+        kind: "split",
+        id: "pair",
+        left: { kind: "tab", ref: { kind: "epic", id: "epic-a" } },
+        right: { kind: "tab", ref: { kind: "settings", id: "settings" } },
+        focusedSide,
+        routeBackingSide: focusedSide,
+        leftRatio: 0.5,
+      },
+    ],
+    activeItemId: "pair",
+  });
+}
+
+function splitState() {
+  const item = useTabsStore
+    .getState()
+    .items.find((candidate) => candidate.id === "pair");
+  if (item?.kind !== "split") throw new Error("split item missing");
+  return {
+    focusedSide: item.focusedSide,
+    routeBackingSide: item.routeBackingSide,
+  };
+}
+
+function renderApp(router: AnyRouter): void {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <TooltipProvider>
+        <ThemeProvider>
+          <RouterProvider router={router} />
+        </ThemeProvider>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
+
 function reset(): void {
   window.localStorage.clear();
   useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -288,6 +331,84 @@ describe("Setup guide across a hidden Settings tab", () => {
         settingsSurface().querySelector("[data-testid='guide-coachmark']"),
       ).not.toBeNull(),
     );
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 3,
+    });
+  });
+});
+
+describe("Setup guide in a task + Settings split", () => {
+  async function waitForGuideOnAppearance(): Promise<void> {
+    await waitFor(
+      () =>
+        expect(
+          settingsSurface().querySelector("[data-testid='guide-coachmark']"),
+        ).not.toBeNull(),
+      { timeout: 15_000 },
+    );
+  }
+
+  it("moves only what Settings shows, and takes no focus, when the task side is focused", async () => {
+    useSettingsStore.setState({ visualLayoutEditorEnabled: true });
+    seedSplit("left");
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 3 } });
+    const router = buildRouter("/home");
+    renderApp(router);
+    await waitForGuideOnAppearance();
+    // Both panes are on screen; only the task owns focus and the route.
+    expect(settingsSurface().dataset.visible).toBe("true");
+    expect(settingsSurface().dataset.focused).toBe("false");
+    const before = splitState();
+
+    narrowWindow();
+
+    // Settings' own pane now shows Layout, with the guide on it.
+    await waitFor(() =>
+      expect(
+        settingsSurface().querySelector("[data-testid='layout-presets-group']"),
+      ).not.toBeNull(),
+    );
+    await waitFor(() =>
+      expect(
+        settingsSurface().querySelector("[data-testid='guide-coachmark']"),
+      ).not.toBeNull(),
+    );
+    // Nothing was taken from the partner.
+    expect(splitState()).toEqual(before);
+    expect(before).toEqual({ focusedSide: "left", routeBackingSide: "left" });
+    expect(router.state.location.pathname).toBe("/home");
+    expect(useTabsStore.getState().activeItemId).toBe("pair");
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/layout",
+    );
+    expect(screen.getByTestId("top-level-surface-epic-epic-a")).toBeTruthy();
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 3,
+    });
+  });
+
+  it("still navigates, activating Settings, when Settings owns focus", async () => {
+    useSettingsStore.setState({ visualLayoutEditorEnabled: true });
+    seedSplit("right");
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 3 } });
+    const router = buildRouter("/settings/appearance");
+    renderApp(router);
+    await waitForGuideOnAppearance();
+    expect(settingsSurface().dataset.focused).toBe("true");
+
+    narrowWindow();
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/settings/layout"),
+    );
+    await waitFor(() =>
+      expect(
+        settingsSurface().querySelector("[data-testid='layout-presets-group']"),
+      ).not.toBeNull(),
+    );
+    expect(splitState().focusedSide).toBe("right");
     expect(useOnboardingStore.getState().activeSetup).toEqual({
       id: "appearance",
       step: 3,

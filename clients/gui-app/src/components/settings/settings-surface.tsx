@@ -8,10 +8,9 @@ import {
 } from "@/lib/settings-sections";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useSettingsSectionSuccessor } from "@/hooks/settings/use-settings-section-successor";
+import { rememberSettingsTabSection } from "@/lib/settings-navigation";
 import { activateTabIntent, settingsTabIntent } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
-import { settingsSectionPath } from "@/stores/tabs/kinds/settings";
-import { useTabsStore } from "@/stores/tabs/store";
 import "./settings-touch-targets.css";
 
 /** Route-independent Settings body. The current route selects its section. */
@@ -41,9 +40,7 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
         });
         return;
       }
-      useTabsStore
-        .getState()
-        .rememberSystemTabPath("settings", settingsSectionPath(successor));
+      rememberSettingsTabSection(successor);
     },
     [routed, router],
   );

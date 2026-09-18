@@ -1,6 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, type RefObject } from "react";
 import type { SettingsSectionId } from "@/lib/settings-sections";
-import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import {
+  navigateToSettingsSection,
+  rememberSettingsTabSection,
+} from "@/lib/settings-navigation";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import {
   resolveSetupGuideStep,
@@ -9,7 +12,10 @@ import {
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  usePaneFocused,
+  usePaneVisible,
+} from "@/components/epic-tabs/pane-visibility-context";
 
 const Coachmark = lazy(() =>
   import("@/components/onboarding/onboarding-coachmark").then((module) => ({
@@ -42,6 +48,11 @@ export function SettingsSetupGuide(props: {
   // followed - the moment the surface is shown again. The modal has no pane
   // around it, and the context's default (`true`) counts that as presented.
   const presented = usePaneVisible();
+  // Presented is not focused: in a split, Settings can be on screen beside a
+  // focused task. Following the step there must not be a command - focusing
+  // Settings would take the partner's focus and route - so it only moves what
+  // Settings itself shows. The modal has no pane, and counts as focused.
+  const focused = usePaneFocused();
   const editor = availability.customizeEditor;
   const previousEditor = useRef(editor);
   useEffect(() => {
@@ -56,9 +67,18 @@ export function SettingsSetupGuide(props: {
     });
     const now = resolveSetupGuideStep(raw, availability);
     if (was.section === props.section && now.section !== props.section) {
-      navigateToSettingsSection(now.section);
+      if (focused) navigateToSettingsSection(now.section);
+      else rememberSettingsTabSection(now.section);
     }
-  }, [editor, availability, active, customizing, presented, props.section]);
+  }, [
+    editor,
+    availability,
+    active,
+    customizing,
+    presented,
+    focused,
+    props.section,
+  ]);
   // Nothing on unmount: development roots render under StrictMode, whose mount
   // probe runs every effect's cleanup once, which would clear the guide the
   // moment it started. `activeSetup` is session-local presence, so a closed
