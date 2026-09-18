@@ -60,38 +60,70 @@ import {
  *
  * Two of them are worth knowing about specifically:
  *
- *   - `native|0|0.servers[].tools[].denySources[]` has NO `.catch()` between it
- *     and the response root. Growing it does not degrade the response, it fails
- *     the whole `providers.list` call. The projection now keeps that call
- *     alive, but this leaf is the one where a pin would matter most.
+ *   - `denySources[]` appears TWICE - under `native|0|0.servers[]` and again
+ *     under `native|0|3.server` - and neither has a `.catch()` between it and
+ *     the response root. Growing that enum does not degrade the response, it
+ *     fails the whole `providers.list` call. The projection now keeps the call
+ *     alive; these are the two leaves where a pin would matter most.
  *   - `managedVersions.available[].installState|4.reason` reaches
  *     `providerManagedInstallErrorReasonSchema` - the SAME enum the row's own
  *     `managedInstallState` was just pinned away from. One field being frozen
  *     says nothing about the other path to the same declaration, which is
  *     precisely the reading error this test exists to make impossible.
+ *
+ * Both of those facts were invisible until this walk stopped deduplicating by
+ * object identity; see `collectEnums`.
  */
 const ACCEPTED_LIVE_ENUM_PATHS: readonly string[] = [
   "apiKey.source",
+  "auth.status",
   "candidates[].kind",
   "managedVersions.available[].certification",
   "managedVersions.available[].installState|3.reason",
   "managedVersions.available[].installState|4.reason",
   "managedVersionsUnavailable.reason",
   "nativeCapabilities.envOverrideScope",
+  "nativeCapabilities.mcp.actionScopes.add[]",
+  "nativeCapabilities.mcp.actionScopes.auth[]",
+  "nativeCapabilities.mcp.actionScopes.discover[]",
   "nativeCapabilities.mcp.actionScopes.list[]",
+  "nativeCapabilities.mcp.actionScopes.remove[]",
+  "nativeCapabilities.mcp.actionScopes.toggleServer[]",
+  "nativeCapabilities.mcp.actionScopes.toggleTool[]",
+  "nativeCapabilities.mcp.actionScopes.update[]",
   "nativeCapabilities.mcp.addServer",
   "nativeCapabilities.mcp.authActions[]",
   "nativeCapabilities.mcp.authTypes[]",
   "nativeCapabilities.mcp.instructionsSource",
   "nativeCapabilities.mcp.oauthFields[]",
   "nativeCapabilities.mcp.perToolBacking",
+  "nativeCapabilities.mcp.removeServer",
+  "nativeCapabilities.mcp.schemasSource",
   "nativeCapabilities.mcp.statusSource",
+  "nativeCapabilities.mcp.toolsSource",
   "nativeCapabilities.mcp.transports[]",
+  "nativeCapabilities.mcp.updateServer",
   "nativeCapabilities.modelProviders.actions[]",
+  "nativeCapabilities.plugins.actionScopes.add[]",
+  "nativeCapabilities.plugins.actionScopes.list[]",
+  "nativeCapabilities.plugins.actionScopes.remove[]",
+  "nativeCapabilities.plugins.actionScopes.setEnabled[]",
   "nativeCapabilities.plugins.addModes[]",
+  "nativeCapabilities.skills.actionScopes.add[]",
+  "nativeCapabilities.skills.actionScopes.create[]",
+  "nativeCapabilities.skills.actionScopes.edit[]",
+  "nativeCapabilities.skills.actionScopes.import[]",
+  "nativeCapabilities.skills.actionScopes.inspect[]",
+  "nativeCapabilities.skills.actionScopes.list[]",
+  "nativeCapabilities.skills.actionScopes.remove[]",
+  "nativeCapabilities.skills.actionScopes.update[]",
   "native|0|0.servers[].status",
+  "native|0|0.servers[].statusSource",
   "native|0|0.servers[].tools[].denySources[]",
   "native|0|2.skills[].source",
+  "native|0|3.server.status",
+  "native|0|3.server.statusSource",
+  "native|0|3.server.tools[].denySources[]",
   "native|1.code",
   "nextRunBinary.kind",
   "profiles[].accentColor",
@@ -100,7 +132,16 @@ const ACCEPTED_LIVE_ENUM_PATHS: readonly string[] = [
   "profiles[].kind",
   "profiles[].rateLimitLimitedScopes[].severity",
   "profiles[].rateLimitStatus",
+  "profiles[].reusedTombstone.accentColor",
 ];
+
+/**
+ * Depth ceiling for the walk. Not a tuning knob - it is the termination
+ * guarantee that replaces identity dedup, set far above the deepest real path
+ * (about 8) so tripping it means a genuinely recursive schema arrived and this
+ * walk needs rethinking, not a bigger number.
+ */
+const MAX_WALK_DEPTH = 50;
 
 /**
  * A schema's definition, widened with the child-schema fields zod puts on the
@@ -130,8 +171,17 @@ function collectEnums(
   schema: z.ZodType,
   path: string,
   found: Map<z.ZodType, string[]>,
-  seenObjects: Set<z.ZodType>,
+  depth: number,
 ): void {
+  // Bounded by DEPTH, not by object identity. Deduplicating on identity is the
+  // obvious way to guarantee termination and it silently drops paths: any
+  // object schema reached twice reports only its first location, which hid
+  // `auth.status` and the whole `native` union's fourth arm - including a
+  // SECOND `denySources` with no catch over it. Nothing here can cycle, because
+  // zod recursion goes through `z.lazy` and the walk does not follow it.
+  if (depth > MAX_WALK_DEPTH) {
+    throw new Error(`schema walk exceeded depth ${MAX_WALK_DEPTH} at ${path}`);
+  }
   const def = defOf(schema);
   switch (def.type) {
     case "enum": {
@@ -146,34 +196,30 @@ function collectEnums(
     case "default":
     case "nonoptional":
     case "readonly": {
-      if (def.innerType) collectEnums(def.innerType, path, found, seenObjects);
+      if (def.innerType) collectEnums(def.innerType, path, found, depth + 1);
       return;
     }
     case "array": {
       if (def.element) {
-        collectEnums(def.element, `${path}[]`, found, seenObjects);
+        collectEnums(def.element, `${path}[]`, found, depth + 1);
       }
       return;
     }
     case "object": {
-      // Guard against a self-referential shape; a repeat visit would add no
-      // path this walk has not already recorded.
-      if (seenObjects.has(schema)) return;
-      seenObjects.add(schema);
       for (const [key, child] of Object.entries(def.shape ?? {})) {
-        collectEnums(child, path ? `${path}.${key}` : key, found, seenObjects);
+        collectEnums(child, path ? `${path}.${key}` : key, found, depth + 1);
       }
       return;
     }
     case "union": {
       for (const [index, arm] of (def.options ?? []).entries()) {
-        collectEnums(arm, `${path}|${index}`, found, seenObjects);
+        collectEnums(arm, `${path}|${index}`, found, depth + 1);
       }
       return;
     }
     case "record": {
       if (def.valueType) {
-        collectEnums(def.valueType, `${path}{}`, found, seenObjects);
+        collectEnums(def.valueType, `${path}{}`, found, depth + 1);
       }
       return;
     }
@@ -184,7 +230,7 @@ function collectEnums(
 
 function enumsOf(schema: z.ZodType): Map<z.ZodType, string[]> {
   const found = new Map<z.ZodType, string[]>();
-  collectEnums(schema, "", found, new Set());
+  collectEnums(schema, "", found, 0);
   return found;
 }
 
@@ -194,10 +240,14 @@ function liveEnumPaths(row: z.ZodType): string[] {
   const paths: string[] = [];
   for (const [enumSchema, where] of enumsOf(row)) {
     if (!live.has(enumSchema)) continue;
-    // One representative path per enum: a second path to the same declaration
-    // is the same fact, and `installState.reason` above shows a repeat is worth
-    // naming in prose rather than duplicating as a row.
-    paths.push(where[0]!.replace("providers[].", ""));
+    // EVERY path, not one representative per enum. A representative would make
+    // this blind to the case that matters most: a NEW field wired to an enum
+    // already on the list. `nativeCapabilities.mcp.removeServer`,
+    // `.schemasSource`, `.toolsSource`, every `actionScopes.*` variant and
+    // `profiles[].reusedTombstone.accentColor` are all real paths a
+    // one-per-enum list hid, and the set went from 29 to 54 when this was
+    // fixed - so the shortcut was already concealing two thirds of the answer.
+    for (const path of where) paths.push(path.replace("providers[].", ""));
   }
   return paths.sort();
 }

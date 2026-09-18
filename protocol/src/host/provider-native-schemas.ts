@@ -2261,7 +2261,7 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE: ProviderNativeCa
 // note predicted was real and stayed open across four lines. Cut 1 below is now
 // general rather than per-field: every array on a frozen line keeps the members
 // that line can represent and drops the rest, which covers `supportedTabs` and
-// the 28 other array-of-enum leaves measured on `providers.list@7.0` at once.
+// the 29 other array-of-enum leaves measured on `providers.list@7.0` at once.
 // Cuts 2 and 3 remain the reparse's job, unchanged.
 //
 // 1. FILTER `supportedTabs` before the parse; never reparse it. `z.array(enum)`

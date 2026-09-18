@@ -12,13 +12,14 @@ import { z } from "zod";
  * over one unknown element, the object holding it fails with it, and the
  * nearest `.catch()` then serves its default.
  *
- * The blast radius is not local. Measured over `providers.list@7.0`, 29 enum
+ * The blast radius is not local. Measured over `providers.list@7.0`, 30 enum
  * leaves sit inside an array and 27 of them share ONE catch scope -
  * `providers[].nativeCapabilities`, a whole-object `.catch(DEFAULT)` - so a
  * single new settings tab costs a 7.0 peer its MCP, Plugins AND Skills tabs
- * together. One more leaf, `native.servers[].tools[].denySources[]`, has no
- * `.catch()` anywhere between it and the root, so growing THAT enum fails the
- * entire `providers.list` response rather than degrading any part of it.
+ * together. Two more, both `denySources[]` on the `native` result (once under
+ * `servers[]` and again under the single-server union arm), have no `.catch()`
+ * anywhere between them and the root, so growing THAT enum fails the entire
+ * `providers.list` response rather than degrading any part of it.
  *
  * None of this is new knowledge. `provider-native-schemas.ts` carries the
  * finding verbatim - "FILTER `supportedTabs` before the parse; never reparse
@@ -27,7 +28,7 @@ import { z } from "zod";
  * when `projectNativeCapabilitiesToV70Preimage` was deleted, alongside the note
  * that whoever reopens the line "has to make them again". v8.0, v9.0, v9.1 and
  * v9.2 all opened since; the projection never came back. This is it, general
- * rather than per-field, because 29 leaves is too many to enumerate by hand and
+ * rather than per-field, because 30 leaves is too many to enumerate by hand and
  * enumerating a sample is how the last freeze came up short.
  *
  * WHAT IT DOES. Exactly one rule, applied recursively: **an array keeps the
