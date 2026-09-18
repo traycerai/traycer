@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DIORAMA_CHAPTERS,
+  MOBILE_DIORAMA_CHAPTERS,
   dioramaBeatAt,
   dioramaChapterStarts,
   dioramaElapsedMs,
@@ -29,10 +30,46 @@ describe("diorama chapters", () => {
     ]);
   });
 
-  it("loops the strip at both ends", () => {
-    expect(stepDioramaChapter(0, 1)).toBe(1);
-    expect(stepDioramaChapter(DIORAMA_CHAPTERS.length - 1, 1)).toBe(0);
-    expect(stepDioramaChapter(0, -1)).toBe(DIORAMA_CHAPTERS.length - 1);
+  it("loops the strip at both ends, at whatever length it is given", () => {
+    const count = DIORAMA_CHAPTERS.length;
+    expect(stepDioramaChapter(0, 1, count)).toBe(1);
+    expect(stepDioramaChapter(count - 1, 1, count)).toBe(0);
+    expect(stepDioramaChapter(0, -1, count)).toBe(count - 1);
+    // The phone walkthrough runs the same strip over its own three chapters.
+    const mobile = MOBILE_DIORAMA_CHAPTERS.length;
+    expect(stepDioramaChapter(mobile - 1, 1, mobile)).toBe(0);
+    expect(stepDioramaChapter(0, -1, mobile)).toBe(mobile - 1);
+  });
+
+  it("plays three phone chapters of about four seconds each", () => {
+    expect(MOBILE_DIORAMA_CHAPTERS.map((chapter) => chapter.id)).toEqual([
+      "menu",
+      "task",
+      "tabs",
+    ]);
+    expect(MOBILE_DIORAMA_CHAPTERS.map((chapter) => chapter.label)).toEqual([
+      "Menu",
+      "Task",
+      "Tabs",
+    ]);
+    for (const chapter of MOBILE_DIORAMA_CHAPTERS) {
+      expect(chapter.durationMs).toBe(4000);
+      expect(chapter.beats.at(0)?.atMs).toBe(0);
+      // The opening beat of a chapter shows the control, not what it opens.
+      expect(chapter.beats.at(0)?.scene).toBe("task");
+      let previous = -1;
+      for (const beat of chapter.beats) {
+        expect(beat.atMs).toBeGreaterThan(previous);
+        expect(beat.atMs).toBeLessThan(chapter.durationMs);
+        previous = beat.atMs;
+      }
+    }
+    // Every surface the phone has is reached by the end of some chapter.
+    expect(
+      MOBILE_DIORAMA_CHAPTERS.map((chapter) => chapter.beats.at(-1)?.scene),
+    ).toEqual(["menu", "task", "tabs"]);
+    expect(dioramaBeatAt(MOBILE_DIORAMA_CHAPTERS[0], 1199)).toBe(0);
+    expect(dioramaBeatAt(MOBILE_DIORAMA_CHAPTERS[0], 1200)).toBe(1);
   });
 
   it("opens every chapter on its first beat and ends every beat inside it", () => {

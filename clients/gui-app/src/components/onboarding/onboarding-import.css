@@ -293,15 +293,47 @@
 /* ----------------------------------------------------------------- mobile */
 
 @media (max-width: 640px) {
+  /* Row one stacks into three: the machine, then the search, then the two
+     scope controls side by side. A phone has no room for four controls in a
+     line, and the host picker is the one that names what the other three are
+     scoped to, so it takes the full width at the top. The scan window and
+     Show imported share the third line on their own: the toggle already
+     carries `ml-auto`, which splits the pair across it. */
   .onboarding-import-toolbar-scope {
     flex-wrap: wrap;
   }
   .onboarding-import-host {
+    flex-basis: 100%;
+    width: 100%;
     max-width: 100%;
   }
   .onboarding-import-search {
     flex-basis: 100%;
   }
+  /* Row two keeps its two ends - the count and the view toggle - on one line,
+     and the provider pills take the line under them as a single scrolling
+     run. Wrapping them instead would push the list off the screen on a phone
+     with five providers installed. */
+  .onboarding-import-selection {
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .onboarding-import-pills {
+    order: 1;
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding-bottom: 0.125rem;
+  }
+  .onboarding-import-pills::-webkit-scrollbar {
+    display: none;
+  }
+  .onboarding-import-stage [data-testid="session-import-provider-pill"] {
+    flex: 0 0 auto;
+  }
+
   .onboarding-import-card {
     padding: 1.25rem 1rem;
   }

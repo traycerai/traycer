@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useReducedMotion } from "motion/react";
 import {
@@ -52,6 +53,7 @@ import { OnboardingBrowserPreview } from "@/components/onboarding/onboarding-bro
 import { cn } from "@/lib/utils";
 import {
   DIORAMA_CHAPTERS,
+  MOBILE_DIORAMA_CHAPTERS,
   dioramaBeatAt,
   dioramaElapsedMs,
   setDioramaPaused,
@@ -61,26 +63,46 @@ import {
   type DioramaClock,
   type DioramaPanelId,
   type DioramaRegionId,
+  type MobileDioramaBeat,
+  type MobileDioramaRegionId,
 } from "@/components/onboarding/onboarding-diorama-chapters";
 import "./onboarding-diorama.css";
 
 export function OnboardingWorkspaceIllustration(props: {
   readonly mobile: boolean;
 }) {
-  if (props.mobile) {
-    return (
-      <figure className="onboarding-workspace onboarding-workspace--mobile">
-        <MobileWorkspace />
-        <figcaption className="sr-only">
-          Tasks in the menu, conversations in the task switcher.
-        </figcaption>
-      </figure>
-    );
-  }
+  // Both halves render their own <figure>: the phone walkthrough is a scene
+  // with its own chapters and its own caption, not the diorama in a frame.
+  if (props.mobile) return <MobileWorkspace />;
   return <WorkspaceDiorama />;
 }
 
-function WorkspaceDiorama() {
+/**
+ * The clock both walkthroughs run on: one chapter at a time, advanced by a rAF
+ * loop that reads elapsed time off `DioramaClock` rather than counting frames.
+ * Typed to the two fields a chapter needs to be played, so the desktop
+ * diorama's chapters and the phone's share it.
+ */
+interface DioramaTimeline {
+  readonly durationMs: number;
+  readonly beats: readonly { readonly atMs: number }[];
+}
+
+interface DioramaPlayback {
+  /** The chapter's position, and the run counter that replays a re-pick. */
+  readonly chapter: { readonly index: number; readonly run: number };
+  readonly beatIndex: number;
+  /** The viewer's preference: while it is on, nothing advances on its own. */
+  readonly reducedMotion: boolean;
+  readonly select: (index: number) => void;
+  /** The strip's per-segment fill and button nodes, written by the loop. */
+  readonly fills: RefObject<(HTMLSpanElement | null)[]>;
+  readonly segments: RefObject<(HTMLButtonElement | null)[]>;
+}
+
+function useDioramaPlayback(
+  chapters: readonly DioramaTimeline[],
+): DioramaPlayback {
   const reducedMotion = useReducedMotion() === true;
   // One value so a segment click restarts the timer even when it names the
   // chapter that is already playing (a new object is a new dependency).
@@ -92,8 +114,7 @@ function WorkspaceDiorama() {
   const [playhead, setPlayhead] = useState({ chapter, beat: 0 });
   const beatIndex = playhead.chapter === chapter ? playhead.beat : 0;
   const beatRef = useRef(0);
-  const active = DIORAMA_CHAPTERS[chapter.index] ?? DIORAMA_CHAPTERS[0];
-  const beat = active.beats[beatIndex] ?? active.beats[0];
+  const active = chapters[chapter.index] ?? chapters[0];
   const clock = useRef<DioramaClock>({ startedAt: 0, pausedAt: null });
   const fills = useRef<(HTMLSpanElement | null)[]>([]);
   const segments = useRef<(HTMLButtonElement | null)[]>([]);
@@ -158,7 +179,7 @@ function WorkspaceDiorama() {
       }
       if (ratio === 1) {
         setChapter((current) => ({
-          index: stepDioramaChapter(current.index, 1),
+          index: stepDioramaChapter(current.index, 1, chapters.length),
           run: current.run,
         }));
         return;
@@ -169,7 +190,85 @@ function WorkspaceDiorama() {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [chapter, active, reducedMotion, paint]);
+  }, [chapter, active, chapters, reducedMotion, paint]);
+
+  return { chapter, beatIndex, reducedMotion, select, fills, segments };
+}
+
+/**
+ * The labelled strip under the scene: one segment per chapter, click to jump,
+ * arrow keys to walk. The fill is written per frame by the playback loop.
+ */
+function DioramaChapterStrip(props: {
+  readonly chapters: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly caption: string | null;
+  }[];
+  readonly activeIndex: number;
+  readonly playback: DioramaPlayback;
+}) {
+  const { chapters, activeIndex, playback } = props;
+  return (
+    <div
+      className="diorama-chapters"
+      role="group"
+      aria-label="Workspace chapters"
+    >
+      {chapters.map((entry, index) => {
+        const current = index === activeIndex;
+        return (
+          <button
+            key={entry.id}
+            ref={(node) => {
+              playback.segments.current[index] = node;
+            }}
+            type="button"
+            className="diorama-chapter"
+            data-active={current}
+            aria-pressed={current}
+            aria-current={current ? "step" : undefined}
+            tabIndex={current ? 0 : -1}
+            onClick={() => {
+              playback.select(index);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                return;
+              event.preventDefault();
+              const next = stepDioramaChapter(
+                index,
+                event.key === "ArrowRight" ? 1 : -1,
+                chapters.length,
+              );
+              playback.select(next);
+              playback.segments.current[next]?.focus();
+            }}
+          >
+            <span className="diorama-chapter-track">
+              <span
+                ref={(node) => {
+                  playback.fills.current[index] = node;
+                }}
+                className="diorama-chapter-fill"
+              />
+            </span>
+            <span className="diorama-chapter-label">{entry.label}</span>
+            {entry.caption === null ? null : (
+              <span className="diorama-chapter-caption">{entry.caption}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function WorkspaceDiorama() {
+  const playback = useDioramaPlayback(DIORAMA_CHAPTERS);
+  const chapter = playback.chapter;
+  const active = DIORAMA_CHAPTERS[chapter.index] ?? DIORAMA_CHAPTERS[0];
+  const beat = active.beats[playback.beatIndex] ?? active.beats[0];
 
   return (
     <figure className="onboarding-workspace">
@@ -191,54 +290,15 @@ function WorkspaceDiorama() {
             ))}
           </div>
         </div>
-        <div
-          className="diorama-chapters"
-          role="group"
-          aria-label="Workspace chapters"
-        >
-          {DIORAMA_CHAPTERS.map((entry, index) => {
-            const current = index === chapter.index;
-            return (
-              <button
-                key={entry.id}
-                ref={(node) => {
-                  segments.current[index] = node;
-                }}
-                type="button"
-                className="diorama-chapter"
-                data-active={current}
-                aria-pressed={current}
-                aria-current={current ? "step" : undefined}
-                tabIndex={current ? 0 : -1}
-                onClick={() => {
-                  select(index);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-                    return;
-                  event.preventDefault();
-                  const next = stepDioramaChapter(
-                    index,
-                    event.key === "ArrowRight" ? 1 : -1,
-                  );
-                  select(next);
-                  segments.current[next]?.focus();
-                }}
-              >
-                <span className="diorama-chapter-track">
-                  <span
-                    ref={(node) => {
-                      fills.current[index] = node;
-                    }}
-                    className="diorama-chapter-fill"
-                  />
-                </span>
-                <span className="diorama-chapter-label">{entry.label}</span>
-                <span className="diorama-chapter-caption">{entry.title}</span>
-              </button>
-            );
-          })}
-        </div>
+        <DioramaChapterStrip
+          chapters={DIORAMA_CHAPTERS.map((entry) => ({
+            id: entry.id,
+            label: entry.label,
+            caption: entry.title,
+          }))}
+          activeIndex={chapter.index}
+          playback={playback}
+        />
       </div>
       <figcaption className="sr-only">
         Tasks live in horizontal tabs. Drag sidebar items onto the canvas to
@@ -660,52 +720,148 @@ function DioramaWindow(props: {
   );
 }
 
+/** The phone's spotlight, on the same attribute contract as the diorama's. */
+function mobileRingOf(
+  beat: MobileDioramaBeat,
+  id: MobileDioramaRegionId,
+): "true" | undefined {
+  return beat.ring === id ? "true" : undefined;
+}
+
+/** The three tasks the drawer lists, and the one the phone is showing. */
+const MOBILE_DRAWER_TASKS: readonly string[] = [
+  "Launch website",
+  "Mobile app",
+  "API cleanup",
+];
+
+/**
+ * Act 1 on a phone: the same chaptered walkthrough the desktop diorama plays,
+ * on a phone frame. Three surfaces live in the frame at once and the beat says
+ * which one is up, so a chapter switch is a transition rather than a mount.
+ */
 function MobileWorkspace() {
+  const playback = useDioramaPlayback(MOBILE_DIORAMA_CHAPTERS);
+  const chapter = playback.chapter;
+  const active =
+    MOBILE_DIORAMA_CHAPTERS[chapter.index] ?? MOBILE_DIORAMA_CHAPTERS[0];
+  // A still frame shows the chapter's LAST beat: nothing advances under
+  // reduced motion, and every chapter here opens on the control being pressed
+  // rather than on what pressing it does - a Menu chapter frozen on its first
+  // beat would never show the drawer at all.
+  const beatIndex = playback.reducedMotion
+    ? active.beats.length - 1
+    : playback.beatIndex;
+  const beat = active.beats[beatIndex] ?? active.beats[0];
   return (
-    <div
-      className="diorama-mobile relative flex flex-col overflow-hidden rounded-2xl border border-border bg-background font-sans text-foreground"
-      aria-hidden="true"
-    >
-      <header
-        className={cn(
-          APP_HEADER_HEIGHT_CLASS,
-          "flex shrink-0 items-center gap-3 border-b border-border px-3",
-        )}
-      >
-        <Menu className="size-4 text-muted-foreground" />
-        <span className="flex-1 text-sm font-medium">Launch website</span>
-        <History className="size-4 text-muted-foreground" />
-        <Bell className="size-4 text-muted-foreground" />
-        <SquareStack className="size-4" />
-      </header>
-      <div className="min-h-0 flex-1">
-        <DioramaPane kind="chat" />
+    <figure className="onboarding-workspace onboarding-workspace--mobile">
+      <div className="diorama-scene">
+        <div className="diorama-mobile-stage">
+          <div
+            className="diorama-mobile relative flex flex-col overflow-hidden rounded-2xl border border-border bg-background font-sans text-foreground"
+            data-scene={beat.scene}
+            aria-hidden="true"
+          >
+            <header
+              className={cn(
+                APP_HEADER_HEIGHT_CLASS,
+                "flex shrink-0 items-center gap-3 border-b border-border bg-background px-3",
+              )}
+            >
+              <span
+                className="diorama-mobile-target"
+                data-ring={mobileRingOf(beat, "menu-trigger")}
+              >
+                <Menu className="size-4 text-muted-foreground" />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                Launch website
+              </span>
+              <History className="size-4 text-muted-foreground" />
+              <Bell className="size-4 text-muted-foreground" />
+              <span
+                className="diorama-mobile-target"
+                data-ring={mobileRingOf(beat, "tab-trigger")}
+              >
+                <SquareStack className="size-4" />
+              </span>
+            </header>
+            <div className="min-h-0 flex-1">
+              <DioramaPane kind="chat" />
+            </div>
+            {/* One scrim for both overlays: whichever is up dims the task
+                behind it, exactly as the app's own drawer and sheet do. */}
+            <span className="diorama-mobile-scrim" />
+            <div
+              className="diorama-mobile-drawer absolute inset-y-0 left-0 z-10 flex w-[78%] flex-col border-r border-border bg-popover p-4 text-popover-foreground shadow-2xl"
+              data-ring={mobileRingOf(beat, "drawer")}
+            >
+              <h2 className="mb-4 text-base font-medium">Tasks</h2>
+              {MOBILE_DRAWER_TASKS.map((task, index) => (
+                <div
+                  key={task}
+                  className={cn(
+                    "mt-1 flex items-center gap-3 rounded-lg p-3 text-sm first:mt-0",
+                    index === 0 && "bg-foreground/8",
+                  )}
+                >
+                  <MessageSquare className="size-4 shrink-0 text-info-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{task}</span>
+                </div>
+              ))}
+              <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+                <Plus className="size-4" />
+                New task
+              </div>
+            </div>
+            <div
+              className="diorama-mobile-sheet absolute inset-x-0 bottom-0 z-10 rounded-t-2xl border-t border-border bg-popover p-4 text-popover-foreground shadow-2xl"
+              data-ring={mobileRingOf(beat, "switcher")}
+            >
+              <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-foreground/20" />
+              <h2 className="mb-4 text-base font-medium">Tabs</h2>
+              <div className="mb-4 flex items-center gap-5 border-b border-border pb-3 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Agents</span>
+                <span>Terminals</span>
+                <span>Browsers</span>
+                <span>Artifacts</span>
+              </div>
+              <div className="flex items-center gap-3 rounded-lg bg-foreground/8 p-3 text-sm">
+                <MessageSquare className="size-4 text-info-foreground" />
+                <span className="flex-1">Build the page</span>
+                <HarnessIcon harnessId="claude" className="size-4" />
+              </div>
+              <div className="mt-1 flex items-center gap-3 rounded-lg p-3 text-sm">
+                <MessageSquare className="size-4 text-info-foreground" />
+                <span className="flex-1">Review changes</span>
+                <HarnessIcon harnessId="codex" className="size-4" />
+              </div>
+              <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+                <Plus className="size-4" />
+                New agent
+              </div>
+            </div>
+          </div>
+        </div>
+        {/* A tap here must not read as a tour swipe. It does not: the tour's
+            gesture (use-onboarding-swipe.ts) drops any pointer that starts on
+            a button, and every segment is one. */}
+        <DioramaChapterStrip
+          chapters={MOBILE_DIORAMA_CHAPTERS.map((entry) => ({
+            id: entry.id,
+            label: entry.label,
+            caption: null,
+          }))}
+          activeIndex={chapter.index}
+          playback={playback}
+        />
       </div>
-      <div className="diorama-mobile-sheet absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-popover p-4 text-popover-foreground shadow-2xl">
-        <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-foreground/20" />
-        <h2 className="mb-4 text-base font-medium">Tabs</h2>
-        <div className="mb-4 flex items-center gap-5 border-b border-border pb-3 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">Agents</span>
-          <span>Terminals</span>
-          <span>Browsers</span>
-          <span>Artifacts</span>
-        </div>
-        <div className="flex items-center gap-3 rounded-lg bg-foreground/8 p-3 text-sm">
-          <MessageSquare className="size-4 text-info-foreground" />
-          <span className="flex-1">Build the page</span>
-          <HarnessIcon harnessId="claude" className="size-4" />
-        </div>
-        <div className="mt-1 flex items-center gap-3 rounded-lg p-3 text-sm">
-          <MessageSquare className="size-4 text-info-foreground" />
-          <span className="flex-1">Review changes</span>
-          <HarnessIcon harnessId="codex" className="size-4" />
-        </div>
-        <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-          <Plus className="size-4" />
-          New agent
-        </div>
-      </div>
-    </div>
+      <figcaption className="sr-only">
+        The menu lists your tasks. A task holds the conversation and its
+        composer. The tab switcher moves between agents, terminals, browsers and
+        artifacts.
+      </figcaption>
+    </figure>
   );
 }
 
@@ -923,12 +1079,16 @@ const DioramaPane = memo(function DioramaPane(props: {
             <p className="diorama-chat-reply">
               I’ll build the portfolio from the plan.
             </p>
-            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-ui-xs text-muted-foreground">
+            {/* The turn's supporting detail. The phone frame drops both: a
+                9/16 pane bottom-anchors, so anything past three blocks pushes
+                the user's own message out of the top of the pane - and the
+                message is half of what the Task chapter is showing. */}
+            <div className="diorama-chat-aside flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-ui-xs text-muted-foreground">
               <ChevronDown className="size-3" />
               <FileText className="size-3" />
               Read Launch plan
             </div>
-            <p>The page is ready to preview.</p>
+            <p className="diorama-chat-aside">The page is ready to preview.</p>
           </div>
           <DioramaComposer />
         </>

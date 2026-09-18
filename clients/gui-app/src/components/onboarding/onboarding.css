@@ -44,6 +44,36 @@
   mix-blend-mode: overlay;
 }
 
+/* ---------------------------------------------------------------- welcome */
+
+/* The copy's own ground. The field is bounded by its luminance band
+   (onboarding-field-alpha.ts), but a dot that lands directly behind a letter
+   still reads as noise in the letterform, so the mark, the title and the skip
+   sit on a soft pool of the page's own background. `z-index: -1` keeps it
+   under the in-flow copy - an absolutely positioned pseudo-element otherwise
+   paints ABOVE non-positioned siblings. Percentage radii, so the pool tracks
+   the copy block at any window size instead of a fixed measure. */
+.onboarding-welcome::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 62% 34% at 50% 44%,
+    color-mix(in srgb, var(--background) 70%, transparent) 0%,
+    color-mix(in srgb, var(--background) 38%, transparent) 52%,
+    transparent 100%
+  );
+}
+/* The skip sits at the bottom edge, outside that pool, and `--muted-foreground`
+   is picked for contrast against a bare background rather than against a
+   background with a field on it. On this one screen it takes the full
+   foreground. */
+.onboarding-welcome .onboarding-button--quiet {
+  color: var(--foreground);
+}
+
 /* ------------------------------------------------------ welcome → tour handoff */
 
 /* The mark itself is a motion shared element and must NOT fade - it travels to

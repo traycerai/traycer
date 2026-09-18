@@ -36,12 +36,14 @@ describe("onboardingStepsFor", () => {
     ]);
   });
 
-  it("keeps the mobile tour to task tabs and providers regardless of capability", () => {
+  it("offers the mobile tour the import act under the same gate as desktop", () => {
     setMobileApp(true);
 
+    // The phone is not the reason the act is there or not - the host is.
     expect(onboardingStepsFor(true).map((step) => step.id)).toEqual([
       "task-tabs",
       "providers",
+      "session-import",
     ]);
     expect(onboardingStepsFor(false).map((step) => step.id)).toEqual([
       "task-tabs",
@@ -49,16 +51,18 @@ describe("onboardingStepsFor", () => {
     ]);
   });
 
-  it("uses mobile-specific task-tabs copy while keeping the step id", () => {
-    const desktopTaskTabs = onboardingStepsFor(true)[0];
+  it("overrides act one's copy on mobile and nothing else", () => {
+    const desktop = onboardingStepsFor(true);
 
     setMobileApp(true);
 
-    const mobileTaskTabs = onboardingStepsFor(true)[0];
-    expect(mobileTaskTabs.id).toBe("task-tabs");
-    expect(mobileTaskTabs.subtitle).toBe(
-      "Find tasks in the menu. Use the tab switcher for chats, browsers, and files.",
+    const mobile = onboardingStepsFor(true);
+    expect(mobile[0].id).toBe("task-tabs");
+    expect(mobile[0].subtitle).toBe(
+      "Tasks in the menu, everything else a swipe away.",
     );
-    expect(mobileTaskTabs).not.toEqual(desktopTaskTabs);
+    expect(mobile[0]).not.toEqual(desktop[0]);
+    // Only act one is rewritten: the other acts are the same objects.
+    expect(mobile.slice(1)).toEqual(desktop.slice(1));
   });
 });

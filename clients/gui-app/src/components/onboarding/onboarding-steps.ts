@@ -31,18 +31,31 @@ export const ONBOARDING_STEPS: ReadonlyArray<OnboardingStep> = [
 ];
 
 const WITHOUT_IMPORT = ONBOARDING_STEPS.slice(0, 2);
-const MOBILE_STEPS: ReadonlyArray<OnboardingStep> = [
-  {
-    ...ONBOARDING_STEPS[0],
-    subtitle:
-      "Find tasks in the menu. Use the tab switcher for chats, browsers, and files.",
-  },
-  ONBOARDING_STEPS[1],
-];
+
+/**
+ * Act 1 is the one act whose copy differs on a phone - the workspace it
+ * describes is a drawer and a tab switcher rather than tiles side by side.
+ * Every other act, the import one included, is the desktop act under the same
+ * availability gate: a phone that can reach a host that scans sessions can
+ * import from it, and dropping the act there stranded the feature on a device
+ * whose host supported it perfectly well.
+ */
+const MOBILE_TASK_TABS: OnboardingStep = {
+  ...ONBOARDING_STEPS[0],
+  subtitle: "Tasks in the menu, everything else a swipe away.",
+};
+
+function withMobileCopy(
+  steps: ReadonlyArray<OnboardingStep>,
+): ReadonlyArray<OnboardingStep> {
+  return steps.map((step) =>
+    step.id === "task-tabs" ? MOBILE_TASK_TABS : step,
+  );
+}
 
 export function onboardingStepsFor(
   sessionImportAvailable: boolean,
 ): ReadonlyArray<OnboardingStep> {
-  if (isMobileApp()) return MOBILE_STEPS;
-  return sessionImportAvailable ? ONBOARDING_STEPS : WITHOUT_IMPORT;
+  const steps = sessionImportAvailable ? ONBOARDING_STEPS : WITHOUT_IMPORT;
+  return isMobileApp() ? withMobileCopy(steps) : steps;
 }

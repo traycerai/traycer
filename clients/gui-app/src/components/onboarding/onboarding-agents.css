@@ -239,6 +239,68 @@
   .onboarding-provider-agents > .onboarding-provider-status + div {
     grid-row: 3;
   }
+
+  /* A phone gets rows, not cards: fifteen providers at 8.5rem each is three
+     on screen and a scroll bar for the rest. Everything the card says is on
+     one line - the glyph, the name, the status, the discovery summary that
+     was the card's footer, and the check. Nothing is dropped and nothing
+     moves in the DOM; the card's own two blocks just lay out in a line.
+
+     `display: contents` on the toggle's first row is what makes that one
+     line possible: its icon, name and check become siblings of the status
+     line instead of a row above it. The check leaves the flow entirely and
+     pins to the row's right edge, which is the one place it can be when the
+     summary that follows it in the DOM has to sit to its left. */
+  .onboarding-provider-cards {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+  .onboarding-provider-card {
+    min-height: 3.25rem;
+    flex-direction: row;
+    align-items: center;
+    /* The strip the pinned check sits in. */
+    padding-right: 1.875rem;
+    border-radius: 12px;
+  }
+  .onboarding-provider-toggle {
+    flex: 1 1 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+  }
+  .onboarding-provider-toggle > span:first-child {
+    display: contents;
+  }
+  .onboarding-provider-status-line {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    font-size: 0.75rem;
+  }
+  .onboarding-provider-check {
+    position: absolute;
+    top: 50%;
+    right: 0.5rem;
+    translate: 0 -50%;
+    margin: 0;
+  }
+  /* The footer's own summary trigger, now trailing the status line. It keeps
+     its popover, so nothing it used to open is out of reach - it is the same
+     control on one line instead of two. */
+  .onboarding-provider-footer {
+    flex: 0 1 auto;
+    /* The name is the row's first line of hierarchy, so the summary yields
+       to it rather than the other way round. */
+    max-width: 40%;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 /* ------------------------------------------------------------- no motion */

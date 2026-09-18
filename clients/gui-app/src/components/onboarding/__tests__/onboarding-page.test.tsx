@@ -742,12 +742,14 @@ describe("OnboardingPage mobile swipe", () => {
     safeAreaInsetsMock.right = 0;
   });
 
-  it("keeps mobile to two steps, leaves vertical drags alone, and navigates on horizontal swipes", async () => {
+  it("runs the whole step list on mobile, leaves vertical drags alone, and navigates on horizontal swipes", async () => {
     const { container } = renderPage(false);
     const surface = swipeSurface(container);
 
     expect(currentStepId()).toBe("task-tabs");
-    expect(scanMock.activeCalls.at(-1)).toBe(false);
+    // The import act is offered on a phone under the same host gate as on the
+    // desktop, so its early scan arms there too.
+    expect(scanMock.activeCalls.at(-1)).toBe(true);
 
     drag(
       surface,
@@ -765,10 +767,17 @@ describe("OnboardingPage mobile swipe", () => {
 
     drag(
       surface,
+      { clientX: 400, clientY: 300 },
+      { clientX: 280, clientY: 306 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("session-import"));
+
+    drag(
+      surface,
       { clientX: 280, clientY: 300 },
       { clientX: 400, clientY: 306 },
     );
-    await waitFor(() => expect(currentStepId()).toBe("task-tabs"));
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
   });
 
   it("does not steal swipes from controls or the platform edge zones", async () => {

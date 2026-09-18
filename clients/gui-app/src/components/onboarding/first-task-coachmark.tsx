@@ -39,7 +39,30 @@ const STEPS = {
     content: "Send a message to continue this conversation.",
     action: "Write a message",
   },
+  "tasks-menu": {
+    progress: { step: 1, total: 2 },
+    title: "Your tasks live here",
+    content: "Open the menu to see everything you started.",
+    action: "Open menu",
+  },
+  "tasks-pick": {
+    progress: { step: 2, total: 2 },
+    title: "Pick up where you left off",
+    content: "Tap any task to continue it.",
+    action: "Show me",
+  },
 } as const;
+
+/**
+ * The steps the drawer's open state decides, rather than a click on the
+ * target. They never acknowledge: closing the drawer without picking a task
+ * has to put the user back on step 1, and an acknowledged hint is gone for
+ * good. What ends this branch is opening a task, which finishes the guide
+ * outright (`mobile-nav-drawer.tsx`).
+ */
+function derivedFromDrawer(step: FirstTaskStep): boolean {
+  return step === "tasks-menu" || step === "tasks-pick";
+}
 
 export function FirstTaskCoachmark(props: {
   readonly step: FirstTaskStep;
@@ -52,9 +75,10 @@ export function FirstTaskCoachmark(props: {
   );
   const acknowledge = useFirstTaskGuideStore((state) => state.acknowledgeHint);
   const writing = props.step === "prompt" || props.step === "continue";
+  const derived = derivedFromDrawer(props.step);
   useEffect(() => {
     const root = props.rootRef.current;
-    if (root === null || acknowledged) return;
+    if (root === null || acknowledged || derived) return;
     const editorSelector = 'textarea, input, [contenteditable="true"]';
     const onClick = (event: MouseEvent): void => {
       if (!(event.target instanceof Element)) return;
@@ -92,6 +116,7 @@ export function FirstTaskCoachmark(props: {
     props.selector,
     props.step,
     writing,
+    derived,
     acknowledged,
     acknowledge,
   ]);
@@ -100,8 +125,11 @@ export function FirstTaskCoachmark(props: {
   // the control: clicking the first task card would open a task they never
   // chose. And it is the one step whose action does not settle it - opening a
   // task is what acknowledges it, through the click listener above.
+  // `tasks-pick` joins them: there is nothing to press for the user - which
+  // task they resume is theirs to choose - so "Show me" puts the first row
+  // under their finger and stops there.
   const interact =
-    writing || props.step === "imported"
+    writing || props.step === "imported" || props.step === "tasks-pick"
       ? focusGuideTarget
       : interactWithGuideTarget;
   if (acknowledged) return null;
@@ -125,7 +153,7 @@ export function FirstTaskCoachmark(props: {
           // A press that found no enabled control did nothing, and retiring
           // the step's guidance for it removes the card for good.
           if (!target || !interact(target)) return;
-          if (props.step !== "imported") acknowledge(props.step);
+          if (props.step !== "imported" && !derived) acknowledge(props.step);
         },
       }}
     />

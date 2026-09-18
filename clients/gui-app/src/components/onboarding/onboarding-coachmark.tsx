@@ -24,6 +24,7 @@ import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision
 import { focusGuideTarget, interactWithGuideTarget } from "./guide-target";
 import {
   escapeOwnedElsewhere,
+  MODAL_OVERLAY_SELECTOR,
   OPEN_OVERLAY_SELECTOR,
   OVERLAY_SELECTOR,
   CLOSING_OVERLAY_SELECTOR,
@@ -94,7 +95,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
   const headingId = `${maskId}-title`;
   const descriptionId = `${maskId}-body`;
   const portal =
-    held?.closest<HTMLElement>('[data-slot="dialog-content"]') ?? document.body;
+    held?.closest<HTMLElement>(MODAL_OVERLAY_SELECTOR) ?? document.body;
 
   const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (target === null || event.defaultPrevented || event.isComposing) return;
@@ -161,7 +162,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
     if (
       (keyboardNavigation && card.contains(focused)) ||
       focused === document.body ||
-      focused === card.closest('[data-slot="dialog-content"]')
+      focused === card.closest(MODAL_OVERLAY_SELECTOR)
     )
       card.focus({ preventScroll: true });
   }, [keyboardNavigation, props.id]);
@@ -220,11 +221,13 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
 
   if (held === null) return null;
   const exiting = target === null;
-  // A picker already owns attention: dimming the app behind it would darken
-  // the very surface the step is about.
-  const dimmed = held.closest(OVERLAY_SELECTOR) === null;
-  // A step inside a popover has to clear that popover's own layer.
-  const overPopover = held.closest('[data-slot="popover-content"]') !== null;
+  // One question, two answers. A step whose target lives inside an overlay
+  // has to clear that overlay's own layer - every one of them rests at z-50,
+  // above the card's resting home - and must not dim, because dimming the app
+  // behind a surface that already owns attention would darken the very thing
+  // the step is about.
+  const overOverlay = held.closest(OVERLAY_SELECTOR) !== null;
+  const dimmed = !overOverlay;
   const state = exiting ? "exiting" : "entered";
   return createPortal(
     <>
@@ -235,7 +238,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
           data-state={state}
           aria-hidden="true"
           className="first-task-coachmark-dim"
-          data-over-popover={overPopover}
+          data-over-overlay={overOverlay}
         >
           <svg className="first-task-coachmark-dim-svg" aria-hidden="true">
             <defs>
@@ -266,7 +269,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
         data-state={state}
         aria-hidden="true"
         className="first-task-coachmark-halo"
-        data-over-popover={overPopover}
+        data-over-overlay={overOverlay}
       >
         <span key={props.id} className="first-task-coachmark-pulse" />
       </div>
@@ -274,7 +277,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
         ref={floaterRef}
         data-state={state}
         className="first-task-coachmark-floater"
-        data-over-popover={overPopover}
+        data-over-overlay={overOverlay}
       >
         <div className="first-task-coachmark-surface">
           <div

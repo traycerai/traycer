@@ -1047,7 +1047,7 @@ function SessionImportOnboardingToolbar(props: {
           onChange={props.onShowImportedChange}
         />
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 pb-2">
+      <div className="onboarding-import-selection flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 pb-2">
         <SessionImportSelectAll
           view={view}
           tone={tone}
@@ -1058,7 +1058,9 @@ function SessionImportOnboardingToolbar(props: {
               : null
           }
         />
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+        {/* On a phone this run scrolls sideways instead of wrapping - see
+            onboarding-import.css. */}
+        <div className="onboarding-import-pills flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           {providers.map((provider) => (
             <ProviderPill
               key={provider.harness}

@@ -142,6 +142,7 @@ import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
 function historyItem(overrides: {
   readonly id: string;
@@ -195,6 +196,7 @@ describe("MobileNavDrawer", () => {
     vi.setSystemTime(NOW_MS);
     testState.items = [];
     testState.activity = {};
+    useFirstTaskGuideStore.getState().prepare();
     testState.indicators = {};
     testState.indicatorEpicIdCalls = [];
     testState.signOut = () => Promise.resolve();
@@ -268,6 +270,7 @@ describe("MobileNavDrawer", () => {
       expect(drawer.hasAttribute("inert")).toBe(true);
       expect(drawer.getAttribute("aria-hidden")).toBe("true");
       expect(drawer.getAttribute("aria-modal")).toBe("false");
+      expect(drawer.getAttribute("data-overlay-surface")).toBe("closed");
     });
 
     // Visual state and semantic state are decoupled: the transform is
@@ -284,6 +287,10 @@ describe("MobileNavDrawer", () => {
       expect(drawer.hasAttribute("inert")).toBe(false);
       expect(drawer.getAttribute("aria-hidden")).toBe("false");
       expect(drawer.getAttribute("aria-modal")).toBe("true");
+      // Same endpoint, stated where the first-task guide's overlay list can
+      // read it: this panel carries no shadcn slot, so the attribute is how a
+      // coachmark knows to pause under it and to lift over it.
+      expect(drawer.getAttribute("data-overlay-surface")).toBe("open");
     });
 
     // The rest of the document goes inert for as long as the drawer is modal,
@@ -811,6 +818,33 @@ describe("MobileNavDrawer", () => {
       // The shared verbose label stays on the item for the landing list / tray;
       // this surface must not render it.
       expect(rows[1]?.textContent).not.toContain("about 1 month ago");
+    });
+
+    it("finishes an active first-task guide when a row opens a task", async () => {
+      // The end of the mobile "your tasks" branch: the guide asked the user to
+      // pick up where they left off, and this row is them doing it.
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      useFirstTaskGuideStore.getState().activate();
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      fireEvent.click(rows[0]);
+
+      expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+    });
+
+    it("leaves a guide that was never active alone", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      fireEvent.click(rows[0]);
+
+      expect(useFirstTaskGuideStore.getState().status).toBe("inactive");
     });
 
     it("renders no leading glyph on an idle task row", async () => {

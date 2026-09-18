@@ -185,9 +185,12 @@ export function dioramaChapterStarts(
   });
 }
 
-/** The beat in effect `elapsedMs` into the chapter. */
+/**
+ * The beat in effect `elapsedMs` into the chapter. Typed to the one field it
+ * reads, so the phone walkthrough's own chapters run on this clock too.
+ */
 export function dioramaBeatAt(
-  chapter: DioramaChapter,
+  chapter: { readonly beats: readonly { readonly atMs: number }[] },
   elapsedMs: number,
 ): number {
   let index = 0;
@@ -198,10 +201,79 @@ export function dioramaBeatAt(
 }
 
 /** Moves along the strip, wrapping at both ends - autoplay and the arrow keys. */
-export function stepDioramaChapter(index: number, delta: number): number {
-  const count = DIORAMA_CHAPTERS.length;
+export function stepDioramaChapter(
+  index: number,
+  delta: number,
+  count: number,
+): number {
   return (index + delta + count) % count;
 }
+
+/* ---------------------------------------------------------------- mobile */
+
+/**
+ * The phone walkthrough's script. A phone has no stage to split and no sidebar
+ * to walk, so its beats carry the two things that DO change on one: which
+ * surface is showing, and which control the spotlight is on. Everything else -
+ * the clock, the chapter strip, the arrow keys - is shared with the diorama.
+ */
+export type MobileDioramaSceneId = "task" | "menu" | "tabs";
+
+/** A control the phone walkthrough can spotlight. */
+export type MobileDioramaRegionId =
+  | "menu-trigger"
+  | "drawer"
+  | "tab-trigger"
+  | "switcher";
+
+export type MobileDioramaBeat = {
+  /** Offset from the chapter's start. The first beat of a chapter is 0. */
+  readonly atMs: number;
+  readonly scene: MobileDioramaSceneId;
+  /** The one control wearing the spotlight ring, or none. */
+  readonly ring: MobileDioramaRegionId | null;
+};
+
+export type MobileDioramaChapter = {
+  readonly id: string;
+  readonly label: string;
+  readonly durationMs: number;
+  readonly beats: readonly MobileDioramaBeat[];
+};
+
+/**
+ * Three chapters, evenly held. The opening beat of each one shows the control
+ * being pressed before the surface it opens arrives, so the eye is on the
+ * trigger rather than on a panel that appeared from nowhere.
+ */
+export const MOBILE_DIORAMA_CHAPTERS: readonly MobileDioramaChapter[] = [
+  {
+    id: "menu",
+    label: "Menu",
+    durationMs: 4000,
+    beats: [
+      { atMs: 0, scene: "task", ring: "menu-trigger" },
+      { atMs: 1200, scene: "menu", ring: "drawer" },
+    ],
+  },
+  {
+    id: "task",
+    label: "Task",
+    durationMs: 4000,
+    // One beat: the chapter's subject is the conversation itself - the
+    // message, the reply and the composer - not a control to point at.
+    beats: [{ atMs: 0, scene: "task", ring: null }],
+  },
+  {
+    id: "tabs",
+    label: "Tabs",
+    durationMs: 4000,
+    beats: [
+      { atMs: 0, scene: "task", ring: "tab-trigger" },
+      { atMs: 1200, scene: "tabs", ring: "switcher" },
+    ],
+  },
+];
 
 /**
  * The autoplay clock. A rAF loop reads elapsed time off it rather than chaining

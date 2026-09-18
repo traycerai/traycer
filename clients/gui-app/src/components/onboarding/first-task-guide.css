@@ -19,13 +19,13 @@
     0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
     0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
   --coachmark-glide: 320ms;
-  /* Two stacking homes, not a dynamic value: above the app, or above a
-     popover's own layer when the step's target lives inside one. */
+  /* Two stacking homes, not a dynamic value: above the app, or above an
+     overlay's own layer when the step's target lives inside one. */
   --coachmark-z: 40;
 }
-.first-task-coachmark-floater[data-over-popover="true"],
-.first-task-coachmark-halo[data-over-popover="true"],
-.first-task-coachmark-dim[data-over-popover="true"] {
+.first-task-coachmark-floater[data-over-overlay="true"],
+.first-task-coachmark-halo[data-over-overlay="true"],
+.first-task-coachmark-dim[data-over-overlay="true"] {
   --coachmark-z: 60;
 }
 

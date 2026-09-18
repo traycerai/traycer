@@ -522,17 +522,17 @@ describe("FirstTaskCoachmark", () => {
 
     const card = await screen.findByTestId("guide-coachmark");
     const floater = card.closest<HTMLElement>(".first-task-coachmark-floater");
-    expect(floater?.dataset.overPopover).toBe("true");
-    expect(screen.getByTestId("guide-coachmark-halo").dataset.overPopover).toBe(
+    expect(floater?.dataset.overOverlay).toBe("true");
+    expect(screen.getByTestId("guide-coachmark-halo").dataset.overOverlay).toBe(
       "true",
     );
     // The attribute is only worth anything because the stylesheet raises the
     // shared layer above a popover's own when it is set.
     expect(guideCss).toContain(
-      '.first-task-coachmark-halo[data-over-popover="true"]',
+      '.first-task-coachmark-halo[data-over-overlay="true"]',
     );
     expect(guideCss).toMatch(
-      /\[data-over-popover="true"\][\s\S]*?--coachmark-z: 60;/,
+      /\[data-over-overlay="true"\][\s\S]*?--coachmark-z: 60;/,
     );
     expect(screen.queryByTestId("guide-coachmark-dim")).toBeNull();
   });

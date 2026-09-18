@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  onboardingFieldLuminance,
+  onboardingFieldPeakAlpha,
+} from "@/components/onboarding/onboarding-field-alpha";
 
 /* The atmosphere behind the welcome screen and the tour: a slow noise field
    quantised through an ordered dither into a grid of dots, in the theme's own
@@ -31,15 +35,16 @@ uniform vec2 uResolution;
 uniform float uTime;
 uniform float uCell;
 uniform vec3 uPrimary;
-uniform vec3 uForeground;
+uniform vec3 uBackground;
 /* Where the field gathers: x is the centre's height in gl space (0 at the
    bottom), y the radius of the falloff, z how much the centre lifts the noise
    toward being lit. The component eases between two presets - behind the
    welcome mark, then spread across the tour's panel. */
 uniform vec3 uFocus;
 
-/* Alpha of the brightest dot. The page's copy sits on top of this. */
-const float PEAK_ALPHA = 0.35;
+/* Alpha of the brightest dot, banded by the ground's luminance in JS - the
+   page's copy sits on top of this (onboarding-field-alpha.ts). */
+uniform float uPeakAlpha;
 /* Dither steps: four gives five levels, which is what reads as a grid rather
    than a gradient. */
 const float LEVELS = 4.0;
@@ -114,10 +119,11 @@ void main() {
   float edge = length(gl_FragCoord.xy - cellCenter);
   float ink = 1.0 - smoothstep(radius - 1.0, radius + 1.0, edge);
 
-  /* Keep the accent in the brightest dot: a full mix to the foreground would
-     wash every theme to grey at the top of the range. */
-  vec3 tint = mix(uPrimary, uForeground, 0.2 + 0.4 * lit);
-  gl_FragColor = vec4(tint, PEAK_ALPHA * lit * ink);
+  /* The field is the accent settling into the ground, so the brightest dot
+     leans toward the BACKGROUND. Mixing toward the foreground made the top of
+     the range converge on the colour of the copy itself. */
+  vec3 tint = mix(uPrimary, uBackground, 0.2 + 0.4 * lit);
+  gl_FragColor = vec4(tint, uPeakAlpha * lit * ink);
 }
 `;
 
@@ -237,7 +243,8 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
     const uTime = gl.getUniformLocation(program, "uTime");
     const uCell = gl.getUniformLocation(program, "uCell");
     const uPrimary = gl.getUniformLocation(program, "uPrimary");
-    const uForeground = gl.getUniformLocation(program, "uForeground");
+    const uBackground = gl.getUniformLocation(program, "uBackground");
+    const uPeakAlpha = gl.getUniformLocation(program, "uPeakAlpha");
     const uFocus = gl.getUniformLocation(program, "uFocus");
 
     const probe = document
@@ -305,12 +312,18 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
     const recolor = (): void => {
       const root = getComputedStyle(document.documentElement);
       const primary = readColor(probe, root.getPropertyValue("--primary"));
-      const foreground = readColor(
+      const background = readColor(
         probe,
-        root.getPropertyValue("--foreground"),
+        root.getPropertyValue("--background"),
       );
       gl.uniform3f(uPrimary, primary[0], primary[1], primary[2]);
-      gl.uniform3f(uForeground, foreground[0], foreground[1], foreground[2]);
+      gl.uniform3f(uBackground, background[0], background[1], background[2]);
+      // The band is a property of the ground, so it is re-read with it: a
+      // theme swap can move the page from a dark ground to a mid one.
+      gl.uniform1f(
+        uPeakAlpha,
+        onboardingFieldPeakAlpha(onboardingFieldLuminance(background)),
+      );
       draw();
     };
 

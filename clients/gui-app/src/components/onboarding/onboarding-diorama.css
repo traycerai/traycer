@@ -750,27 +750,83 @@
 .onboarding-workspace--mobile {
   justify-content: center;
 }
+
+/* A size container, so the phone can be bounded by the room it has in BOTH
+   axes. `aspect-ratio` alone cannot do it: with a definite width the height
+   comes from the ratio and a `max-height` then clamps the box without the
+   width following, which draws a squashed phone. Feeding the height back in
+   as `cqh` keeps the ratio exact at every panel size. */
+.diorama-mobile-stage {
+  container: diorama-mobile-stage / size;
+  display: grid;
+  place-items: center;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
 .diorama-mobile {
-  width: min(100%, 24rem);
-  max-height: 100%;
-  aspect-ratio: 390 / 620;
+  width: min(100%, 22rem, 100cqh * 9 / 16);
+  aspect-ratio: 9 / 16;
   margin-inline: auto;
 }
-.diorama-mobile .diorama-pane-tabs {
+.diorama-mobile .diorama-pane-tabs,
+.diorama-mobile .diorama-chat-aside {
   display: none;
 }
+
+/* The two overlays live in the frame the whole time; the beat's scene says
+   which one is up. Both start off-frame in their own direction, so a chapter
+   switch is the surface travelling rather than appearing. */
+.diorama-mobile-drawer,
 .diorama-mobile-sheet {
-  animation: diorama-sheet 350ms var(--diorama-ease) 900ms both;
+  transition:
+    transform 320ms var(--diorama-ease),
+    opacity 200ms var(--diorama-ease),
+    box-shadow 220ms var(--diorama-ease);
 }
-@keyframes diorama-sheet {
-  from {
-    opacity: 0;
-    transform: translateY(12%);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.diorama-mobile-drawer {
+  transform: translateX(-102%);
+  opacity: 0;
+}
+.diorama-mobile[data-scene="menu"] .diorama-mobile-drawer {
+  transform: translateX(0);
+  opacity: 1;
+}
+.diorama-mobile-sheet {
+  transform: translateY(102%);
+  opacity: 0;
+}
+.diorama-mobile[data-scene="tabs"] .diorama-mobile-sheet {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+/* Not a surface of its own - it is the room behind whichever overlay is up. */
+.diorama-mobile-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: #0000;
+  pointer-events: none;
+  transition: background-color 240ms var(--diorama-ease);
+}
+.diorama-mobile:not([data-scene="task"]) .diorama-mobile-scrim {
+  background: #0006;
+}
+
+/* The header controls the chapters point at. The ring is the diorama's own,
+   drawn on a box with room inside it so the line never lands on the glyph. */
+.diorama-mobile-target {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border-radius: 0.375rem;
+  transition: box-shadow 220ms var(--diorama-ease);
+}
+.diorama-mobile [data-ring="true"] {
+  box-shadow: var(--diorama-ring);
 }
 
 /* ---------------------------------------------------- reduced motion */
@@ -820,7 +876,9 @@
   .diorama-tiled {
     transition: none;
   }
+  .diorama-mobile-drawer,
   .diorama-mobile-sheet {
-    animation-name: diorama-fade-in;
+    transition: opacity 200ms ease;
+    transform: none;
   }
 }
