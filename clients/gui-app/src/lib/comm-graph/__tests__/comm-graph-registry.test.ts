@@ -67,6 +67,7 @@ function row(id: number, timestamp: number): EpicCommunicationGraphEvent {
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
   };
 }
 

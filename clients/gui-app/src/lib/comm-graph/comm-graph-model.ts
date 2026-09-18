@@ -252,3 +252,52 @@ export function aggregateCommGraphEdges(
     events: entry.events,
   }));
 }
+
+/**
+ * The far end of a cross-task message, drawn as a stand-in node.
+ *
+ * A cross-task message is recorded in BOTH tasks' logs, each row naming the
+ * other task in `peerEpicId`. Seen from this task, one endpoint is an agent
+ * that lives in the other task and so has no node here; without a stand-in the
+ * exchange would be skipped by `aggregateCommGraphEdges` exactly like an edge
+ * to an unknown id. The stand-in carries that foreign agent's id, so the pair
+ * folds onto an ordinary edge.
+ */
+export interface CommGraphPeerTaskStub {
+  /** The foreign endpoint's agent id - also the stand-in node's id. */
+  readonly agentId: string;
+  /** The task that agent lives in. */
+  readonly peerEpicId: string;
+  /** Capture time of the first row naming it, for a stable layout order. */
+  readonly firstSeenAt: number;
+}
+
+/**
+ * Every foreign endpoint named by a cross-task row in `events`, first
+ * appearance first. An endpoint that IS one of this task's agents is never a
+ * stub, so a row whose both ends resolve here draws exactly as before.
+ */
+export function commGraphPeerTaskStubs(
+  events: ReadonlyArray<CommGraphEvent>,
+  epicAgentIds: ReadonlySet<string>,
+): ReadonlyArray<CommGraphPeerTaskStub> {
+  const byAgentId = new Map<string, CommGraphPeerTaskStub>();
+  for (const event of events) {
+    if (event.peerEpicId === null) continue;
+    for (const endpoint of [event.senderAgentId, event.receiverAgentId]) {
+      if (endpoint === null) continue;
+      if (epicAgentIds.has(endpoint) || byAgentId.has(endpoint)) continue;
+      byAgentId.set(endpoint, {
+        agentId: endpoint,
+        peerEpicId: event.peerEpicId,
+        firstSeenAt: event.timestamp,
+      });
+    }
+  }
+  return Array.from(byAgentId.values());
+}
+
+/** Label for a peer task whose title this client does not know. */
+export function commGraphPeerTaskFallbackLabel(peerEpicId: string): string {
+  return `Task ${peerEpicId.slice(0, 8)}`;
+}
