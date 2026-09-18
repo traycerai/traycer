@@ -1,4 +1,3 @@
-import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
@@ -21,7 +20,6 @@ import {
   chatOpensPublishedCopy,
   makeChatOpenTileRef,
 } from "@/lib/chats/chat-open-tile-ref";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
@@ -46,7 +44,6 @@ import { useChatSharingInFlight } from "@/lib/chats/chat-sharing-inflight";
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
 import {
   useEpicDeleteTuiAgent,
-  discardDeletedTuiAgentPayloads,
   useEpicRenameTuiAgent,
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
@@ -133,7 +130,6 @@ import {
   type NodeSortClock,
 } from "@/lib/epic-sort";
 import {
-  findOpenTileInTab,
   useActiveEpicArtifactId,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
@@ -1578,14 +1574,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const { expandedIds, toggleExpanded } = expansion;
   const node = useChatRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
-  const navigateNested = useEpicNestedFocusNavigation();
   const { openTile } = useEpicTileNavigation();
   // Non-null only where this tree is mounted on a surface that cannot express
   // the desktop open gestures - see `ChatTreeSurface`.
   const surface = useChatTreeSurface();
-  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareCloseCanvasTabFocusTarget,
-  );
   const markArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.markArtifactSelfDeleted,
   );
@@ -2005,27 +1997,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     if (artifactType !== "terminal-agent") markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
-      // The tab for THIS row's host - closing the clone's twin would leave
-      // the deleted chat's own tab open and shut a live one.
-      const found = findOpenTileInTab(tabId, openRef());
-      if (found !== null) {
-        navigateNested(epicId, tabId, () =>
-          withoutTabRecovery(() =>
-            prepareCloseCanvasTabFocusTarget(
-              tabId,
-              found.paneId,
-              found.instanceId,
-            ),
-          ),
-        );
-      }
-      if (artifactType === "terminal-agent") {
-        discardDeletedTuiAgentPayloads({
-          epicId,
-          tuiAgentId: nodeId,
-          hostId: mutationHostId,
-        });
-      }
     };
     const handleDeleteError = () => {
       if (artifactType !== "terminal-agent") unmarkArtifactSelfDeleted(nodeId);

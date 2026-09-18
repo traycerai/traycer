@@ -133,7 +133,6 @@ import {
 } from "@/stores/epics/epic-sidebar-expansion-store";
 import {
   findOpenArtifactInTab,
-  findOpenTileInTab,
   useActiveEpicArtifactId,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
@@ -176,10 +175,7 @@ import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
 } from "@/hooks/epic/use-epic-node-mutations";
-import {
-  useEpicDeleteTuiAgent,
-  discardDeletedTuiAgentPayloads,
-} from "@/hooks/epic/use-epic-tui-agent-mutations";
+import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   DEFAULT_EPIC_NODE_NAMES,
   isEpicArtifactKind,
@@ -1596,18 +1592,14 @@ function SidebarBulkDeleteController(props: {
         // still-being-deleted tab) get pushed as a route entry. Instead,
         // close every successfully-deleted open tab raw, then compute and
         // commit the post-batch focus target exactly once.
-        // The chat mutation already closed exactly the owning host's tiles.
+        // Agent mutation hooks already closed the owning host's tiles.
         const openTargets = targets.flatMap((target, index) => {
-          if (target.kind === "chat" || results[index].status !== "fulfilled")
+          if (
+            target.kind !== "artifact" ||
+            results[index].status !== "fulfilled"
+          )
             return [];
-          const found =
-            target.kind === "terminal-agent"
-              ? findOpenTileInTab(props.tabId, {
-                  id: target.id,
-                  type: "terminal-agent",
-                  hostId: recordById.get(target.id)?.hostId ?? sessionHostId,
-                })
-              : findOpenArtifactInTab(props.tabId, target.id);
+          const found = findOpenArtifactInTab(props.tabId, target.id);
           return found === null ? [] : [found];
         });
         if (openTargets.length > 0) {
@@ -1625,15 +1617,6 @@ function SidebarBulkDeleteController(props: {
         }
         targets.forEach((target, index) => {
           if (
-            target.kind === "terminal-agent" &&
-            results[index].status === "fulfilled"
-          ) {
-            discardDeletedTuiAgentPayloads({
-              epicId: props.epicId,
-              tuiAgentId: target.id,
-              hostId: recordById.get(target.id)?.hostId ?? sessionHostId,
-            });
-          } else if (
             target.kind !== "terminal-agent" &&
             results[index].status === "rejected"
           ) {

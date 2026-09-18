@@ -774,7 +774,7 @@ describe("useEpicDeleteTuiAgent routing", () => {
     expect(fixture.deleteTuiCalls).toEqual([]);
   });
 
-  it("discards the deleted host's closed-tile payload even after the caller unmounts before the delete resolves, leaving another host's payload", async () => {
+  it("retires every owning-host tile and closed payload after unmount, preserving the peer host's", async () => {
     // Pre-existing closed-tile payloads, from an unrelated EARLIER close -
     // not produced by this delete, so a sweep that only ran because a
     // mounted caller's per-call `onSuccess` fired would miss them. Proves the
@@ -802,6 +802,102 @@ describe("useEpicDeleteTuiAgent routing", () => {
     };
     seedClosedPayload(REMOTE.hostId, "inst-remote-closed");
     seedClosedPayload(LOCAL.hostId, "inst-local-closed");
+
+    // LIVE tiles for the deleted row (REMOTE.hostId), spread across two view
+    // tabs and, within the first, two separate panes - the sweep must not be
+    // scoped to whichever single tab/pane a caller happened to look in. A
+    // same-id LOCAL.hostId peer, live alongside them, must survive.
+    useEpicCanvasStore.getState().openTileInTab(canvasTabId, {
+      id: REMOTE_TUI_ID,
+      instanceId: "inst-b-live-1",
+      type: "terminal-agent",
+      name: "Shared terminal agent",
+      hostId: REMOTE.hostId,
+    });
+    useEpicCanvasStore.getState().openTileInTab(canvasTabId, {
+      id: REMOTE_TUI_ID,
+      instanceId: "inst-a-live",
+      type: "terminal-agent",
+      name: "Peer terminal agent",
+      hostId: LOCAL.hostId,
+    });
+    const canvasForSplit =
+      useEpicCanvasStore.getState().canvasByTabId[canvasTabId];
+    if (canvasForSplit === undefined) throw new Error("expected a canvas");
+    const paneForSplit = collectPanes(canvasForSplit.root).at(0)?.id;
+    if (paneForSplit === undefined) throw new Error("expected a pane");
+    // `splitPaneWithNode` MOVES an existing same-id/host tile into the new
+    // pane rather than opening a second instance - not what a genuinely
+    // separate second live tile needs. `splitPaneEmptyInTab` makes the new
+    // pane, then `openTileInPane` opens directly into it, bypassing dedup
+    // (the same non-dedup path a second view of already-open content uses).
+    const secondPaneId = useEpicCanvasStore
+      .getState()
+      .splitPaneEmptyInTab(canvasTabId, paneForSplit, "horizontal");
+    if (secondPaneId === null) throw new Error("expected a new pane");
+    useEpicCanvasStore.getState().openTileInPane(
+      canvasTabId,
+      secondPaneId,
+      {
+        id: REMOTE_TUI_ID,
+        instanceId: "inst-b-live-2",
+        type: "terminal-agent",
+        name: "Shared terminal agent",
+        hostId: REMOTE.hostId,
+      },
+      { mode: "permanent", index: null },
+    );
+    const secondViewTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(EPIC_ID, "Tab 2");
+    useEpicCanvasStore.getState().openTileInTab(secondViewTabId, {
+      id: REMOTE_TUI_ID,
+      instanceId: "inst-b-live-3",
+      type: "terminal-agent",
+      name: "Shared terminal agent",
+      hostId: REMOTE.hostId,
+    });
+
+    function ownedInstanceIds(
+      tabId: string,
+      id: string,
+      hostId: string,
+    ): readonly string[] {
+      const tiles =
+        useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
+        {};
+      return Object.entries(tiles)
+        .filter(([, tile]) => tile?.id === id && tile.hostId === hostId)
+        .map(([instanceId]) => instanceId);
+    }
+
+    // Preconditions: every instance this test claims to retire or preserve
+    // genuinely exists, in genuinely separate tabs/panes, BEFORE the delete
+    // runs - otherwise an instance that was never created would pass the
+    // post-delete "is absent" assertions vacuously.
+    expect(secondViewTabId).not.toBe(canvasTabId);
+    const tab1BInstanceIds = ownedInstanceIds(
+      canvasTabId,
+      REMOTE_TUI_ID,
+      REMOTE.hostId,
+    );
+    const tab2BInstanceIds = ownedInstanceIds(
+      secondViewTabId,
+      REMOTE_TUI_ID,
+      REMOTE.hostId,
+    );
+    expect(tab1BInstanceIds).toHaveLength(2);
+    expect(tab2BInstanceIds).toHaveLength(1);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[canvasTabId]
+        ?.tilesByInstanceId["inst-a-live"],
+    ).toBeDefined();
+    const canvasBeforeDelete =
+      useEpicCanvasStore.getState().canvasByTabId[canvasTabId];
+    if (canvasBeforeDelete === undefined) throw new Error("expected a canvas");
+    expect(collectPanes(canvasBeforeDelete.root).length).toBeGreaterThanOrEqual(
+      2,
+    );
 
     const { result, unmount } = renderHook(() => useEpicDeleteTuiAgent(), {
       wrapper: fixture.wrapper,
@@ -837,5 +933,19 @@ describe("useEpicDeleteTuiAgent routing", () => {
         "inst-local-closed"
       ],
     ).toBeDefined();
+
+    const tab1Tiles =
+      useEpicCanvasStore.getState().canvasByTabId[canvasTabId]
+        ?.tilesByInstanceId ?? {};
+    const tab2Tiles =
+      useEpicCanvasStore.getState().canvasByTabId[secondViewTabId]
+        ?.tilesByInstanceId ?? {};
+    for (const instanceId of tab1BInstanceIds) {
+      expect(tab1Tiles[instanceId]).toBeUndefined();
+    }
+    for (const instanceId of tab2BInstanceIds) {
+      expect(tab2Tiles[instanceId]).toBeUndefined();
+    }
+    expect(tab1Tiles["inst-a-live"]).toBeDefined();
   });
 });

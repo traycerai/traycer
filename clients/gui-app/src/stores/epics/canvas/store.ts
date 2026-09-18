@@ -700,10 +700,11 @@ export interface EpicCanvasStore {
     targetPaneId: string,
   ) => string | null;
   closeCanvasTab: (tabId: string, paneId: string, tileTabId: string) => void;
-  closeConfirmedDeletedChatTiles: (
+  closeConfirmedDeletedAgentTiles: (
     epicId: string,
-    chatId: string,
+    agentId: string,
     hostId: string,
+    agentType: "chat" | "terminal-agent",
   ) => void;
   prepareCloseCanvasTabFocusTarget: (
     tabId: string,
@@ -2699,10 +2700,15 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
-        closeConfirmedDeletedChatTiles: (epicId, chatId, hostId) => {
+        closeConfirmedDeletedAgentTiles: (
+          epicId,
+          agentId,
+          hostId,
+          agentType,
+        ) => {
           // Snapshot every matching instance before closing any of them: a
           // close can dissolve its pane and rewrite the surrounding tree.
-          // The host is part of chat identity, so a same-id peer on another
+          // The host is part of agent identity, so a same-id peer on another
           // machine must remain open.
           const targets: Array<{
             readonly tabId: string;
@@ -2718,8 +2724,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               pane.tabInstanceIds.forEach((instanceId) => {
                 const tile = canvas.tilesByInstanceId[instanceId];
                 if (
-                  tile?.type === "chat" &&
-                  tile.id === chatId &&
+                  tile?.type === agentType &&
+                  tile.id === agentId &&
                   tile.hostId === hostId
                 ) {
                   targets.push({ tabId, paneId: pane.id, instanceId });
@@ -2731,8 +2737,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           pruneRecoveryTiles(
             (tile, ownerEpicId) =>
               ownerEpicId === epicId &&
-              tile.type === "chat" &&
-              tile.id === chatId &&
+              tile.type === agentType &&
+              tile.id === agentId &&
               tile.hostId === hostId,
           );
           withoutTabRecovery(() =>

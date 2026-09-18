@@ -22,10 +22,7 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
-import {
-  useEpicDeleteTuiAgent,
-  discardDeletedTuiAgentPayloads,
-} from "@/hooks/epic/use-epic-tui-agent-mutations";
+import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
@@ -131,19 +128,11 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
     if (kind === "chat")
       deleteChat.mutate({ epicId, chatId: nodeId, hostId: mutationHostId });
     else if (kind === "terminal-agent")
-      deleteTuiAgent.mutate(
-        { epicId, tuiAgentId: nodeId, hostId: mutationHostId },
-        {
-          onSuccess: () => {
-            withoutTabRecovery(closeOpenTile);
-            discardDeletedTuiAgentPayloads({
-              epicId,
-              tuiAgentId: nodeId,
-              hostId: mutationHostId,
-            });
-          },
-        },
-      );
+      deleteTuiAgent.mutate({
+        epicId,
+        tuiAgentId: nodeId,
+        hostId: mutationHostId,
+      });
     else if (kind === "artifact")
       deleteArtifact.mutate(
         { epicId, artifactId: nodeId },

@@ -109,19 +109,13 @@ interface TestState {
   openArtifactById: Readonly<
     Record<string, { readonly paneId: string; readonly instanceId: string }>
   >;
-  /**
-   * What `findOpenTileInTab` returns for a `${id}::${hostId}` identity. Used
-   * to prove bulk terminal-agent delete closes only the named host's open
-   * tile - a same-id tile bound to another host is a different identity and
-   * must never match.
-   */
+  /** What `findOpenTileInTab` returns for a `${id}::${hostId}` identity. */
   openTileByIdentity: Readonly<
     Record<string, { readonly paneId: string; readonly instanceId: string }>
   >;
   readonly markArtifactSelfDeleted: Mock;
   readonly unmarkArtifactSelfDeleted: Mock;
   readonly pruneRecoveryTiles: Mock;
-  readonly discardDeletedTuiAgentPayloads: Mock;
   sessionReady: boolean;
   snapshotLoaded: boolean;
   activeArtifactId: string | null;
@@ -238,7 +232,6 @@ const testState = vi.hoisted<TestState>(() => ({
   markArtifactSelfDeleted: vi.fn(),
   unmarkArtifactSelfDeleted: vi.fn(),
   pruneRecoveryTiles: vi.fn(),
-  discardDeletedTuiAgentPayloads: vi.fn(),
   sessionReady: true,
   snapshotLoaded: true,
   activeArtifactId: null,
@@ -704,35 +697,23 @@ vi.mock("@/lib/tab-recovery/history", async (importOriginal) => ({
   },
 }));
 
-// `discardDeletedTuiAgentPayloads` is passed through REAL (wrapped in a spy
-// for call-argument assertions) rather than stubbed - mocking it away would
-// hide the exact cleanup this suite is meant to pin, and the sidebar's own
-// mocked canvas store below supplies the `closedTilePayloadsByTabId` /
-// `discardClosedTilePayload` fields it reads so it runs as a safe no-op when
-// nothing matches.
-vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/hooks/epic/use-epic-tui-agent-mutations")
-    >();
-  testState.discardDeletedTuiAgentPayloads.mockImplementation(
-    actual.discardDeletedTuiAgentPayloads,
-  );
-  return {
-    useEpicDeleteTuiAgent: () => ({
-      mutate: vi.fn(),
-      mutateAsync: testState.deleteTuiAgentMutateAsync,
-      isPending: false,
-    }),
-    useEpicRenameTuiAgent: () => ({
-      mutate: vi.fn(),
-      mutateAsync: testState.renameTuiAgentMutateAsync,
-      // Honest pending, for the same reason as `useEpicRenameChat` above.
-      isPending: testState.renameTuiAgentMutateAsync.mock.calls.length > 0,
-    }),
-    discardDeletedTuiAgentPayloads: testState.discardDeletedTuiAgentPayloads,
-  };
-});
+// Tile-close and closed-payload cleanup for a TUI delete are owned by
+// `useEpicDeleteTuiAgent` itself (`discardDeletedTuiAgentPayloads` is a
+// private, unexported detail of that module) - this suite only pins that the
+// SIDEBAR never does that work itself, so the hook is a plain mock.
+vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
+  useEpicDeleteTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteTuiAgentMutateAsync,
+    isPending: false,
+  }),
+  useEpicRenameTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.renameTuiAgentMutateAsync,
+    // Honest pending, for the same reason as `useEpicRenameChat` above.
+    isPending: testState.renameTuiAgentMutateAsync.mock.calls.length > 0,
+  }),
+}));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
   // The chat write-routing gate reads the session through the
@@ -820,10 +801,6 @@ vi.mock("@/stores/epics/canvas/store", () => ({
         prepareOpenTileInTabFocusTargetFromSource: recordPreparedOpen,
         prepareOpenTilePreviewInTabFocusTargetFromSource: recordPreparedOpen,
         prepareOpenTileInBackgroundTabFocusTargetFromSource: recordPreparedOpen,
-        // Read by the REAL `discardDeletedTuiAgentPayloads` (see the TUI
-        // mutations mock above) - empty here means it runs as a no-op scan,
-        // which is enough to prove the sidebar WIRES it with the right
-        // arguments without needing a real canvas store in this suite.
         closedTilePayloadsByTabId: {},
         discardClosedTilePayload: vi.fn(),
       }),
@@ -1494,11 +1471,10 @@ describe("epic sidebar selection mode", () => {
     });
   });
 
-  it("bulk-deletes a terminal agent on its owning host, closing only that host's open tile and leaving a same-id tile on another host untouched", async () => {
+  it("bulk-deletes a terminal agent on its owning host, targeting a same-id row correctly and leaving tile/payload teardown to the mutation hook", async () => {
     // A host-minted id is unique per host, not globally (see `tileHostId` in
-    // `actions.ts`) - a cross-host clone can carry the source's id verbatim.
-    // The sidebar's single row for "agent-shared" is bound to host-B; a
-    // second, unrelated open tile happens to share that id on host-A.
+    // `actions.ts`) - the sidebar's single row for "agent-shared" is bound to
+    // host-B, distinct from whatever a same-id row on another host would be.
     const agentShared = treeNode(
       "agent-shared",
       null,
@@ -1511,10 +1487,6 @@ describe("epic sidebar selection mode", () => {
       nodeById: { "agent-shared": agentShared },
     };
     testState.records = [{ ...recordFromNode(agentShared), hostId: "host-B" }];
-    testState.openTileByIdentity = {
-      "agent-shared::host-A": { paneId: "pane-a", instanceId: "inst-a" },
-      "agent-shared::host-B": { paneId: "pane-b", instanceId: "inst-b" },
-    };
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -1530,39 +1502,21 @@ describe("epic sidebar selection mode", () => {
         hostId: "host-B",
       });
     });
-    await waitFor(() => {
-      expect(testState.closeCanvasTab).toHaveBeenCalledWith(
-        TAB_ID,
-        "pane-b",
-        "inst-b",
-      );
-    });
-    expect(testState.closeCanvasTab).not.toHaveBeenCalledWith(
-      TAB_ID,
-      "pane-a",
-      "inst-a",
-    );
-    expect(testState.closeCanvasTab).toHaveBeenCalledTimes(1);
+
+    // Tile-close and closed-payload teardown are now owned entirely by
+    // `useEpicDeleteTuiAgent` (mocked here), not the caller - the controller
+    // must never touch the canvas itself for a terminal-agent target.
+    expect(testState.closeCanvasTab).not.toHaveBeenCalled();
 
     // The bare-id `selfDeletedArtifactIds` marker is global, not host-scoped -
-    // setting it for this row would also block Back/Forward restoration of
-    // the untouched host-A tile sharing its id. Terminal-agent targets are
-    // deliberately excluded from marking.
+    // setting it for this row would also block Back/Forward restoration of a
+    // same-id row on another host. Terminal-agent targets are deliberately
+    // excluded from marking.
     expect(testState.markArtifactSelfDeleted).not.toHaveBeenCalled();
 
-    // Close-payload cleanup: the sidebar calls the REAL helper (see the
-    // module mock above) with the row's owning host, after closing B's tile.
-    expect(testState.discardDeletedTuiAgentPayloads).toHaveBeenCalledWith({
-      epicId: EPIC_ID,
-      tuiAgentId: "agent-shared",
-      hostId: "host-B",
-    });
-
     // The broad recovery-tile prune this controller runs itself excludes
-    // terminal agents entirely - `useEpicDeleteTuiAgent`'s own onSuccess
-    // already prunes them, scoped to the host it actually deleted from. A
-    // same-id tile's recovery entry on host-A can only survive if THIS
-    // predicate never matches a terminal-agent tile, whatever id it carries.
+    // both agent kinds entirely - their own delete mutations already prune,
+    // scoped to the host they actually deleted from.
     expect(testState.pruneRecoveryTiles).toHaveBeenCalledTimes(1);
     const isDeleted = testState.pruneRecoveryTiles.mock.calls[0][0] as (
       tile: { readonly type: string; readonly id: string },
@@ -1571,6 +1525,9 @@ describe("epic sidebar selection mode", () => {
     expect(
       isDeleted({ type: "terminal-agent", id: "agent-shared" }, EPIC_ID),
     ).toBe(false);
+    expect(isDeleted({ type: "chat", id: "agent-shared" }, EPIC_ID)).toBe(
+      false,
+    );
     // Proves the predicate isn't trivially false for everything - an
     // artifact sharing the deleted id would still be pruned.
     expect(isDeleted({ type: "spec", id: "agent-shared" }, EPIC_ID)).toBe(true);
@@ -5085,7 +5042,7 @@ describe("chat row archive", () => {
   });
 
   it("does not close a same-id other-host tab after bulk chat delete", async () => {
-    // Chat tile teardown is hook-owned (`closeConfirmedDeletedChatTiles` is
+    // Chat tile teardown is hook-owned (`closeConfirmedDeletedAgentTiles` is
     // host-scoped). An id-only `findOpenArtifactInTab` close here would shut
     // a surviving clone on another host after the hook already closed the
     // matching tile.

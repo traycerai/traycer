@@ -1,14 +1,14 @@
 /**
- * `SwitcherRowActions`'s terminal-agent delete must close only the tile bound
- * to the row's OWNING host. A host-minted id is unique per host, not
- * globally, so a same-id tile can be open on another host at the same time -
- * an id-only close would tear down that unrelated tile instead of the one
- * actually deleted.
+ * `SwitcherRowActions`'s terminal-agent delete must target the row's OWNING
+ * host, not whichever host the session/window happens to be on - a
+ * host-minted id is unique per host, not globally. Tile-close and
+ * closed-payload cleanup for the delete are owned by the mutation hook
+ * itself (`useEpicDeleteTuiAgent`, mocked here) and covered by that hook's
+ * own regression suite, not this component-level one.
  *
- * Network mutation hooks are mocked (only `useEpicDeleteTuiAgent` is
- * exercised); the canvas store, `findOpenTileInTab` and the open-epic store
- * feeding `useEpicNodeHostId` are real, since the routing they do is exactly
- * what this suite pins.
+ * Network mutation hooks are mocked; the open-epic store feeding
+ * `useEpicNodeHostId` is real, since the owner-host derivation this suite
+ * pins depends on it.
  */
 import { type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,8 +28,6 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 
 vi.mock("sonner", () => ({
@@ -38,14 +36,7 @@ vi.mock("sonner", () => ({
 
 const { deleteTuiAgentMutate, deleteChatMutate, deleteArtifactMutate } =
   vi.hoisted(() => ({
-    deleteTuiAgentMutate: vi.fn(
-      (
-        _variables: unknown,
-        options: { readonly onSuccess?: () => void } | undefined,
-      ) => {
-        options?.onSuccess?.();
-      },
-    ),
+    deleteTuiAgentMutate: vi.fn(),
     deleteChatMutate: vi.fn(),
     deleteArtifactMutate: vi.fn(),
   }));
@@ -58,25 +49,16 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   }),
 }));
 
-// `discardDeletedTuiAgentPayloads` is passed through REAL: it is the
-// close-payload cleanup this suite pins, and mocking the module wholesale
-// would silently drop it - the component would call `undefined(...)`.
-vi.mock(
-  "@/hooks/epic/use-epic-tui-agent-mutations",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/hooks/epic/use-epic-tui-agent-mutations")
-    >()),
-    useEpicDeleteTuiAgent: () => ({
-      mutate: deleteTuiAgentMutate,
-      isPending: false,
-    }),
-    useEpicRenameTuiAgent: () => ({
-      mutateAsync: vi.fn(() => new Promise(() => undefined)),
-      isPending: false,
-    }),
+vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
+  useEpicDeleteTuiAgent: () => ({
+    mutate: deleteTuiAgentMutate,
+    isPending: false,
   }),
-);
+  useEpicRenameTuiAgent: () => ({
+    mutateAsync: vi.fn(() => new Promise(() => undefined)),
+    isPending: false,
+  }),
+}));
 
 vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicDeleteArtifact: () => ({
@@ -101,7 +83,6 @@ vi.mock("@/hooks/epic/use-epic-record-mutation-client", () => ({
 const EPIC_ID = "epic-switcher-row-actions";
 const VIEWER_ID = "viewer-switcher-row-actions";
 const NODE_ID = "agent-shared";
-const HOST_A = "host-A";
 const HOST_B = "host-B";
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -189,16 +170,6 @@ function tuiAgentProjection(hostId: string): TuiAgentProjection {
   };
 }
 
-function terminalAgentTile(hostId: string, instanceId: string): EpicNodeRef {
-  return {
-    id: NODE_ID,
-    instanceId,
-    type: "terminal-agent",
-    name: "Shared terminal agent",
-    hostId,
-  };
-}
-
 let handle: OpenedStoreForTest;
 let tabId: string;
 let queryClient: QueryClient;
@@ -221,14 +192,6 @@ beforeEach(() => {
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   tabId = useEpicCanvasStore.getState().openEpicTab(EPIC_ID, "Tab");
-  // Two open tiles under ONE content id, bound to different hosts - the
-  // cross-host id collision this suite exists to prove is handled correctly.
-  useEpicCanvasStore
-    .getState()
-    .openTileInTab(tabId, terminalAgentTile(HOST_A, "inst-a"));
-  useEpicCanvasStore
-    .getState()
-    .openTileInTab(tabId, terminalAgentTile(HOST_B, "inst-b"));
 });
 
 afterEach(() => {
@@ -249,7 +212,7 @@ function Wrapper(props: { readonly children: ReactNode }): ReactNode {
 }
 
 describe("SwitcherRowActions terminal-agent delete", () => {
-  it("deletes on the owning host and closes only that host's tile, leaving a same-id tile on another host open", () => {
+  it("sends the delete to the row's OWNING host, derived from the real projection", () => {
     render(
       <SwitcherRowActions
         epicId={EPIC_ID}
@@ -269,93 +232,10 @@ describe("SwitcherRowActions terminal-agent delete", () => {
     fireEvent.click(screen.getByTestId(`switcher-delete-${NODE_ID}`));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    expect(deleteTuiAgentMutate).toHaveBeenCalledTimes(1);
-    expect(deleteTuiAgentMutate.mock.calls[0][0]).toEqual({
+    expect(deleteTuiAgentMutate).toHaveBeenCalledExactlyOnceWith({
       epicId: EPIC_ID,
       tuiAgentId: NODE_ID,
       hostId: HOST_B,
     });
-
-    const tiles =
-      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
-      {};
-    expect(tiles["inst-b"]).toBeUndefined();
-    expect(tiles["inst-a"]).toEqual(terminalAgentTile(HOST_A, "inst-a"));
-  });
-
-  it("discards the freshly-captured close payload for the deleted host, leaving an already-closed same-id payload from another host and tab", () => {
-    // An EARLIER, unrelated close of a same-id tile bound to host-A, in a
-    // second view tab - its Back/Forward payload already exists before this
-    // test's delete runs. `updateTabCanvas` captures a closed-tile payload on
-    // every canvas mutation regardless of `withoutTabRecovery` (a SEPARATE
-    // mechanism from the recovery-history store that guard suppresses), so
-    // this is exactly how a real pre-existing payload gets there.
-    const otherTabId = useEpicCanvasStore
-      .getState()
-      .openEpicTab(EPIC_ID, "Tab 2");
-    useEpicCanvasStore
-      .getState()
-      .openTileInTab(
-        otherTabId,
-        terminalAgentTile(HOST_A, "inst-a-closed-earlier"),
-      );
-    const otherCanvas = useEpicCanvasStore.getState().canvasByTabId[otherTabId];
-    if (otherCanvas === undefined)
-      throw new Error("expected second tab canvas");
-    const otherPaneId = collectPanes(otherCanvas.root).at(0)?.id;
-    if (otherPaneId === undefined) throw new Error("expected second tab pane");
-    useEpicCanvasStore
-      .getState()
-      .closeCanvasTab(otherTabId, otherPaneId, "inst-a-closed-earlier");
-    expect(
-      useEpicCanvasStore.getState().closedTilePayloadsByTabId[otherTabId]?.[
-        "inst-a-closed-earlier"
-      ],
-    ).toBeDefined();
-
-    render(
-      <SwitcherRowActions
-        epicId={EPIC_ID}
-        tabId={tabId}
-        kind="terminal-agent"
-        nodeId={NODE_ID}
-        name="Shared terminal agent"
-        cascadeSummary={null}
-      />,
-      { wrapper: Wrapper },
-    );
-
-    // Radix's DropdownMenuTrigger opens on pointerdown, not click.
-    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${NODE_ID}`), {
-      button: 0,
-    });
-    fireEvent.click(screen.getByTestId(`switcher-delete-${NODE_ID}`));
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    // The close actually happened - without this, an undiscarded payload for
-    // a tile that was never closed (e.g. a wrong-host close bug that took
-    // down "inst-a" instead) would read identically to a correctly-captured
-    // and correctly-discarded one, and the payload assertion below would
-    // pass vacuously.
-    expect(
-      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
-        "inst-b"
-      ],
-    ).toBeUndefined();
-    // The close-on-delete captured a fresh payload for "inst-b" (host-B) -
-    // `discardDeletedTuiAgentPayloads` must have discarded exactly that one.
-    expect(
-      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
-        "inst-b"
-      ],
-    ).toBeUndefined();
-    // The already-closed host-A payload, in a DIFFERENT tab, is untouched -
-    // matching id and type is not enough; only the deleted row's own host
-    // clears.
-    expect(
-      useEpicCanvasStore.getState().closedTilePayloadsByTabId[otherTabId]?.[
-        "inst-a-closed-earlier"
-      ],
-    ).toBeDefined();
   });
 });

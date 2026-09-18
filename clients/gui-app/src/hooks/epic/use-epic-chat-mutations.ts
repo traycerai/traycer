@@ -828,10 +828,11 @@ export function useEpicDeleteChat(): UseMutationResult<
           // cloud record query is unresolved.
           useEpicCanvasStore
             .getState()
-            .closeConfirmedDeletedChatTiles(
+            .closeConfirmedDeletedAgentTiles(
               variables.epicId,
               variables.chatId,
               ctx.hostId,
+              "chat",
             );
         }
         // Ticket 15 (decision #29): a deleted chat can never be reopened -

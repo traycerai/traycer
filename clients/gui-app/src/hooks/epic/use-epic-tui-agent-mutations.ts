@@ -7,7 +7,6 @@ import {
   type EpicRecordMutationContext,
   type EpicRecordMutationTarget,
 } from "@/hooks/epic/use-epic-record-mutation-client";
-import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -104,14 +103,18 @@ export function useEpicDeleteTuiAgent() {
       }),
       onSuccess: (_data, variables, ctx) => {
         // Hook callbacks survive the row unmounting before the response arrives.
-        discardDeletedTuiAgentPayloads(variables);
-        pruneRecoveryTiles(
-          (tile, epicId) =>
-            epicId === variables.epicId &&
-            tile.type === "terminal-agent" &&
-            tile.id === variables.tuiAgentId &&
-            tile.hostId === ctx.hostId,
-        );
+        if (ctx.hostId !== null) {
+          useEpicCanvasStore
+            .getState()
+            .closeConfirmedDeletedAgentTiles(
+              variables.epicId,
+              variables.tuiAgentId,
+              ctx.hostId,
+              "terminal-agent",
+            );
+          // Closing captures Back/Forward payloads, so discard them afterwards.
+          discardDeletedTuiAgentPayloads(variables);
+        }
         // The deletion is a registry fact on a migrated host; without this the
         // row would linger in the tree until the next poll tick.
         for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
@@ -173,7 +176,7 @@ export function useEpicRenameTuiAgent() {
 }
 
 /** Run after closing deleted tiles: closing also captures Back/Forward payloads. */
-export function discardDeletedTuiAgentPayloads({
+function discardDeletedTuiAgentPayloads({
   epicId,
   tuiAgentId,
   hostId,
