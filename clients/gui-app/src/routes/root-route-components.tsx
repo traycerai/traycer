@@ -14,6 +14,7 @@ import { PreventSleepController } from "@/components/layout/bridges/prevent-slee
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
@@ -144,6 +145,7 @@ export function RootComponent() {
           <>
             <SystemTabModalHost />
             <ChatSearchDialogHost />
+            <SweepReviewDialogHost />
             {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
             <NotificationsMobileSheet />
