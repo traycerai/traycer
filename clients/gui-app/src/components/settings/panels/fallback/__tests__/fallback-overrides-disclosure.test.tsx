@@ -28,7 +28,7 @@ describe("FallbackOverridesMatrix disclosure", () => {
     // exists. A pin on the string is what makes the next such divergence a
     // failing test rather than a sentence nobody re-reads.
     expect(FALLBACK_OVERRIDES_DISCLOSURE).toBe(
-      "Turning every chip off leaves the brief retry that outages and connection failures start with, and the notification at the end - but no cancellation window; this editor does not author the wire’s per-reason off value, and Notify stays last.",
+      "Turn off every option in a row and Traycer will not switch or wait for that problem - it will notify you instead. Outages and connection problems still get a brief retry first. There is no countdown to cancel.",
     );
     const policy: FallbackPolicy = createDefaultFallbackPolicy();
     render(

@@ -355,6 +355,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   }> = [];
   closeCalls = 0;
   reloadCalls = 0;
+  stopCalls = 0;
   goBackCalls = 0;
   goForwardCalls = 0;
   readonly backgroundThrottlingStates: boolean[] = [];
@@ -498,6 +499,10 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
 
   reload(): void {
     this.reloadCalls += 1;
+  }
+
+  stop(): void {
+    this.stopCalls += 1;
   }
 
   findInPage(
@@ -5506,5 +5511,142 @@ describe("BrowserViewManager navigation attempts and failure settles", () => {
       status: "ready",
       reason: "Navigation failed",
     });
+  });
+});
+
+describe("BrowserViewManager stop", () => {
+  it("settles an in-flight navigation on the page still shown, and the aborted loadURL does not re-settle it", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    const deferred = Promise.withResolvers<void>();
+    view.nextLoadURLDeferred = deferred;
+    harness.nativeTabStatuses.length = 0;
+
+    const navigatePromise = harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "navigate", url: "https://example.com/slow" },
+    });
+    void navigatePromise.catch(() => undefined);
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "loading",
+    });
+    harness.nativeTabStatuses.length = 0;
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "stop" },
+    });
+    expect(view.stopCalls).toBe(1);
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      reason: null,
+      url: "https://example.com/first",
+    });
+    harness.nativeTabStatuses.length = 0;
+
+    deferred.reject(new Error("ERR_ABORTED"));
+    await expect(navigatePromise).rejects.toThrow("ERR_ABORTED");
+    expect(harness.nativeTabStatuses).toEqual([]);
+  });
+
+  it("is a no-op on a tab that is not loading", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    harness.nativeTabStatuses.length = 0;
+
+    const stopped = await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "stop" },
+    });
+    expect(view.stopCalls).toBe(0);
+    expect(harness.nativeTabStatuses).toEqual([]);
+    expect(stopped).toBe(true);
+  });
+
+  it("settles a reload in flight", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "reload" },
+    });
+    view.emit(
+      "did-start-navigation",
+      {},
+      "https://example.com/first",
+      false,
+      true,
+    );
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "loading",
+    });
+    harness.nativeTabStatuses.length = 0;
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "stop" },
+    });
+    expect(view.stopCalls).toBe(1);
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      status: "ready",
+      reason: null,
+    });
+  });
+
+  it("opens a fresh attempt for a navigation issued after a stop", async () => {
+    const harness = createHarness();
+    const { view, capability } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_TILE_KEY,
+      "https://example.com/first",
+    );
+    const deferred = Promise.withResolvers<void>();
+    view.nextLoadURLDeferred = deferred;
+    const firstNavigate = harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "navigate", url: "https://example.com/slow" },
+    });
+    void firstNavigate.catch(() => undefined);
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "stop" },
+    });
+    const stoppedAttempt = harness.nativeTabStatuses.at(-1)?.navigationAttempt;
+    if (stoppedAttempt === undefined) throw new Error("stop emitted nothing");
+    harness.nativeTabStatuses.length = 0;
+    deferred.reject(new Error("ERR_ABORTED"));
+    await expect(firstNavigate).rejects.toThrow("ERR_ABORTED");
+
+    await harness.manager.controlElectronTab("window-1", {
+      ...capability,
+      action: { kind: "navigate", url: "https://example.com/slow" },
+    });
+    expect(view.loadUrls.slice(-2)).toEqual([
+      "https://example.com/slow",
+      "https://example.com/slow",
+    ]);
+    const afterStopAttempt =
+      harness.nativeTabStatuses.at(-1)?.navigationAttempt;
+    if (afterStopAttempt === undefined) {
+      throw new Error("navigate emitted nothing");
+    }
+    expect(afterStopAttempt).toBeGreaterThan(stoppedAttempt);
   });
 });

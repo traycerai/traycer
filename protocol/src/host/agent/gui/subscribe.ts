@@ -123,6 +123,7 @@ import {
   chatRecordSchema,
   chatSkeletonChunkSchema,
   chatTranscriptDerivedSchema,
+  chatTranscriptDerivedSchemaPreSetupPlacement,
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreFallback,
@@ -4024,7 +4025,7 @@ const chatWindowedSnapshotSchemaV18 = z.object({
    */
   tail: chatTranscriptWindowSchemaV18,
   /** Whole-transcript folds a windowed client cannot compute for itself. */
-  derived: chatTranscriptDerivedSchema,
+  derived: chatTranscriptDerivedSchemaPreSetupPlacement,
 });
 // The chat record as every pre-`auto` windowed line ships it: `chatRecordSchema`
 // with the settings tuple held to the pre-`auto` enum (`chatSchemaV18` is the
@@ -4066,7 +4067,7 @@ const chatWindowedSnapshotSchemaV110 = z.object({
   rowCount: z.number().int().nonnegative(),
   indexRevision: z.number().int().nonnegative().nullable(),
   tail: chatTranscriptWindowSchemaPreShellHost,
-  derived: chatTranscriptDerivedSchema,
+  derived: chatTranscriptDerivedSchemaPreSetupPlacement,
   pendingFallback: pendingFallbackSchemaPreAuto.optional(),
   pendingReturn: pendingReturnSchemaPreAuto.optional(),
   lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
@@ -4098,6 +4099,7 @@ export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV111.extend(
     queue: chatQueueStateSchema,
     pendingApprovals: z.array(chatApprovalStateSchema),
     tail: chatTranscriptWindowSchema,
+    derived: chatTranscriptDerivedSchema,
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
     // and `1.11` inherited that freeze, so `1.13` is where a tuple may name the
     // mode again.
@@ -4282,7 +4284,7 @@ const chatWindowedSnapshotSchemaV19 = z.object({
   rowCount: z.number().int().nonnegative(),
   indexRevision: z.number().int().nonnegative().nullable(),
   tail: chatTranscriptWindowSchemaPreFallback,
-  derived: chatTranscriptDerivedSchema,
+  derived: chatTranscriptDerivedSchemaPreSetupPlacement,
 });
 
 const chatSubscribeServerFrameSchemaV19 = z.discriminatedUnion("kind", [

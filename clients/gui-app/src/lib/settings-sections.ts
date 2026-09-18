@@ -325,13 +325,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   },
   // Beside Agent selection, and for the same reason it sits under the picker at
   // all: both configure how a chat agent gets ROUTED, and both answer per host,
-  // because the providers and accounts a fallback can reach are that machine's.
-  // "Fallback" and not "Automatic fallback" - the section is the whole subject,
-  // and "Automatic fallback" is the master toggle INSIDE it, so using the same
-  // words for both would make the rail row read as a switch.
+  // because the providers and accounts a route can reach are that machine's.
+  // "Model routing" and not "Route automatically" - the section is the whole
+  // subject, and "Route automatically" is the master toggle INSIDE it, so using
+  // the same words for both would make the rail row read as a switch.
   {
     id: "fallback",
-    label: "Fallback",
+    label: "Model routing",
     icon: Waypoints,
     group: "host",
   },

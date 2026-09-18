@@ -76,7 +76,9 @@ continues and Left goes back; Tab and Enter retain native button behavior.
 Action-required steps press the real control when it is a button or link, and focus it when it is a field, instead of skipping it. Once focus
 moves into a control, the coachmark does not take it back. Text fields and pickers
 keep their own keys. Keyboard navigation reveals settings instantly.
-Escape pauses the guide before Settings can close and returns focus to its target.
+Escape closes the guide before Settings can close and returns focus to its target, and it works from anywhere on the surface rather than only from the card or its target - unless a picker, menu or dialog is open, which answers its own Escape first.
+Closing a guide is a skip, and a skip is done: Escape and the card's X both mark that guide complete, so a card the person has seen and declined never comes back asking again.
+Closing the settings surface mid-guide is not a skip - `activeSetup` is session-local presence, so the guide simply resumes at its step when Settings reopens.
 
 **Every step names its own section**, not the guide.
 The guide draws only while the mounted section is the one the current step points at, Continue navigates to the next step's section when it differs, and Back navigates to the previous step's.
@@ -89,13 +91,17 @@ The engine's mount point survives a section change (`SettingsPanelForSection` sw
 
 The three guides: agent selection is three steps on Agents (the editor shell, its Edit/Preview toggle, the Revert button).
 Appearance and layout is five, and it crosses surfaces: theme mode, wallpaper and interface font on Appearance, then the density preset and the sidebar panel arranger on Layout.
-Browser sign-ins is two steps on General: the "Save website sessions" switch, then the "Choose source…" button, which is action-required and is where the guide waits.
+Browser sign-ins is two steps on Browser: the "Save website sessions" switch, then the "Choose source…" button, which is action-required and is where the guide waits.
 It is also the one guide with a `requiresBrowserView` flag, because without the desktop browser bridge there is no way to finish it.
 
 Progress is local in `onboarding-store`: -1 means not started, intermediate steps
 resume, and the guide length means complete. Active guides are session-local;
 replaying a completed guide does not clear completion. Agent selection and
 appearance finish on Done, so keeping defaults is valid.
+
+The store is persisted at version 2.
+The migration settles a checklist nobody has touched for anyone who finished the tour before the checklist shipped: every guide is marked complete and the reminder is dismissed, because they have been using the app already and three open cards would be a nag rather than a checklist.
+Someone part-way through a guide keeps their progress and is still offered the rest of it, and a user who has not finished the tour is left alone.
 
 **A step the product finishes says so in the table, and the product reports an event rather than a guide id.**
 A step carries `advanceOn` for an event that moves past it in place of Continue, and `completesOn` for the event that ends the guide from it.

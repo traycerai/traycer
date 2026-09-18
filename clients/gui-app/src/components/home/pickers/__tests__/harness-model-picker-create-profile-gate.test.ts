@@ -7,6 +7,8 @@ const OAUTH_CAP: ProviderCliState["loginCapability"] = {
   token: null,
   codePaste: null,
   terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
@@ -14,6 +16,8 @@ const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
   token: null,
   codePaste: null,
   terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
 };
 
 describe("resolveCreateProfileGate", () => {
@@ -45,20 +49,43 @@ describe("resolveCreateProfileGate", () => {
       token: null,
       codePaste: null,
       terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
     });
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
   });
 
-  it("allows creating a profile on a remote host for --device-auth", () => {
+  // Retitled: this row used to say "for --device-auth" and passed because the
+  // gate sniffed that flag out of `oauthArgs`. It no longer does - the host
+  // declares `remoteSafe` and the flag says nothing to the client - so the
+  // marker is what this row asserts, and the argv below is retained only as a
+  // decoy proving the sniff is really gone.
+  it("allows creating a profile on a remote host for a remote-safe flow", () => {
     const gate = resolveCreateProfileGate(false, {
       oauthArgs: ["login", "--device-auth"],
       token: null,
       codePaste: null,
       terminalLogin: null,
+      remoteSafe: {},
+      selfOpensBrowser: null,
     });
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
+  });
+
+  // The mirror of the row above, and the one that would have caught the
+  // codex/grok regression: the same argv WITHOUT the marker must be refused.
+  it("refuses a remote host for --device-auth argv with no remote-safe marker", () => {
+    const gate = resolveCreateProfileGate(false, {
+      oauthArgs: ["login", "--device-auth"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
+    });
+    expect(gate.disabled).toBe(true);
   });
 
   it("allows creating a profile on a remote host for code-paste", () => {
@@ -67,6 +94,8 @@ describe("resolveCreateProfileGate", () => {
       token: null,
       codePaste: {},
       terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
     });
     expect(gate.disabled).toBe(false);
     expect(gate.reason).toBeUndefined();
@@ -81,6 +110,8 @@ describe("resolveCreateProfileGate", () => {
       token: null,
       codePaste: null,
       terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
     });
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
@@ -125,6 +156,8 @@ describe("resolveCreateProfileGate", () => {
         token: null,
         codePaste: null,
         terminalLogin: {},
+        remoteSafe: null,
+        selfOpensBrowser: null,
       });
       expect(gate.disabled).toBe(true);
       expect(gate.reason).toBe(

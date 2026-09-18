@@ -112,7 +112,7 @@ const SETUP_GUIDES = {
     requiresBrowserView: true,
     steps: [
       {
-        section: "general",
+        section: "browser",
         selector: '[aria-label="Save website sessions on this computer"]',
         title: "Keep sites signed in",
         content: "Turn this on so logins survive between tasks.",
@@ -120,7 +120,7 @@ const SETUP_GUIDES = {
         advanceOn: "browser-save-enabled",
       },
       {
-        section: "general",
+        section: "browser",
         selector: '[data-testid="settings-import-logins-trigger"]',
         title: "Bring in your sign-ins",
         content: "Pick a browser, review the sites, then import.",
