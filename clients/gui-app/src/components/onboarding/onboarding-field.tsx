@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ONBOARDING_FIELD_TINT_MIX,
+  onboardingFieldGlslFloat,
   onboardingFieldLuminance,
   onboardingFieldPeakAlpha,
 } from "@/components/onboarding/onboarding-field-alpha";
@@ -122,7 +124,7 @@ void main() {
   /* The field is the accent settling into the ground, so the brightest dot
      leans toward the BACKGROUND. Mixing toward the foreground made the top of
      the range converge on the colour of the copy itself. */
-  vec3 tint = mix(uPrimary, uBackground, 0.2 + 0.4 * lit);
+  vec3 tint = mix(uPrimary, uBackground, ${onboardingFieldGlslFloat(ONBOARDING_FIELD_TINT_MIX.base)} + ${onboardingFieldGlslFloat(ONBOARDING_FIELD_TINT_MIX.range)} * lit);
   gl_FragColor = vec4(tint, uPeakAlpha * lit * ink);
 }
 `;

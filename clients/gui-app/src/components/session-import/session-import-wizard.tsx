@@ -9,6 +9,7 @@ import type {
   SessionImportSelection,
 } from "@traycer/protocol/host/session-import/candidate";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { SessionImportImportedSupport } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -1012,6 +1013,20 @@ function SessionImportOnboardingToolbar(props: {
 }) {
   const { tone, view, providers, scanning, groupByProject } = props;
   const viewControlId = useId();
+  const narrow = useIsMobileViewport();
+  const pills = (
+    <div className="onboarding-import-pills flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+      {providers.map((provider) => (
+        <ProviderPill
+          key={provider.harness}
+          provider={provider}
+          pending={scanning}
+          tone={tone}
+          onToggle={props.onToggleProvider}
+        />
+      ))}
+    </div>
+  );
   return (
     <div className="onboarding-import-toolbar flex shrink-0 flex-col gap-2.5">
       <div className="onboarding-import-toolbar-scope flex min-w-0 items-center gap-2">
@@ -1058,19 +1073,12 @@ function SessionImportOnboardingToolbar(props: {
               : null
           }
         />
-        {/* On a phone this run scrolls sideways instead of wrapping - see
-            onboarding-import.css. */}
-        <div className="onboarding-import-pills flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-          {providers.map((provider) => (
-            <ProviderPill
-              key={provider.harness}
-              provider={provider}
-              pending={scanning}
-              tone={tone}
-              onToggle={props.onToggleProvider}
-            />
-          ))}
-        </div>
+        {/* On a narrow viewport the pills take the line UNDER the count and
+            the view toggle and scroll sideways (onboarding-import.css), so
+            they are rendered after the toggle there: reordering in the DOM
+            rather than with CSS `order` keeps the tab sequence in the order
+            the eye reads. */}
+        {narrow ? null : pills}
         <fieldset
           aria-label="Import view"
           role="radiogroup"
@@ -1094,6 +1102,7 @@ function SessionImportOnboardingToolbar(props: {
             </label>
           ))}
         </fieldset>
+        {narrow ? pills : null}
       </div>
     </div>
   );

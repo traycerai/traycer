@@ -44,18 +44,34 @@ export function onboardingFieldPeakAlpha(groundLuminance: number): number {
 }
 
 /**
+ * The tint mix the shader applies: `mix(uPrimary, uBackground, base + range * lit)`.
+ * The shader's GLSL is generated from these two numbers so the contrast model
+ * below and the rendered field cannot drift apart.
+ */
+export const ONBOARDING_FIELD_TINT_MIX = { base: 0.2, range: 0.4 } as const;
+
+/** A GLSL float literal for a coefficient (GLSL rejects `1` where it wants `1.0`). */
+export function onboardingFieldGlslFloat(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : String(value);
+}
+
+/**
  * How far the worst dot on the screen pulls the ground toward `--primary`.
  *
  * The shader's two lines are
- *   `tint = mix(uPrimary, uBackground, 0.2 + 0.4 * lit)`
+ *   `tint = mix(uPrimary, uBackground, base + range * lit)`
  *   `alpha = uPeakAlpha * lit * ink`
  * so a dot composited over the ground lands at
- *   `ground + (primary - ground) * peak * lit * (0.8 - 0.4 * lit)`
- * whose `lit` term peaks at `lit = 1` with a value of 0.4. Mixing toward the
- * BACKGROUND rather than the foreground is what bounds this at all: the old
- * mix converged on `--foreground` itself, which is why the copy disappeared
- * into the field on a mid-luminance ground.
+ *   `ground + (primary - ground) * peak * lit * (1 - base - range * lit)`
+ * and this returns the largest value that `lit` term takes on 0..1, times the
+ * peak. Mixing toward the BACKGROUND rather than the foreground is what bounds
+ * this at all: the old mix converged on `--foreground` itself, which is why
+ * the copy disappeared into the field on a mid-luminance ground.
  */
 export function onboardingFieldWorstCaseMix(peakAlpha: number): number {
-  return 0.4 * peakAlpha;
+  const { base, range } = ONBOARDING_FIELD_TINT_MIX;
+  const pull = (lit: number): number => lit * (1 - base - range * lit);
+  // The parabola's vertex, clamped into the range `lit` can take.
+  const vertex = Math.min(1, Math.max(0, (1 - base) / (2 * range)));
+  return peakAlpha * Math.max(pull(vertex), pull(1));
 }

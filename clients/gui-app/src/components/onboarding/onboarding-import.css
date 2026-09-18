@@ -292,7 +292,9 @@
 
 /* ----------------------------------------------------------------- mobile */
 
-@media (max-width: 640px) {
+/* Same breakpoint as `useIsMobileViewport` (767px), which the wizard uses
+   to reorder the selection row. */
+@media (max-width: 767px) {
   /* Row one stacks into three: the machine, then the search, then the two
      scope controls side by side. A phone has no room for four controls in a
      line, and the host picker is the one that names what the other three are
@@ -313,13 +315,14 @@
   /* Row two keeps its two ends - the count and the view toggle - on one line,
      and the provider pills take the line under them as a single scrolling
      run. Wrapping them instead would push the list off the screen on a phone
-     with five providers installed. */
+     with five providers installed. The wizard renders the pills after the
+     toggle at this width (the same `useIsMobileViewport` breakpoint), so the
+     line order here is the DOM order and no `order` rule is needed. */
   .onboarding-import-selection {
     flex-wrap: wrap;
     justify-content: space-between;
   }
   .onboarding-import-pills {
-    order: 1;
     flex: 1 0 100%;
     flex-wrap: nowrap;
     overflow-x: auto;

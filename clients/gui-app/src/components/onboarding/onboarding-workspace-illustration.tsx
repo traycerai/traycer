@@ -207,14 +207,12 @@ function DioramaChapterStrip(props: {
   }[];
   readonly activeIndex: number;
   readonly playback: DioramaPlayback;
+  /** The group's accessible name: each walkthrough names its own chapters. */
+  readonly label: string;
 }) {
-  const { chapters, activeIndex, playback } = props;
+  const { chapters, activeIndex, playback, label } = props;
   return (
-    <div
-      className="diorama-chapters"
-      role="group"
-      aria-label="Workspace chapters"
-    >
+    <div className="diorama-chapters" role="group" aria-label={label}>
       {chapters.map((entry, index) => {
         const current = index === activeIndex;
         return (
@@ -298,6 +296,7 @@ function WorkspaceDiorama() {
           }))}
           activeIndex={chapter.index}
           playback={playback}
+          label="Workspace chapters"
         />
       </div>
       <figcaption className="sr-only">
@@ -854,6 +853,7 @@ function MobileWorkspace() {
           }))}
           activeIndex={chapter.index}
           playback={playback}
+          label="Phone walkthrough chapters"
         />
       </div>
       <figcaption className="sr-only">
