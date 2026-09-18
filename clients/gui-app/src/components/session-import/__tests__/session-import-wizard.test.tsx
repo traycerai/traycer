@@ -1129,6 +1129,32 @@ describe("<SessionImportWizard />", () => {
     expect(screen.getByTestId("session-import-provider-failure")).toBeTruthy();
   });
 
+  it("says sessions are MISSING, not unreadable, when the failing provider already delivered rows", () => {
+    renderWizard(vi.fn());
+    const callbacks = requireCallbacks();
+
+    act(() => {
+      callbacks.onGroup(
+        folderGroup({
+          path: "/repo/a",
+          sessions: [importableCandidate("codex", "s1", "Codex session")],
+        }),
+      );
+      callbacks.onProviderFailed({
+        harness: "codex",
+        reason: "source_unreadable",
+        detail: "Listed 1 Codex session, then Codex stopped responding.",
+      });
+    });
+
+    const notice = screen.getByTestId("session-import-provider-failure");
+    expect(notice.textContent).toContain("Some Codex sessions are missing.");
+    expect(notice.textContent).not.toContain("Couldn’t read");
+    expect(notice.textContent).toContain("then Codex stopped responding.");
+    // The row the walk did produce is still on offer.
+    expect(screen.getAllByTestId("session-import-group")).toHaveLength(1);
+  });
+
   it("submits ticked candidates with a titles map keyed by harness:nativeSessionId and notifies the caller", () => {
     const onImportStarted = vi.fn();
     renderWizard(onImportStarted);

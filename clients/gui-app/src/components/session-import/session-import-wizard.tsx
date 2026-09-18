@@ -27,9 +27,9 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   buildSessionImportSubmission,
   buildSessionImportView,
-  harnessDisplayName,
   importedCountNoun,
   selectionStateFor,
+  sessionImportProviderFailureLead,
   sessionImportScanWindowLabel,
   sessionImportSelectionKey,
   SESSION_IMPORT_SCAN_WINDOW_OPTIONS,
@@ -319,7 +319,7 @@ export function SessionImportWizard(props: {
               tone.warningSurface,
             )}
           >
-            Couldn’t read {harnessDisplayName(failure.harness)} sessions.{" "}
+            {sessionImportProviderFailureLead(view.providers, failure.harness)}{" "}
             {failure.detail}
           </p>
         ))}

@@ -1,0 +1,241 @@
+{
+  "note": "ONE table of behaviour for the two copies of the JSON Lines framer: traycer-host/src/util/jsonl-line-framer.ts (internal) and clients/traycer-cli/src/util/jsonl-line-framer.ts (here). Both suites run it. Chunks are base64 so a byte sequence cannot be reflowed by a formatter; expected lines are JSON strings with \\u escapes for the same reason. linesPerChunk[i] is what push(chunk i) must return, in order - not just the totals. throwsAtChunk means push of that chunk must throw JsonlLineTooLongError.",
+  "cases": [
+    {
+      "name": "one message carrying raw U+2028 and U+2029 stays ONE line",
+      "maxLineBytes": 67108864,
+      "chunksBase64": [
+        "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJwcmV2aWV3IjoiYmVmb3Jl4oCobWlkZGxl4oCpYWZ0ZXIifX0KeyJqc29ucnBjIjoiMi4wIiwiaWQiOjIsInJlc3VsdCI6eyJvayI6dHJ1ZX19Cg=="
+      ],
+      "expect": {
+        "linesPerChunk": [
+          [
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"preview\":\"before\u2028middle\u2029after\"}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":true}}"
+          ]
+        ],
+        "flush": null
+      }
+    },
+    {
+      "name": "CRLF: exactly one trailing CR is trimmed",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["YQ0KYg0K"],
+      "expect": {
+        "linesPerChunk": [["a", "b"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "an interior CR is data",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["YQ1iCg=="],
+      "expect": {
+        "linesPerChunk": [["a\rb"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "a blank line is a line",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["Cgo="],
+      "expect": {
+        "linesPerChunk": [["", ""]],
+        "flush": null
+      }
+    },
+    {
+      "name": "a 2-byte character split across two chunks arrives whole",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["eMM=", "qXkK"],
+      "expect": {
+        "linesPerChunk": [[], ["x\u00e9y"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "a 4-byte character split across two chunks arrives whole",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["YfCf", "mIBiCg=="],
+      "expect": {
+        "linesPerChunk": [[], ["a\ud83d\ude00b"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "a chunk that finishes a line and starts a split character",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["bGluZTEKww==", "qXJlc3QK"],
+      "expect": {
+        "linesPerChunk": [["line1"], ["\u00e9rest"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "an empty chunk changes nothing",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["YWI=", "", "Ywo="],
+      "expect": {
+        "linesPerChunk": [[], [], ["abc"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "a final row with no trailing newline is data, flushed",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["b25lCnR3bw=="],
+      "expect": {
+        "linesPerChunk": [["one"]],
+        "flush": "two"
+      }
+    },
+    {
+      "name": "a stream ending on a newline flushes nothing",
+      "maxLineBytes": 67108864,
+      "chunksBase64": ["b25lCg=="],
+      "expect": {
+        "linesPerChunk": [["one"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "the bound is per line, not per stream: many short lines pass",
+      "maxLineBytes": 8,
+      "chunksBase64": [
+        "YQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQphCmEKYQo="
+      ],
+      "expect": {
+        "linesPerChunk": [
+          [
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a",
+            "a"
+          ]
+        ],
+        "flush": null
+      }
+    },
+    {
+      "name": "exactly maxLineBytes is not over the bound",
+      "maxLineBytes": 8,
+      "chunksBase64": ["YWFhYWFhYWEK"],
+      "expect": {
+        "linesPerChunk": [["aaaaaaaa"]],
+        "flush": null
+      }
+    },
+    {
+      "name": "one byte past the bound throws",
+      "maxLineBytes": 8,
+      "chunksBase64": ["YWFhYWFhYWFhCg=="],
+      "expect": {
+        "throwsAtChunk": 0
+      }
+    },
+    {
+      "name": "crossing the bound by accumulation throws",
+      "maxLineBytes": 8,
+      "chunksBase64": ["MTIzNDU=", "Njc4OTA="],
+      "expect": {
+        "throwsAtChunk": 1
+      }
+    }
+  ]
+}

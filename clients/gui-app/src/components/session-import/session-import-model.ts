@@ -638,6 +638,26 @@ export function candidateDisplayTitle(
 }
 
 /** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
+/**
+ * The sentence a provider failure leads with.
+ *
+ * A reader may fail AFTER it has already produced rows - a listing that walked
+ * two pages and then lost the provider is reported as a failure, and those two
+ * pages are on screen and importable. "Couldn't read Codex sessions" above a
+ * list of Codex sessions is the wrong sentence for that; the host's own detail
+ * (which carries the count) follows either way.
+ */
+export function sessionImportProviderFailureLead(
+  providers: ReadonlyArray<SessionImportProviderView>,
+  harness: GuiHarnessId,
+): string {
+  const view = providers.find((provider) => provider.harness === harness);
+  const name = harnessDisplayName(harness);
+  return view !== undefined && view.count > 0
+    ? `Some ${name} sessions are missing.`
+    : `Couldn’t read ${name} sessions.`;
+}
+
 export function harnessDisplayName(harness: GuiHarnessId): string {
   const providerId = guiHarnessIdToProviderId(harness);
   return providerId === null ? harness : providerDisplayName(providerId);

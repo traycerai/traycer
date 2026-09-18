@@ -1,0 +1,171 @@
+/**
+ * The CLI's line framer for JSON-per-line streams: today, the host-maintenance
+ * lease's request stream on stdin.
+ *
+ * It exists because `node:readline` is the wrong tool for framing JSON. Node
+ * ends a line on U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) as
+ * well as on `\n`, and both are legal RAW inside a JSON string - `JSON.stringify`
+ * emits them unescaped - so one message arrives as several fragments, none of
+ * which parses. Measured on node v24.20.0.
+ *
+ * ## This file is a COPY. A change here is a change in two places.
+ *
+ * The host has the same framer at `traycer-host/src/util/jsonl-line-framer.ts`
+ * (internal repo). The CLI cannot import a host-internal module and there is no
+ * package both repos legitimately share, so the code is duplicated on purpose,
+ * and the duplication is held together by two things that must not be weakened:
+ *
+ *  - `src/util/__tests__/jsonl-line-framer-vectors.json` - ONE table of
+ *    behaviour, run by this repo's suite AND by the host's
+ *    (`jsonl-line-framer-parity.test.ts`, which reads this very file through
+ *    the submodule checkout and fails if it is missing);
+ *  - a parity assertion in that host test: the two files must be identical
+ *    below their module header. Edit one alone and it goes red.
+ *
+ * Deliberately dependency-free (not even `node:buffer`).
+ */
+
+/**
+ * Ceiling on ONE line, for a caller with no budget of its own to refuse
+ * against (the JSON-RPC clients; the metered readers refuse far earlier). Two
+ * orders of magnitude above the largest
+ * line measured on a real store - a 100-row `thread/list` page is ~503 KB,
+ * the turn-end readback that wedged a chat was ~1.3 MB - and above a
+ * `thread/read` of a large thread, which ticket 7 measured in tens of MiB.
+ * An import read is bounded by its own metered budget long before this.
+ */
+export const MAX_JSONL_LINE_BYTES = 64 * 1024 * 1024;
+
+const NEWLINE = 0x0a;
+const CARRIAGE_RETURN = 0x0d;
+
+/**
+ * A line longer than the framer's bound. NOT recoverable by truncating: a
+ * truncated JSON line is malformed, which is exactly the silent drop this
+ * module exists to remove. A stream that produces one is desynchronized, so a
+ * transport treats this as fatal and a file reader fails that one file.
+ */
+export class JsonlLineTooLongError extends Error {
+  constructor(
+    readonly lineBytes: number,
+    readonly maxLineBytes: number,
+  ) {
+    // No path, no id: this message travels into INFO+ logs and thrown errors.
+    super(
+      `a JSON line exceeded ${maxLineBytes} bytes (${lineBytes} bytes and no newline yet)`,
+    );
+    this.name = "JsonlLineTooLongError";
+  }
+}
+
+export type JsonlLineFramer = {
+  /**
+   * The complete lines this chunk finished, in order. A chunk that finishes
+   * none returns an empty array; the bytes are held until a `\n` arrives.
+   * Throws {@link JsonlLineTooLongError} when the line in progress passes the
+   * bound, before anything is handed back.
+   */
+  push(chunk: Uint8Array): readonly string[];
+  /**
+   * The trailing line that never got its `\n`, or `null`.
+   *
+   * The two callers answer this differently on purpose, which is why it is a
+   * separate call rather than something `push` decides: a FILE's last row
+   * without a trailing newline is data (`meteredJsonlLines` yields it), while
+   * a CHILD's partial line at exit is not a message and is discarded - what
+   * `readline` did instead was hand that fragment to the client's line
+   * handler, which failed to parse it and logged a warning about a stream
+   * that had simply been cut.
+   */
+  flush(): string | null;
+  /** Drops whatever is buffered: a caller that has stopped reading. */
+  discard(): void;
+};
+
+export function createJsonlLineFramer(options: {
+  readonly maxLineBytes: number;
+}): JsonlLineFramer {
+  const { maxLineBytes } = options;
+  // Streaming decode: a multi-byte character split across two chunks is
+  // completed by the next `decode` call rather than turning into U+FFFD, which
+  // is what a per-chunk `toString()` would produce at the seam.
+  const decoder = new TextDecoder("utf-8");
+  let pendingText = "";
+  // Tracked in BYTES, not code points: the bound is a memory bound, and the
+  // two differ by up to 4x on non-ASCII text.
+  let pendingBytes = 0;
+
+  const takeLine = (decoded: string): string => {
+    const line = pendingText + decoded;
+    pendingText = "";
+    pendingBytes = 0;
+    // Exactly one trailing CR, the JSON Lines grammar: an interior `\r` is
+    // part of the data, and a CRLF pair is a line ending.
+    return line.length > 0 &&
+      line.charCodeAt(line.length - 1) === CARRIAGE_RETURN
+      ? line.slice(0, -1)
+      : line;
+  };
+
+  return {
+    push(chunk: Uint8Array): readonly string[] {
+      const lines: string[] = [];
+      let from = 0;
+      for (;;) {
+        const newline = indexOfNewline(chunk, from);
+        if (newline === -1) break;
+        const lineBytes = pendingBytes + (newline - from);
+        if (lineBytes > maxLineBytes) {
+          throw new JsonlLineTooLongError(lineBytes, maxLineBytes);
+        }
+        // Decoded in stream mode up to the separator. A `\n` byte can never be
+        // part of a multi-byte sequence in UTF-8, so a line boundary is always
+        // a safe place to read the decoder's output.
+        lines.push(
+          takeLine(
+            decoder.decode(chunk.subarray(from, newline), { stream: true }),
+          ),
+        );
+        from = newline + 1;
+      }
+      if (from < chunk.byteLength) {
+        const rest = chunk.subarray(from);
+        pendingBytes += rest.byteLength;
+        if (pendingBytes > maxLineBytes) {
+          // Thrown BEFORE the finished lines are returned, so a caller cannot
+          // act on half a chunk and then be told the stream is unusable.
+          throw new JsonlLineTooLongError(pendingBytes, maxLineBytes);
+        }
+        pendingText += decoder.decode(rest, { stream: true });
+      }
+      return lines;
+    },
+
+    flush(): string | null {
+      // The final, non-streaming decode releases an incomplete multi-byte
+      // sequence at the end of the stream as U+FFFD rather than dropping it.
+      const tail = pendingText + decoder.decode();
+      pendingText = "";
+      pendingBytes = 0;
+      return tail.length === 0 ? null : tail;
+    },
+
+    discard(): void {
+      pendingText = "";
+      pendingBytes = 0;
+      decoder.decode();
+    },
+  };
+}
+
+/**
+ * `Uint8Array` has no `indexOf` for a byte value the way `Buffer` does, and
+ * the framer must not import `node:buffer` (the worker bundle takes this
+ * module), so the scan is written out.
+ */
+function indexOfNewline(chunk: Uint8Array, from: number): number {
+  for (let index = from; index < chunk.byteLength; index += 1) {
+    if (chunk[index] === NEWLINE) return index;
+  }
+  return -1;
+}
