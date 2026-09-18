@@ -2846,7 +2846,17 @@ function useChatTileSessionViewModel(
         ),
         placement: sideChatPlacementForTile(viewTabId, node.id),
         createChat: (request, callbacks) =>
-          createSideChat.mutate(request, callbacks),
+          createSideChat.mutate(request, {
+            ...callbacks,
+            onSuccess: (result) => {
+              // Consume the captured queue edit only after the fork exists;
+              // a failed create must leave the original queued prompt intact.
+              if (activeEditingQueueItemId !== null) {
+                chatActions.queueCancel(activeEditingQueueItemId);
+              }
+              callbacks.onSuccess(result);
+            },
+          }),
         onHistoryUnavailable: (reason) => {
           toast(
             reason === "no-checkpoint"
@@ -2856,12 +2866,20 @@ function useChatTileSessionViewModel(
         },
       });
       sideChatCancelsRef.current.add(cancel);
+      // The composer clears its accepted draft immediately. End that edit
+      // now too, so a delayed create cannot clear a subsequent queue edit.
+      if (activeEditingQueueItemId !== null) {
+        dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+      }
       return true;
     },
     [
       activeHostId,
+      activeEditingQueueItemId,
+      chatActions,
       createSideChat,
       currentEpicId,
+      dispatchUi,
       node.id,
       profile,
       state.chat,
