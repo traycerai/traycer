@@ -338,11 +338,35 @@ function fallbackTupleAnnouncementKey(tuple: ChatRunSettings | null): string {
   ]);
 }
 
-function cancelOpportunityText(deadline: number | null, now: number): string {
+/**
+ * The countdown clause, and the one part of it that is not rung-agnostic.
+ *
+ * Two of the three forms say nothing about WHAT is due, and are true on every
+ * rung: "cancel" is honest whatever the plan would have done, and
+ * `DONT_SWITCH_LABEL` names a button the grace card renders unconditionally,
+ * so pointing at it is never a lie even where the plan is not a switch.
+ *
+ * The due-now form named a switch, and only one rung has one. `retry` attempts
+ * the same tuple again, `wait` parks until a reset, `notify` stops and leaves
+ * the error standing, `checking` does not know yet - on all four, "The switch
+ * is due now" asserted a move that was not going to happen, to the one audience
+ * that cannot see the card contradicting it. The rung is the whole predicate;
+ * a `switch` still earns the word with no destination resolved yet, because a
+ * switch is what is coming either way.
+ */
+function cancelOpportunityText(
+  deadline: number | null,
+  now: number,
+  planIsSwitch: boolean,
+): string {
   const action = `Select ${DONT_SWITCH_LABEL} to cancel.`;
   if (deadline === null) return action;
   const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000));
-  if (seconds === 0) return `The switch is due now. ${action}`;
+  if (seconds === 0) {
+    return planIsSwitch
+      ? `The switch is due now. ${action}`
+      : `The countdown is up. ${action}`;
+  }
   return `You have ${seconds} ${seconds === 1 ? "second" : "seconds"} to cancel. ${action}`;
 }
 
@@ -416,7 +440,13 @@ function fallbackHoldText(
     const moving = queuedMessagesMovingText(pending.queuedItemsMoving);
     if (moving !== null) parts.push(moving);
   }
-  parts.push(cancelOpportunityText(pending.deadline, now));
+  // The ACTION alone, deliberately not the `&& destination !== null` pairing
+  // the fresh-session line above needs. That line describes a destination, so
+  // it waits for one; this clause only claims a switch is coming, which is
+  // true of the rung from the moment the host names it.
+  parts.push(
+    cancelOpportunityText(pending.deadline, now, plan?.action === "switch"),
+  );
   // Everything this wrapper adds - the fresh-session line, the queued-message
   // count, the countdown - names no tuple, so the identities are the inner
   // line's unchanged.

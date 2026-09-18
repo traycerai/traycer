@@ -332,10 +332,97 @@ describe("fallbackTraversalAnnouncement", () => {
     expect(text).toContain(
       "There's nowhere to route this chat. It will stop and keep the error visible.",
     );
-    expect(text).toContain("The switch is due now.");
     // Falsification: drop the `seconds === 0` branch in `cancelOpportunityText`
     // and this becomes "You have 0 seconds to cancel." instead.
     expect(text).not.toContain("0 seconds");
+    expect(text).toContain("The countdown is up.");
+    // The clause must not NAME a switch here, and this assertion used to read
+    // `toContain("The switch is due now.")` - the suite pinned the defect. A
+    // `notify` rung stops the chat and leaves the error standing; there is no
+    // switch to be due, and a screen reader is the one audience that cannot
+    // see the card disagreeing.
+    expect(text).not.toContain("The switch is due now.");
+    expect(text).not.toContain("switch is due");
+    // Still points at the button, which the grace card renders on every rung.
+    expect(text).toContain(`Select ${DONT_SWITCH_LABEL} to cancel.`);
+  });
+
+  it("hold: a due-now deadline still names the switch on a switch rung, resolved destination or not", () => {
+    // The other arm of the matrix, and the reason the fix is keyed on the rung
+    // rather than on `notify`. Falsification: make the due-now sentence
+    // unconditionally neutral and this goes red - it would trade one false
+    // sentence for a vaguer one on the only rung that earned the word.
+    const dueNow = (destination: string | null): string | undefined =>
+      fallbackTraversalAnnouncement({
+        pending: pendingFallback({
+          state: "hold",
+          traversalId: "t1",
+          revision: 1,
+          deadline: NOW,
+          queuedItemsMoving: 0,
+        }),
+        plan: plan({
+          planId: "plan-switch-1",
+          action: "switch",
+          destination,
+          resumesAt: null,
+        }),
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: destination,
+        now: NOW,
+      })?.text;
+
+    expect(dueNow(TARGET_IDENTITY)).toContain("The switch is due now.");
+    // Unresolved destination and the claim still holds: a switch is what is
+    // coming, whether or not the host can name where yet. This is why the
+    // predicate is the action alone and not the `&& destination !== null`
+    // pairing that gates the fresh-session line.
+    expect(dueNow(null)).toContain("The switch is due now.");
+    expect(dueNow(null)).not.toContain("The countdown is up.");
+  });
+
+  it("hold: a due-now deadline names no switch on retry or wait either - the class is every non-switch rung, not just notify", () => {
+    // CodeRabbit flagged `notify`. The predicate is wider: `retry` attempts
+    // the same tuple and `wait` parks until a reset, so neither has a switch
+    // to be due, and both read the same false sentence before this fix.
+    const dueNowFor = (
+      action: "retry" | "wait",
+      resumesAt: number | null,
+    ): string | undefined =>
+      fallbackTraversalAnnouncement({
+        pending: pendingFallback({
+          state: "hold",
+          traversalId: "t1",
+          revision: 1,
+          deadline: NOW,
+          queuedItemsMoving: 0,
+        }),
+        plan: plan({
+          planId: `plan-${action}-1`,
+          action,
+          destination: null,
+          resumesAt,
+        }),
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: null,
+        now: NOW,
+      })?.text;
+
+    for (const text of [
+      dueNowFor("retry", null),
+      dueNowFor("wait", NOW + 3_600_000),
+    ]) {
+      expect(text).toContain("The countdown is up.");
+      expect(text).not.toContain("switch is due");
+      expect(text).toContain(`Select ${DONT_SWITCH_LABEL} to cancel.`);
+    }
+    // And each still names its own rung's subject, unchanged by this fix.
+    expect(dueNowFor("retry", null)).toContain(
+      `The chat will retry on ${FAILED_IDENTITY}.`,
+    );
+    expect(dueNowFor("wait", NOW + 3_600_000)).toContain(
+      `The chat will wait for ${FAILED_IDENTITY}`,
+    );
   });
 
   it("hold: a null plan (host found no takeable rung) states exhaustion truthfully, distinct from a genuinely still-resolving 'checking' plan and from an unresolved switch destination", () => {
