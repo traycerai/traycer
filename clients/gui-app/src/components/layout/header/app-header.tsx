@@ -1,5 +1,13 @@
 import { type CSSProperties, type ReactNode } from "react";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 import { UserMenu } from "@/components/auth/user-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
@@ -15,8 +23,12 @@ import { NotificationsBell } from "@/components/notifications/notifications-bell
 import { cn } from "@/lib/utils";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { useLayoutStore } from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  isVisualLayoutEditorEnabled,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 
 // Frameless-desktop detection: Electron's preload bridge exposes
@@ -189,21 +201,69 @@ function HeaderUsageControls(): ReactNode {
   const inHeader = useLayoutStore(
     (state) => state.statusBar.placement === "header",
   );
-  if (!inHeader) return null;
-  return (
-    <>
-      <RateLimitIconButton />
-      {showGlobalResourceMonitor ? (
-        // Unconditionally the owner of `app.resources.open`: this whole
-        // component is behind `inHeader`, so the strip's own popover is not
-        // mounted while this one is.
-        <ResourceMonitorPopover
-          trigger="header-button"
-          className={undefined}
-          claimsOpenAction
+  const { ref, editing } = useLayoutHotspot({
+    settingId: "header.usage",
+    tileId: null,
+    ghost: !inHeader,
+    condition: inHeader ? null : "Usage is placed in the status bar",
+  });
+  if (!inHeader) {
+    // While `placement` is `status-bar`, the header shows a ghost drop slot
+    // instead of nothing, so the cluster can still be dragged (or moved by
+    // its popover) back to the header.
+    if (!editing) return null;
+    return (
+      <HeaderClusterContextMenu>
+        <span
+          ref={ref}
+          data-testid="header-usage-ghost"
+          aria-hidden
+          className="mr-1 inline-flex h-5 w-16 shrink-0 rounded-md border border-dashed border-border/60"
         />
-      ) : null}
-    </>
+      </HeaderClusterContextMenu>
+    );
+  }
+  return (
+    <HeaderClusterContextMenu>
+      <span ref={ref} className="contents">
+        <RateLimitIconButton />
+        {showGlobalResourceMonitor ? (
+          // Unconditionally the owner of `app.resources.open`: this whole
+          // component is behind `inHeader`, so the strip's own popover is not
+          // mounted while this one is.
+          <ResourceMonitorPopover
+            trigger="header-button"
+            className={undefined}
+            claimsOpenAction
+          />
+        ) : null}
+      </span>
+    </HeaderClusterContextMenu>
+  );
+}
+
+/**
+ * The header cluster's own right-click entry into Customize - it has no menu
+ * of its own to append to (unlike the status bar strip's
+ * `StatusBarVisibilityMenu`), so a minimal one is added here, outside a
+ * session and only at desktop width.
+ */
+function HeaderClusterContextMenu(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const editing = useCustomizeStore((state) => state.session !== null);
+  const narrowViewport = useIsMobileViewport();
+  if (!isVisualLayoutEditorEnabled() || narrowViewport || editing)
+    return props.children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+          Customize layout…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

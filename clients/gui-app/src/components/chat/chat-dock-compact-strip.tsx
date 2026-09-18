@@ -157,20 +157,21 @@ export function ChatDockCompactStrip(): ReactNode {
       className="ml-auto flex min-w-0 shrink-0 items-center gap-1"
     >
       {value.chips.map((chip) => (
-        <ChatDockCompactChip
-          key={chip.section}
-          icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
-          text={chip.text}
-          working={chip.working}
-          lineDeltas={chip.lineDeltas}
-          label={chip.label}
-          pulseToken={chip.pulseToken}
-          expanded={value.expanded.has(chip.section)}
-          testId={`chat-dock-chip-${chip.section}`}
-          onClick={() => {
-            value.onToggle(chip.section);
-          }}
-        />
+        <span key={chip.section} className="contents" ref={chip.hotspotRef}>
+          <ChatDockCompactChip
+            icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
+            text={chip.text}
+            working={chip.working}
+            lineDeltas={chip.lineDeltas}
+            label={chip.label}
+            pulseToken={chip.pulseToken}
+            expanded={value.expanded.has(chip.section)}
+            testId={`chat-dock-chip-${chip.section}`}
+            onClick={() => {
+              value.onToggle(chip.section);
+            }}
+          />
+        </span>
       ))}
     </div>
   );

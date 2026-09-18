@@ -13,6 +13,7 @@ import {
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
 import type { NavigatorResourceMetric } from "@/stores/settings/settings-store";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 function pluralize(count: number, singular: string, plural: string): string {
@@ -153,6 +154,94 @@ export function OwnerResourceChip(props: OwnerResourceChipProps) {
       label="Resource usage"
       className={props.className}
     />
+  );
+}
+
+export interface NavigatorResourceHotspotOwner {
+  readonly epicId: string;
+  readonly kind: ResourceOwnerKindWireV14;
+  readonly ownerId: string;
+  readonly hostId: string | null;
+}
+
+export interface NavigatorResourceHotspotChipProps {
+  /** Null for a row that never owns a tracked process (a spec, a ticket). */
+  readonly owner: NavigatorResourceHotspotOwner | null;
+  readonly metrics: ReadonlyArray<NavigatorResourceMetric>;
+  readonly className: string | undefined;
+  /**
+   * Whether THIS row is the navigator's designated hotspot carrier. Every
+   * navigator (chat tree, terminal sidebar) shows one `sidebar.resourceChips`
+   * setting for the whole list, so exactly one row - the first one rendered -
+   * registers it; every other row renders its chip passively, exactly as
+   * before. Passing this from more than one row would collide on the same
+   * instance key.
+   */
+  readonly registersHotspot: boolean;
+}
+
+function resourceChipGhostCondition(
+  noMetrics: boolean,
+  hasOwner: boolean,
+): string | null {
+  if (noMetrics) return "No metrics selected";
+  if (!hasOwner) return "This row has no resource usage to show";
+  return null;
+}
+
+/**
+ * `OwnerResourceChip`, plus - for the one row a navigator designates - the
+ * `sidebar.resourceChips` hotspot: a ghost when there is nothing to show
+ * (no metrics selected, or this particular row owns no tracked process), the
+ * real chip wrapped in a ref otherwise. Every other row stays exactly
+ * `OwnerResourceChip`.
+ */
+export function NavigatorResourceHotspotChip(
+  props: NavigatorResourceHotspotChipProps,
+): ReactNode {
+  const noMetrics = props.metrics.length === 0;
+  const nothingToShow = noMetrics || props.owner === null;
+  const { ref, editing } = useLayoutHotspot({
+    settingId: "sidebar.resourceChips",
+    tileId: null,
+    ghost: nothingToShow,
+    condition: resourceChipGhostCondition(noMetrics, props.owner !== null),
+  });
+  if (!props.registersHotspot) {
+    if (nothingToShow) return null;
+    return (
+      <OwnerResourceChip
+        epicId={props.owner.epicId}
+        kind={props.owner.kind}
+        ownerId={props.owner.ownerId}
+        hostId={props.owner.hostId}
+        metrics={props.metrics}
+        className={props.className}
+      />
+    );
+  }
+  if (nothingToShow) {
+    if (!editing) return null;
+    return (
+      <span
+        ref={ref}
+        aria-hidden
+        data-testid="sidebar-resource-chip-ghost"
+        className="h-3 w-10 shrink-0 rounded-sm border border-dashed border-border/60 opacity-70"
+      />
+    );
+  }
+  return (
+    <span ref={ref} className="contents">
+      <OwnerResourceChip
+        epicId={props.owner.epicId}
+        kind={props.owner.kind}
+        ownerId={props.owner.ownerId}
+        hostId={props.owner.hostId}
+        metrics={props.metrics}
+        className={props.className}
+      />
+    </span>
   );
 }
 

@@ -23,6 +23,7 @@ function chip(
   return {
     section,
     glyph: section,
+    hotspotRef: () => undefined,
     working: false,
     text,
     lineDeltas: null,

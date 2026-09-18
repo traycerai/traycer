@@ -1,5 +1,6 @@
 import {
   getCustomizeOptions,
+  type CustomizeDropRefusal,
   type CustomizeMove,
 } from "@/lib/customize/customize-options";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
@@ -20,12 +21,14 @@ export function resolveCustomizeDrop(
   activeId: string,
   overId: string | null,
   overGroup: string | null,
-): CustomizeMove | null {
+): CustomizeMove | CustomizeDropRefusal | null {
   if (!overId || activeId === overId) return null;
   const instance = useCustomizeStore.getState().instances.get(activeId);
   if (!instance) return null;
   const drag = getCustomizeOptions(instance)?.drag;
   if (!drag || drag.group !== overGroup) return null;
-  const move = drag.resolveDrop(overId);
-  return move && !move.disabled ? move : null;
+  const result = drag.resolveDrop(overId);
+  if (result === null) return null;
+  if ("refused" in result) return result;
+  return result.disabled ? null : result;
 }

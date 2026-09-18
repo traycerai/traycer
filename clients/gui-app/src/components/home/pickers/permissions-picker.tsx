@@ -12,6 +12,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { cn } from "@/lib/utils";
 import { useComposerLayoutValue } from "@/lib/layout-overrides";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
   AUTO_MID_TURN_NOTICE,
   PERMISSION_OPTIONS,
@@ -85,6 +87,10 @@ interface PermissionsPickerProps {
    * in) out from under the panel the user is reading.
    */
   closeFocus: "composer" | "trigger";
+  /** `false` for every mount that isn't a real toolbar slot (the Settings
+   *  default-permission row): keeps that row from registering the
+   *  `composer.access` hotspot under the shared `"landing"` tile id. */
+  readonly interactive: boolean;
 }
 
 export function PermissionsPicker(props: PermissionsPickerProps) {
@@ -99,6 +105,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     turnActive,
     judgeBilling,
     closeFocus,
+    interactive,
   } = props;
   // Display value is the *normalized* one: when the sticky value isn't in the
   // active harness's supported set (rehydration of a saved chat, the one-frame
@@ -120,6 +127,13 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // shape a narrow composer already puts it in - icon alone, name on hover -
   // and no further.
   const compact = useComposerLayoutValue("access") === "compact";
+  const tileId = useComposerTileId();
+  const { ref: hotspotRef } = useLayoutHotspot({
+    settingId: "composer.access",
+    tileId,
+    ghost: false,
+    condition: null,
+  });
 
   // No tooltip of its own: the wrapper below already renders one (both branches
   // ARE a `TooltipWrapper`), and the label is VISIBLE on this pill until the
@@ -132,6 +146,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   const trigger = (
     <DropdownMenuTrigger asChild>
       <ToolbarPillButton
+        ref={interactive ? hotspotRef : undefined}
         aria-label={label}
         disabled={disabled}
         className={cn(

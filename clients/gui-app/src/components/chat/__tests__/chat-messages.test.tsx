@@ -67,6 +67,10 @@ import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
+import { getCustomizeOptions } from "@/lib/customize/customize-options";
+import { registerChatSurfacesCustomizeOptions } from "@/lib/customize/options/chat-surfaces-options";
+import { undo } from "@/lib/customize/history";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { InterviewSegment } from "@/stores/composer/chat-store";
 import type { TileFindAdapter } from "@/stores/tile-find";
@@ -88,6 +92,8 @@ const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
 const LEGEND_LIST_HEADER_PX = 40;
 const DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX = 80;
+
+registerChatSurfacesCustomizeOptions();
 
 function noOpOnVisibleOrdinalRangeChange(_range: OrdinalRange | null): void {
   return undefined;
@@ -2670,6 +2676,79 @@ describe("ChatMessages scroll policy", () => {
 
       expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
       expect(screen.queryByTestId("chat-turn-minimap-hit-strip")).toBeNull();
+    });
+  });
+
+  // Ticket w3-chat-surfaces: `chat.minimapSide`. Hidden or contentless while a
+  // Customize session is open means the real rail has nothing to mount on, so
+  // a dashed placeholder stands in on the setting's own preferred side.
+  describe("chat.minimapSide Customize hotspot", () => {
+    beforeEach(() => {
+      act(() => {
+        useCustomizeStore.setState({
+          session: {
+            scene: "in-place",
+            opener: { kind: "none" },
+            startedAt: 0,
+          },
+          instances: new Map(),
+          activeKey: null,
+          popoverKey: null,
+          invoker: null,
+          disclosure: null,
+          pendingTarget: null,
+          preferredTileId: null,
+          history: { past: [], future: [] },
+        });
+      });
+    });
+    afterEach(() => {
+      act(() => {
+        useCustomizeStore.setState({ session: null });
+      });
+    });
+
+    it("ghosts a dashed rail on the right while hidden and editing", async () => {
+      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "customize-hidden-minimap",
+      });
+      await settleLegendList();
+
+      expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+      const ghost = screen.getByTestId("chat-minimap-ghost");
+      expect(ghost.className).toContain("right-3");
+      const instance = [
+        ...useCustomizeStore.getState().instances.values(),
+      ].find((candidate) => candidate.settingId === "chat.minimapSide");
+      expect(instance?.condition).toBe("Hidden");
+    });
+
+    it("choosing Left writes the setting, and Undo restores it", async () => {
+      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "customize-choose-left",
+      });
+      await settleLegendList();
+
+      const options = getCustomizeOptions({
+        key: "chat.minimapSide@shell:task-1",
+        settingId: "chat.minimapSide",
+        sceneId: "shell",
+        tileId: "task-1",
+        node: document.createElement("div"),
+        ghost: false,
+        condition: null,
+      });
+      act(() => {
+        if (options?.control?.kind === "choice") options.control.change("left");
+      });
+      expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
+
+      act(() => undo());
+      expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
     });
   });
 

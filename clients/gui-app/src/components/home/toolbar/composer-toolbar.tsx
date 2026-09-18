@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
 
 import {
@@ -15,6 +15,16 @@ import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-av
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
+import { isVisualLayoutEditorEnabled } from "@/stores/settings/settings-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 
 interface ComposerToolbarProps {
   /** Per-composer toolbar store; this component subscribes to the slices the
@@ -135,55 +145,89 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
       ? dictation
       : null;
 
+  const editing = useCustomizeStore((state) => state.session !== null);
+  const narrowViewport = useIsMobileViewport();
+  const showCustomizeEntry =
+    isVisualLayoutEditorEnabled() && !editing && !narrowViewport;
+
+  // Both clusters render through the same `renderToolbarItem` map now that an
+  // item may move between them, so both need the full prop set - what used to
+  // be split into "left's props" and "right's props" is one shared object.
+  const itemProps = {
+    onAttachImages,
+    permission,
+    onPermissionChange: setPermission,
+    supportedPermissionModes,
+    harnessLabel,
+    catalogSupportedModes,
+    hostKnowsAutoMode,
+    // A turn the user can still switch a mode underneath - which the host
+    // honours IMMEDIATELY for the running turn, not from the next message;
+    // the picker's own mid-turn notice is what says so. `settingsLocked`
+    // surfaces cannot flip at all.
+    turnActive: activeTurnStatus !== null && !settingsLocked,
+    judgeBilling,
+    settingsLocked,
+    store,
+    createProfileHostId,
+    runTargetHostId,
+    terminalLoginSurface,
+    dictation,
+    dictationPreparing,
+  };
+
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 px-2.5 pb-2.5 pt-1">
-      {recordingDictation !== null ? (
-        <div className="col-span-2 min-w-0">
-          <DictationRecordingBar
-            state={recordingDictation.state}
-            getStream={recordingDictation.getStream}
-            onStop={recordingDictation.onStop}
-            onCancel={recordingDictation.onCancel}
-          />
-        </div>
-      ) : (
-        <>
-          <ComposerToolbarLeft
-            onAttachImages={onAttachImages}
-            permission={permission}
-            onPermissionChange={setPermission}
-            supportedPermissionModes={supportedPermissionModes}
-            harnessLabel={harnessLabel}
-            catalogSupportedModes={catalogSupportedModes}
-            hostKnowsAutoMode={hostKnowsAutoMode}
-            // A turn the user can still switch a mode underneath - which the
-            // host honours IMMEDIATELY for the running turn, not from the next
-            // message; the picker's own mid-turn notice is what says so.
-            // `settingsLocked` surfaces cannot flip at all.
-            turnActive={activeTurnStatus !== null && !settingsLocked}
-            judgeBilling={judgeBilling}
-            settingsLocked={settingsLocked}
-          />
-          <ComposerToolbarRight
-            store={store}
-            canSubmit={canSubmit}
-            attachmentPending={attachmentPending}
-            onSubmit={onSubmit}
-            activeTurnStatus={activeTurnStatus}
-            stopDisabled={stopDisabled}
-            onStopTurn={onStopTurn}
-            composerDisabledHint={composerDisabledHint}
-            settingsLocked={settingsLocked}
-            dictation={dictation}
-            dictationPreparing={dictationPreparing}
-            createProfileHostId={createProfileHostId}
-            runTargetHostId={runTargetHostId}
-            terminalLoginSurface={terminalLoginSurface}
-          />
-        </>
-      )}
-    </div>
+    <ComposerToolbarContextMenu enabled={showCustomizeEntry}>
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 px-2.5 pb-2.5 pt-1">
+        {recordingDictation !== null ? (
+          <div className="col-span-2 min-w-0">
+            <DictationRecordingBar
+              state={recordingDictation.state}
+              getStream={recordingDictation.getStream}
+              onStop={recordingDictation.onStop}
+              onCancel={recordingDictation.onCancel}
+            />
+          </div>
+        ) : (
+          <>
+            <ComposerToolbarLeft {...itemProps} />
+            <ComposerToolbarRight
+              {...itemProps}
+              canSubmit={canSubmit}
+              attachmentPending={attachmentPending}
+              onSubmit={onSubmit}
+              activeTurnStatus={activeTurnStatus}
+              stopDisabled={stopDisabled}
+              onStopTurn={onStopTurn}
+              composerDisabledHint={composerDisabledHint}
+            />
+          </>
+        )}
+      </div>
+    </ComposerToolbarContextMenu>
   );
 }
 
 export const ComposerToolbar = memo(ComposerToolbarImpl);
+
+/**
+ * The composer toolbar's own right-click entry into Customize - the toolbar
+ * has no context menu of its own to append to, so this adds a minimal one,
+ * outside a session and only when the switch is on.
+ */
+function ComposerToolbarContextMenu(props: {
+  readonly enabled: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (!props.enabled) return props.children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+          Customize layout…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}

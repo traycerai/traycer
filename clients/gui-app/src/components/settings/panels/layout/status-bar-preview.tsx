@@ -440,7 +440,11 @@ function StatusBarPreviewStrip(props: {
                   data-testid="status-bar-preview-content"
                   className={STATUS_BAR_USAGE_CONTENT_CLASS}
                 >
-                  <StatusBarUsageReadings cluster={cluster} display={display} />
+                  <StatusBarUsageReadings
+                    cluster={cluster}
+                    display={display}
+                    interactive={false}
+                  />
                 </span>
               </span>
             </StatusBarUsageScroller>
@@ -474,6 +478,7 @@ function StatusBarPreviewStrip(props: {
           hostId={props.scope.hostId}
           hostLabel={props.scope.hostLabel}
           hasExplicitPick={props.hasExplicitPick}
+          interactive={false}
         />
       ) : null}
     </div>
@@ -639,6 +644,7 @@ function usePreviewCluster(hostId: string | null): StatusBarRateLimitCluster {
     providers,
     profileSelection,
     mode: "passive",
+    editing: false,
   });
   return cluster;
 }

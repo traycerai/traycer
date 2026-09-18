@@ -13,6 +13,10 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Button } from "@/components/ui/button";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { customizeLayoutAction } from "@/lib/commands/actions/customize-layout";
+import { isVisualLayoutEditorEnabled } from "@/stores/settings/settings-store";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -210,6 +214,22 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
     () => getVisibleLeftPanelGroups(panelGroups, availabilityContext),
     [availabilityContext, panelGroups],
   );
+  const editing = useCustomizeStore((state) => state.session !== null);
+  // Every panel this build knows about that isn't currently on the rail -
+  // presence-gated, or explicitly hidden - so a Customize session can still
+  // configure it. Not positioned inside its stored group's pill: the pill
+  // combines panels into one real button, and a ghost sharing that slot with
+  // a visible sibling would need a second target on the same pixels.
+  const hiddenPanelIds = useMemo(
+    () =>
+      editing
+        ? LEFT_PANEL_DEFINITIONS.filter(
+            (definition) =>
+              !isLeftPanelVisible(definition, availabilityContext),
+          ).map((definition) => definition.id)
+        : [],
+    [editing, availabilityContext],
+  );
   // Which icon lights up. Resolved rather than compared against `activePanelId`
   // directly so a hidden active panel highlights whatever the body fell back
   // to, instead of leaving the rail with nothing marked.
@@ -322,6 +342,13 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
                 </Fragment>
               );
             })}
+            {hiddenPanelIds.map((panelId) => (
+              <RailGhostTile
+                key={panelId}
+                panelId={panelId}
+                orientation={orientation}
+              />
+            ))}
           </div>
         </ContextMenuTrigger>
         <RailContextMenuContent
@@ -372,6 +399,8 @@ function RailContextMenuContent(props: {
   const hasOverrides = Object.keys(context.visibilityOverrideById).length > 0;
   const pointedEntry =
     entries.find((entry) => entry.definition.id === contextPanelId) ?? null;
+  const editing = useCustomizeStore((state) => state.session !== null);
+  const showCustomizeEntry = isVisualLayoutEditorEnabled() && !editing;
 
   return (
     <ContextMenuContent
@@ -422,6 +451,14 @@ function RailContextMenuContent(props: {
             data-testid="epic-rail-reset-panel-visibility"
           >
             Reset panel visibility
+          </ContextMenuItem>
+        </>
+      ) : null}
+      {showCustomizeEntry ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => customizeLayoutAction()}>
+            Customize layout…
           </ContextMenuItem>
         </>
       ) : null}
@@ -507,6 +544,12 @@ function RailGroupButton(props: RailGroupButtonProps) {
   const handleContextMenu = useCallback((): void => {
     onContextMenu(primaryPanel.id);
   }, [onContextMenu, primaryPanel.id]);
+  const { ref: hotspotRef } = useLayoutHotspot({
+    settingId: "sidebar.panel",
+    tileId: primaryPanel.id,
+    ghost: false,
+    condition: null,
+  });
   const dragData = useMemo<EpicCanvasLeftPanelRailDragData>(
     () => ({
       kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -540,8 +583,8 @@ function RailGroupButton(props: RailGroupButtonProps) {
     data: dropData,
   });
   const setButtonRef = useMemo(
-    () => mergeRefs<HTMLElement>(dragRef, dropRef),
-    [dragRef, dropRef],
+    () => mergeRefs<HTMLElement>(dragRef, dropRef, hotspotRef),
+    [dragRef, dropRef, hotspotRef],
   );
 
   return (
@@ -644,6 +687,47 @@ function RailButton(props: RailButtonProps) {
           ) : null}
         </span>
       </Button>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A panel the rail is not currently showing - presence-gated with nothing to
+ * show yet, or explicitly hidden - drawn while Customize is open so it stays
+ * a hotspot. `condition` is the definition's own forced-on hint where there is
+ * one; a plain hidden panel just says so.
+ */
+function RailGhostTile(props: {
+  readonly panelId: LeftPanelId;
+  readonly orientation: RailOrientation;
+}): ReactNode {
+  const definition = getLeftPanelDefinition(props.panelId);
+  const condition = definition.forcedOnHint ?? "Hidden from the sidebar";
+  const { ref } = useLayoutHotspot({
+    settingId: "sidebar.panel",
+    tileId: props.panelId,
+    ghost: true,
+    condition,
+  });
+  const Icon = definition.icon;
+  return (
+    <TooltipWrapper
+      label={`${definition.title} — ${condition}`}
+      side={props.orientation === "vertical" ? "right" : "bottom"}
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <div
+        ref={ref}
+        aria-hidden
+        data-testid={`epic-rail-ghost-${props.panelId}`}
+        className={cn(
+          LEFT_PANEL_RAIL_TILE_CLASS,
+          "rounded-md border border-dashed border-border/60 text-muted-foreground/60 opacity-70",
+        )}
+      >
+        <Icon className="size-4" />
+      </div>
     </TooltipWrapper>
   );
 }

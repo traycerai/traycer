@@ -2,97 +2,54 @@ import { memo } from "react";
 import { useStore } from "zustand";
 
 import { ComposerSendButton } from "@/components/home/composer/composer-send-button";
+import { useComposerLayout } from "@/lib/layout-overrides";
 import {
-  ComposerMicButton,
-  ComposerMicPreparing,
-  type ComposerDictationControl,
-} from "@/components/home/toolbar/composer-mic-button";
-import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
-import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
+  renderToolbarItem,
+  type ComposerToolbarItemsProps,
+} from "@/components/home/toolbar/composer-toolbar-item";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
-import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
-interface ComposerToolbarRightProps {
-  store: ComposerToolbarStore;
-  canSubmit: boolean;
-  attachmentPending: boolean;
-  onSubmit: () => void;
-  activeTurnStatus: ChatActiveTurn["status"] | null;
-  stopDisabled: boolean;
-  onStopTurn: (() => void) | null;
-  composerDisabledHint: string | null;
-  settingsLocked: boolean;
-  /** Voice-input control, or `null` when voice input is disabled/unavailable. */
-  dictation: ComposerDictationControl | null;
-  /** Non-null while the on-device model is downloading; renders a status chip. */
-  dictationPreparing: DictationPreparingStatus | null;
-  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
-   *  prop of the same name. */
-  createProfileHostId: string | null;
-  readonly runTargetHostId: string | null;
-  /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
-   *  prop of the same name. */
-  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+interface ComposerToolbarRightProps extends ComposerToolbarItemsProps {
+  readonly canSubmit: boolean;
+  readonly attachmentPending: boolean;
+  readonly onSubmit: () => void;
+  readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+  readonly stopDisabled: boolean;
+  readonly onStopTurn: (() => void) | null;
+  readonly composerDisabledHint: string | null;
 }
 
 function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
-  const {
-    store,
-    canSubmit,
-    attachmentPending,
-    onSubmit,
-    activeTurnStatus,
-    stopDisabled,
-    onStopTurn,
-    composerDisabledHint,
-    settingsLocked,
-    dictation,
-    dictationPreparing,
-    createProfileHostId,
-    runTargetHostId,
-    terminalLoginSurface,
-  } = props;
+  const order = useComposerLayout().toolbar.right;
   // Block sending until the model slug resolves to a concrete value - an
   // empty slug is the transient "catalog still loading" marker and must never
   // reach the wire as `model: ""`. Gating HERE (instead of in the host
   // composer's `canSubmit`) keeps the composer from re-rendering when the
   // catalog resolves; the submit handlers re-check via `store.getState()`.
   const modelResolved = useStore(
-    store,
+    props.store,
     (s) => s.selection.modelSlug.length > 0,
   );
-  const canSubmitResolved = canSubmit ? modelResolved : false;
+  const canSubmitResolved = props.canSubmit ? modelResolved : false;
 
   return (
     <div className="flex min-w-0 items-center justify-end gap-1">
-      <HarnessModelPicker
-        labelDisplay="responsive"
-        store={store}
-        withServiceTier
-        withReasoning
-        tuiOnly={false}
-        lockedHarnessId={null}
-        disabled={settingsLocked}
-        registerActivation
-        createProfileHostId={createProfileHostId}
-        runTargetHostId={runTargetHostId}
-        terminalLoginSurface={terminalLoginSurface}
-        profileAdmission={null}
-      />
-      {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
-      {dictation === null && dictationPreparing !== null ? (
-        <ComposerMicPreparing status={dictationPreparing} />
-      ) : null}
-      <ComposerSendButton
-        canSubmit={canSubmitResolved}
-        attachmentPending={attachmentPending}
-        onSubmit={onSubmit}
-        activeTurnStatus={activeTurnStatus}
-        stopDisabled={stopDisabled}
-        onStopTurn={onStopTurn}
-        disabledHint={composerDisabledHint}
-      />
+      {order.map((id) => (
+        <span key={id} className="contents" data-testid={`toolbar-item-${id}`}>
+          {renderToolbarItem(id, props)}
+        </span>
+      ))}
+      <span className="contents" data-testid="toolbar-item-send">
+        <ComposerSendButton
+          canSubmit={canSubmitResolved}
+          attachmentPending={props.attachmentPending}
+          onSubmit={props.onSubmit}
+          activeTurnStatus={props.activeTurnStatus}
+          stopDisabled={props.stopDisabled}
+          onStopTurn={props.onStopTurn}
+          disabledHint={props.composerDisabledHint}
+        />
+      </span>
     </div>
   );
 }

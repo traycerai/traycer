@@ -148,6 +148,7 @@ function useLaneProbe(mode: StatusBarRateLimitMode) {
     providers,
     profileSelection: PROFILE_SELECTION,
     mode,
+    editing: false,
   });
 }
 

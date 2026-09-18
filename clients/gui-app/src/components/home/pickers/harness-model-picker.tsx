@@ -5,6 +5,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
   findUpgradeServiceTierForModel,
   findReasoningOptionsForModel,
@@ -252,6 +254,13 @@ function buildReasoningFooter(input: {
     disabled: hasNoReasoningLevels(input.selectedModel, input.options),
     onChange: input.onChange,
   };
+}
+
+function isModelHotspotInteractive(
+  registerActivation: boolean,
+  activityEnabled: boolean,
+): boolean {
+  return registerActivation && activityEnabled;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -1001,6 +1010,20 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activationController,
   );
 
+  // Same test the shortcut registration above uses to keep fork / add-node
+  // dialog pickers and the Auto-judge picker out - a genuine toolbar mount,
+  // not every place this component is used as a plain picker.
+  const modelHotspotInteractive = isModelHotspotInteractive(
+    registerActivation,
+    activityEnabled,
+  );
+  const tileId = useComposerTileId();
+  const { ref: modelHotspotRef } = useLayoutHotspot({
+    settingId: "composer.model",
+    tileId,
+    ghost: false,
+    condition: null,
+  });
   const selectedHarnessLabel = selectedHarness?.label ?? selection.harnessId;
   // Layout ▸ Composer ▸ Reasoning level. Read here rather than in the trigger
   // so the chip stays a pure function of its props, and both surfaces that
@@ -1039,6 +1062,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         >
           <HarnessModelTrigger
             {...paneActivationDeferProps}
+            ref={modelHotspotInteractive ? modelHotspotRef : undefined}
             selection={selection}
             label={presentation.label}
             reasoningLabel={presentation.reasoningLabel}

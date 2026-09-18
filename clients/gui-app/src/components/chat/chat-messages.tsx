@@ -118,6 +118,8 @@ import {
   useSubagentOpenStore,
 } from "@/stores/chats/subagent-open-store";
 import { useLayoutSetting } from "@/lib/layout-overrides";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
 import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
@@ -2788,6 +2790,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
   const chatTurnMinimapSide = useLayoutSetting("chatTurnMinimapSide");
   const isMobileViewport = useIsMobileViewport();
+  const { ref: minimapHotspotRef, editing: minimapEditing } = useLayoutHotspot({
+    settingId: "chat.minimapSide",
+    tileId: taskId,
+    ghost: chatTurnMinimapSide === "hide" || !hasContent,
+    condition: chatTurnMinimapSide === "hide" ? "Hidden" : "No messages yet",
+  });
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteReplyEnabled && visible && !systemOverlayActive,
@@ -3880,6 +3888,32 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     workingVerb,
   });
 
+  // A dashed placeholder rail while `editing` and the real minimap has
+  // nothing to mount on (hidden, or no content yet) - so the Customize
+  // popover still has something to anchor to. Computed here, in the same
+  // component that calls `useLayoutHotspot`, rather than in a helper function
+  // it would be passed into: `minimapHotspotRef` is a plain callback, not a
+  // React ref, but a value threaded straight from that hook reads as one to
+  // the react-compiler's ref-safety check once it crosses a function boundary.
+  // `hide` has no remembered side of its own, so the ghost defaults to the
+  // app's own default side rather than inventing one.
+  const minimapGhostSide =
+    chatTurnMinimapSide === "hide" ? "right" : chatTurnMinimapSide;
+  const minimapGhostRail =
+    minimapEditing && !isMobileViewport ? (
+      <div
+        ref={minimapHotspotRef}
+        data-testid="chat-minimap-ghost"
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute top-0 bottom-0 hidden w-2 md:block",
+          minimapGhostSide === "left" ? "left-3" : "right-3",
+        )}
+      >
+        <div className="absolute inset-y-0 w-px rounded-full border border-dashed border-border/60" />
+      </div>
+    ) : null;
+
   return (
     <ChatOpenStoreScopeProvider value={instanceId}>
       <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
@@ -3933,7 +3967,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             side: chatTurnMinimapSide,
             mobileViewport: isMobileViewport,
           }) ? (
-            <div className="contents max-md:hidden">
+            <div className="contents max-md:hidden" ref={minimapHotspotRef}>
               <ChatTurnMinimap
                 rows={listRows}
                 transcriptWindow={transcriptWindow}
@@ -3946,7 +3980,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 side={chatTurnMinimapSide}
               />
             </div>
-          ) : null}
+          ) : (
+            minimapGhostRail
+          )}
           {hasContent ? (
             <ScrollToEndPill
               state={scrollToEndPillState}

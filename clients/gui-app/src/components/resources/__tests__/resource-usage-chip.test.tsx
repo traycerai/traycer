@@ -12,12 +12,14 @@ import type {
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import {
   EpicResourceChip,
+  NavigatorResourceHotspotChip,
   OwnerResourceChip,
   ResourceUsageChip,
 } from "@/components/resources/resource-usage-chip";
 import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 
 function process(
   over: Partial<ResourceProcessSnapshotWireV15>,
@@ -107,10 +109,20 @@ function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
   };
 }
 
+function startCustomizeSession(): void {
+  useCustomizeStore.setState({
+    session: { scene: "in-place", opener: { kind: "none" }, startedAt: 0 },
+    instances: new Map(),
+    history: { past: [], future: [] },
+    announcement: "",
+  });
+}
+
 afterEach(() => {
   cleanup();
   __setResourcesStreamClientFactoryForTests(null);
   resourcesRegistry.disposeAll();
+  useCustomizeStore.setState({ session: null, instances: new Map() });
 });
 
 describe("ResourceUsageChip", () => {
@@ -428,5 +440,114 @@ describe("EpicResourceChip", () => {
     expect(
       screen.getByLabelText(/Epic resource usage: 40% CPU/),
     ).not.toBeNull();
+  });
+});
+
+describe("NavigatorResourceHotspotChip", () => {
+  it("is passive outside a session, exactly like OwnerResourceChip", () => {
+    const stub = installStubFactory();
+    render(
+      <>
+        <ResourcesStreamMount epicId="epic-1" />
+        <NavigatorResourceHotspotChip
+          owner={{
+            epicId: "epic-1",
+            kind: "terminal",
+            ownerId: "s1",
+            hostId: "host-1",
+          }}
+          metrics={["cpu"]}
+          className={undefined}
+          registersHotspot
+        />
+      </>,
+    );
+    expect(screen.queryByLabelText(/Resource usage/)).toBeNull();
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(
+          projection({ owners: [owner("terminal", "s1", { cpuPercent: 12 })] }),
+        );
+    });
+    expect(screen.getByLabelText(/Resource usage: 12% CPU/)).not.toBeNull();
+  });
+
+  it("renders nothing for a non-hotspot row with no metrics selected", () => {
+    const { container } = render(
+      <NavigatorResourceHotspotChip
+        owner={{
+          epicId: "epic-1",
+          kind: "terminal",
+          ownerId: "s1",
+          hostId: "host-1",
+        }}
+        metrics={[]}
+        className={undefined}
+        registersHotspot={false}
+      />,
+    );
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("ghosts the hotspot row while editing with no metrics selected", () => {
+    startCustomizeSession();
+    render(
+      <NavigatorResourceHotspotChip
+        owner={{
+          epicId: "epic-1",
+          kind: "terminal",
+          ownerId: "s1",
+          hostId: "host-1",
+        }}
+        metrics={[]}
+        className={undefined}
+        registersHotspot
+      />,
+    );
+    expect(screen.getByTestId("sidebar-resource-chip-ghost")).not.toBeNull();
+  });
+
+  it("ghosts the hotspot row while editing when this row owns no tracked process", () => {
+    startCustomizeSession();
+    render(
+      <NavigatorResourceHotspotChip
+        owner={null}
+        metrics={["cpu"]}
+        className={undefined}
+        registersHotspot
+      />,
+    );
+    expect(screen.getByTestId("sidebar-resource-chip-ghost")).not.toBeNull();
+  });
+
+  it("registers the sidebar.resourceChips hotspot instance while editing", () => {
+    startCustomizeSession();
+    render(
+      <NavigatorResourceHotspotChip
+        owner={null}
+        metrics={[]}
+        className={undefined}
+        registersHotspot
+      />,
+    );
+    const instance = [...useCustomizeStore.getState().instances.values()].find(
+      (candidate) => candidate.settingId === "sidebar.resourceChips",
+    );
+    expect(instance).toBeDefined();
+    expect(instance?.ghost).toBe(true);
+    expect(instance?.condition).toBe("No metrics selected");
+  });
+
+  it("renders nothing when not the hotspot row and not editing, even with no owner", () => {
+    const { container } = render(
+      <NavigatorResourceHotspotChip
+        owner={null}
+        metrics={["cpu"]}
+        className={undefined}
+        registersHotspot={false}
+      />,
+    );
+    expect(container.innerHTML).toBe("");
   });
 });

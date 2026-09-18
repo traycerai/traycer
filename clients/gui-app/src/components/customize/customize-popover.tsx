@@ -228,40 +228,68 @@ function Control({
         ))}
       </div>
     );
+  const moveItem = control.moveItem;
   return (
     <div
       role="group"
       aria-label={control.label}
       className="flex flex-col gap-2"
     >
-      {control.options.map((option) => {
+      {control.options.map((option, index) => {
         const checked = control.values.includes(option.value);
         return (
-          <label
-            key={option.value}
-            className="flex flex-wrap items-center gap-2 text-ui-sm"
-          >
-            <Checkbox
-              checked={checked}
-              disabled={
-                option.disabled ||
-                (checked && control.lastItemHeld && control.values.length === 1)
-              }
-              onCheckedChange={(next) =>
-                mutate(() =>
-                  control.change(
-                    next === true
-                      ? [...control.values, option.value]
-                      : control.values.filter(
-                          (value) => value !== option.value,
-                        ),
-                  ),
-                )
-              }
-            />
-            {option.label}
-            <Picture option={option} />
-          </label>
+          <div key={option.value} className="flex flex-wrap items-center gap-2">
+            <label className="flex flex-1 flex-wrap items-center gap-2 text-ui-sm">
+              <Checkbox
+                checked={checked}
+                disabled={
+                  option.disabled ||
+                  (checked &&
+                    control.lastItemHeld &&
+                    control.values.length === 1)
+                }
+                onCheckedChange={(next) =>
+                  mutate(() =>
+                    control.change(
+                      next === true
+                        ? [...control.values, option.value]
+                        : control.values.filter(
+                            (value) => value !== option.value,
+                          ),
+                    ),
+                  )
+                }
+              />
+              {option.label}
+              <Picture option={option} />
+            </label>
+            {moveItem ? (
+              <div
+                role="group"
+                aria-label={`Move ${option.label}`}
+                className="flex gap-1"
+              >
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={index === 0}
+                  onClick={() => mutate(() => moveItem(option.value, -1))}
+                >
+                  Move up
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={index === control.options.length - 1}
+                  onClick={() => mutate(() => moveItem(option.value, 1))}
+                >
+                  Move down
+                </Button>
+              </div>
+            ) : null}
+          </div>
         );
       })}
     </div>

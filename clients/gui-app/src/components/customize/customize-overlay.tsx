@@ -25,11 +25,14 @@ import {
   watchCustomizeLease,
 } from "@/lib/customize/lease";
 import { getCustomizeSetting } from "@/lib/customize/catalog";
+import { registerBuiltinCustomizeOptions } from "@/lib/customize/options";
 import { useDesktopWindowId } from "@/lib/windows/desktop-window-id";
 import {
   selectedInstances,
   useCustomizeStore,
 } from "@/stores/customize/customize-store";
+
+registerBuiltinCustomizeOptions();
 
 export function CustomizeOverlay() {
   const session = useCustomizeStore((state) => state.session);

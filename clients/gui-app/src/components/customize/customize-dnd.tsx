@@ -35,20 +35,23 @@ export function CustomizeDnd({ children }: { children: ReactNode }) {
         setDragging(false);
         suppressNextCustomizeClick();
         const group: unknown = over?.data.current?.group;
-        const move = resolveCustomizeDrop(
+        const result = resolveCustomizeDrop(
           String(active.id),
           over ? String(over.id) : null,
           typeof group === "string" ? group : null,
         );
-        if (move) {
-          recordSettingGesture(
-            move.analytics,
-            move.label,
-            move.touches,
-            move.run,
-          );
-          useCustomizeStore.getState().announce(move.announcement);
+        if (result === null) return;
+        if ("refused" in result) {
+          useCustomizeStore.getState().announce(result.refused);
+          return;
         }
+        recordSettingGesture(
+          result.analytics,
+          result.label,
+          result.touches,
+          result.run,
+        );
+        useCustomizeStore.getState().announce(result.announcement);
       }}
     >
       <div data-customize-dragging={dragging ? "" : undefined}>
@@ -63,14 +66,14 @@ export function DropLine() {
   const { active, over } = useDndContext();
   if (!active || !over || active.id === over.id) return null;
   const group: unknown = over.data.current?.group;
-  if (
-    !resolveCustomizeDrop(
-      String(active.id),
-      String(over.id),
-      typeof group === "string" ? group : null,
-    )
-  )
-    return null;
+  const result = resolveCustomizeDrop(
+    String(active.id),
+    String(over.id),
+    typeof group === "string" ? group : null,
+  );
+  // A refusal is a real answer (something to announce on drop), but it draws
+  // no line while hovering - there is nowhere valid to show one landing.
+  if (result === null || "refused" in result) return null;
   const vertical = over.data.current?.axis === "vertical";
   return (
     <div

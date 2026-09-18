@@ -1,11 +1,12 @@
+import type { ReactNode } from "react";
 import type {
   BackgroundItem,
   ChatActiveTurn,
   ChatQueuedItem,
   ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { PinnedStackSections } from "@/components/chat/chat-pinned-stack";
-import { chatPinnedStackVisible } from "@/components/chat/chat-pinned-stack-utils";
+import { PinnedTodoPanel } from "@/components/chat/chat-pinned-stack";
+import { ChatAccumulatedChangesPanel } from "@/components/chat/chat-accumulated-changes-panel";
 import { ActiveAgentsPanel } from "@/components/chat/chat-active-agents-panel";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
@@ -14,9 +15,21 @@ import type { ChatDockSection } from "@/components/chat/chat-dock-compact-contex
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
-import { chatBackgroundSectionVisible } from "@/lib/chat/chat-lower-scroll-budget";
+import type { DockSection } from "@/stores/settings/layout-store";
 import { cn } from "@/lib/utils";
 import type { ChatPinnedStackTopSpacing } from "@/components/chat/chat-pinned-stack";
+
+/** One dock row's hotspot, registered by the tile regardless of which of the
+ *  three anchors (ghost row here, real row here, or the compact chip in the
+ *  composer strip) currently carries it. */
+export interface DockRowHotspot {
+  readonly hotspotRef: (node: HTMLElement | null) => void;
+  /** No content at all - the setting has nothing to anchor to but this row's
+   *  own ghost placeholder, regardless of the Visible/Compact preference. */
+  readonly ghost: boolean;
+  readonly condition: string;
+  readonly editing: boolean;
+}
 
 export interface ChatLowerDockProps {
   readonly snapshotLoaded: boolean;
@@ -40,6 +53,10 @@ export interface ChatLowerDockProps {
    * answer to size everything below the dock.
    */
   readonly folded: ReadonlySet<ChatDockSection>;
+  /** The vertical order of the three reorderable rows below Todo. */
+  readonly dockOrder: ReadonlyArray<DockSection>;
+  /** This tile's Customize hotspot for each of the three reorderable rows. */
+  readonly hotspots: Readonly<Record<DockSection, DockRowHotspot>>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
    * This chat's running managed commands, counted by the parent because the
@@ -81,34 +98,35 @@ export interface ChatLowerDockProps {
   readonly onBackgroundSessionStop: () => string | null;
 }
 
-export function ChatLowerDock(props: ChatLowerDockProps) {
-  // A folded section is not "not there" - it is a chip under the input, and
-  // one click brings the row back. So the visibility questions stay exactly as
-  // they were and `folded` subtracts from their answers, rather than each
-  // predicate learning about a setting.
-  const changesFolded = props.folded.has("filesChanged");
-  const pinnedVisible =
-    props.snapshotLoaded &&
-    chatPinnedStackVisible({
-      todo: props.todo,
-      restore: props.restore,
-      changesFolded,
-    });
-  // User-owned and received A2A queue items both surface here (the latter
-  // read-only); the panel itself decides how each row renders.
-  const queueVisible = props.queue.items.length > 0;
-  const agentsVisible =
-    props.activeAgents.length > 0 &&
-    props.selfAgent !== null &&
-    !props.folded.has("activeAgents");
-  const backgroundVisible =
-    chatBackgroundSectionVisible({
-      backgroundItemCount: props.backgroundItems?.length ?? 0,
-      runningManagedCommandCount: props.runningManagedCommandCount,
-      heldManagedCommandCount: props.heldManagedCommandCount,
-    }) && !props.folded.has("background");
+interface DockRowPlan {
+  readonly section: DockSection;
+  readonly hotspot: DockRowHotspot;
+  readonly showGhost: boolean;
+  readonly showRow: boolean;
+}
 
-  if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {
+function planDockRow(
+  section: DockSection,
+  hotspot: DockRowHotspot,
+  folded: ReadonlySet<ChatDockSection>,
+): DockRowPlan {
+  return {
+    section,
+    hotspot,
+    showGhost: hotspot.ghost && hotspot.editing,
+    showRow: !hotspot.ghost && !folded.has(section),
+  };
+}
+
+export function ChatLowerDock(props: ChatLowerDockProps) {
+  const todoVisible = props.snapshotLoaded && props.todo !== null;
+  const queueVisible = props.queue.items.length > 0;
+  const rows = props.dockOrder.map((section) =>
+    planDockRow(section, props.hotspots[section], props.folded),
+  );
+  const anyRowVisible = rows.some((row) => row.showGhost || row.showRow);
+
+  if (!todoVisible && !queueVisible && !anyRowVisible) {
     return null;
   }
 
@@ -124,25 +142,151 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
       >
         <div className="@container mx-3 -mb-px overflow-hidden rounded-t-lg border border-b-0 border-border bg-muted/30">
           <QueueSection visible={queueVisible} dock={props} />
-          <PinnedSection
-            visible={pinnedVisible}
-            separated={queueVisible}
-            changesFolded={changesFolded}
-            dock={props}
-          />
-          <AgentsSection
-            visible={agentsVisible}
-            separated={queueVisible || pinnedVisible}
-            dock={props}
-          />
-          <BackgroundSection
-            visible={backgroundVisible}
-            separated={queueVisible || pinnedVisible || agentsVisible}
-            dock={props}
-          />
+          {todoVisible ? (
+            <PinnedTodoPanel
+              todo={props.todo}
+              scrollRegionMaxHeightClass={props.scrollRegionMaxHeightClass}
+              separated={queueVisible}
+            />
+          ) : null}
+          {dockRows({
+            rows,
+            separatedBefore: queueVisible || todoVisible,
+            dock: props,
+          })}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Plain functions, never JSX components (never invoked as `<X .../>`): each
+ * dock row's hotspot ref is a plain callback threaded through here as data,
+ * and the react-compiler's ref-safety check treats a same-named prop crossing
+ * an actual COMPONENT boundary as a suspect ref access even though this one
+ * is not - see the identical `dockHotspot`/`hotspotRef` shape that passes
+ * clean one function up, inlined into `ChatLowerDock`'s own render instead of
+ * split into child components. Calling these as ordinary functions (not JSX)
+ * keeps everything in the one component the compiler already trusts.
+ */
+function dockRows(props: {
+  readonly rows: ReadonlyArray<DockRowPlan>;
+  readonly separatedBefore: boolean;
+  readonly dock: ChatLowerDockProps;
+}): ReactNode {
+  let separated = props.separatedBefore;
+  const nodes: ReactNode[] = [];
+  for (const row of props.rows) {
+    if (row.showGhost) {
+      nodes.push(
+        dockGhostRow({
+          key: row.section,
+          hotspotRef: row.hotspot.hotspotRef,
+          condition: row.hotspot.condition,
+          separated,
+        }),
+      );
+      separated = true;
+      continue;
+    }
+    if (!row.showRow) continue;
+    nodes.push(
+      dockRow({
+        key: row.section,
+        section: row.section,
+        hotspotRef: row.hotspot.hotspotRef,
+        separated,
+        dock: props.dock,
+      }),
+    );
+    separated = true;
+  }
+  return nodes;
+}
+
+function dockGhostRow(props: {
+  readonly key: string;
+  readonly hotspotRef: (node: HTMLElement | null) => void;
+  readonly condition: string;
+  readonly separated: boolean;
+}): ReactNode {
+  return (
+    <div
+      key={props.key}
+      ref={props.hotspotRef}
+      data-testid="chat-dock-ghost-row"
+      aria-hidden
+      className={cn(
+        "flex items-center px-3 py-2 text-ui-xs text-muted-foreground/60",
+        props.separated && "border-t border-border/50",
+      )}
+    >
+      <span className="border-b border-dashed border-muted-foreground/40 pb-px">
+        {props.condition}
+      </span>
+    </div>
+  );
+}
+
+function dockRow(props: {
+  readonly key: string;
+  readonly section: DockSection;
+  readonly hotspotRef: (node: HTMLElement | null) => void;
+  readonly separated: boolean;
+  readonly dock: ChatLowerDockProps;
+}): ReactNode {
+  const { dock } = props;
+  if (props.section === "filesChanged") {
+    return (
+      <span key={props.key} className="contents" ref={props.hotspotRef}>
+        <ChatAccumulatedChangesPanel
+          restore={dock.restore}
+          separated={props.separated}
+          scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
+        />
+      </span>
+    );
+  }
+  if (props.section === "activeAgents") {
+    if (dock.selfAgent === null) return null;
+    return (
+      <span key={props.key} className="contents" ref={props.hotspotRef}>
+        <ActiveAgentsPanel
+          epicId={dock.epicId}
+          viewTabId={dock.viewTabId}
+          self={dock.selfAgent}
+          descendants={dock.activeAgents}
+          scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
+          separated={props.separated}
+        />
+      </span>
+    );
+  }
+  // An undefined `backgroundItems` is "the host has not said yet"; the
+  // managed-command rows come from a different stream and need not wait on it.
+  const items = dock.backgroundItems ?? [];
+  return (
+    <span key={props.key} className="contents" ref={props.hotspotRef}>
+      <BackgroundItemsPanel
+        items={items}
+        epicId={dock.epicId}
+        chatId={dock.chatId}
+        viewTabId={dock.viewTabId}
+        canAct={dock.canAct}
+        readOnly={dock.readOnly}
+        pendingStopTaskIds={dock.backgroundStopPendingTaskIds}
+        stopAllPending={dock.backgroundStopAllPending}
+        sessionStopPending={dock.backgroundSessionStopPending}
+        turnActive={dock.activeTurnStatus !== null}
+        scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
+        separated={props.separated}
+        onItemClick={dock.onBackgroundItemClick}
+        onStopItem={dock.onBackgroundItemStop}
+        onStopAll={dock.onBackgroundItemsStopAll}
+        onStopSession={dock.onBackgroundSessionStop}
+      />
+    </span>
   );
 }
 
@@ -170,79 +314,6 @@ function QueueSection(props: {
       onAbortSteer={dock.onQueueAbortSteer}
       onReorder={dock.onQueueReorder}
       onSteerNow={dock.onQueueSteerNow}
-    />
-  );
-}
-
-function PinnedSection(props: {
-  readonly visible: boolean;
-  readonly separated: boolean;
-  readonly changesFolded: boolean;
-  readonly dock: ChatLowerDockProps;
-}) {
-  if (!props.visible) return null;
-  const { dock } = props;
-  return (
-    <div data-testid="chat-pinned-stack">
-      <PinnedStackSections
-        todo={dock.todo}
-        restore={dock.restore}
-        scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
-        separated={props.separated}
-        changesFolded={props.changesFolded}
-      />
-    </div>
-  );
-}
-
-function AgentsSection(props: {
-  readonly visible: boolean;
-  readonly separated: boolean;
-  readonly dock: ChatLowerDockProps;
-}) {
-  const { dock } = props;
-  const selfAgent = dock.selfAgent;
-  if (!props.visible || selfAgent === null) return null;
-  return (
-    <ActiveAgentsPanel
-      epicId={dock.epicId}
-      viewTabId={dock.viewTabId}
-      self={selfAgent}
-      descendants={dock.activeAgents}
-      scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
-      separated={props.separated}
-    />
-  );
-}
-
-function BackgroundSection(props: {
-  readonly visible: boolean;
-  readonly separated: boolean;
-  readonly dock: ChatLowerDockProps;
-}) {
-  const { dock } = props;
-  // An undefined `backgroundItems` is "the host has not said yet"; the
-  // managed-command rows come from a different stream and need not wait on it.
-  const items = dock.backgroundItems ?? [];
-  if (!props.visible) return null;
-  return (
-    <BackgroundItemsPanel
-      items={items}
-      epicId={dock.epicId}
-      chatId={dock.chatId}
-      viewTabId={dock.viewTabId}
-      canAct={dock.canAct}
-      readOnly={dock.readOnly}
-      pendingStopTaskIds={dock.backgroundStopPendingTaskIds}
-      stopAllPending={dock.backgroundStopAllPending}
-      sessionStopPending={dock.backgroundSessionStopPending}
-      turnActive={dock.activeTurnStatus !== null}
-      scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
-      separated={props.separated}
-      onItemClick={dock.onBackgroundItemClick}
-      onStopItem={dock.onBackgroundItemStop}
-      onStopAll={dock.onBackgroundItemsStopAll}
-      onStopSession={dock.onBackgroundSessionStop}
     />
   );
 }

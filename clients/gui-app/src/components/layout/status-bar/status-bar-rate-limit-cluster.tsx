@@ -55,6 +55,8 @@ export function StatusBarRateLimitCluster(props: {
   readonly hostId: string | null;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  /** Whether a Customize session is live - hidden providers stay clickable. */
+  readonly editing: boolean;
 }): ReactNode {
   const display = useStatusBarUsageDisplay();
   const requestRevealProfile = useRateLimitPopoverStore(
@@ -67,6 +69,7 @@ export function StatusBarRateLimitCluster(props: {
     // lane polls here, the queue lane takes its cold start here, and the `↻`
     // below fans out from here. Every other reader observes what this one wrote.
     mode: "live",
+    editing: props.editing,
   });
 
   return (
@@ -167,7 +170,11 @@ export function StatusBarUsageTrigger(props: {
           data-testid="status-bar-rate-limit-content"
           className={STATUS_BAR_USAGE_CONTENT_CLASS}
         >
-          <StatusBarUsageReadings cluster={cluster} display={display} />
+          <StatusBarUsageReadings
+            cluster={cluster}
+            display={display}
+            interactive
+          />
         </span>
       </button>
     </PopoverTrigger>

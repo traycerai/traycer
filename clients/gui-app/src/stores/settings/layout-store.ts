@@ -459,7 +459,7 @@ export const DEFAULT_STATUS_BAR_LAYOUT: StatusBarLayoutPreferences = {
  * re-inserted lands beside the neighbours it renders beside, whichever cluster
  * it belongs to.
  */
-const TOOLBAR_ITEM_IDS: ReadonlyArray<ToolbarItemId> = [
+export const TOOLBAR_ITEM_IDS: ReadonlyArray<ToolbarItemId> = [
   "attachImage",
   "access",
   "harness",

@@ -108,6 +108,7 @@ export function GeneralSettingsPanel() {
                 turnActive={false}
                 judgeBilling={null}
                 closeFocus="trigger"
+                interactive={false}
               />
             }
           />

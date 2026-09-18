@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { House } from "lucide-react";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
 import { headerTabClassName } from "@/components/layout/tabs/tab-chrome-tokens";
@@ -35,6 +36,12 @@ interface TabStripHomeItemProps {
  */
 export function TabStripHomeItem(props: TabStripHomeItemProps): ReactNode {
   const { isActive, onActivate, badgeCount } = props;
+  const { ref } = useLayoutHotspot({
+    settingId: "tabs.home",
+    tileId: null,
+    ghost: false,
+    condition: null,
+  });
 
   return (
     <TooltipWrapper
@@ -44,6 +51,7 @@ export function TabStripHomeItem(props: TabStripHomeItemProps): ReactNode {
       align={undefined}
     >
       <button
+        ref={ref}
         type="button"
         role="tab"
         aria-selected={isActive}

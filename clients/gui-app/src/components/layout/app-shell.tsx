@@ -18,6 +18,7 @@ import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-his
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
 import { MobileAppStatusBar } from "@/components/layout/status-bar/mobile-app-status-bar";
+import { StatusBarGhost } from "@/components/layout/status-bar/status-bar-ghost";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -167,6 +168,7 @@ export function AppShell(props: AppShellProps) {
                   <AppStatusBar />
                 </div>
               ) : null}
+              {!showStatusBar && !isMobile ? <StatusBarGhost /> : null}
               <OpenFolderDialog />
               <RemoteFolderPickerDialog />
               <QuitInterceptBridge />

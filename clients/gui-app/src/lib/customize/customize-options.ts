@@ -38,6 +38,12 @@ export type CustomizeControl = ControlBase &
         readonly options: ReadonlyArray<CustomizeOptionSpec>;
         readonly lastItemHeld: boolean;
         readonly change: (values: ReadonlyArray<string>) => void;
+        /**
+         * Reorders `options` itself (a complete order over every item, not just
+         * the selected ones) rather than the selection. Absent for a plain
+         * checklist with no meaningful order of its own (`sidebar.resourceChips`).
+         */
+        readonly moveItem: ((value: string, direction: -1 | 1) => void) | null;
       }
     | {
         readonly kind: "composite";
@@ -54,11 +60,20 @@ export interface CustomizeMove {
   readonly analytics: AnalyticsSetting;
   readonly run: () => void;
 }
+/** A drop the setting recognises but will not allow - `reason` is spoken over
+ *  the live region instead of applying a move. Distinct from `null`, which is
+ *  simply not a drop this setting has an opinion about (wrong group, no
+ *  target) and reverts silently per the drag contract. */
+export interface CustomizeDropRefusal {
+  readonly refused: string;
+}
 export interface CustomizeDrag {
   readonly group: string;
   readonly axis: "horizontal" | "vertical" | "both";
   /** Resolve against current stores at drop time; null is an invalid drop. */
-  readonly resolveDrop: (overId: string) => CustomizeMove | null;
+  readonly resolveDrop: (
+    overId: string,
+  ) => CustomizeMove | CustomizeDropRefusal | null;
 }
 export interface CustomizeOptions {
   readonly state: string;

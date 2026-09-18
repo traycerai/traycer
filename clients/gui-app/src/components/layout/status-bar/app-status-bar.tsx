@@ -1,4 +1,6 @@
 import { use, useEffect, useState, type ReactNode } from "react";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
@@ -89,6 +91,7 @@ function ScopedAppStatusBar(props: {
   const resourcesEnabled = useLayoutStore(
     (state) => state.statusBar.resources.enabled,
   );
+  const editing = useCustomizeStore((state) => state.session !== null);
   // Resolved here rather than in the cluster because it has two readers on
   // opposite sides of the gate below: the segments, and the right-click menu
   // that wraps the whole strip. One resolution is what keeps the menu's list
@@ -229,6 +232,7 @@ function ScopedAppStatusBar(props: {
                   providers={windowedProviders}
                   profileSelection={profileSelection}
                   scope={scope}
+                  editing={editing}
                 />
               </span>
             </PopoverAnchor>
@@ -266,6 +270,7 @@ function ScopedAppStatusBar(props: {
                   hostId={scope.hostId}
                   hostLabel={scope.hostLabel}
                   hasExplicitPick={props.hasExplicitPick}
+                  interactive
                 />
               }
             />
@@ -289,16 +294,38 @@ function StatusBarUsageSlot(props: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
   readonly scope: HostScope;
+  readonly editing: boolean;
 }): ReactNode {
+  // Registered unconditionally (before the early returns below) so the handle
+  // is a hotspot whether or not the cluster it opens is currently on screen -
+  // the whole point of a handle that "stays" while its segments ghost.
+  const { ref: handleRef } = useLayoutHotspot({
+    settingId: "statusBar.usage",
+    tileId: null,
+    ghost: !props.rateLimitsEnabled,
+    condition: props.rateLimitsEnabled ? null : "Usage limits are turned off",
+  });
   if (!props.scopedToOwnHost)
     return <StatusBarHostNotice scope={props.scope} />;
-  if (!props.rateLimitsEnabled) return null;
   return (
-    <StatusBarRateLimitCluster
-      hostId={props.scope.hostId}
-      providers={props.providers}
-      profileSelection={props.profileSelection}
-    />
+    <>
+      {props.editing ? (
+        <span
+          ref={handleRef}
+          data-testid="status-bar-usage-handle"
+          aria-hidden
+          className="mr-1 inline-flex size-3 shrink-0 rounded-xs border border-dashed border-border/60"
+        />
+      ) : null}
+      {props.rateLimitsEnabled ? (
+        <StatusBarRateLimitCluster
+          hostId={props.scope.hostId}
+          providers={props.providers}
+          profileSelection={props.profileSelection}
+          editing={props.editing}
+        />
+      ) : null}
+    </>
   );
 }
 

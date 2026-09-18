@@ -1,4 +1,6 @@
 import { useLayoutEffect, useRef, type CSSProperties, type Ref } from "react";
+import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import { FoldVertical, Pin, PinOff } from "lucide-react";
 import {
   animate,
@@ -78,6 +80,15 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
     (s) => s.setPinContextUsageBreakdown,
   );
   const indicatorStyle = useLayoutSetting("contextIndicatorStyle");
+  const tileId = useComposerTileId();
+  const effective = computeEffectiveContextUsage(usage);
+  const noUsage = usage === null || effective === null;
+  const { ref: contextHotspotRef, editing: contextEditing } = useLayoutHotspot({
+    settingId: "chat.context",
+    tileId,
+    ghost: noUsage,
+    condition: "no usage reported yet",
+  });
 
   useLayoutEffect(() => {
     if (pinContextUsageBreakdown && focusPinnedActionAfterPinRef.current) {
@@ -91,8 +102,6 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
     }
   }, [pinContextUsageBreakdown]);
 
-  if (usage === null) return null;
-  const effective = computeEffectiveContextUsage(usage);
   // The chip ONLY renders when we can compute a reliable percent from the
   // harness's real SDK data (`contextTokens` + `contextWindow` both
   // sourced from the SDK, no hardcoded fallbacks). For harnesses where
@@ -100,7 +109,19 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   // public context-window surface - the chip stays hidden. Raw token
   // counts on their own would mislead without a denominator, so we don't
   // show them.
-  if (effective === null) return null;
+  if (noUsage) {
+    if (!contextEditing) return null;
+    return (
+      <span
+        ref={contextHotspotRef}
+        data-testid="context-usage-chip-ghost"
+        aria-hidden
+        className="inline-flex h-5 w-12 shrink-0 items-center justify-center rounded-sm border border-dashed border-border/60 text-ui-xs text-muted-foreground/50"
+      >
+        —
+      </span>
+    );
+  }
   const percent = effective.percentLeft;
   const meterStyle = contextUsageMeterStyle(percent);
   const rows = buildContextUsageRows(usage, effective);
@@ -113,13 +134,15 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
 
   if (pinContextUsageBreakdown) {
     return (
-      <ContextUsagePinnedStrip
-        rows={rows}
-        effective={effective}
-        onUnpin={unpinFromPinnedStrip}
-        onCompact={onCompact}
-        actionRef={pinnedUnpinActionRef}
-      />
+      <span ref={contextHotspotRef} className="contents">
+        <ContextUsagePinnedStrip
+          rows={rows}
+          effective={effective}
+          onUnpin={unpinFromPinnedStrip}
+          onCompact={onCompact}
+          actionRef={pinnedUnpinActionRef}
+        />
+      </span>
     );
   }
 
@@ -179,7 +202,10 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   );
 
   return (
-    <div className="flex min-w-0 items-center gap-0.5 justify-self-end">
+    <div
+      ref={contextHotspotRef}
+      className="flex min-w-0 items-center gap-0.5 justify-self-end"
+    >
       {onCompact === null ? null : <CompactAction onCompact={onCompact} />}
       <Popover>
         <PopoverTrigger asChild>

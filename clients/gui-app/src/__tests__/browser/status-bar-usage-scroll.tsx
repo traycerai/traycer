@@ -67,6 +67,7 @@ function accountSegment(index: number): StatusBarProviderSegmentModel {
   return {
     providerId,
     profileId,
+    hidden: false,
     account: { profileId, accentColor: "#5b8def", label: profileId },
     state: "live",
     reason: null,
@@ -120,6 +121,7 @@ export function StatusBarUsageScrollFixture(props: {
           hostId={FIXTURE_HOST_ID}
           hostLabel="Fixture"
           hasExplicitPick={false}
+          interactive={false}
         />
       </div>
     </div>

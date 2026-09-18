@@ -22,6 +22,7 @@ import { TerminalLaunchPanel } from "@/components/home/composer/terminal-launch-
 import type { ComposerMode } from "@/components/home/data/landing-options";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { ComposerToolbar } from "@/components/home/toolbar/composer-toolbar";
+import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { cn } from "@/lib/utils";
@@ -240,11 +241,13 @@ export function ComposerBody({
         toolbar={
           <div className={hiddenInTerminal}>
             <SurfaceActivityProvider active={composerMode === "chat"}>
-              {toolbarLayout === "collapsed" ? (
-                <ComposerMobileToolbar {...sharedToolbarProps} />
-              ) : (
-                <ComposerToolbar {...sharedToolbarProps} />
-              )}
+              <ComposerTileIdProvider tileId="landing">
+                {toolbarLayout === "collapsed" ? (
+                  <ComposerMobileToolbar {...sharedToolbarProps} />
+                ) : (
+                  <ComposerToolbar {...sharedToolbarProps} />
+                )}
+              </ComposerTileIdProvider>
             </SurfaceActivityProvider>
           </div>
         }

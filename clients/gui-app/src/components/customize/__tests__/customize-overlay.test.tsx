@@ -150,11 +150,15 @@ describe("CustomizeOverlay", () => {
     const labels = [...proxies].map((proxy) =>
       proxy.getAttribute("aria-label"),
     );
+    // Both settingIds now carry a real registered factory (composer.mic since
+    // the toolbar ticket, tabs.home since the sidebar ticket), so the proxy's
+    // state comes from that factory's own `state` string, not the "visible"
+    // fallback `proxyState` uses for an unregistered instance.
     expect(labels).toContain(
-      `Customize ${getCustomizeSetting("composer.mic").label}, visible`,
+      `Customize ${getCustomizeSetting("composer.mic").label}, Visible`,
     );
     expect(labels).toContain(
-      `Customize ${getCustomizeSetting("tabs.home").label}, visible`,
+      `Customize ${getCustomizeSetting("tabs.home").label}, Hidden`,
     );
   });
 
@@ -514,6 +518,7 @@ describe("CustomizeOverlay", () => {
       analytics: "layout.composer.mic",
       values: [],
       lastItemHeld: false,
+      moveItem: null,
       options: [
         { value: "a", label: "Option A", picture: null, override: {} },
         { value: "b", label: "Option B", picture: null, override: {} },

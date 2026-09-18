@@ -59,7 +59,7 @@ import {
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
+import { NavigatorResourceHotspotChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import {
@@ -202,6 +202,7 @@ interface TerminalSidebarBodyProps {
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   const { panel } = props;
   const listRef = useRef<HTMLUListElement>(null);
+  const navigatorResourceMetrics = useLayoutSetting("navigatorResourceMetrics");
   const revealRequest = useSidebarNodeRevealRequest(props.tabId);
   useLayoutEffect(() => {
     if (revealRequest === null || listRef.current === null) return;
@@ -230,7 +231,17 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
     );
   }
   if (panel.rows.length === 0 && panel.failedCreates.length === 0) {
-    return <TerminalsEmptyState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
+    return (
+      <>
+        <TerminalsEmptyState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />
+        <NavigatorResourceHotspotChip
+          owner={null}
+          metrics={navigatorResourceMetrics}
+          className={undefined}
+          registersHotspot
+        />
+      </>
+    );
   }
   return (
     <ul
@@ -239,7 +250,7 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
     >
-      {panel.rows.map((row) => (
+      {panel.rows.map((row, index) => (
         <TerminalRow
           key={epicTerminalUiIdentityKey(
             "session",
@@ -254,6 +265,7 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
           durable={row.durable}
           onOpen={(event) => props.onOpen(row, event)}
           authority={panel}
+          registersResourceHotspot={index === 0}
         />
       ))}
       {panel.failedCreates.map((job) => (
@@ -283,6 +295,8 @@ interface TerminalRowProps {
   readonly durable: boolean;
   readonly onOpen: (event: MouseEvent<HTMLElement>) => void;
   readonly authority: EpicTerminalRowAuthority;
+  /** See `ChatNodeProps.registersResourceHotspot` in the chat tree. */
+  readonly registersResourceHotspot: boolean;
 }
 
 function TerminalRow(props: TerminalRowProps) {
@@ -295,6 +309,7 @@ function TerminalRow(props: TerminalRowProps) {
     runtimeStatus,
     session,
     tabId,
+    registersResourceHotspot,
   } = props;
   // Per-row boolean subscription so selecting a session re-renders only the two
   // rows whose active state flips, not every row.
@@ -473,16 +488,17 @@ function TerminalRow(props: TerminalRowProps) {
                       </span>
                     ) : null}
                   </div>
-                  {navigatorResourceMetrics.length > 0 ? (
-                    <OwnerResourceChip
-                      epicId={epicId}
-                      kind="terminal"
-                      ownerId={session.sessionId}
-                      hostId={hostId}
-                      metrics={navigatorResourceMetrics}
-                      className={undefined}
-                    />
-                  ) : null}
+                  <NavigatorResourceHotspotChip
+                    owner={{
+                      epicId,
+                      kind: "terminal",
+                      ownerId: session.sessionId,
+                      hostId,
+                    }}
+                    metrics={navigatorResourceMetrics}
+                    className={undefined}
+                    registersHotspot={registersResourceHotspot}
+                  />
                 </button>
                 <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/term-row:opacity-100">
                   <DropdownMenu>
