@@ -50,6 +50,8 @@ const MENTION_DRAFT: DraftState = {
   origin: null,
   supersedes: null,
   publication: null,
+  chatTitle: null,
+  epicTitle: null,
 };
 
 beforeEach(() => {
@@ -205,6 +207,8 @@ describe("composer draft store hydration", () => {
       origin: null,
       supersedes: null,
       publication: null,
+      chatTitle: null,
+      epicTitle: null,
     });
   });
 
@@ -452,11 +456,11 @@ describe("composer draft store clearDraft", () => {
 });
 
 /**
- * Prompt-stash CAS token: `revision` must bump on real content changes and
+ * Compare-and-swap token: `revision` must bump on real content changes and
  * external replacements, but NOT on caret-only selection updates or on the
  * hydration-time resetEpoch bump.
  */
-describe("composer draft store revision (prompt-stash CAS)", () => {
+describe("composer draft store revision (CAS token)", () => {
   it("bumps revision on setSnapshot; selection-only uses setSelection", () => {
     const taskId = "task-revision-1";
     useComposerDraftStore

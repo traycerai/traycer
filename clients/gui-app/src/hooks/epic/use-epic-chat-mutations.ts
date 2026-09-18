@@ -6,8 +6,9 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  CreateChatRequestV11,
+  CreateChatRequestV12,
   CreateChatResponse,
+  CreateChatResponseV12,
   DeleteChatRequest,
   DeleteChatResponse,
   SetChatArchivedRequest,
@@ -30,7 +31,7 @@ import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
+import { epicMutationKeys } from "@/lib/query-keys";
 import {
   toastFromHostError,
   toastFromHostErrorWithDetail,
@@ -44,6 +45,18 @@ import {
   clearPendingChatCreation,
 } from "@/lib/chats/pending-chat-creations";
 import { isRecoverableLatestForkRefusal } from "@/lib/chats/recoverable-fork-refusal";
+import { reportEpicCreateRefusal } from "@/lib/epics/report-epic-create-refusal";
+import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
+import {
+  currentDraftBlobOwnerId,
+  invalidateDraftBlobConfirmations,
+  putDraftBlobs,
+} from "@/lib/drafts/draft-blob-transport";
+import {
+  armEpicCreateSeedHoldTimer,
+  clearEpicCreateSeedPending,
+  invalidateBindingListingsExceptHeld,
+} from "@/lib/worktree/pending-epic-create-seeds";
 import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -65,7 +78,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
  * is rejected through the mutation error channel instead of creating the chat
  * on the wrong machine.
  */
-export type CreateChatMutationInput = CreateChatRequestV11;
+export type CreateChatMutationInput = CreateChatRequestV12;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
   /**
@@ -178,7 +191,7 @@ function isInlineForkRefusal(error: HostRpcError): boolean {
  * create on the tab's own bound host client.
  */
 export function useEpicCreateChatForHost(): UseMutationResult<
-  CreateChatResponse,
+  CreateChatResponseV12,
   HostRpcError,
   CreateChatMutationInput,
   CreateChatMutationContext
@@ -208,11 +221,20 @@ export function useEpicCreateChatForHost(): UseMutationResult<
  * more: the app-wide one that existed had zero callers, and a create is
  * PLACEMENT - it must be sent on the client the placement resolved, never
  * on a host read separately from the chip.
+ *
+ * RESOLVES `CreateChatResponseV12`, whose `refusal` key `@1.0`/`@1.1` do not
+ * have at all - so a refused create's body is `{ chatId, refusal }` and its
+ * `chatId` names a chat that was never made. A caller whose request carries an
+ * `initialMessage` with hash-only images MUST read `refusal` before treating
+ * the body as a created chat; the new-conversation modal is the only such
+ * caller, and it is the reason this type is the `@1.2` one. The fork dialog,
+ * the clone-on-host-switch flow and the tile's side-chat send no initial
+ * message, so the host has nothing to fail to resolve for them.
  */
 export function useEpicCreateChatForHostClient(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<
-  CreateChatResponse,
+  CreateChatResponseV12,
   HostRpcError,
   CreateChatMutationInput,
   CreateChatMutationContext
@@ -242,6 +264,47 @@ export function useEpicCreateChatForHostClient(
       }
       return params;
     },
+    // The `missing-attachment-bytes` retry, the twin of `epic.create`'s and in
+    // the same place for the same reason: below every arm that treats a body as
+    // a created chat, so only the final outcome reaches them.
+    //
+    // `epic.createChat` is UNKEYED, so the re-dispatch is a plain second
+    // request rather than a replay - which is safe here precisely because the
+    // first one refused and created nothing.
+    //
+    // NOT because the method mints no caller-owned id: it does, and the modal
+    // pre-mints `chatId` and passes it. The reason unkeyed is settled here is
+    // the plan's D-decision about what a key would have to protect. A key
+    // guards the window where the caller cannot tell whether a create landed
+    // and will ask again; this surface has no such window. The modal clears its
+    // draft, staged intent and editor SYNCHRONOUSLY at submit and closes
+    // itself, so the only re-dispatch is the one on this refusal arm - where
+    // the host has already said it created nothing - and a second refusal ends
+    // the line with a toast rather than a retry. There is nothing left for a
+    // key to deduplicate.
+    //
+    // A SECOND refusal is the end of the line. The modal clears its draft,
+    // staged intent and editor synchronously at submit (by design - it closes
+    // itself), so there is no prompt to restore and the toast is the whole
+    // remedy.
+    resolveResponse: async (response, variables, redispatch) => {
+      if (response.refusal?.kind !== "missing-attachment-bytes") {
+        return response;
+      }
+      const hostId = client?.getActiveHostId() ?? null;
+      if (client === null || hostId === null) return response;
+      const content = variables.initialMessage?.content ?? null;
+      if (content === null) return response;
+      const hashes = hashOnlyImageHashes(content);
+      if (hashes.length === 0) return response;
+      // Retracted before the re-upload, exactly as on `epic.create`'s twin:
+      // this refusal is the only evidence the client gets that its ack memo is
+      // wrong, and a hash whose re-upload fails here must not keep reading as
+      // confirmed to the next message that carries it.
+      invalidateDraftBlobConfirmations(hostId, hashes);
+      await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
+      return redispatch();
+    },
     options: {
       mutationKey: epicMutationKeys.createChat(),
       onMutate: () => ({
@@ -249,8 +312,37 @@ export function useEpicCreateChatForHostClient(
         ownerUserId: currentProfileUserId(),
       }),
       onSuccess: (data, params, ctx) => {
+        // A REFUSAL ARRIVES HERE, not in `onError`, and it has to be read
+        // BEFORE anything treats this body as a created chat. `@1.2` gave
+        // `epic.createChat` a `refusal` key it has never had, and the released
+        // lines have none at all - so a refused create's body is
+        // `{ chatId, refusal }`, whose `chatId` names a chat the host did not
+        // make. Retaining it would put a stand-in row in the registry that no
+        // projection can ever confirm, and the invalidations below would ask
+        // the host to re-list a chat that does not exist.
+        //
+        // Nothing else in this arm runs either: no seed-hold timer (no create
+        // to cover), no binding invalidation (no binding), no record refetch.
+        // The teardown of what the SUBMIT staged - the eager tab, the handoff -
+        // belongs to the caller, which is the only side that knows what it
+        // registered.
+        if (data.refusal !== undefined) {
+          reportEpicCreateRefusal(data.refusal, ctx.hostId);
+          clearEpicCreateSeedPending(params.epicId, params.chatId);
+          return;
+        }
         retainCreatedChatUntilProjected(data, params, ctx.ownerUserId);
         invalidateBindingsForEpic(queryClient, ctx.hostId);
+        // This surface's own backstop, armed at its own create's response and
+        // scoped to its own pair. A no-op for the three surfaces that register
+        // nothing (the fork dialog, the tile side-chat, clone-on-host-switch);
+        // it exists for the new-conversation modal's DEFERRED create, whose
+        // tile can be closed before the setup outcome the driver watches for.
+        //
+        // Per pair and NOT per epic: an epic-wide arm here would let any fork
+        // or side-chat into a held landing epic push that landing hold past its
+        // own ceiling.
+        armEpicCreateSeedHoldTimer(params.epicId, params.chatId);
         // NOT optional here: this is the variant the in-Epic new-conversation
         // modal and the fork dialog actually run. The created chat lands in
         // the host's chat database and in nothing this renderer already
@@ -264,6 +356,13 @@ export function useEpicCreateChatForHostClient(
       },
       onError: (error, variables) => {
         releaseCreatedChat(variables);
+        // Beside `releaseCreatedChat` and for the same reason: nothing else
+        // would ever remove a deferred modal create's marker entry. No tile
+        // mounts for a rejected create (the modal's own catch takes the
+        // eager-opened tab down), so the tile-level driver never runs; the only
+        // rejection that can have armed a timer is a lifecycle throw inside the
+        // `onSuccess` above, AFTER the arm, and this clear cancels it.
+        clearEpicCreateSeedPending(variables.epicId, variables.chatId);
         if (isInlineForkRefusal(error)) return;
         // A step inside an operation that recovers from it, not the end of
         // one: the clone-on-host-switch flow narrates the history downgrade
@@ -368,14 +467,25 @@ function releaseCreatedChat(request: CreateChatMutationInput): void {
   clearPendingChatCreation(request.epicId, request.chatId);
 }
 
+/**
+ * Host-wide despite the name, and now through the shared helper: it refetches
+ * every epic's binding listing on this host at the response exactly as before,
+ * EXCEPT one a deferred landing create is still holding. That epic has no host
+ * binding row to answer with until its queued drain's `git worktree add` lands,
+ * so refetching it here would replace the landing seed with `{ rows: [] }` for
+ * the whole provisioning window.
+ *
+ * The cost, accepted and bounded by that window: a synchronous create from any
+ * of this hook's four surfaces into a held epic on the same host has its
+ * binding row on the HOST at the response but on SCREEN only at the hold's
+ * release - or at the first fetch by any observer on that shared key.
+ */
 function invalidateBindingsForEpic(
   queryClient: QueryClient,
   hostId: string | null,
 ): void {
   if (hostId === null) return;
-  void queryClient.invalidateQueries({
-    queryKey: hostQueryKeys.methodScope(hostId, "worktree.listBindingsForEpic"),
-  });
+  invalidateBindingListingsExceptHeld(queryClient, hostId);
 }
 
 /**

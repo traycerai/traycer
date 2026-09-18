@@ -102,7 +102,7 @@ const CODE_DERIVED_MATCHERS: ReadonlyArray<{
  */
 const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.ts": 3,
-  "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 1,
+  "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 2,
   // These reads drive viewport editing and resize-handle navigation. They do
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
@@ -111,10 +111,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
-  "gui-app/src/components/chat/composer/prompt-stash-control.tsx": 7,
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 9,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
   "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
@@ -148,13 +148,18 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/editor-core/links/artifact-link-popover.tsx": 3,
   "gui-app/src/editor-core/nodes/mermaid/pan-zoom-svg-viewer.tsx": 7,
   "gui-app/src/hooks/use-primary-action-shortcut.ts": 1,
-  "gui-app/src/lib/browser-view/sessions/screencast-controller.ts": 4,
-  "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 2,
+  "gui-app/src/lib/browser-view/sessions/screencast-controller.ts": 2,
+  "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 4,
   "gui-app/src/lib/keybindings/bare-key-owner.ts": 1,
   "gui-app/src/lib/keybindings/chord.ts": 4,
   "gui-app/src/lib/notifications/notification-feed-keyboard-navigation.ts": 1,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
+  // The mac/non-mac history-modifier check, kept separate from every
+  // registered chord matcher above: it reads the character so it can
+  // recognise the SAME convention (Cmd/Ctrl+Z, Ctrl+Y) regardless of which
+  // physical key a layout puts it on - see PRINTABLE_CHARACTER_MATCHES.
+  "shared/keybindings/text-history-shortcut.ts": 1,
 };
 
 /**
@@ -191,8 +196,8 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
     why: "platform mod+A select-all convention",
   },
   "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": {
-    chars: ["v"],
-    why: "the clipboard paste convention - see isScreencastPasteChord",
+    chars: ["v", "y"],
+    why: "the clipboard paste convention (see isScreencastPasteChord), plus the non-mac Ctrl+Y redo spelling - screencastHistoryKey re-derives the viewer's history gesture by character so it can translate it across a mac/non-mac viewer-host pair, the same deliberate character-matching exception as isTextHistoryShortcut",
   },
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": {
     chars: ["r"],
@@ -202,9 +207,9 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
     chars: ["r"],
     why: "single-letter accelerator on a visible label inside an open menu",
   },
-  "gui-app/src/components/chat/composer/prompt-stash-control.tsx": {
-    chars: ["d"],
-    why: "single-letter accelerator on a visible label inside an open menu",
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": {
+    chars: ["c", "d"],
+    why: "single-letter accelerators on visible labels inside the open drafts list",
   },
   "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": {
     chars: ["+", "-", "0", "=", "F", "_", "f"],

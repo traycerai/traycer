@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
-import { aggregateCommGraphEdges } from "@/lib/comm-graph/comm-graph-model";
+import {
+  aggregateCommGraphEdges,
+  commGraphPeerTaskFallbackLabel,
+  commGraphPeerTaskStubs,
+} from "@/lib/comm-graph/comm-graph-model";
 import { layoutCommGraphNodes } from "@/lib/comm-graph/comm-graph-layout";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 
@@ -23,6 +27,7 @@ function a2a(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }
@@ -314,6 +319,138 @@ describe("aggregateCommGraphEdges", () => {
     );
 
     expect(edges).toEqual([]);
+  });
+});
+
+describe("commGraphPeerTaskStubs", () => {
+  const LOCAL_AGENT_IDS = new Set(["a", "b"]);
+
+  it("stubs the foreign sender on a receiver-task row, and the foreign receiver on a sender-task mirror row", () => {
+    // Two independent cross-task exchanges, seen from THIS task's log: one
+    // where a foreign agent messaged a local one, and one where a local agent
+    // messaged a foreign one. Each names its own foreign endpoint.
+    const stubs = commGraphPeerTaskStubs(
+      [
+        a2a({
+          id: 1,
+          timestamp: 10,
+          senderAgentId: "foreign-1",
+          receiverAgentId: "a",
+          peerEpicId: "epic-x",
+        }),
+        a2a({
+          id: 2,
+          timestamp: 20,
+          senderAgentId: "b",
+          receiverAgentId: "foreign-2",
+          peerEpicId: "epic-y",
+        }),
+      ],
+      LOCAL_AGENT_IDS,
+    );
+
+    expect(stubs).toEqual([
+      { agentId: "foreign-1", peerEpicId: "epic-x", firstSeenAt: 10 },
+      { agentId: "foreign-2", peerEpicId: "epic-y", firstSeenAt: 20 },
+    ]);
+  });
+
+  it("dedupes by agent id, keeping the first appearance", () => {
+    // The same foreign agent named again on a later row must not produce a
+    // second stub, or overwrite the task/timestamp the first row recorded.
+    const stubs = commGraphPeerTaskStubs(
+      [
+        a2a({
+          id: 1,
+          timestamp: 10,
+          senderAgentId: "foreign-1",
+          receiverAgentId: "a",
+          peerEpicId: "epic-x",
+        }),
+        a2a({
+          id: 2,
+          timestamp: 20,
+          senderAgentId: "foreign-1",
+          receiverAgentId: "b",
+          peerEpicId: "epic-x-later",
+        }),
+      ],
+      LOCAL_AGENT_IDS,
+    );
+
+    expect(stubs).toEqual([
+      { agentId: "foreign-1", peerEpicId: "epic-x", firstSeenAt: 10 },
+    ]);
+  });
+
+  it("ignores rows with no peerEpicId - a same-task row names no foreign task", () => {
+    const stubs = commGraphPeerTaskStubs(
+      [
+        a2a({
+          id: 1,
+          timestamp: 10,
+          senderAgentId: "a",
+          receiverAgentId: "b",
+          peerEpicId: null,
+        }),
+      ],
+      LOCAL_AGENT_IDS,
+    );
+
+    expect(stubs).toEqual([]);
+  });
+
+  it("never stubs an id that is one of this task's own agents", () => {
+    // A cross-task row whose endpoints both happen to resolve locally (should
+    // not occur in practice, but the guard is what makes that safe) produces
+    // no stub at all - a real agent id is never shadowed by a stand-in.
+    const stubs = commGraphPeerTaskStubs(
+      [
+        a2a({
+          id: 1,
+          timestamp: 10,
+          senderAgentId: "a",
+          receiverAgentId: "b",
+          peerEpicId: "epic-x",
+        }),
+      ],
+      LOCAL_AGENT_IDS,
+    );
+
+    expect(stubs).toEqual([]);
+  });
+
+  it("folds a cross-task row onto an edge once the stub id is added to the drawable set", () => {
+    // The whole point of the stand-in: with its id added to the set
+    // `aggregateCommGraphEdges` draws over, the cross-task row is no longer
+    // skipped as an edge to nowhere.
+    const events = [
+      a2a({
+        id: 1,
+        timestamp: 10,
+        senderAgentId: "foreign-1",
+        receiverAgentId: "a",
+        peerEpicId: "epic-x",
+      }),
+    ];
+    const stubs = commGraphPeerTaskStubs(events, LOCAL_AGENT_IDS);
+    const drawableIds = new Set([
+      ...LOCAL_AGENT_IDS,
+      ...stubs.map((stub) => stub.agentId),
+    ]);
+
+    const edges = aggregateCommGraphEdges(events, drawableIds);
+
+    expect(edges).toHaveLength(1);
+    expect([edges[0].agentAId, edges[0].agentBId]).toEqual(["a", "foreign-1"]);
+  });
+});
+
+describe("commGraphPeerTaskFallbackLabel", () => {
+  it("labels a peer task by the first 8 characters of its id", () => {
+    expect(commGraphPeerTaskFallbackLabel("epic-peer-123456789")).toBe(
+      "Task epic-pee",
+    );
   });
 });
 

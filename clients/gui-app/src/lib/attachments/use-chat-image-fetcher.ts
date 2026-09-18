@@ -99,12 +99,12 @@ function chatPlaneReadSelector(
 }
 
 /**
- * How long a one-shot byte read (clipboard re-inline, prompt stash) waits before
- * giving up and treating the image as unresolvable.
+ * How long a one-shot byte read (clipboard re-inline, draft image resolution)
+ * waits before giving up and treating the image as unresolvable.
  *
- * These two callers are not renderers: nothing paints while they run, and both
- * have a defined "couldn't get it" behavior (drop the image from the clipboard
- * write / fail the stash save). An unbounded wait would hang a Cmd+C instead,
+ * These callers are not renderers: nothing paints while they run, and each has
+ * a defined "couldn't get it" behavior (drop the image from the clipboard
+ * write / report it unavailable). An unbounded wait would hang a Cmd+C instead,
  * which is what the old `hasAttachmentBytes` pre-check existed to avoid - the
  * bound replaces that pre-check rather than being added on top of it.
  */
@@ -372,12 +372,12 @@ export type ChatAttachmentByteReader = (
  * answers `null` instead of throwing and gives up after
  * `CHAT_ATTACHMENT_READ_TIMEOUT_MS`.
  *
- * For the two non-rendering consumers - the clipboard re-inline on a copied
- * user message and the prompt stash's hash resolution. Both used to pre-check
- * `hasAttachmentBytes` and read the doc directly; both now go through the host,
- * so both need a bound instead of a pre-check. `null` keeps their existing skip
- * behavior verbatim: the clipboard write leaves the image as a bare hash, and
- * the stash reports the image as unavailable.
+ * For the non-rendering consumers - the clipboard re-inline on a copied user
+ * message, and draft hash resolution. These used to pre-check
+ * `hasAttachmentBytes` and read the doc directly; they now go through the host,
+ * so they need a bound instead of a pre-check. `null` keeps their existing skip
+ * behavior verbatim: the clipboard write leaves the image as a bare hash, and a
+ * draft reports the image as unavailable.
  *
  * Bytes only, deliberately: both consumers re-attach the image to a model that
  * already carries its own media type, so the host's sniffed verdict has no
@@ -386,11 +386,24 @@ export type ChatAttachmentByteReader = (
  * Deliberately NOT routed through `imageBlobCache`: that cache hands back a
  * blob URL, not bytes, and its entries are reference-counted against mounted
  * renderers. A copy is neither.
+ *
+ * THIS WINDOW'S COMPOSER STORE IS TRIED FIRST here, unlike in the rendering
+ * fetcher, where it is the last leg. Both resolve the same hash - the fetcher's
+ * chain falls through to that store too - so this is about WHICH leg answers
+ * first, and hash-first composers changed the answer. An image attached to a
+ * chat draft but not yet SENT now lives only in this window's store; before,
+ * such a node carried its own inline base64 and never reached this resolver at
+ * all. Asking the host first would mean a round-trip per image, on every prompt
+ * stash save of an unsent draft, that is now routinely a miss - and on a remote
+ * host that is a network round-trip. The reorder cannot return the wrong bytes:
+ * the store is content-addressed, so a hit under `hash` IS that image.
  */
 export function useChatAttachmentByteReader(): ChatAttachmentByteReader {
   const fetcher = useChatImageFetcher();
   return useCallback<ChatAttachmentByteReader>(
     async (hash) => {
+      const local = await getImageBytes(hash).catch(() => undefined);
+      if (local !== undefined) return local;
       const controller = new AbortController();
       const timer = setTimeout(
         () => controller.abort(),

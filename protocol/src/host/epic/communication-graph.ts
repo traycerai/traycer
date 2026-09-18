@@ -248,17 +248,43 @@ export const epicCommunicationGraphEventSchema = z.object({
   originChatId: z.string().nullable(),
   /** Origin ref: block or message id to anchor on within `originChatId`. */
   originRefId: z.string().nullable(),
+  /**
+   * @1.1: the task at the far end of a cross-task `a2a_message`. A
+   * cross-task message is recorded in BOTH tasks' logs, each row naming the
+   * other task here, so the graph can draw that end as a task stub node
+   * rather than an agent it has no record of. Null for every same-task row
+   * and every other kind.
+   *
+   * Defaulted rather than required: a host serving @1.1 from before the field
+   * existed omits it, and its frames must still parse.
+   */
+  peerEpicId: z.string().nullable().default(null),
 });
 export type EpicCommunicationGraphEvent = z.infer<
   typeof epicCommunicationGraphEventSchema
 >;
 
-/** Frozen @1.0 event row: the three original kinds only. */
-export const epicCommunicationGraphEventSchemaV10 =
-  epicCommunicationGraphEventSchema.extend({
-    kind: epicCommunicationGraphEventKindSchemaV10,
-    originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
-  });
+/**
+ * Frozen @1.0 event row: the three original kinds only, and no `peerEpicId`.
+ * A hand-written copy, never derived from the live schema above, so growth on
+ * @1.1 can never leak into the released @1.0 line; a @1.0 client's reparse
+ * strips the key.
+ */
+export const epicCommunicationGraphEventSchemaV10 = z.object({
+  id: z.number().int().positive(),
+  kind: epicCommunicationGraphEventKindSchemaV10,
+  timestamp: z.number().int(),
+  senderAgentId: z.string().nullable(),
+  receiverAgentId: z.string().nullable(),
+  responseId: z.string().nullable(),
+  inReplyTo: z.string().nullable(),
+  expectReply: z.boolean().nullable(),
+  messageText: z.string().nullable(),
+  noticeReason: z.string().nullable(),
+  originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
+  originChatId: z.string().nullable(),
+  originRefId: z.string().nullable(),
+});
 export type EpicCommunicationGraphEventV10 = z.infer<
   typeof epicCommunicationGraphEventSchemaV10
 >;
@@ -490,16 +516,40 @@ export const hostCommunicationGraphCloudFeedEventSchema = z.object({
    * row was captured; false for a row captured by an already-live lane. Only
    * `false` is eligible for a live pulse - see the module doc above. */
   historicalUpload: z.boolean(),
+  /**
+   * @1.1: the far end's task of a cross-task message, exactly as the cloud
+   * row carries it - see `epicCommunicationGraphEventSchema.peerEpicId`. Null
+   * for same-task rows and for rows ingested before the cloud stored it.
+   */
+  peerEpicId: z.string().nullable().default(null),
 });
 export type HostCommunicationGraphCloudFeedEvent = z.infer<
   typeof hostCommunicationGraphCloudFeedEventSchema
 >;
 
-export const hostCommunicationGraphCloudFeedEventSchemaV10 =
-  hostCommunicationGraphCloudFeedEventSchema.extend({
-    kind: epicCommunicationGraphEventKindSchemaV10,
-    originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
-  });
+/**
+ * Frozen @1.0 cloud row: original kinds, no `peerEpicId`. Hand-written for
+ * the same reason as `epicCommunicationGraphEventSchemaV10`.
+ */
+export const hostCommunicationGraphCloudFeedEventSchemaV10 = z.object({
+  eventId: z.string().min(1).max(191),
+  originHostId: z.string().min(1),
+  originSequence: z.number().int().nonnegative(),
+  ingestVersion: z.number().int().nonnegative(),
+  kind: epicCommunicationGraphEventKindSchemaV10,
+  capturedAt: z.number().int(),
+  senderAgentId: z.string().nullable(),
+  receiverAgentId: z.string().nullable(),
+  responseId: z.string().nullable(),
+  inReplyTo: z.string().nullable(),
+  expectReply: z.boolean().nullable(),
+  messageText: z.string().nullable(),
+  noticeReason: z.string().nullable(),
+  originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
+  originChatId: z.string().nullable(),
+  originRefId: z.string().nullable(),
+  historicalUpload: z.boolean(),
+});
 export type HostCommunicationGraphCloudFeedEventV10 = z.infer<
   typeof hostCommunicationGraphCloudFeedEventSchemaV10
 >;

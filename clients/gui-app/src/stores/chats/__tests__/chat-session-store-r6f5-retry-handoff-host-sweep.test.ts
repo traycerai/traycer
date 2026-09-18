@@ -26,7 +26,6 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
-import type { PromptStashSnapshot } from "@/lib/composer/prompt-stash-codec";
 
 import {
   createChatSessionStore,
@@ -36,7 +35,7 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   putDraftBlobs,
   resetDraftBlobTransportForTests,
@@ -47,32 +46,15 @@ import {
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
-import { pngBytesOfSize } from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/image-fixtures";
+import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
+import {
+  resetHandedOffDrafts,
+  waitForHandedOffDraft,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
-}));
-
-const promptStashMocks = vi.hoisted(() => ({
-  save: vi.fn<(snapshot: PromptStashSnapshot) => Promise<void>>(),
-}));
-vi.mock("@/stores/composer/prompt-stash-store", () => ({
-  usePromptStashStore: {
-    getState: () => ({
-      save: promptStashMocks.save,
-      // The handoff calls `saveWhile`, not `save`. Routed through the same
-      // mock so these assertions keep observing it - but HONOURING the
-      // predicate, so a stale-generation write is skipped here exactly as the
-      // real store skips it.
-      saveWhile: (
-        snapshot: PromptStashSnapshot,
-        stillCurrent: () => boolean,
-      ) =>
-        stillCurrent()
-          ? promptStashMocks.save(snapshot)
-          : Promise.resolve(undefined),
-    }),
-  },
 }));
 
 const EPIC_ID = "epic-r6f5b";
@@ -95,6 +77,13 @@ const OK_CLIENT: DraftBlobClient = {
     Promise.resolve({
       ok: true as const,
     })) as HostRequester<HostRpcRegistry>["request"],
+  // `drafts.putBlob` rides THIS member, never `request` above - a fake without
+  // it is a fake no upload can reach. Options ignored: no case here turns on
+  // the idempotency key or the upload budget.
+  requestWithOptions: ((_method, _params) =>
+    Promise.resolve({
+      ok: true as const,
+    })) as HostRequester<HostRpcRegistry>["requestWithOptions"],
 };
 
 function hashOnlyContent(hash: string, text: string): JsonContent {
@@ -259,8 +248,7 @@ let harness: Harness | null = null;
 
 beforeEach(() => {
   installFreshIndexedDb();
-  promptStashMocks.save.mockReset();
-  promptStashMocks.save.mockResolvedValue(undefined);
+  resetHandedOffDrafts();
   Object.defineProperty(globalThis, "createImageBitmap", {
     configurable: true,
     writable: true,
@@ -371,18 +359,10 @@ describe("R7F3: a sticky per-consumer sweep record survives another consumer cle
     // only the sticky per-consumer record can be the source of that "gone".
     harness.handle.dispose();
 
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const saved = promptStashMocks.save.mock.calls.map(
-      ([snapshot]) => snapshot,
+    const text = await waitForHandedOffDraft(
+      "sticky sweep prompt",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
     );
-    const match = saved.find((snapshot) =>
-      JSON.stringify(snapshot.entry.content).includes("sticky sweep prompt"),
-    );
-    expect(match).toBeDefined();
-    if (match === undefined) throw new Error("expected the prompt's snapshot");
-    const text = JSON.stringify(match.entry.content);
     expect(text).toContain("no longer exists");
     expect(text).toContain("/repo-r7f3-shared");
   });
@@ -461,18 +441,10 @@ describe("R6F5(b): retryHandoffAccountFor reflects the host-level sweep set", ()
     // through `retryHandoffAccountFor`.
     harness.handle.dispose();
 
-    await vi.waitFor(() => {
-      expect(promptStashMocks.save).toHaveBeenCalled();
-    });
-    const saved = promptStashMocks.save.mock.calls.map(
-      ([snapshot]) => snapshot,
+    const text = await waitForHandedOffDraft(
+      "retry-sweep prompt",
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
     );
-    const match = saved.find((snapshot) =>
-      JSON.stringify(snapshot.entry.content).includes("retry-sweep prompt"),
-    );
-    expect(match).toBeDefined();
-    if (match === undefined) throw new Error("expected the prompt's snapshot");
-    const text = JSON.stringify(match.entry.content);
     expect(text).toContain("no longer exists");
     expect(text).toContain("/repo-retry-sweep");
   });

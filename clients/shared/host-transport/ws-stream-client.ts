@@ -13,6 +13,7 @@ import {
   getMemoizedStreamMethodSupport,
   recordNegotiatedStreamMethodSupport,
 } from "./stream-method-support-registry";
+import { recordNegotiatedStreamMethodVersions } from "./negotiated-stream-version-registry";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -1228,6 +1229,20 @@ export class WsStreamClient<
       if (handshakeHostId !== null) {
         recordNegotiatedStreamMethodSupport(handshakeHostId, method, support);
       }
+    }
+    if (handshakeHostId !== null) {
+      // The per-HOST version publication, from the map this loop just rebuilt.
+      // `manifestSchemaVersions` is the right source rather than
+      // `methodSchemaVersions`: the latter holds only what live sessions of
+      // THIS client negotiated, which is empty for every method nobody here
+      // subscribed to, while a host-keyed reader is asked precisely about
+      // methods its caller has no session for. Published as a whole map so a
+      // re-handshake REPLACES the host's answer instead of leaving a method a
+      // new incarnation no longer bridges behind.
+      recordNegotiatedStreamMethodVersions(
+        handshakeHostId,
+        this.manifestSchemaVersions,
+      );
     }
     if (changed) {
       this.notifyMethodSupportListeners();

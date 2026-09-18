@@ -25,7 +25,10 @@ import {
 import type { HostDirectoryEntry } from "../host-directory";
 import type { RemoteHostDirectoryEntry } from "../remote-fetcher";
 import { WsRpcClient } from "../../host-transport/ws-rpc-client";
-import { HostRpcError } from "../../host-transport/host-messenger";
+import {
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "../../host-transport/host-messenger";
 import type {
   IWebSocketFactory,
   WebSocketCloseEvent,
@@ -760,5 +763,243 @@ describe("HostClient", () => {
     );
 
     expect(dialed).toHaveLength(0);
+  });
+
+  describe("requestWithOptions", () => {
+    const timedSchedulingPolicy: RpcSchedulingPolicy<typeof registry> = {
+      modeFor: () => "latest",
+      // A real number for `host.ping`, unlike the module-level `schedulingPolicy`
+      // above whose `joinResponseTimeoutMs` always answers `null`.
+      joinResponseTimeoutMs: (method) =>
+        method === "host.ping" ? 5_000 : null,
+    };
+
+    function buildTimedClient(): {
+      client: HostClient<typeof registry>;
+      requester: HostClient<typeof registry>;
+      messenger: MockHostMessenger<typeof registry>;
+    } {
+      const invalidator = new RecordingInvalidator();
+      const messenger = new MockHostMessenger<typeof registry>({
+        registry,
+        handlers: { "host.ping": () => ({ pong: true }) },
+        requestId: () => "req-1",
+      });
+      const client = new HostClient({
+        registry,
+        messenger,
+        invalidator,
+        schedulingPolicy: timedSchedulingPolicy,
+        requestCoordinator: null,
+        findHostById: (hostId) =>
+          hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      });
+      client.setRequestContext(makeContext("user-1", "tok-1"));
+      return {
+        client,
+        requester: client.createRequester(mockLocalHostEntry),
+        messenger,
+      };
+    }
+
+    /**
+     * `MockHostMessenger.requestWithResponseTimeout` `void`s the budget and
+     * delegates to `request`, so the budget NEVER appears in `messenger.calls`
+     * and the resolved `{ pong: true }` is byte-identical whether it survived
+     * the dispatch or was dropped on the floor. The spy's argument list is the
+     * only place this seam makes the budget observable - which is why the
+     * cases below assert on the spy and not on the returned value.
+     */
+    it("routes the policy-declared timeout to requestWithResponseTimeout with the budget intact", async () => {
+      const { requester, messenger } = buildTimedClient();
+      const timeoutSpy = vi.spyOn(messenger, "requestWithResponseTimeout");
+
+      await expect(
+        requester.requestWithOptions(
+          "host.ping",
+          {},
+          {
+            idempotencyKey: null,
+            responseTimeoutMs: 5_000,
+            requiredHostMethodVersion: null,
+            signal: undefined,
+          },
+        ),
+      ).resolves.toEqual({ pong: true });
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(
+        "host.ping",
+        {},
+        5_000,
+        expect.objectContaining({ replayMustBeKeyed: false }),
+      );
+    });
+
+    it("carries the budget, the idempotency key and the version floor on ONE dispatch", async () => {
+      // The reason this entry point exists: `drafts.putBlob` needs all three at
+      // once, and no narrow entry point carries more than one. Asserting them
+      // separately would pass on an implementation that can only ever honour
+      // one at a time.
+      const { requester, messenger } = buildTimedClient();
+      const timeoutSpy = vi.spyOn(messenger, "requestWithResponseTimeout");
+      const requiredHostMethodVersion: RequiredHostMethodVersion = {
+        method: "host.ping",
+        version: { major: 1, minor: 0 },
+      };
+
+      await requester.requestWithOptions(
+        "host.ping",
+        {},
+        {
+          idempotencyKey: "put-key-1",
+          responseTimeoutMs: 5_000,
+          requiredHostMethodVersion,
+          signal: undefined,
+        },
+      );
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(
+        "host.ping",
+        {},
+        5_000,
+        expect.objectContaining({
+          idempotencyKey: "put-key-1",
+          requiredHostMethodVersion,
+          replayMustBeKeyed: false,
+        }),
+      );
+      // And the same three survive all the way onto the recorded call, which is
+      // the messenger's own view rather than the spy's.
+      expect(messenger.calls).toHaveLength(1);
+      expect(messenger.calls[0]).toMatchObject({
+        method: "host.ping",
+        idempotencyKey: "put-key-1",
+        requiredHostMethodVersion,
+      });
+    });
+
+    it("passes the key and the floor through on the plain path too", async () => {
+      const { requester, messenger } = buildTimedClient();
+      const requiredHostMethodVersion: RequiredHostMethodVersion = {
+        method: "host.ping",
+        version: { major: 1, minor: 0 },
+      };
+
+      await requester.requestWithOptions(
+        "host.ping",
+        {},
+        {
+          idempotencyKey: "put-key-1",
+          responseTimeoutMs: null,
+          requiredHostMethodVersion,
+          signal: undefined,
+        },
+      );
+
+      expect(messenger.calls).toHaveLength(1);
+      expect(messenger.calls[0]).toMatchObject({
+        idempotencyKey: "put-key-1",
+        requiredHostMethodVersion,
+      });
+    });
+
+    it("rejects any other value the policy did not declare, scheduling nothing", async () => {
+      const { requester, messenger } = buildTimedClient();
+      const requestSpy = vi.spyOn(messenger, "request");
+      const timeoutSpy = vi.spyOn(messenger, "requestWithResponseTimeout");
+
+      await expect(
+        requester.requestWithOptions(
+          "host.ping",
+          {},
+          {
+            idempotencyKey: null,
+            responseTimeoutMs: 4_999,
+            requiredHostMethodVersion: null,
+            signal: undefined,
+          },
+        ),
+      ).rejects.toThrow("does not permit response timeout 4999");
+
+      // The refusal is pre-send, not a failed round trip: nothing reaches the
+      // messenger on either path.
+      expect(requestSpy).not.toHaveBeenCalled();
+      expect(timeoutSpy).not.toHaveBeenCalled();
+      expect(messenger.calls).toHaveLength(0);
+    });
+
+    it("rejects when the policy declares null for the method, scheduling nothing", async () => {
+      // The module-level `schedulingPolicy` (used by `buildHostClientWithMock`)
+      // never declares a timeout for any method - `joinResponseTimeoutMs`
+      // always answers `null`.
+      const { requester, messenger } = buildHostClientWithMock();
+      requester.setRequestContext(makeContext("user-1", "tok-1"));
+      const requestSpy = vi.spyOn(messenger, "request");
+      const timeoutSpy = vi.spyOn(messenger, "requestWithResponseTimeout");
+
+      await expect(
+        requester.requestWithOptions(
+          "host.ping",
+          {},
+          {
+            idempotencyKey: null,
+            responseTimeoutMs: 1_000,
+            requiredHostMethodVersion: null,
+            signal: undefined,
+          },
+        ),
+      ).rejects.toThrow("does not permit response timeout 1000");
+
+      expect(requestSpy).not.toHaveBeenCalled();
+      expect(timeoutSpy).not.toHaveBeenCalled();
+      expect(messenger.calls).toHaveLength(0);
+    });
+
+    it("responseTimeoutMs: null uses the plain request path, not requestWithResponseTimeout", async () => {
+      const { requester, messenger } = buildTimedClient();
+      const requestSpy = vi.spyOn(messenger, "request");
+      const timeoutSpy = vi.spyOn(messenger, "requestWithResponseTimeout");
+
+      await requester.requestWithOptions(
+        "host.ping",
+        {},
+        {
+          idempotencyKey: null,
+          responseTimeoutMs: null,
+          requiredHostMethodVersion: null,
+          signal: undefined,
+        },
+      );
+
+      expect(requestSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).not.toHaveBeenCalled();
+    });
+
+    it("a pinned requester's requestWithOptions routes to the resolved directory entry, unlike the unrouted spine", async () => {
+      const { client, messenger } = buildHostClientWithMock();
+      client.setRequestContext(makeContext("user-1", "tok-1"));
+      const pinned = client.createRequesterForHostId(mockLocalHostEntry.hostId);
+      const options = {
+        idempotencyKey: null,
+        responseTimeoutMs: null,
+        requiredHostMethodVersion: null,
+        signal: undefined,
+      } as const;
+
+      // The Proxy arm: without it, `requestWithOptions` would fall through to
+      // the generic bind and reach the TARGET's own method, which addresses no
+      // host and rejects at the preflight - exactly the failure asserted below
+      // for the unrouted spine itself.
+      await expect(
+        pinned.requestWithOptions("host.ping", {}, options),
+      ).resolves.toEqual({ pong: true });
+      expect(messenger.calls).toHaveLength(1);
+
+      await expect(
+        client.requestWithOptions("host.ping", {}, options),
+      ).rejects.toThrow();
+    });
   });
 });

@@ -3,7 +3,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@/lib/host";
 
 import { getImageBytes, putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -37,7 +37,7 @@ async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 type FakeRequest = HostRequester<HostRpcRegistry>["request"];
 
 function targetWithClient(request: FakeRequest): DraftImageByteTarget {
-  return { hostId: HOST, client: { request } };
+  return { hostId: HOST, client: { request, requestWithOptions: request } };
 }
 
 beforeEach(() => {
@@ -128,7 +128,7 @@ describe("resolveDraftImageBytes", () => {
     }) as FakeRequest;
     const clientOnly: DraftImageByteTarget = {
       hostId: null,
-      client: { request },
+      client: { request, requestWithOptions: request },
     };
     const hostOnly: DraftImageByteTarget = { hostId: HOST, client: null };
 
