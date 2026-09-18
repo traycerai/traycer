@@ -5,12 +5,31 @@
  * from the SENT message's own `structuredContent`, whose images are already
  * epic attachments. Proving those travel bare, unconditionally, is the
  * regression guard for "no user-visible behaviour change" this ticket promises.
+ *
+ * ## The default here is BRIDGE DOWN
+ *
+ * `baseInput` answers `false` for `getDraftBlobBridgeSupported`, so every case
+ * that does not say otherwise runs the pre-bridge behaviour byte for byte: an
+ * image added during the edit is re-inlined, and nothing is uploaded. That is
+ * deliberate rather than incidental - these cases are about the RECONCILE
+ * contract (live re-read, session identity, the send freeze), and an arm that
+ * silently sent some of them by hash would change what they are measuring
+ * without changing what they assert.
+ *
+ * The two cases that DO drive the bridge are the pair at the end, which exist
+ * to show the same document taking two different wires. The fuller by-hash
+ * behaviour - a mixed message, an inherited hash, the upload-before-read order -
+ * lives in `use-chat-message-actions-edit-by-hash.test.tsx`.
  */
 import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  HostClient,
+  HostRequester,
+} from "@traycer-clients/shared/host-client/host-client";
 
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import {
@@ -21,7 +40,10 @@ import {
 import type { InlineEditState } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
+import type { HostRpcRegistry } from "@/lib/host";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const resolveMocks = vi.hoisted(() => ({
   resolveDraftImageBytes: vi.fn<
@@ -39,6 +61,56 @@ vi.mock("@/lib/drafts/resolve-draft-image-bytes", async (importOriginal) => {
     resolveDraftImageBytes: resolveMocks.resolveDraftImageBytes,
   };
 });
+
+/**
+ * The bytes `putDraftBlobs` reads before it uploads. Mocked at the SAME seam
+ * the landing and chat composers write through - `localBytesForHash` calls
+ * `getImageBytes` - so the transport itself stays the production one.
+ */
+const imageStoreMocks = vi.hoisted(() => ({
+  getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
+    Promise.resolve(undefined),
+  ),
+}));
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
+  return { ...actual, getImageBytes: imageStoreMocks.getImageBytes };
+});
+
+const clientMocks = vi.hoisted(() => ({
+  putBlobCalls: [] as string[],
+  ackedHashes: new Set<string>(),
+}));
+
+/**
+ * A `DraftBlobClient`-shaped stub for the tab's `HostClient`. `putDraftBlobs`
+ * reaches exactly `requestWithOptions("drafts.putBlob", …)`; the cast is to the
+ * concrete requester member types rather than through `unknown`, so a newly
+ * called member is a compile error here and not a runtime one.
+ */
+const TAB_CLIENT = {
+  request: (() =>
+    Promise.reject(
+      new Error("unexpected request call"),
+    )) as HostRequester<HostRpcRegistry>["request"],
+  requestWithOptions: ((method: string, params: unknown) => {
+    if (method !== "drafts.putBlob") {
+      return Promise.reject(new Error(`unexpected method ${method}`));
+    }
+    const sha256 = (params as { readonly sha256: string }).sha256;
+    clientMocks.putBlobCalls.push(sha256);
+    return Promise.resolve(
+      clientMocks.ackedHashes.has(sha256)
+        ? { ok: true as const }
+        : { ok: false as const, reason: "digest-mismatch" as const },
+    );
+  }) as HostRequester<HostRpcRegistry>["requestWithOptions"],
+} as HostClient<HostRpcRegistry>;
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => TAB_CLIENT,
+}));
 
 const TARGET_MESSAGE_ID = "msg-1";
 const DEFAULT_SESSION_ID = "edit-session-1";
@@ -190,6 +262,9 @@ function baseInput(
     worktreeBinding: null,
     revertOnEditOpen: false,
     queuedCount: 0,
+    // Bridge DOWN by default - see the file docblock. Every case below that
+    // does not override this runs the pre-bridge behaviour unchanged.
+    getDraftBlobBridgeSupported: () => false,
     ...overrides,
   };
 }
@@ -225,10 +300,23 @@ function wrapper({ children }: { children: ReactNode }): ReactNode {
 beforeEach(() => {
   resolveMocks.resolveDraftImageBytes.mockReset();
   resolveMocks.resolveDraftImageBytes.mockResolvedValue(null);
+  imageStoreMocks.getImageBytes.mockReset();
+  imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
+  clientMocks.putBlobCalls.length = 0;
+  clientMocks.ackedHashes.clear();
+  // A null owner records and confirms nothing, so without this the bridge-UP
+  // case below would upload, be forgotten, re-inline, and read exactly like
+  // the bridge-DOWN case it is paired against.
+  useAuthStore.setState({
+    profile: { userId: "user-1", userName: "U", email: "u@example.com" },
+    contextMetadata: { userId: "user-1", username: "user-1" },
+  });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  useAuthStore.setState({ profile: null, contextMetadata: null });
+  resetDraftBlobTransportForTests();
 });
 
 describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
@@ -261,7 +349,16 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     expect(atoms[0]?.b64content).toBeNull();
   });
 
-  it("re-inlines a hash-only node added during the edit (not present in initialContent)", async () => {
+  it("re-inlines a hash-only node added during the edit (not present in initialContent) when the stream cannot bridge draft blobs", async () => {
+    // EVERY condition the by-hash case below has, except the getter. Without
+    // the local bytes and the host's ack seeded here this case would still pass
+    // with the bridge gate DELETED - the upload would simply find nothing to
+    // send - and it would be reading "no bytes" while claiming to read "no
+    // bridge". Established by ablation, not by inspection.
+    imageStoreMocks.getImageBytes.mockImplementation((hash) =>
+      Promise.resolve(hash === ADDED_IMAGE_HASH ? IMAGE_BYTES : undefined),
+    );
+    clientMocks.ackedHashes.add(ADDED_IMAGE_HASH);
     resolveMocks.resolveDraftImageBytes.mockImplementation((hash) =>
       hash === ADDED_IMAGE_HASH
         ? Promise.resolve(IMAGE_BYTES)
@@ -324,6 +421,81 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
       SENT_IMAGE_HASH,
       expect.anything(),
     );
+    // And nothing was offered to the host: with the bridge down there is no
+    // session that could materialize a bare hash, so uploading would buy a
+    // round trip and change nothing.
+    expect(clientMocks.putBlobCalls).toEqual([]);
+  });
+
+  // The INVERSE of the case above, same document, same added image: with the
+  // bridge up and the host acking the bytes, the node the user just added
+  // travels as 64 characters instead of a base64 screenshot. The two cases
+  // together are the whole user-visible claim of this arm - one document, two
+  // wires, and the only difference is what the stream negotiated.
+  it("sends a hash-only node added during the edit BY HASH when the stream bridges draft blobs", async () => {
+    imageStoreMocks.getImageBytes.mockImplementation((hash) =>
+      Promise.resolve(hash === ADDED_IMAGE_HASH ? IMAGE_BYTES : undefined),
+    );
+    clientMocks.ackedHashes.add(ADDED_IMAGE_HASH);
+    // Resolvable, so a red is the arm failing to take the by-hash path and NOT
+    // a byte source that could not answer. If the gate silently closed, this
+    // mock is exactly what the fallback would use, and the node would arrive
+    // inline rather than the send failing.
+    resolveMocks.resolveDraftImageBytes.mockImplementation((hash) =>
+      hash === ADDED_IMAGE_HASH
+        ? Promise.resolve(IMAGE_BYTES)
+        : Promise.resolve(null),
+    );
+    const editUserMessage = vi.fn<ChatActions["editUserMessage"]>(() => ({
+      clientActionId: "ca-1",
+      messageId: "m-1",
+    }));
+    const edit = inlineEdit({
+      currentContent: {
+        type: "doc",
+        content: [
+          hashOnlyImageNode(SENT_IMAGE_HASH),
+          hashOnlyImageNode(ADDED_IMAGE_HASH),
+          { type: "paragraph", content: [{ type: "text", text: "hi" }] },
+        ],
+      },
+    });
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: edit,
+            chatActions: fakeChatActions(editUserMessage),
+            getDraftBlobBridgeSupported: () => true,
+          }),
+        ),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+
+    await waitFor(() => {
+      expect(editUserMessage).toHaveBeenCalledTimes(1);
+    });
+
+    // The added image was uploaded, and the INHERITED one was not - it is
+    // already an epic attachment, so putting it back on the host would be a
+    // round trip per Save.
+    expect(clientMocks.putBlobCalls).toEqual([ADDED_IMAGE_HASH]);
+    // Nothing was read for bytes at all. This is the order claim: the reconcile
+    // loop resolves its initial set unconditionally, so a required set computed
+    // before the upload would have asked for these bytes anyway and committed
+    // them over the top of a perfectly good hash.
+    expect(resolveMocks.resolveDraftImageBytes).not.toHaveBeenCalled();
+    const atoms = collectImageAtoms(editUserMessage.mock.calls[0][0].content);
+    expect(atoms).toHaveLength(2);
+    // BOTH nodes keep their hash, and neither carries bytes.
+    expect([...atoms].map((atom) => atom.hash).sort()).toEqual(
+      [SENT_IMAGE_HASH, ADDED_IMAGE_HASH].sort(),
+    );
+    for (const atom of atoms) expect(atom.b64content).toBeNull();
   });
 
   it("sends the LIVE currentContent re-read after resolution, not the document captured before the await", async () => {
@@ -460,6 +632,85 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
       expect(atom.hash).toBeNull();
       expect(typeof atom.b64content).toBe("string");
     }
+  });
+
+  /**
+   * B2-2, rehomed. An inline edit whose images have to be read back is
+   * CANCELLABLE across that read - Escape and the Cancel button both just clear
+   * the inline-edit state - and a settled read that dispatched anyway rewrote
+   * message history and reverted files on disk for an edit the user took back.
+   * No later undo puts that right, so the guard has to land before the FIRST
+   * write.
+   *
+   * `inlineEditIsPending` is no defence: it is set INSIDE the dispatch, so
+   * during the read there is nothing for Cancel to refuse and nothing for the
+   * dispatch to notice. The live record following `activeInlineEdit` down to
+   * `null` is.
+   *
+   * The sibling cases - retarget, reopen, already-pending - are the three above;
+   * this is the fourth way out of a session and the only one that leaves NO
+   * record for `commit` to compare against.
+   *
+   * TWO lines enforce it and EITHER is sufficient, so neither ablates alone:
+   * the layout effect drops the live record when `activeInlineEdit` goes null,
+   * and `currentLiveInlineEdit` answers null on a null committed record.
+   * Removing both together is what reds this case - and only this case, which
+   * is what makes it the pin for cancel rather than a second reading of the
+   * retarget one. Stated because a reviewer ablating one line would conclude
+   * this test proves nothing.
+   */
+  it("abandons the send when the edit is CANCELLED during the read", async () => {
+    let release: (() => void) | null = null;
+    resolveMocks.resolveDraftImageBytes.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(IMAGE_BYTES);
+        }),
+    );
+    const editUserMessage = vi.fn<ChatActions["editUserMessage"]>(() => ({
+      clientActionId: "ca-1",
+      messageId: "m-1",
+    }));
+    // `Props` is spelled out rather than inferred. `renderHook` infers it from
+    // `initialProps`, which is a live edit here, so inference lands on
+    // `InlineEditState` and `rerender(null)` - the cancel this case IS - fails
+    // to typecheck against `Props | undefined`. Annotating the callback
+    // parameter alone does not move it; the generic argument does.
+    const { result, rerender } = renderHook<
+      ChatMessageActionsResult,
+      InlineEditState | null
+    >(
+      (edit) =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: edit,
+            chatActions: fakeChatActions(editUserMessage),
+          }),
+        ),
+      {
+        wrapper,
+        initialProps: inlineEdit({
+          currentContent: docWithImageAndText(ADDED_IMAGE_HASH, "typing"),
+          initialContent: docWithText("typing"),
+        }),
+      },
+    );
+
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+
+    act(() => {
+      rerender(null);
+    });
+
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(editUserMessage).not.toHaveBeenCalled();
   });
 
   it("abandons the send when the target message id changes mid-flight", async () => {
@@ -639,5 +890,55 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     });
 
     expect(editUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("starts no second preparation when a resubmit lands while the read is in flight", async () => {
+    // The window BETWEEN the two cells above. "freezes the document the moment
+    // a send goes out" covers a resubmit with no read in flight, and "abandons
+    // the send when a resend is already pending" covers a read in flight whose
+    // pending mark has COMMITTED. Here a read is in flight and no mark has
+    // committed, so neither `sentRevision` nor the projection can answer yet -
+    // the prep-flight latch is the only thing that can, and this is the only
+    // cell that observes it.
+    //
+    // The witness is the READ count, not the send count: one send is already
+    // guaranteed by the freeze even without the latch (the second commit finds
+    // `sentRevision` set), so counting sends would pass either way and pin
+    // nothing. What a missing latch actually costs is a duplicate preparation -
+    // a second set of byte reads and a second upload of the same hashes.
+    const releases: (() => void)[] = [];
+    resolveMocks.resolveDraftImageBytes.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve(IMAGE_BYTES));
+        }),
+    );
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: inlineEdit({
+              currentContent: docWithImageAndText(ADDED_IMAGE_HASH, "typing"),
+              initialContent: docWithText("typing"),
+            }),
+          }),
+        ),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+
+    await act(async () => {
+      for (const release of releases) release();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(resolveMocks.resolveDraftImageBytes).toHaveBeenCalledTimes(1);
   });
 });

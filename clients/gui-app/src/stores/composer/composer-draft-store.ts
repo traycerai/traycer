@@ -21,6 +21,7 @@ import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 
 export interface DraftSelection {
   readonly from: number;
@@ -566,6 +567,41 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.composerDraft)),
+      // Serialization boundary: a persisted chat draft NEVER carries base64.
+      // The in-memory `drafts` map is canonical and DOES hold a paste's
+      // still-pending b64 node - that node is the work token its background
+      // prepare+hash+store job is keyed on, and the composer re-enters ingest
+      // for it on every document change - so the strip lives only here, at the
+      // localStorage seam. A hash-only node, whose bytes are durable in the
+      // composer image store, always survives, and `blobHashes` on the draft
+      // mirror's write is derived from those same hashes, which is what shrank
+      // the debounced `drafts.upsert` bodies from megabytes to a few KB.
+      //
+      // `selection` travels WITH the strip, and is dropped when the strip
+      // actually removes a node. The previous note here reasoned that the image
+      // node "is still there in memory", which is true and answers the wrong
+      // question: what the caret is applied to on the next launch is the
+      // REHYDRATED document, and that is the stripped copy - one node shorter,
+      // with every position after the removed image shifted. See
+      // `stripBase64ImageNodesWithSelection` for why it is dropped rather than
+      // rebased.
+      partialize: (state) => ({
+        pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
+        drafts: Object.fromEntries(
+          Object.entries(state.drafts).map(([chatId, draft]) => [
+            chatId,
+            draft === undefined
+              ? draft
+              : {
+                  ...draft,
+                  ...stripBase64ImageNodesWithSelection(
+                    draft.content,
+                    draft.selection,
+                  ),
+                },
+          ]),
+        ),
+      }),
       // Synchronous localStorage hydration can finish during `create(...)`,
       // before an `onFinishHydration` subscriber can be registered. Normalize
       // at the merge boundary so legacy revisions are safe on initial import.

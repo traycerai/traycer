@@ -253,6 +253,7 @@ const IMAGE_CONTENT: JsonContent = {
         b64content: "abc123",
         mimeType: "image/png",
         size: 128,
+        byHashEligible: true,
       },
     },
     {
@@ -6127,6 +6128,7 @@ describe("createChatSessionStore", () => {
       content: SECOND_CONTENT,
       sender: { type: "user", userId: OWNER_ID },
       settings: SETTINGS,
+      worktreeIntent: null,
     });
 
     // Billing moves; the seeded send's own context must be what is reported.
@@ -7736,6 +7738,7 @@ describe("createChatSessionStore", () => {
       content: CONTENT,
       sender: { type: "user", userId: OWNER_ID },
       settings: SETTINGS,
+      worktreeIntent: null,
     });
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");

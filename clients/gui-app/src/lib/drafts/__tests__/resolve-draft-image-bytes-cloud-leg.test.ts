@@ -5,7 +5,10 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 
 import { getImageBytes, putImage } from "@/lib/composer/landing-image-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
-import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import {
+  resetDraftBlobTransportForTests,
+  type DraftBlobClient,
+} from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   recordCloudDraftImageSources,
@@ -62,7 +65,10 @@ interface RecordedCall {
 
 function targetWithClient(handle: FakeRequest): {
   readonly target: DraftImageByteTarget;
-  readonly client: { readonly request: FakeRequest };
+  // `DraftBlobClient`, not a `{ request }` shape: every consumer below takes
+  // the whole client, and a return type narrower than the value silently
+  // erases `requestWithOptions` at each of them however right the value is.
+  readonly client: DraftBlobClient;
   readonly calls: RecordedCall[];
 } {
   const calls: RecordedCall[] = [];
@@ -70,7 +76,7 @@ function targetWithClient(handle: FakeRequest): {
     calls.push({ method });
     return handle(method, params);
   };
-  const client = { request };
+  const client = { request, requestWithOptions: request };
   return { target: { hostId: HOST, client }, client, calls };
 }
 

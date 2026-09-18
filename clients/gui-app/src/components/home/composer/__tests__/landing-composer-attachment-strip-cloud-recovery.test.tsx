@@ -51,7 +51,7 @@ function okClient(bytesBase64: string, byteLength: number): DraftBlobClient {
     Promise.resolve({
       outcome: { status: "ok" as const, bytesBase64, byteLength },
     })) as FakeRequest;
-  return { request };
+  return { request, requestWithOptions: request };
 }
 
 async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {

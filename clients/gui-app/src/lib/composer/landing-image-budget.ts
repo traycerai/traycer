@@ -34,6 +34,7 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
 import {
   hasLandingImageBytes,
   landingImageSizesHydrated,
@@ -80,25 +81,123 @@ export function registerExtraImageRootSource(
   extraRootSources.push(source);
 }
 
+/**
+ * A source that can also say how big its roots SAY they are.
+ *
+ * Separate from {@link ExtraImageRootSource} rather than a second member on it,
+ * because only a source holding whole documents can answer this - a registrant
+ * that knows nothing but a list of digests (an annotation crop's hash, a
+ * mirror's blob list) has nothing to declare and should not be made to say so.
+ *
+ * ## Why this channel has to exist at all
+ *
+ * `rootByteCost`'s second answer is "what the CONTENT declares", and without
+ * this the only content the budget can see is the landing drafts'. Every OTHER
+ * holder - an open inline edit, a queue edit, a composer mid-submit - is a
+ * hash-only registrant, so its roots fall through to the per-image CEILING even
+ * when their nodes carry an exact `size`. That over-charges a holder's image by
+ * the difference (an inline edit of a 3 MiB attachment is billed
+ * {@link LANDING_IMAGE_MAX_BYTES_PER_IMAGE}), and it does it per holder, so a
+ * few open edits refuse pastes that would comfortably fit.
+ *
+ * The failure direction is safe, which is why it survived a merge unnoticed:
+ * over-charging never admits past the budget, it only refuses work. It is still
+ * wrong, and it is invisible from the outside - the user sees a full store they
+ * do not have.
+ */
+export interface ExtraImageSizeSource {
+  /** Declared byte size per hash, for every root this source is holding. */
+  declaredSizes(): ReadonlyMap<string, number>;
+}
+
+const extraSizeSources: ExtraImageSizeSource[] = [];
+
+export function registerExtraImageSizeSource(
+  source: ExtraImageSizeSource,
+): void {
+  extraSizeSources.push(source);
+}
+
 function currentDrafts(): ReadonlyArray<LandingDraftTab> {
   return draftRootSource?.drafts() ?? [];
 }
 
 /**
  * Per-partition byte budget for stored landing images. Flagged TUNABLE - shipped
- * at 64 MB (≈ 12× the 5 MB per-image cap). Per-runtime partitioning already
- * isolates this to the current window, so the budget is scoped to this window's
- * drafts; there is no cross-window accounting.
+ * at 64 MB, ≈ 12× {@link LANDING_IMAGE_MAX_BYTES_PER_IMAGE}. Per-runtime
+ * partitioning already isolates this to the current window, so the budget is
+ * scoped to this window's drafts; there is no cross-window accounting.
  */
 export const LANDING_IMAGE_BUDGET_BYTES = 64 * 1024 * 1024;
 
 /**
- * Per-image ceiling the paste paths enforce, and therefore the most an
- * unmeasured root can possibly be costing. Lives here because this module is
- * the capacity authority; `use-composer-paste.ts` re-exports it as
- * `MAX_IMAGE_BYTES` for the validation sites.
+ * What the LEGACY prompt stash allowed a single blob to be, and therefore the
+ * most `landing-image-import.ts` can still put in this partition.
+ *
+ * The stash plane itself is gone - #1979 replaced it with the composer Drafts
+ * control and deleted the repository, codec, store and preparation policy. What
+ * survives is its DATA: that change migrates existing stash entries into closed
+ * start-page drafts, and the importer writes those blobs through `putImage`
+ * verbatim, with no ceiling of its own. The stash kept an animated GIF/WebP at
+ * full size up to this number because an animation cannot be re-encoded
+ * frame-faithfully, so a migrated one can still be this large.
+ *
+ * It is written here, beside the budget that reasons about it, rather than left
+ * in the preparer: it is no longer a preparation POLICY, it is a fact about
+ * bytes already on disk. When the migration is retired and no partition can
+ * still be holding one, this retires with it and the ceiling becomes the paste
+ * ceiling alone.
  */
-export const LANDING_IMAGE_MAX_BYTES_PER_IMAGE = 5 * 1024 * 1024;
+export const LEGACY_STASH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The most a single resident root can possibly be costing, and therefore what
+ * an UNMEASURED one is charged (see `rootByteCost`).
+ *
+ * DERIVED FROM THE WRITE SITES, not from one of them, because it is the only
+ * honest way to state a bound: this is a fact about every path that can put
+ * bytes in the partition, and there are two different ceilings among them.
+ *
+ *  - The paste/ingest/annotation paths all prepare under
+ *    `PREPARED_IMAGE_POLICY` and land at most {@link PREPARED_IMAGE_MAX_BYTES}.
+ *  - `importImagesIntoLanding` (`landing-image-import.ts`) writes bytes
+ *    straight through with NO ceiling of its own. Its one per-image check is
+ *    an inline comparison of the node's declared MIME and size against the
+ *    blob - `atom.mimeType !== blob.mimeType || (atom.size !== null && ...)` -
+ *    which rejects corruption and is not a size limit.
+ *
+ *    It has TWO production callers and neither adds one, so this bullet's
+ *    bound comes from the POPULATION each can present, not from a check:
+ *      - `stash-migration.ts` replays legacy stash blobs, bounded by the
+ *        stash's own policy, whose `animationCeiling` is
+ *        {@link LEGACY_STASH_IMAGE_MAX_BYTES}: an animated GIF or WebP cannot
+ *        be re-encoded frame-faithfully, so it was kept VERBATIM up to that
+ *        ceiling rather than compressed to the static one.
+ *      - `unrecorded-prompt-handoff.ts` replays inline `b64content` nodes
+ *        through `materializeInlineImages`, which filters by MIME
+ *        (`isHostStorableImageMimeType`) and takes `size` FROM the bytes - no
+ *        size gate at all. Those bytes are ones some earlier build already
+ *        admitted under whatever paste ceiling was in force then, so they are
+ *        bounded by history rather than by anything in this tree.
+ *
+ *    Both populations only shrink and neither is known to exceed
+ *    {@link LEGACY_STASH_IMAGE_MAX_BYTES} - but that is an argument about what
+ *    past builds could have written, not an invariant this file enforces. A
+ *    NEW writer through this path would need a ceiling of its own.
+ *  - `landing-image-move.ts` re-writes bytes an earlier site already admitted
+ *    and adds no ceiling, so it cannot raise this.
+ *
+ * So the bound is the larger of the two, and taking the paste ceiling alone
+ * would under-charge a migrated animation by 1.25 MiB per unmeasured root -
+ * which on a cold start, where every root is unmeasured, is the budget admitting
+ * more than {@link LANDING_IMAGE_BUDGET_BYTES} of real bytes. Written as a
+ * `max` so a change to either bound moves this with it instead of silently
+ * making it wrong.
+ */
+export const LANDING_IMAGE_MAX_BYTES_PER_IMAGE = Math.max(
+  PREPARED_IMAGE_MAX_BYTES,
+  LEGACY_STASH_IMAGE_MAX_BYTES,
+);
 
 export interface LandingImageBudgetCandidate {
   /**
@@ -185,6 +284,14 @@ function declaredSizeByHash(
     for (const atom of collectImageAtoms(content)) {
       if (atom.hash === null) continue;
       if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
+    }
+  }
+  // First writer wins throughout, including here, so a draft's own declaration
+  // is never displaced by a holder's. Both are the same node's `size` in
+  // practice; the order only decides which copy answers.
+  for (const source of extraSizeSources) {
+    for (const [hash, size] of source.declaredSizes()) {
+      if (!sizeByHash.has(hash)) sizeByHash.set(hash, size);
     }
   }
   return sizeByHash;

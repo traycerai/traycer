@@ -37,7 +37,7 @@ async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 type FakeRequest = HostRequester<HostRpcRegistry>["request"];
 
 function targetWithClient(request: FakeRequest): DraftImageByteTarget {
-  return { hostId: HOST, client: { request } };
+  return { hostId: HOST, client: { request, requestWithOptions: request } };
 }
 
 beforeEach(() => {
@@ -128,7 +128,7 @@ describe("resolveDraftImageBytes", () => {
     }) as FakeRequest;
     const clientOnly: DraftImageByteTarget = {
       hostId: null,
-      client: { request },
+      client: { request, requestWithOptions: request },
     };
     const hostOnly: DraftImageByteTarget = { hostId: HOST, client: null };
 

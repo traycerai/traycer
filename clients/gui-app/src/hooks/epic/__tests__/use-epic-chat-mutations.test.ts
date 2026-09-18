@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { ReactNode } from "react";
 import { createElement } from "react";
 
@@ -160,6 +168,12 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  EPIC_CREATE_SEED_HOLD_TIMEOUT_MS,
+  clearEpicCreateSeedPending,
+  markEpicCreateSeedPending,
+  readEpicCreateSeed,
+} from "@/lib/worktree/pending-epic-create-seeds";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -231,6 +245,12 @@ beforeEach(() => {
 });
 
 describe("useEpicCreateChatForHostClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    clearEpicCreateSeedPending("e2", "c2");
+    clearEpicCreateSeedPending("e-none", "c-none");
+  });
+
   it("retains the created chat on success", () => {
     renderHook(() => useEpicCreateChatForHostClient(null), {
       wrapper: makeWrapper(),
@@ -281,6 +301,108 @@ describe("useEpicCreateChatForHostClient", () => {
     });
 
     expect(clearPendingChatCreation).toHaveBeenCalledWith("e2", "c2");
+  });
+
+  it("onSuccess arms its own pair's timer and is a no-op for a surface that registered nothing", () => {
+    vi.useFakeTimers();
+    const released: string[] = [];
+    markEpicCreateSeedPending("e2", "c2", {
+      hostId: "host-test",
+      seededMessageId: "msg-1",
+      seedRows: false,
+      heldForDeferredCreate: false,
+      release: () => {
+        released.push("c2");
+      },
+    });
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onSuccess: (
+        data: CreateChatResponse,
+        params: CreateChatMutationInput,
+        ctx: { hostId: string | null; ownerUserId: string | null },
+      ) => void;
+    };
+
+    opts.onSuccess(
+      { chatId: "c-none" },
+      {
+        hostId: "host-test",
+        epicId: "e-none",
+        chatId: "c-none",
+        parentId: null,
+        title: "",
+      },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+    vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+    expect(released).toEqual([]);
+    expect(readEpicCreateSeed("e2", "c2")).not.toBeNull();
+
+    opts.onSuccess(
+      { chatId: "c2" },
+      {
+        hostId: "host-test",
+        epicId: "e2",
+        chatId: "c2",
+        parentId: null,
+        title: "",
+      },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+    vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+    expect(released).toEqual(["c2"]);
+    expect(readEpicCreateSeed("e2", "c2")).toBeNull();
+  });
+
+  it("onError clears the pair, including an armed timer", () => {
+    vi.useFakeTimers();
+    const released: string[] = [];
+    markEpicCreateSeedPending("e2", "c2", {
+      hostId: "host-test",
+      seededMessageId: "msg-1",
+      seedRows: false,
+      heldForDeferredCreate: false,
+      release: () => {
+        released.push("c2");
+      },
+    });
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    const successOpts = getCapturedMutation("epic.createChat").options as {
+      onSuccess: (
+        data: CreateChatResponse,
+        params: CreateChatMutationInput,
+        ctx: { hostId: string | null; ownerUserId: string | null },
+      ) => void;
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+    successOpts.onSuccess(
+      { chatId: "c2" },
+      {
+        hostId: "host-test",
+        epicId: "e2",
+        chatId: "c2",
+        parentId: null,
+        title: "",
+      },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+    expect(readEpicCreateSeed("e2", "c2")).not.toBeNull();
+
+    successOpts.onError(makeError("RPC_ERROR"), {
+      hostId: "host-test",
+      epicId: "e2",
+      chatId: "c2",
+      parentId: null,
+      title: "",
+    });
+    expect(readEpicCreateSeed("e2", "c2")).toBeNull();
+    vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+    expect(released).toEqual([]);
   });
 });
 

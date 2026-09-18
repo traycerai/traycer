@@ -2246,12 +2246,11 @@ describe("DraftMirrorSession", () => {
     const gate = new Promise<void>((resolve) => {
       releaseUpload = resolve;
     });
-    const client: DraftBlobClient = {
-      request: (async (_method, _params) => {
-        await gate;
-        return { ok: true as const };
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const uploadPromise = putDraftBlobs(BLOB_HOST, client, [hash], BLOB_OWNER);
     // The request has dispatched (it is parked on `gate`, inside the
@@ -2297,14 +2296,13 @@ describe("DraftMirrorSession", () => {
 
     // The host answers "I do not have these methods" once.
     let withholds = true;
-    const client: DraftBlobClient = {
-      request: ((_method, _params) =>
-        withholds
-          ? Promise.reject(unsupportedError("drafts.putBlob"))
-          : Promise.resolve({
-              ok: true as const,
-            })) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = ((_method, _params) =>
+      withholds
+        ? Promise.reject(unsupportedError("drafts.putBlob"))
+        : Promise.resolve({
+            ok: true as const,
+          })) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     expect(await putDraftBlobs(host, client, [hash], BLOB_OWNER)).toEqual([]);
     expect(hostWithholdsDraftBlobs(host)).toBe(true);
 
@@ -2351,12 +2349,11 @@ describe("DraftMirrorSession", () => {
     const gate = new Promise<void>((resolve) => {
       releaseUpload = resolve;
     });
-    const client: DraftBlobClient = {
-      request: (async (_method, _params) => {
-        await gate;
-        return { ok: true as const };
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
     const host = "host-close-fence-eviction";
 
     const uploadPromise = putDraftBlobs(host, client, [hash], BLOB_OWNER);
@@ -2394,12 +2391,11 @@ describe("DraftMirrorSession", () => {
     const gate = new Promise<void>((resolve) => {
       releaseUpload = resolve;
     });
-    const client: DraftBlobClient = {
-      request: (async (_method, _params) => {
-        await gate;
-        return { ok: true as const };
-      }) as HostRequester<HostRpcRegistry>["request"],
-    };
+    const request = (async (_method, _params) => {
+      await gate;
+      return { ok: true as const };
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
 
     const uploadPromise = putDraftBlobs(
       "host-close-fence-control",
