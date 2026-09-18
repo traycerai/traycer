@@ -15,7 +15,10 @@ import type {
   ChatSearchOpenTarget,
 } from "@/components/chat-search/chat-search-results-view";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
-import type { ChatSearchPageError } from "@/hooks/chats/use-chat-search-query";
+import type {
+  ChatSearchBaseRequest,
+  ChatSearchPageError,
+} from "@/hooks/chats/use-chat-search-query";
 
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicTitle: () => null,
@@ -70,11 +73,23 @@ function readyStatus(
     kind: "ready",
     messages: input.messages ?? [],
     indexState: input.indexState ?? "complete",
+    // The list never reads it; a surface's `renderExpansion` does.
+    expansionBase: EXPANSION_BASE,
     showMore: input.showMore ?? null,
     loadingMore: input.loadingMore ?? false,
     loadMoreError: input.loadMoreError ?? null,
   };
 }
+
+const EXPANSION_BASE: ChatSearchBaseRequest = {
+  query: "snippet",
+  scope: { kind: "current-task", epicId: "epic-1" },
+  tiers: null,
+  roleFilter: "any",
+  dateRange: null,
+  harness: null,
+  mode: "ranked",
+};
 
 function renderList(overrides: Partial<ChatSearchMessageHitListProps>): {
   readonly container: HTMLElement;

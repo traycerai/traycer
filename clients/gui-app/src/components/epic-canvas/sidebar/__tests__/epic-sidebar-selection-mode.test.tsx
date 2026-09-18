@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { domMax, LazyMotion } from "motion/react";
 import { forwardRef, type ReactNode } from "react";
 import type { Mock } from "vitest";
+import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
@@ -627,6 +628,16 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
 vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
   useChatPublicationTargets: () => ({ data: undefined, isError: false }),
   publicationTargetMap: () => new Map<string, string>(),
+}));
+
+// The Agents panel's message-hit section, which the chats panel body asks for
+// on every render. Left `absent` - the section is not this suite's subject, and
+// the real hook issues a host query, which a mount with no `QueryClientProvider`
+// cannot serve.
+vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
+  useChatSearchMessageHits: (): ChatSearchMessageHitsStatus => ({
+    kind: "absent",
+  }),
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
