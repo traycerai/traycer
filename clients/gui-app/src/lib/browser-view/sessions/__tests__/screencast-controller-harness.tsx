@@ -74,6 +74,12 @@ export function mountController(): MountedController {
     const imeInputRef = useRef<HTMLInputElement | null>(null);
     const controllerRef = useRef<ScreencastController | null>(null);
     controllerRef.current ??= createScreencastController({
+      // None of this harness's callers exercise history-shortcut
+      // translation (screencast-input-encoding.ts's screencastHistoryKey) -
+      // `null` is the "host platform unknown" default, which passes the
+      // event through untranslated and matches every existing assertion
+      // here, which was written before that translation existed.
+      readHostIsMac: () => null,
       readControlPlaneRttMs: () => null,
       readRequestNewTab: () => requestNewTab,
       readRequestCloseTab: () => requestCloseTab,

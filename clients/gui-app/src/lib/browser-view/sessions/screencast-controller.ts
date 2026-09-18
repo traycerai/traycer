@@ -18,6 +18,7 @@ import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/cont
 import {
   buildScreencastPointerFrame,
   inputModifiers,
+  screencastHistoryKey,
   isScreencastModChord,
   isScreencastPasteChord,
   nextPointerClickCount,
@@ -32,6 +33,8 @@ import {
 } from "@/lib/browser-view/sessions/screencast-input-encoding";
 import type { BrowserInputChannelLabel } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
+import { isTextHistoryShortcut } from "@traycer-clients/shared/keybindings/text-history-shortcut";
+import { isMac } from "@/lib/keybindings/platform";
 
 const WHEEL_LINE_HEIGHT_PX = 16;
 
@@ -254,6 +257,7 @@ type PendingTouchGesture =
  * displays.
  */
 export function createScreencastController(options: {
+  readonly readHostIsMac: () => boolean | null;
   readonly refs: ScreencastSessionRefs;
   readonly sendFrame: (frame: BrowserScreencastClientFrame) => void;
   readonly listeners: ScreencastControllerListeners;
@@ -1078,8 +1082,7 @@ export function createScreencastController(options: {
       kind: "keyboard",
       type: "rawKeyDown",
       code: event.code,
-      key: event.key,
-      modifiers: inputModifiers(event),
+      ...screencastHistoryKey(event, isMac(), options.readHostIsMac()),
       autoRepeat: event.repeat,
     });
     if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
@@ -1108,8 +1111,7 @@ export function createScreencastController(options: {
       kind: "keyboard",
       type: "keyUp",
       code: event.code,
-      key: event.key,
-      modifiers: inputModifiers(event),
+      ...screencastHistoryKey(event, isMac(), options.readHostIsMac()),
       autoRepeat: event.repeat,
     });
   };
@@ -1212,6 +1214,9 @@ export function createScreencastController(options: {
     handleTileKeyDown: (event) => {
       const tile = refs.tileRef.current;
       if (tile === null) return;
+      // Editing conventions win over physical browser chords. The IME input
+      // forwards the event to the page; an address field keeps its own undo.
+      if (isTextHistoryShortcut(event, isMac())) return;
       if (isScreencastModChord(event, "l")) {
         event.preventDefault();
         event.stopPropagation();

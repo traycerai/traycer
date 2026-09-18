@@ -9,6 +9,7 @@ import {
   hostDirectoryEntryModule,
   hostStreamClientForWithAuthModule,
   liveStream as fixtureLiveStream,
+  registeredHostsModule,
   streamAuthRevalidatorModule,
   tabHostIdModule,
   runnerOpenExternalLinkModule,
@@ -39,6 +40,16 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
+);
+
+// use-screencast-session.ts's hostIsMac derivation falls through to this
+// hook once useHostDirectoryEntry answers no `kind`. Pinned to `data: null`
+// (no registered hosts) so hostIsMac deterministically resolves to `null`
+// ("host platform unknown") for the undo/redo wire-shape assertions below,
+// rather than depending on the real TanStack Query hook's disabled-query
+// default settling the same way.
+vi.mock("@/hooks/auth/use-registered-hosts-query", () =>
+  registeredHostsModule(),
 );
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () =>
@@ -357,17 +368,17 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   /**
-   * The same row, on a layout where the physical key does not produce a `w`.
+   * The same physical position the row-close test above uses, but on a
+   * layout where it produces `z` instead of `w`.
    *
-   * AZERTY reports `key: "z"` for `code: "KeyW"`. The streamed matcher was the
-   * third of the three that decide this chord - after the renderer's and the
-   * native guest's, both moved onto `code` earlier - and the only one still
-   * comparing the CHARACTER, so an armed screencast typed the reader's close
-   * chord at the remote page and closed the row on whichever key produced a
-   * `w` instead. Nothing else could catch it: an armed tile suppresses the
-   * browser-scoped app registry.
+   * AZERTY reports `key: "z"` for `code: "KeyW"`. The streamed matcher
+   * compares physical `code` for `mod+w`, so before `isTextHistoryShortcut`
+   * existed this WAS the close-tab chord and closed the row - on an AZERTY
+   * keyboard, that is also the reader's mod+Z undo. Editing conventions now
+   * win over physical browser chords (`handleTileKeyDown`'s guard), so this
+   * must be left to the page as undo instead, not claimed as close-tab.
    */
-  it("closes the landing row on the physical close key on a non-US layout", async () => {
+  it("leaves mod+Z to the page as undo, even at the physical close-tab position, on a non-US layout", async () => {
     const onRequestCloseTab = vi.fn<() => void>();
     renderPeekTile(
       <BrowserPeekTile
@@ -387,8 +398,8 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     firePlatformModKey(imeInput(), "keydown", "z", "KeyW");
     firePlatformModKey(imeInput(), "keyup", "z", "KeyW");
 
-    expect(onRequestCloseTab).toHaveBeenCalledOnce();
-    expect(keyboardFramesFor(stream, "z", "KeyW")).toEqual([]);
+    expect(onRequestCloseTab).not.toHaveBeenCalled();
+    expect(keyboardFramesFor(stream, "z", "KeyW")).not.toEqual([]);
   });
 
   /**
@@ -420,6 +431,63 @@ describe("BrowserPeekTile shortcuts and paste", () => {
 
     expect(onRequestCloseTab).not.toHaveBeenCalled();
     expect(keyboardFramesFor(stream, "w", "KeyZ")).not.toEqual([]);
+  });
+
+  /**
+   * The baseline, no-layout-collision case for the same guard: on a US
+   * layout, mod+Z/mod+Shift+Z are not registered chords at all today, but
+   * `handleTileKeyDown` now checks `isTextHistoryShortcut` before any chord
+   * lookup, so this pins that undo/redo reach the page even if a future
+   * chord were ever registered on that letter.
+   */
+  it("forwards mod+Z and mod+Shift+Z (undo/redo) to the page as distinct down/up frames", async () => {
+    // `useRegisteredHosts` is pinned to no registered hosts by this file's
+    // mocks, so `hostIsMac` resolves to `null` ("host platform unknown") and
+    // `screencastHistoryKey` passes the event through unmodified rather than
+    // translating it - the frames below carry the event's own key/modifiers
+    // verbatim. A weaker "some frame for key z went out" assertion would
+    // pass even if the redo (Shift) frame were silently dropped, since the
+    // plain undo keydown/keyup alone already satisfy it - this checks each
+    // frame individually, including the Shift bit that distinguishes redo
+    // from undo.
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    const mods = platformModKeys();
+    const baseModifiers = (mods.metaKey ? 4 : 2) as number;
+
+    firePlatformModKey(imeInput(), "keydown", "z", "KeyZ");
+    firePlatformModKey(imeInput(), "keyup", "z", "KeyZ");
+    fireEvent.keyDown(imeInput(), {
+      key: "Z",
+      code: "KeyZ",
+      shiftKey: true,
+      ...mods,
+    });
+
+    const frames = framesOfKind(stream, "keyboard");
+    expect(frames).toMatchObject([
+      { type: "rawKeyDown", key: "z", code: "KeyZ", modifiers: baseModifiers },
+      { type: "keyUp", key: "z", code: "KeyZ", modifiers: baseModifiers },
+      {
+        type: "rawKeyDown",
+        key: "Z",
+        code: "KeyZ",
+        modifiers: baseModifiers | 8,
+      },
+    ]);
   });
 
   /**
