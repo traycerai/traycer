@@ -407,6 +407,59 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(420);
   });
 
+  it("keeps an open Comments panel when another window writes", async () => {
+    // The Comments panel is a transient reveal that `partialize` deliberately
+    // never persists, so a remote blob CANNOT carry it. Before the merge guard,
+    // another window resizing its sidebar replaced the live map with one that
+    // by construction had no Comments entry, and the user's open panel became
+    // Chats for a reason they could not see.
+    useLeftPanelStore.getState().setActivePanelId("tab-a", "comments");
+    // The map is in the blob, exactly as the other window wrote it: that window
+    // had no Comments panel open, so `partialize` gave it an entry-less map.
+    // Omitting the key entirely would let the OLD shallow merge pass too - the
+    // local map would survive for want of anything to replace it - so the
+    // regression would go unwatched.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { sidebarWidthPx: 420, activePanelIdByTabId: {} },
+        version: 3,
+      }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "comments",
+    );
+    // The remote write still lands - this is a guard on one value, not a veto.
+    expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(420);
+  });
+
+  it("takes the remote answer for a durable active panel", async () => {
+    // Only `"comments"` is layered back on. Every other panel id round-trips
+    // through `partialize`, so keeping the local one would ignore the very
+    // write this rehydrate exists to apply.
+    useLeftPanelStore.getState().setActivePanelId("tab-a", "artifacts");
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { activePanelIdByTabId: { "tab-a": "terminals" } },
+        version: 3,
+      }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "terminals",
+    );
+  });
+
   it("ignores a storage event for an unrelated key", async () => {
     useLeftPanelStore.getState().setSidebarWidthPx(DEFAULT_SIDEBAR_WIDTH_PX);
     window.localStorage.setItem(
