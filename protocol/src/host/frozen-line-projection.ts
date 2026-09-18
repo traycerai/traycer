@@ -87,6 +87,26 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Total array elements anywhere in a value. Used only to choose between union
+ * arms that both accept a projection - it is a "how much survived" score, not a
+ * validity check, so it counts elements rather than weighing them.
+ */
+function countArrayElements(value: unknown): number {
+  if (Array.isArray(value)) {
+    let total = value.length;
+    for (const entry of value) total += countArrayElements(entry);
+    return total;
+  }
+  if (isPlainRecord(value)) {
+    let total = 0;
+    for (const entry of Object.values(value))
+      total += countArrayElements(entry);
+    return total;
+  }
+  return 0;
+}
+
+/**
  * Project `value` onto `schema`. Returns `value` BY IDENTITY when nothing had
  * to change, so an undrifted payload allocates nothing and a caller can tell
  * the two cases apart by reference.
@@ -143,14 +163,33 @@ function project(schema: z.ZodType, value: unknown): unknown {
     case "union": {
       const options = def.options;
       if (!options) return value;
-      // Project against the arm that actually accepts the result. An arm the
-      // value was never going to match reports nothing useful, so a candidate
-      // only wins by parsing - never by being first.
+      // An arm becomes a candidate only by PARSING, never by being first - but
+      // parsing is not enough to CHOOSE between two candidates, and "first that
+      // parses" is both order-dependent and lossy. Where two arms overlap, an
+      // earlier one can accept the value after dropping members a later one
+      // would have kept, and nothing downstream could tell a better answer
+      // existed.
+      //
+      // So: an arm needing NO repair wins outright - identity means the value
+      // already belongs to it - and otherwise the arm RETAINING THE MOST array
+      // elements wins. Both rules are independent of arm order, which matters
+      // because that order is an authoring detail of the frozen schema, not a
+      // statement about the wire. Today's unions here are discriminated and so
+      // at most one arm can match anyway; this is what keeps that from becoming
+      // a silent precondition.
+      let best: unknown = null;
+      let bestRetained = -1;
       for (const arm of options) {
         const projected = project(arm, value);
-        if (arm.safeParse(projected).success) return projected;
+        if (!arm.safeParse(projected).success) continue;
+        if (projected === value) return value;
+        const retained = countArrayElements(projected);
+        if (retained > bestRetained) {
+          best = projected;
+          bestRetained = retained;
+        }
       }
-      return value;
+      return bestRetained >= 0 ? best : value;
     }
     case "record": {
       const valueType = def.valueType;

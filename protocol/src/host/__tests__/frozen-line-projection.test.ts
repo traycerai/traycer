@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { projectOntoFrozenLine } from "@traycer/protocol/host/frozen-line-projection";
@@ -114,6 +115,26 @@ describe("projectOntoFrozenLine", () => {
         .catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE)
         .parse(projected).supportedTabs,
     ).toEqual(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70_PREIMAGE.supportedTabs);
+  });
+
+  it("picks the union arm that keeps the most, in either arm order", () => {
+    // Overlapping arms are the case where "first arm that parses" silently
+    // loses data: the narrow arm ACCEPTS the value once its extra member has
+    // been dropped, so it looks like a valid answer while a better one existed.
+    // Today's real unions here are discriminated, so at most one arm can match
+    // - this keeps that from becoming an unstated precondition.
+    const narrow = z.object({ items: z.array(z.enum(["a"])) });
+    const wide = z.object({ items: z.array(z.enum(["a", "b"])) });
+    const value = { items: ["a", "b"] };
+
+    // The narrow arm alone does lose "b" - so the fixture really is the trap.
+    expect(projectOntoFrozenLine(narrow, value)).toEqual({ items: ["a"] });
+
+    for (const union of [z.union([narrow, wide]), z.union([wide, narrow])]) {
+      expect(projectOntoFrozenLine(union, value)).toEqual({
+        items: ["a", "b"],
+      });
+    }
   });
 
   it("drops one unknown tab instead of the whole capability object", () => {
