@@ -82,6 +82,25 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     clientForHostIdMock.current(hostId),
 }));
 
+// `LocalHostRestartFlow`'s `RestartHostConfirmDialog` renders
+// `HostRestartSessions` whenever `open && hostId !== null` - which is the
+// INITIAL confirm, not only a busy-verdict follow-up - so every Force
+// restart… test here that resolves a local host id mounts it the moment the
+// dialog opens. It calls `useFocusModel()`, which reaches
+// `useEpicGetTaskContexts()` -> `useHostClient()` from `@/lib/host/runtime`,
+// and that hook throws outside a real `<HostRuntimeProvider>` - this file
+// mocks `useHostBinding` directly instead of standing one up (same as
+// `local-host-restart-flow.test.tsx`). This suite is about the banner's own
+// wiring (attempt phases, Force restart dispatch), not the sessions list or
+// the wider task/notification/auth stack `useFocusModel` reaches into, so
+// it's mocked at its own leaf module - the same boundary as
+// `use-host-directory-list-query` and `use-host-client-for-host-id` above.
+vi.mock("@/hooks/home-focus/use-focus-model", async () => {
+  const { EMPTY_FOCUS_MODEL } =
+    await import("@/lib/home-focus/build-focus-model");
+  return { useFocusModel: () => EMPTY_FOCUS_MODEL };
+});
+
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),

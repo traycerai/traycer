@@ -118,7 +118,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/delete-account": "Settings - Delete account",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
-  "/settings/fallback": "Settings - Fallback",
+  "/settings/fallback": "Settings - Model routing",
   "/settings/getting-started": "Getting started",
   "/settings/general": "Settings - General",
   "/settings/host": "Settings - Host",

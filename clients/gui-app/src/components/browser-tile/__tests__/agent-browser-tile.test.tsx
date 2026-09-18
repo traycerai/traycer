@@ -118,6 +118,7 @@ const CHROME_CONTROLLER: TileController = {
     back: false,
     forward: false,
     reload: false,
+    stop: false,
     zoom: false,
     devtools: false,
     find: false,
@@ -142,6 +143,7 @@ const CHROME_CONTROLLER: TileController = {
   onBack: () => undefined,
   onForward: () => undefined,
   onReload: () => undefined,
+  onStop: () => undefined,
   onZoomOut: () => undefined,
   onZoomIn: () => undefined,
   onResetZoom: () => undefined,
@@ -855,7 +857,9 @@ describe("ElectronTabSurface browser-scoped chords", () => {
  * A `loading` that neither settles nor reports further progress within
  * `NAVIGATION_STALL_TIMEOUT_MS` resolves to the terminal stalled/Retry
  * surface. Each fresh `loading` status rearms the clock; a `ready`/`dead`
- * status clears the stalled state outright.
+ * status clears the stalled state outright. The stalled surface itself is
+ * reserved for a tab with no committed document - a stall on a page that
+ * has already painted stays quietly invisible instead of covering it.
  */
 describe("ElectronTabSurface navigation stall", () => {
   function loadingStatus(): NativeStatusChange {
@@ -1026,6 +1030,37 @@ describe("ElectronTabSurface navigation stall", () => {
     });
 
     expect(screen.queryByText("This page did not load")).toBeNull();
+  });
+
+  it("keeps a committed page clean when a later navigation stalls", async () => {
+    const bridge = state.bridge;
+    if (bridge === null) throw new Error("bridge missing");
+    renderTile(
+      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
+    );
+    await act(() => Promise.resolve());
+
+    act(() => {
+      bridge.emitStatus(readyStatus());
+    });
+    act(() => {
+      bridge.emitStatus({ ...loadingStatus(), navigationAttempt: 1 });
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    // The stalled surface's own status panel stays mounted underneath (as
+    // the loader panel does elsewhere in this file) - what must actually be
+    // false is whether the overlay ancestor PAINTS it over the live page.
+    const banner = screen.getByText("This page did not load");
+    const overlay = banner.closest('[class*="opacity-"]');
+    if (!(overlay instanceof HTMLElement)) {
+      throw new Error("expected loader overlay ancestor");
+    }
+    expect(overlay.getAttribute("aria-hidden")).toBe("true");
+    expect(overlay.className).toContain("opacity-0");
   });
 });
 

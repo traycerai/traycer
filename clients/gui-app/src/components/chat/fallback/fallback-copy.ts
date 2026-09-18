@@ -66,7 +66,21 @@ export const SWITCH_INSTEAD_LABEL = "Switch instead…";
  */
 export const SWITCH_LABEL = "Switch…";
 export const SIGN_IN_INSTEAD_LABEL = "Sign in instead";
-export const FALLBACK_SETTINGS_LABEL = "Fallback settings";
+/**
+ * The link every routing surface carries back to its settings page.
+ *
+ * "Model routing", not "Fallback settings". Two changes in one string, both
+ * deliberate:
+ *
+ *   - **the noun.** "Fallback" named a mechanism and taught a reader nothing;
+ *     the feature is a routing table the user authors, and "routing" is the
+ *     word the category already uses for exactly this. It is the ONE place the
+ *     feature's name is spelled in chat, which is why it lives as a constant.
+ *   - **no trailing "settings".** The card is already this feature. A chip
+ *     reading "Model routing settings" inside a routing card names the noun
+ *     twice; the chip is a link to the page, and the page is called this.
+ */
+export const FALLBACK_SETTINGS_LABEL = "Model routing";
 
 /**
  * The consequence helper both refusals carry.
@@ -340,27 +354,37 @@ export function describeWaitDisposition(
       // own controls.
       return null;
     case "checking":
-      return "Checking whether this account has a confirmed reset time.";
+      return "Checking when this limit resets…";
     case "no_verified_reset":
-      return "No confirmed reset time for this account yet, so there's nothing to wait for.";
+      return "The provider hasn't said when this limit resets, so there's nothing to wait for.";
     case "beyond_cap":
+      // Names the SETTING, not just the verdict. "Later than your longest wait
+      // allows" states a fact about a number the user cannot see from here and
+      // gives them nowhere to go; the cap lives on this feature's own settings
+      // page, which the card already links to beside this line.
       return resetsAtLabel === null
-        ? "This limit resets later than your longest wait allows."
-        : `This limit resets at ${resetsAtLabel}, later than your longest wait allows.`;
+        ? "This limit resets later than Traycer is set to wait."
+        : `This limit resets at ${resetsAtLabel} — longer than Traycer is set to wait.`;
     case "attempt_unavailable":
-      // NO CAUSE, and specifically not a claim about resend or the account
-      // (D220's rule, applied to the disposition the cold review caught).
+      // SILENT, deliberately.
       //
-      // The withdrawn sentence was "This message can't be re-sent on the
-      // account it ran on", which asserts far more than the producer
-      // established. The host returns this disposition when the wait REPLAY
-      // ENVELOPE is absent, and it adds `retry` and `switch` independently
-      // whenever the chat has settings - so an untyped terminal failure with
-      // automation off renders an ENABLED Retry directly beside it, on the
-      // original settings. The card would have been contradicting its own
-      // button. What the host actually withheld is the wait rung; why is not
-      // ours to state.
-      return "Waiting isn't available for this message.";
+      // The line here used to read "Waiting isn't available for this message."
+      // It claimed no cause, which was right (D220 - the host withheld the wait
+      // replay envelope, and why is not ours to state), but a sentence that
+      // claims no cause and names no remedy is a sentence with nothing in it.
+      // The reader never saw a wait control on this row, so its absence needs
+      // no eulogy; what they have is Retry and Switch, and the card now leads
+      // with those.
+      //
+      // This does NOT weaken F6's rule that a vanished control must be
+      // explained. F6 is about a control the user could reasonably expect: the
+      // three dispositions above all describe a wait that is genuinely on the
+      // table and merely blocked - by a check still running, by a provider that
+      // has not published a boundary, or by a cap the user themselves set and
+      // can raise. Each of those names something to do or something to wait
+      // for. This one names neither, and is the only arm where the honest copy
+      // is none.
+      return null;
   }
 }
 

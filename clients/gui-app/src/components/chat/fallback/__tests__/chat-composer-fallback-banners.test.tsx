@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatRunSettings,
@@ -15,6 +15,7 @@ import {
   returnBannerLowUsage,
   type ComposerRateLimitAdvisory,
 } from "@/components/chat/fallback/fallback-return-low-usage";
+import { useDismissedRoutingCardsStore } from "@/components/chat/fallback/use-dismissed-routing-cards";
 import {
   FAILED_CLAUDE_TUPLE,
   PREFERRED_CLAUDE_TUPLE,
@@ -42,9 +43,33 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+// `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s
+// identical double for the full rationale. Slug passthrough, matching the
+// no-catalogue degradation this file's cases were already written against
+// (this suite pins which CARD renders and the dismiss behaviour, not model
+// naming - that's each card's own test file).
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
+const harness = vi.hoisted(() => ({
+  mutate: vi.fn(),
+}));
+
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
-    mutate: vi.fn(),
+    mutate: harness.mutate,
     isPending: false,
   }),
 }));
@@ -121,6 +146,12 @@ function visiblePrompt(input: {
 describe("ChatComposerFallbackBanners", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Session-scoped, module-level state - see the store's own doc for why
+    // it is deliberately NOT persisted. A dismissal from one test would
+    // otherwise hide every later test's card for the same
+    // `(chatId, traversalId, card)` triple, since every case here reuses
+    // "chat-composer" / "traversal-composer".
+    useDismissedRoutingCardsStore.setState({ dismissed: new Set() });
   });
 
   afterEach(() => {
@@ -158,6 +189,135 @@ describe("ChatComposerFallbackBanners", () => {
     // Falsification: replace the two independent checks with a ternary else-branch and THIS assertion must go red.
     expect(screen.queryByTestId("fallback-grace-card")).toBeNull();
     expect(screen.queryByTestId("fallback-waiting-card")).toBeNull();
+  });
+
+  // A dismissal hides the card WITHOUT cancelling the traversal - see
+  // `use-dismissed-routing-cards.ts`'s own doc for why the × is deliberately
+  // not wired to `useFallbackCancel`. `mutate` (the shared stub every
+  // fallback mutation in this suite resolves through) staying uncalled is the
+  // falsification that a regression here would actually catch: a card that
+  // silently cancelled instead of hiding would still make the queryByTestId
+  // assertion pass.
+  it("hides the grace card after Dismiss, without cancelling the traversal", () => {
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("hold"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(screen.getByTestId("fallback-grace-card")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    // Falsification: drop the `useRoutingCardDismissed` gate from
+    // `FallbackPendingBanner` - this assertion goes red, the card stays.
+    expect(screen.queryByTestId("fallback-grace-card")).toBeNull();
+    // Falsification (the other half): wire `onDismiss` to `useFallbackCancel`
+    // instead of `useDismissRoutingCard` - the card above still disappears
+    // (cancelling ALSO removes it, once the store update this double doesn't
+    // model settles), so this is the assertion that tells the two apart.
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  it("hides the waiting card after Dismiss, without cancelling the traversal", () => {
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("waiting"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(screen.getByTestId("fallback-waiting-card")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("fallback-waiting-card")).toBeNull();
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  it("scopes a dismissal to its own traversal - a new traversal on the same chat still shows its card", () => {
+    const { unmount } = renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("hold"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("fallback-grace-card")).toBeNull();
+    unmount();
+
+    // A later failure opens a NEW traversal id - `use-dismissed-routing-cards`
+    // keys by `(chatId, traversalId, card)` precisely so waving away one
+    // episode does not mute the feature for every later one on this chat.
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingFallback({
+        state: "hold",
+        reason: "rate_limit",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+        targetTuple: TARGET_CODEX_TUPLE,
+        impendingAction: null,
+        deadline: Date.now() + 30_000,
+        attempt: 1,
+        maxAttempts: 3,
+        queuedItemsMoving: 0,
+        siblingSwitching: 0,
+        traversalId: "traversal-composer-2",
+        revision: 1,
+      }),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    // Falsification: key the dismissal store by `chatId` alone - this must
+    // go red, since it is the same chat as the dismissed card above.
+    expect(screen.getByTestId("fallback-grace-card")).toBeDefined();
+  });
+
+  // One traversal walks a whole ladder under a single id: a switch whose
+  // replacement fails advances to a wait on the SAME traversalId. Keyed by
+  // `(chatId, traversalId)` alone, dismissing the countdown would also
+  // swallow the wait card the next rung raises - the one surface telling the
+  // user their chat is parked until a provider limit resets, about a state
+  // they had never been shown. `use-dismissed-routing-cards.ts` fixes this by
+  // adding the card kind to the key; see that file's own doc.
+  //
+  // Falsification: revert `cardKey` to `` `${chatId}:${traversalId}` `` (drop
+  // the `card` segment) and both assertions below go red - the countdown
+  // dismissal now also hides the waiting card for the same traversal.
+  it("scopes a dismissal to its own CARD - dismissing the countdown still shows the waiting card the same traversal raises next", () => {
+    const { unmount } = renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("hold"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("fallback-grace-card")).toBeNull();
+    unmount();
+
+    // Same traversalId, advanced to the next rung of the ladder.
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("waiting"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(screen.getByTestId("fallback-waiting-card")).toBeDefined();
+  });
+
+  it("mirror: scopes a dismissal to its own CARD - dismissing the waiting card still shows the countdown card the same traversal raises next", () => {
+    const { unmount } = renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("waiting"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("fallback-waiting-card")).toBeNull();
+    unmount();
+
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("hold"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(screen.getByTestId("fallback-grace-card")).toBeDefined();
   });
 
   it("renders the return banner only in the fallback-return slot", () => {
