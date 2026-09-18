@@ -160,14 +160,30 @@ export const LEGACY_STASH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
  *
  *  - The paste/ingest/annotation paths all prepare under
  *    `PREPARED_IMAGE_POLICY` and land at most {@link PREPARED_IMAGE_MAX_BYTES}.
- *  - The legacy-stash migration (`landing-image-import.ts`) writes the old
- *    blob bytes straight through with no ceiling of its own - its only
- *    per-image check is `stashImageMetadataAgreesWithBlob`, which compares
- *    declared MIME and size against the blob and is not a size limit. A stash
- *    blob is bounded by the stash's own policy, whose `animationCeiling` is
- *    {@link LEGACY_STASH_IMAGE_MAX_BYTES}: an animated GIF or WebP cannot be
- *    re-encoded frame-faithfully, so it is kept VERBATIM up to that ceiling
- *    rather than compressed to the static one.
+ *  - `importImagesIntoLanding` (`landing-image-import.ts`) writes bytes
+ *    straight through with NO ceiling of its own. Its one per-image check is
+ *    an inline comparison of the node's declared MIME and size against the
+ *    blob - `atom.mimeType !== blob.mimeType || (atom.size !== null && ...)` -
+ *    which rejects corruption and is not a size limit.
+ *
+ *    It has TWO production callers and neither adds one, so this bullet's
+ *    bound comes from the POPULATION each can present, not from a check:
+ *      - `stash-migration.ts` replays legacy stash blobs, bounded by the
+ *        stash's own policy, whose `animationCeiling` is
+ *        {@link LEGACY_STASH_IMAGE_MAX_BYTES}: an animated GIF or WebP cannot
+ *        be re-encoded frame-faithfully, so it was kept VERBATIM up to that
+ *        ceiling rather than compressed to the static one.
+ *      - `unrecorded-prompt-handoff.ts` replays inline `b64content` nodes
+ *        through `materializeInlineImages`, which filters by MIME
+ *        (`isHostStorableImageMimeType`) and takes `size` FROM the bytes - no
+ *        size gate at all. Those bytes are ones some earlier build already
+ *        admitted under whatever paste ceiling was in force then, so they are
+ *        bounded by history rather than by anything in this tree.
+ *
+ *    Both populations only shrink and neither is known to exceed
+ *    {@link LEGACY_STASH_IMAGE_MAX_BYTES} - but that is an argument about what
+ *    past builds could have written, not an invariant this file enforces. A
+ *    NEW writer through this path would need a ceiling of its own.
  *  - `landing-image-move.ts` re-writes bytes an earlier site already admitted
  *    and adds no ceiling, so it cannot raise this.
  *

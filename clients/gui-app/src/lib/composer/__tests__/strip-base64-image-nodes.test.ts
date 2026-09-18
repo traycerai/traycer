@@ -18,8 +18,13 @@ function pendingImage(id: string): JsonContent {
   };
 }
 
+// `hash`, not some other digest field: `ImageAttachmentAttrs` is a union where a
+// node presents `b64content` XOR `hash`, and `hash` is the arm the strip is
+// meant to leave alone. The strip itself only reads `b64content`, so a wrong
+// field name here would still pass - and would be the shape a later reader
+// copies into a test where it does matter.
 function hashOnlyImage(id: string): JsonContent {
-  return { type: "imageAttachment", attrs: { id, sha256: "a".repeat(64) } };
+  return { type: "imageAttachment", attrs: { id, hash: "a".repeat(64) } };
 }
 
 function paragraph(text: string): JsonContent {

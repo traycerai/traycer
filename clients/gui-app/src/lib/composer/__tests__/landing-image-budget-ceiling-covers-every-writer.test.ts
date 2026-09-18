@@ -146,7 +146,14 @@ const WRITERS = [
   {
     path: "src/lib/composer/landing-image-import.ts",
     bound: LEGACY_STASH_IMAGE_MAX_BYTES,
-    why: "migrates a legacy stash blob verbatim; the stash kept animations at full size",
+    // Two callers, neither of which applies a size ceiling, so the bound is a
+    // fact about the bytes each can present rather than about a check:
+    // `stash-migration.ts` replays stash blobs (animations kept at full size by
+    // the stash's own policy), and `unrecorded-prompt-handoff.ts` replays
+    // inline b64 nodes through `materializeInlineImages`, which gates on MIME
+    // only. Naming just the stash caller here read as if the other did not
+    // exist.
+    why: "writes verbatim for two callers - legacy stash blobs and replayed inline handoff nodes - neither of which applies a size ceiling",
   },
   {
     path: "src/lib/composer/landing-image-move.ts",

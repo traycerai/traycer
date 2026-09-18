@@ -511,11 +511,14 @@ describe("composer image preparation: static codecs and compression", () => {
     expect(SPLIT_CEILING_TEST_POLICY.animationCeiling).toBe(5 * 1024 * 1024);
   });
 
-  // The preparer is now shared with every composer paste surface, which runs a
-  // much wider policy. The stash's numbers must not drift toward it: its 2048
-  // px edge, its 975 KiB output ceiling, and - the one that is easy to lose -
-  // its animation ceiling, which is its SOURCE ceiling and not its output one.
-  it("pins the stash policy against the shared preparer's universal policy", () => {
+  // The fixture's whole value is that its two byte ceilings DIFFER, so the
+  // preparer can be driven with an animation sized between them - an interval
+  // that is empty under the production policy, where they are equal. Pinning
+  // both policies side by side is what makes a silent edit to either one fail
+  // here: drift the fixture's `byteCeiling` up to its `animationCeiling`, or
+  // widen the production policy apart, and the distinction this fixture exists
+  // to test quietly stops being tested while every case stays green.
+  it("pins the split-ceiling fixture apart from the production policy", () => {
     expect(SPLIT_CEILING_TEST_POLICY).toEqual({
       sourceCeiling: 5 * 1024 * 1024,
       maxLongestEdge: 2048,

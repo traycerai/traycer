@@ -190,12 +190,19 @@ export function makeMockCodec(options: MockCodecOptions): MockCodecBundle {
  * These were the prompt stash's numbers, and it was the only caller that had
  * them; #1979 deleted that plane, so no production policy has this shape today
  * (`PREPARED_IMAGE_POLICY` sets `byteCeiling === animationCeiling`). It is kept
- * here as a FIXTURE rather than retired with the caller, because the branch it
- * exercises is still in the preparer: an animation is passed through verbatim
- * up to `animationCeiling` instead of being re-encoded to `byteCeiling`, since
- * re-encoding cannot be frame-faithful. Retargeting these suites onto the paste
- * policy would have left that branch with no coverage at all while every case
- * stayed green - the two ceilings would simply be equal.
+ * here as a FIXTURE rather than retired with the caller, and what it preserves
+ * is specifically the SPLIT.
+ *
+ * The verbatim-animation branch itself is not what needs this:
+ * `prepared-image-policy-matrix.test.ts` drives `animated-verbatim` and the
+ * over-ceiling `ImageTooLargeError` under the production policy, so that branch
+ * stays covered whatever this fixture does. What only a split policy can
+ * express is an animation sized BETWEEN the two ceilings - over `byteCeiling`,
+ * under `animationCeiling` - which is the case that distinguishes "passed
+ * through verbatim because re-encoding cannot be frame-faithful" from "small
+ * enough that no policy would have re-encoded it anyway". Where the two
+ * ceilings are equal that interval is empty, so the distinction is untestable
+ * and a passing suite says nothing about it.
  */
 export const SPLIT_CEILING_TEST_POLICY: PreparationPolicy = {
   sourceCeiling: 5 * 1024 * 1024,
