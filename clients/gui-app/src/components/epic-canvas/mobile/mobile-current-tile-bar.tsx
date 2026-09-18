@@ -111,7 +111,10 @@ function MobileCurrentTileBarBody(
   const chatWriteRoute = useChatWriteRoute(tile.type === "chat", tile.id);
   const editable =
     renameKind !== null && canMutate && chatWriteRoute !== "unavailable";
-  const rename = useSwitcherRename(epicId);
+  const rename = useSwitcherRename(
+    epicId,
+    "hostId" in tile ? tile.hostId : null,
+  );
   const handleCommit = useCallback(
     (next: string) => {
       if (renameKind === null) return;

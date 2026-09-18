@@ -110,6 +110,13 @@ vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
     isPending: false,
   }),
 }));
+// The terminal rename client now resolves through the tile's own hostId
+// (`useEpicRecordMutationClient`) rather than the ambient session client or
+// `useHostBinding` - mocked here so this suite never reaches the real host
+// runtime, matching the network-layer-only mocking boundary above.
+vi.mock("@/hooks/epic/use-epic-record-mutation-client", () => ({
+  useEpicRecordMutationClient: () => () => null,
+}));
 
 // The chat SESSION is the external boundary here - this suite opens no chat
 // stream - so the hook that reads one is the seam. Everything downstream of it
@@ -281,6 +288,9 @@ describe("<MobileCurrentTileBar />", () => {
       epicId: "epic-1",
       chatId: "chat-1",
       title: "New title",
+      // The current-tile bar supplies the TILE's own host, not the ambient
+      // session's - `CHAT_TILE.hostId` above.
+      hostId: "host-A",
     });
     expect(mutateSpies.renameTuiAgent).not.toHaveBeenCalled();
     expect(mutateSpies.renameArtifact).not.toHaveBeenCalled();

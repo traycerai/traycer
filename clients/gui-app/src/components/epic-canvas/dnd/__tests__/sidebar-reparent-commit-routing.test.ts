@@ -25,6 +25,16 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { appLogger } from "@/lib/logger";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+  type MockMethodHandler,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
 const seam = vi.hoisted(() => {
   // Typed through a helper rather than an `as TreeSlice` on the literal: the
@@ -36,6 +46,11 @@ const seam = vi.hoisted(() => {
     childrenByParent: {},
     nodeById: {},
   });
+  // A real annotated local, not an `as Record` on the literal below: the
+  // typed lint's `--fix` strips that assertion (the same reason `emptyTree`
+  // above is a helper rather than an inline cast), which silently widened
+  // this back to an empty-object literal with no string index.
+  const hostIdByNodeId: Record<string, string | undefined> = {};
   return {
     emptyTree,
     reparentArtifact: vi.fn<(id: string, parentId: string | null) => boolean>(
@@ -87,8 +102,62 @@ const seam = vi.hoisted(() => {
     enqueueWriteCommand: vi.fn<(intent: unknown) => unknown>(() =>
       Promise.resolve(null),
     ),
+    /**
+     * Per-node owner host override, read into the `tuiAgents`/`chats` union
+     * rows below. Empty by default, so every EXISTING test in this file (none
+     * of which sets it) keeps projecting `hostId: undefined` and falls back to
+     * the session host - unchanged behavior for the same-host case.
+     */
+    hostIdByNodeId,
+    /**
+     * The binding the commit is handed - `null` unless a test needs a
+     * cross-host resolve. Typed as `resolveNamedHostClient`'s own parameter
+     * (a `Pick` of `HostRuntimeBinding`, not the full interface): that pure
+     * resolver reads only `.hostClient`, so this is the honest declaration of
+     * what it depends on, not a narrowed stand-in for a type it does not use.
+     */
+    hostBinding: null as Pick<
+      HostRuntimeBinding<HostRpcRegistry>,
+      "hostClient"
+    > | null,
   };
 });
+
+/**
+ * A real `HostClient` backed by an in-memory `MockHostMessenger`, wrapped as
+ * the `Pick<HostRuntimeBinding, "hostClient">` `resolveNamedHostClient` (the
+ * REAL production function, not a mock) actually takes - so a cross-host
+ * reparent lands on a real transport endpoint, not a spied helper call.
+ * Mirrors `use-switcher-rename.test.tsx`'s `buildCommandRequester`.
+ */
+function buildNamedHostRuntimeBinding(
+  hostId: string,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): Pick<HostRuntimeBinding<HostRpcRegistry>, "hostClient"> {
+  const entry: HostDirectoryEntry = {
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === entry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${hostId}`,
+      handlers,
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return { hostClient: spine };
+}
 
 const handle = vi.hoisted(() => ({ marker: "handle" }));
 
@@ -115,12 +184,24 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
             // `Object.fromEntries` infers `any` off that union rather than
             // widening it - which `no-unsafe-assignment` then rejects. The
             // homogeneous `tuiAgentRecords` map above needs no annotation.
-            byId: Object.fromEntries<{ id: string; docResident: boolean }>([
+            byId: Object.fromEntries<{
+              id: string;
+              docResident: boolean;
+              hostId: string | undefined;
+            }>([
               ...seam.recordIds.map(
-                (id) => [id, { id, docResident: false }] as const,
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: false, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
               ),
               ...seam.docResidentIds.map(
-                (id) => [id, { id, docResident: true }] as const,
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: true, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
               ),
             ]),
             allIds: [...seam.recordIds, ...seam.docResidentIds],
@@ -132,12 +213,21 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
             byId: Object.fromEntries<{
               id: string;
               docResident: boolean | null;
+              hostId: string | undefined;
             }>([
               ...seam.recordIds.map(
-                (id) => [id, { id, docResident: false }] as const,
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: false, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
               ),
               ...seam.docHomedChatIds.map(
-                (id) => [id, { id, docResident: true }] as const,
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: true, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
               ),
             ]),
             allIds: [...seam.recordIds, ...seam.docHomedChatIds],
@@ -199,6 +289,7 @@ async function drop(
     panelId: "chats",
     viewTabId: "tab-1",
     queryClient,
+    hostBinding: seam.hostBinding,
   });
 }
 
@@ -222,6 +313,8 @@ beforeEach(() => {
   seam.beginReparentMutation.mockReturnValue("req-1");
   seam.retirePendingMutation.mockClear();
   seam.retirePendingMutation.mockReturnValue(true);
+  seam.hostIdByNodeId = {};
+  seam.hostBinding = null;
 });
 
 describe("commitSidebarReparentDrop routes by which plane owns the pointer", () => {
@@ -458,6 +551,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       panelId: "artifacts",
       viewTabId: "tab-1",
       queryClient,
+      hostBinding: seam.hostBinding,
     });
 
     expect(seam.enqueueWriteCommand).toHaveBeenCalledTimes(1);
@@ -492,6 +586,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       panelId: "artifacts",
       viewTabId: "tab-1",
       queryClient,
+      hostBinding: seam.hostBinding,
     });
 
     expect(seam.enqueueWriteCommand).toHaveBeenCalledWith({
@@ -522,6 +617,111 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     // cancel must not leave a phantom pending mutation behind.
     expect(seam.beginReparentMutation).not.toHaveBeenCalled();
     expect(seam.retirePendingMutation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A registry-backed agent's parent pointer lives on its OWNER host's record
+ * plane, which is not necessarily the SESSION host the sidebar is projected
+ * from - a cross-host clone can be dragged from a session viewing it as a
+ * foreign row. The commit must resolve a client NAMED for the owner host
+ * (`resolveNamedHostClient(hostBinding, ownerHostId)`) rather than blindly
+ * reusing the session's own client, which would send `epic.reparentChat` to
+ * the wrong machine.
+ */
+describe("commitSidebarReparentDrop resolves the OWNER host's client for a cross-host row", () => {
+  it("sends epic.reparentChat on the NAMED owner-host's real transport, never the session client, when the row's own host differs from the session", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    // The session (`getEpicSessionHandleHostId`) is stubbed to "host-1"; this
+    // row's own owner is a DIFFERENT host.
+    seam.hostIdByNodeId = { "tui-1": "host-2" };
+    const reparentChat = vi.fn<
+      MockMethodHandler<HostRpcRegistry, "epic.reparentChat">
+    >(() => Promise.resolve({ updated: true }));
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": reparentChat,
+    });
+
+    await drop("tui-1", "tui-parent");
+
+    expect(reparentChat).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      chatId: "tui-1",
+      newParentId: "tui-parent",
+    });
+    // The session's OWN client must never see this request - it does not own
+    // the dragged row.
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("invalidates records for BOTH the owner host and the session host on success", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.hostIdByNodeId = { "tui-1": "host-2" };
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": () => Promise.resolve({ updated: true }),
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await drop("tui-1", "tui-parent");
+    await vi.waitFor(() => {
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: hostQueryKeys.methodScope("host-2", "epic.listTuiAgents"),
+      });
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-1", "epic.listTuiAgents"),
+    });
+    invalidate.mockRestore();
+  });
+
+  it("is a silent cancel when there is no host runtime binding to resolve the owner host through", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.hostIdByNodeId = { "tui-1": "host-2" };
+    // `resolveNamedHostClient` answers null for exactly one reason: no
+    // `HostRuntimeBinding` at all (the app shell has not mounted one yet).
+    // `beforeEach` already defaults `hostBinding` to `null`; restated here for
+    // this test's own clarity.
+    seam.hostBinding = null;
+
+    await drop("tui-1", "tui-parent");
+
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+  });
+
+  it("still uses the SESSION client when the row's own host matches the session host (no named binding touched)", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    // Same host as `getEpicSessionHandleHostId`'s stub ("host-1") - an
+    // explicit same-host row, not just the "hostId absent" default the rest
+    // of this file's tests rely on. `hostBinding` is left `null` (the
+    // `beforeEach` default) and must never be touched for this row.
+    seam.hostIdByNodeId = { "tui-1": "host-1" };
+    seam.request.mockResolvedValueOnce({ updated: true });
+
+    await drop("tui-1", "tui-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "tui-1",
+      newParentId: "tui-parent",
+    });
   });
 });
 
@@ -580,6 +780,7 @@ describe("commitSidebarReparentDrop never lets a queue failure escape as an unha
         panelId: "artifacts",
         viewTabId: "tab-1",
         queryClient,
+        hostBinding: seam.hostBinding,
       });
       await drainRejections();
       expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -601,6 +802,7 @@ describe("commitSidebarReparentDrop never lets a queue failure escape as an unha
         panelId: "artifacts",
         viewTabId: "tab-1",
         queryClient,
+        hostBinding: seam.hostBinding,
       });
       await drainRejections();
       expect(errorSpy).not.toHaveBeenCalled();

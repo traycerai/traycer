@@ -1127,7 +1127,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     void renameArtifact
       .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
       .then(
-        () => renameArtifactInTab(tabId, nodeId, trimmed),
+        () => renameArtifactInTab(tabId, nodeId, trimmed, null),
         () => {},
       );
   }, [

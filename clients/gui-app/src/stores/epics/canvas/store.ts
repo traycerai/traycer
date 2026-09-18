@@ -755,6 +755,7 @@ export interface EpicCanvasStore {
     tabId: string,
     artifactId: string,
     name: string,
+    hostId: string | null,
   ) => void;
   /**
    * Refresh the persisted fallback `name` of every terminal tile bound to
@@ -2909,17 +2910,19 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return null;
         },
 
-        renameArtifactInTab: (tabId, artifactId, name) => {
+        renameArtifactInTab: (tabId, artifactId, name, hostId) => {
           const trimmed = name.trim();
           if (trimmed.length === 0) return;
           set((state) => {
             const tab = state.tabsById[tabId];
             if (tab === undefined) return state;
             const canvasPatch = updateTabCanvas(state, tabId, (canvas) =>
-              renameArtifact(canvas, artifactId, trimmed),
+              renameArtifact(canvas, artifactId, trimmed, hostId),
             );
             const records = state.artifactTreeByEpicId[tab.epicId] ?? [];
-            const target = records.find((r) => r.id === artifactId);
+            const matches = (r: EpicNodeRecord) =>
+              r.id === artifactId && (hostId === null || r.hostId === hostId);
+            const target = records.find(matches);
             if (target === undefined || target.name === trimmed) {
               return canvasPatch;
             }
@@ -2928,7 +2931,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               artifactTreeByEpicId: {
                 ...state.artifactTreeByEpicId,
                 [tab.epicId]: records.map((r) =>
-                  r.id === artifactId ? { ...r, name: trimmed } : r,
+                  matches(r) ? { ...r, name: trimmed } : r,
                 ),
               },
             };

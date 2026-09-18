@@ -22,13 +22,19 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
-import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
+import {
+  useEpicDeleteTuiAgent,
+  discardDeletedTuiAgentPayloads,
+} from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
+import {
+  findOpenArtifactInTab,
+  findOpenTileInTab,
+} from "@/stores/epics/canvas/canvas-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 interface SwitcherRowActionsProps {
@@ -64,7 +70,6 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const rename = useSwitcherRename(epicId);
   // Rename and Delete both reach `ChatRegistryWriter` for a chat row, so both
   // are gated together. `"artifact"` and `"terminal"` rows are never chats.
   const writeRoute = useChatWriteRoute(kind === "chat", nodeId);
@@ -73,6 +78,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const ownerHostId = useEpicNodeHostId(nodeId);
   const sessionHostId = useEpicSessionHostId();
   const mutationHostId = ownerHostId ?? sessionHostId;
+  const rename = useSwitcherRename(epicId, mutationHostId);
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact(nodeId);
   // The row's terminal lives on the host the switcher LISTS (the Epic
@@ -91,12 +97,27 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   // Deleting/closing an item that is open must also close its canvas tile, or
   // the single mobile tile view would keep rendering a now-dead tile.
   const closeOpenTile = useCallback(() => {
-    const found = findOpenArtifactInTab(tabId, nodeId);
+    const found =
+      kind === "artifact"
+        ? findOpenArtifactInTab(tabId, nodeId)
+        : findOpenTileInTab(tabId, {
+            id: nodeId,
+            type: kind,
+            hostId: mutationHostId,
+          });
     if (found === null) return;
     navigateNested(epicId, tabId, () =>
       prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
     );
-  }, [epicId, nodeId, navigateNested, prepareCloseCanvasTabFocusTarget, tabId]);
+  }, [
+    epicId,
+    kind,
+    mutationHostId,
+    nodeId,
+    navigateNested,
+    prepareCloseCanvasTabFocusTarget,
+    tabId,
+  ]);
 
   const submitRename = useCallback(
     (title: string) => {
@@ -111,8 +132,17 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       deleteChat.mutate({ epicId, chatId: nodeId, hostId: mutationHostId });
     else if (kind === "terminal-agent")
       deleteTuiAgent.mutate(
-        { epicId, tuiAgentId: nodeId },
-        { onSuccess: () => withoutTabRecovery(closeOpenTile) },
+        { epicId, tuiAgentId: nodeId, hostId: mutationHostId },
+        {
+          onSuccess: () => {
+            withoutTabRecovery(closeOpenTile);
+            discardDeletedTuiAgentPayloads({
+              epicId,
+              tuiAgentId: nodeId,
+              hostId: mutationHostId,
+            });
+          },
+        },
       );
     else if (kind === "artifact")
       deleteArtifact.mutate(

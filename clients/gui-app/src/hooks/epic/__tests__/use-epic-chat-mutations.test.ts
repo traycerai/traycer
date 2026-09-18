@@ -115,6 +115,7 @@ import type {
   CreateChatMutationInput,
   DeleteChatMutationInput,
   DeleteChatMutationOptions,
+  RenameChatMutationInput,
 } from "@/hooks/epic/use-epic-chat-mutations";
 
 interface CapturedMutationArgs {
@@ -294,20 +295,91 @@ describe("useEpicRenameChat", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename agent.");
   });
 
-  it("addresses the Epic session's host, not the app-wide one", () => {
-    // Both call sites (the sidebar chat tree, the canvas tab rename) live
-    // inside an Epic and outside every tile `TabHostProvider`. The ambient
-    // client this used to read is the EFFECTIVE host, which diverges from the
-    // session host for the whole of a re-point - a window in which the sidebar
-    // stays interactive because only the canvas is made inert.
-    //
-    // Identity, not "a client was passed": `useHostClient()` is mocked to
-    // return a fresh object per call, so a regression fails here on the
-    // object rather than on an absence.
+  // The caller names the record's owning host on the mutation input
+  // (`RenameChatMutationInput.hostId`), like archive/delete above - a rename
+  // is a write to that row's owning host, not to whatever the Epic session
+  // happens to be bound to. `useEpicRecordMutationClient()` still prefers the
+  // session client when it already addresses the named host (avoids minting
+  // a second requester for the common case) and falls through to the binding
+  // otherwise.
+  it("uses the session client for the session host and the binding otherwise", () => {
     renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
-    expect(getCapturedMutation("epic.renameChat").client).toBe(
+    expect(resolveCapturedClient("epic.renameChat", "host-test")).toBe(
       epicSessionHostClient,
     );
+    expect(resolveCapturedClient("epic.renameChat", "remote-host")).toBe(
+      namedHostClients.get("remote-host"),
+    );
+  });
+
+  it("fails closed for a null host without dispatching anywhere", () => {
+    renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
+    expect(resolveCapturedClient("epic.renameChat", null)).toBeNull();
+  });
+
+  it("strips hostId from the wire request", () => {
+    renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
+    const mapVariables = getCapturedMutation("epic.renameChat").mapVariables;
+    if (mapVariables === undefined) {
+      throw new Error("expected renameChat mapVariables");
+    }
+    const variables: RenameChatMutationInput = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      title: "New title",
+      hostId: "remote-host",
+    };
+    expect(mapVariables(variables as never)).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      title: "New title",
+    });
+  });
+
+  it("refreshes both the target and viewer caches after a remote rename", () => {
+    const { wrapper, queryClient } = makeWrapperWithClient();
+    const invalidateQueries = vi
+      .spyOn(queryClient, "invalidateQueries")
+      .mockResolvedValue();
+    renderHook(() => useEpicRenameChat(), { wrapper });
+    const opts = getCapturedMutation("epic.renameChat").options as {
+      onMutate: (variables: RenameChatMutationInput) => {
+        readonly hostId: string | null;
+        readonly viewerHostId: string | null;
+      };
+      onSuccess: (
+        data: unknown,
+        variables: RenameChatMutationInput,
+        ctx: {
+          readonly hostId: string | null;
+          readonly viewerHostId: string | null;
+        },
+        mutationContext: MutationFunctionContext,
+      ) => void;
+    };
+
+    const variables: RenameChatMutationInput = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      title: "New title",
+      hostId: "remote-host",
+    };
+    const ctx = opts.onMutate(variables);
+    expect(ctx).toEqual({ hostId: "remote-host", viewerHostId: "host-test" });
+    opts.onSuccess(undefined, variables, ctx, {
+      client: queryClient,
+      meta: undefined,
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope(
+        "remote-host",
+        "epic.listChatRecords",
+      ),
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-test", "epic.listChatRecords"),
+    });
   });
 });
 

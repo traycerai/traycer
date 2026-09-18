@@ -46,6 +46,7 @@ import { useChatSharingInFlight } from "@/lib/chats/chat-sharing-inflight";
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
 import {
   useEpicDeleteTuiAgent,
+  discardDeletedTuiAgentPayloads,
   useEpicRenameTuiAgent,
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
@@ -1877,7 +1878,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         // verdict is a round trip. A promise here is truthy, so the branch
         // would be taken even for a write that failed.
         if (await epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
-          renameArtifactInTab(tabId, nodeId, trimmed);
+          renameArtifactInTab(tabId, nodeId, trimmed, null);
         }
         return;
       }
@@ -1910,7 +1911,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
           .getState()
           .isLatestRenameStamp(nodeId, requestId))
       ) {
-        renameArtifactInTab(tabId, nodeId, trimmed);
+        renameArtifactInTab(tabId, nodeId, trimmed, mutationHostId);
       }
     };
     const failed = async (): Promise<void> => {
@@ -1919,7 +1920,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     if (artifactType === "chat") {
       settleDetachedEpicMutation(
         renameChat
-          .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+          .mutateAsync({
+            epicId,
+            chatId: nodeId,
+            title: trimmed,
+            hostId: mutationHostId,
+          })
           .then(landed, failed),
         "sidebar tree",
         "chat rename settlement",
@@ -1927,7 +1933,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     } else if (artifactType === "terminal-agent") {
       settleDetachedEpicMutation(
         renameTerminalAgent
-          .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+          .mutateAsync({
+            epicId,
+            tuiAgentId: nodeId,
+            title: trimmed,
+            hostId: mutationHostId,
+          })
           .then(landed, failed),
         "sidebar tree",
         "terminal-agent rename settlement",
@@ -1953,6 +1964,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     renameChat,
     renameTerminalAgent,
     renameValue,
+    mutationHostId,
     setIsRenaming,
     tabId,
   ]);
@@ -1990,7 +2002,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       "sidebar tree",
       "local delete projection",
     );
-    markArtifactSelfDeleted(nodeId);
+    if (artifactType !== "terminal-agent") markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
       // The tab for THIS row's host - closing the clone's twin would leave
@@ -2007,9 +2019,16 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
           ),
         );
       }
+      if (artifactType === "terminal-agent") {
+        discardDeletedTuiAgentPayloads({
+          epicId,
+          tuiAgentId: nodeId,
+          hostId: mutationHostId,
+        });
+      }
     };
     const handleDeleteError = () => {
-      unmarkArtifactSelfDeleted(nodeId);
+      if (artifactType !== "terminal-agent") unmarkArtifactSelfDeleted(nodeId);
     };
     if (artifactType === "chat") {
       deleteChat.mutate(
@@ -2018,7 +2037,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       );
     } else if (artifactType === "terminal-agent") {
       deleteTerminalAgent.mutate(
-        { epicId, tuiAgentId: nodeId },
+        { epicId, tuiAgentId: nodeId, hostId: mutationHostId },
         { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
       );
     }

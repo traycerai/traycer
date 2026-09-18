@@ -1,4 +1,14 @@
+import type {
+  DeleteTuiAgentRequest,
+  RenameTuiAgentRequest,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  useEpicRecordMutationClient,
+  type EpicRecordMutationContext,
+  type EpicRecordMutationTarget,
+} from "@/hooks/epic/use-epic-record-mutation-client";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -68,31 +78,33 @@ export function useEpicCreateTuiAgentForClient(
   });
 }
 
-/**
- * Mutation hook for `epic.deleteTerminalAgent`.
- *
- * Removes the terminal-agent record from the epic's `tuiAgents` Y.Map.
- * Caller opens a confirm dialog first; success is silent (the Y.Doc stream
- * removes the row); failure shows a toast. PTY teardown is the renderer's
- * tab-close responsibility, not the host's.
- */
+export type DeleteTuiAgentMutationInput = DeleteTuiAgentRequest &
+  EpicRecordMutationTarget;
+export type RenameTuiAgentMutationInput = RenameTuiAgentRequest &
+  EpicRecordMutationTarget;
+
+/** Delete on the owning host, which also tears down its runtime and worktree binding. */
 export function useEpicDeleteTuiAgent() {
-  // The Epic session's client, not the app-wide one: every caller is a
-  // surface inside the Epic canvas (the sidebar tree, the sidebar's batch
-  // action, the canvas rename), acting on a row the SESSION projected.
-  const client = useEpicSessionHostClient();
+  const client = useEpicRecordMutationClient();
+  const sessionClient = useEpicSessionHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.deleteTuiAgent",
-    TuiAgentRecordMutationContext
+    EpicRecordMutationContext,
+    DeleteTuiAgentMutationInput
   >({
     client,
     method: "epic.deleteTuiAgent",
-    mapVariables: (variables) => variables,
+    mapVariables: ({ epicId, tuiAgentId }) => ({ epicId, tuiAgentId }),
     options: {
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: ({ hostId }) => ({
+        hostId,
+        viewerHostId: sessionClient?.getActiveHostId() ?? null,
+      }),
       onSuccess: (_data, variables, ctx) => {
+        // Hook callbacks survive the row unmounting before the response arrives.
+        discardDeletedTuiAgentPayloads(variables);
         pruneRecoveryTiles(
           (tile, epicId) =>
             epicId === variables.epicId &&
@@ -102,7 +114,9 @@ export function useEpicDeleteTuiAgent() {
         );
         // The deletion is a registry fact on a migrated host; without this the
         // row would linger in the tree until the next poll tick.
-        invalidateEpicTuiAgentRecords(queryClient, ctx.hostId);
+        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+          invalidateEpicTuiAgentRecords(queryClient, hostId);
+        }
         Analytics.getInstance().track(AnalyticsEvent.TerminalAgentStopped, {
           source: "direct_ui",
         });
@@ -119,24 +133,34 @@ export function useEpicDeleteTuiAgent() {
  * Input enters pending (read-only) state; success is silent.
  */
 export function useEpicRenameTuiAgent() {
-  // Session client, as above.
-  const client = useEpicSessionHostClient();
+  const client = useEpicRecordMutationClient();
+  const sessionClient = useEpicSessionHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.renameTuiAgent",
-    TuiAgentRecordMutationContext
+    EpicRecordMutationContext,
+    RenameTuiAgentMutationInput
   >({
     client,
     method: "epic.renameTuiAgent",
-    mapVariables: (variables) => variables,
+    mapVariables: ({ epicId, tuiAgentId, title }) => ({
+      epicId,
+      tuiAgentId,
+      title,
+    }),
     options: {
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: ({ hostId }) => ({
+        hostId,
+        viewerHostId: sessionClient?.getActiveHostId() ?? null,
+      }),
       onSuccess: (_data, _variables, ctx) => {
         // Same refresh as the chat rename: on a migrated host the new title
         // lives in the registry, so without this the row keeps its old title
         // until the poll fires - a rename that reads as a no-op.
-        invalidateEpicTuiAgentRecords(queryClient, ctx.hostId);
+        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+          invalidateEpicTuiAgentRecords(queryClient, hostId);
+        }
         Analytics.getInstance().track(AnalyticsEvent.TerminalRenamed, {
           kind: "agent",
         });
@@ -146,4 +170,27 @@ export function useEpicRenameTuiAgent() {
       },
     },
   });
+}
+
+/** Run after closing deleted tiles: closing also captures Back/Forward payloads. */
+export function discardDeletedTuiAgentPayloads({
+  epicId,
+  tuiAgentId,
+  hostId,
+}: DeleteTuiAgentMutationInput): void {
+  const state = useEpicCanvasStore.getState();
+  for (const [tabId, tab] of Object.entries(state.tabsById)) {
+    if (tab?.epicId !== epicId) continue;
+    for (const [instanceId, payload] of Object.entries(
+      state.closedTilePayloadsByTabId[tabId] ?? {},
+    )) {
+      if (
+        payload?.node.type === "terminal-agent" &&
+        payload.node.id === tuiAgentId &&
+        payload.node.hostId === hostId
+      ) {
+        state.discardClosedTilePayload(tabId, instanceId);
+      }
+    }
+  }
 }

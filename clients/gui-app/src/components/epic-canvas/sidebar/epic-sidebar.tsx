@@ -133,6 +133,7 @@ import {
 } from "@/stores/epics/epic-sidebar-expansion-store";
 import {
   findOpenArtifactInTab,
+  findOpenTileInTab,
   useActiveEpicArtifactId,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
@@ -175,7 +176,10 @@ import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
 } from "@/hooks/epic/use-epic-node-mutations";
-import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
+import {
+  useEpicDeleteTuiAgent,
+  discardDeletedTuiAgentPayloads,
+} from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   DEFAULT_EPIC_NODE_NAMES,
   isEpicArtifactKind,
@@ -1546,7 +1550,7 @@ function SidebarBulkDeleteController(props: {
       return;
     }
     targets.forEach((target) => {
-      markArtifactSelfDeleted(target.id);
+      if (target.kind !== "terminal-agent") markArtifactSelfDeleted(target.id);
     });
     setDeletePending(true);
     void Promise.allSettled(
@@ -1567,6 +1571,7 @@ function SidebarBulkDeleteController(props: {
             return deleteTerminalAgent.mutateAsync({
               epicId: props.epicId,
               tuiAgentId: target.id,
+              hostId: recordById.get(target.id)?.hostId ?? sessionHostId,
             });
         }
       }),
@@ -1579,6 +1584,7 @@ function SidebarBulkDeleteController(props: {
           (tile, epicId) =>
             epicId === props.epicId &&
             tile.type !== "chat" &&
+            tile.type !== "terminal-agent" &&
             successfulIds.includes(tile.id),
         );
         const failedIds = targets.flatMap((target, index) =>
@@ -1594,7 +1600,14 @@ function SidebarBulkDeleteController(props: {
         const openTargets = targets.flatMap((target, index) => {
           if (target.kind === "chat" || results[index].status !== "fulfilled")
             return [];
-          const found = findOpenArtifactInTab(props.tabId, target.id);
+          const found =
+            target.kind === "terminal-agent"
+              ? findOpenTileInTab(props.tabId, {
+                  id: target.id,
+                  type: "terminal-agent",
+                  hostId: recordById.get(target.id)?.hostId ?? sessionHostId,
+                })
+              : findOpenArtifactInTab(props.tabId, target.id);
           return found === null ? [] : [found];
         });
         if (openTargets.length > 0) {
@@ -1610,8 +1623,22 @@ function SidebarBulkDeleteController(props: {
             return getCurrentNestedFocusTarget(canvas);
           });
         }
-        failedIds.forEach((id) => {
-          unmarkArtifactSelfDeleted(id);
+        targets.forEach((target, index) => {
+          if (
+            target.kind === "terminal-agent" &&
+            results[index].status === "fulfilled"
+          ) {
+            discardDeletedTuiAgentPayloads({
+              epicId: props.epicId,
+              tuiAgentId: target.id,
+              hostId: recordById.get(target.id)?.hostId ?? sessionHostId,
+            });
+          } else if (
+            target.kind !== "terminal-agent" &&
+            results[index].status === "rejected"
+          ) {
+            unmarkArtifactSelfDeleted(target.id);
+          }
         });
         clearSelectedIds(successfulIds);
         if (failedIds.length === 0) {

@@ -20,6 +20,7 @@ import { ensureSettingsTab } from "@/lib/commands/actions/open-system-tab";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import {
   findOpenArtifactInTab,
+  findOpenTileInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
@@ -882,7 +883,10 @@ function routeOpenChatNotification(
     .flatMap((tabId) => {
       const tab = state.tabsById[tabId];
       if (tab?.epicId !== payload.epicId) return [];
-      const found = findOpenArtifactInTab(tabId, chatId);
+      const found =
+        targetHostId === null
+          ? findOpenArtifactInTab(tabId, chatId)
+          : findOpenTileInTab(tabId, { id: chatId, hostId: targetHostId });
       if (found === null) return [];
       const tile =
         state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
