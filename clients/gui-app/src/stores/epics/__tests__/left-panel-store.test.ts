@@ -391,6 +391,54 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(480);
   });
 
+  it("rehydrates when another window writes the left-panel key", async () => {
+    // A legacy-version blob on purpose: the storage listener goes through the
+    // same `rehydrate` a start-up hydration does, so `migrate` still runs.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({ state: { sidebarWidthPx: 420 }, version: 1 }),
+    );
+
+    window.dispatchEvent(new StorageEvent("storage", { key: PERSIST_KEY }));
+    // The listener's rehydrate is fire-and-forget.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(420);
+  });
+
+  it("ignores a storage event for an unrelated key", async () => {
+    useLeftPanelStore.getState().setSidebarWidthPx(DEFAULT_SIDEBAR_WIDTH_PX);
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({ state: { sidebarWidthPx: 460 }, version: 3 }),
+    );
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "some-other-app:left-panel" }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useLeftPanelStore.getState().sidebarWidthPx).toBe(
+      DEFAULT_SIDEBAR_WIDTH_PX,
+    );
+  });
+
+  it("restores the whole visibility map in one write", () => {
+    // What an undo needs: a walk over the per-panel setter would persist and
+    // re-render once per panel and show intermediate rails on the way.
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverrides({ terminals: false });
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual({
+      terminals: false,
+    });
+  });
+
   it("persists active chat and artifact filters set through actions", () => {
     act(() => {
       useLeftPanelStore.getState().setChatOrigin("epic-a", "gui");

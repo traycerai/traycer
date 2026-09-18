@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  basePersistOptions,
+  installCrossWindowRehydrate,
+  persistKey,
+  STORE_KEYS,
+} from "@/lib/persist";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
   DEFAULT_SORT_MODE,
@@ -315,6 +320,16 @@ interface LeftPanelStore {
   readonly setPanelVisibilityOverride: (
     panelId: LeftPanelId,
     override: boolean | null,
+  ) => void;
+  /**
+   * The whole map at once, for a caller holding a complete answer rather than
+   * one panel's - the Customize editor's undo, which restores the arrangement a
+   * gesture changed in ONE write. A walk over the per-panel setter would persist
+   * and re-render once per panel, and would leave the rail in intermediate
+   * states an undo never meant to show.
+   */
+  readonly setPanelVisibilityOverrides: (
+    overrides: PanelVisibilityOverrideById,
   ) => void;
   readonly clearPanelVisibilityOverrides: () => void;
 
@@ -1193,6 +1208,10 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
+      setPanelVisibilityOverrides: (overrides) => {
+        set({ panelVisibilityOverrideById: { ...overrides } });
+      },
+
       clearPanelVisibilityOverrides: () => {
         set((state) =>
           Object.keys(state.panelVisibilityOverrideById).length === 0
@@ -1571,6 +1590,14 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
     },
   ),
 );
+
+/**
+ * Another window's rail change - a reorder, a group, a hidden panel - reaches
+ * this one live. The rehydrate runs this store's `migrate` exactly as a start-up
+ * hydration does, so a blob written by an older build is still repaired on the
+ * way in.
+ */
+installCrossWindowRehydrate(useLeftPanelStore, PERSIST_KEY);
 
 export const useEpicLeftPanelStore = useLeftPanelStore;
 
