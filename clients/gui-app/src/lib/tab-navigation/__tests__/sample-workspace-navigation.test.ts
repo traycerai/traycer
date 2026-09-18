@@ -3,15 +3,7 @@ import type {
   NavigateOptions,
   UseNavigateResult,
 } from "@tanstack/react-router";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetTabNavigationControllerForTesting,
   activateTabIntent,
@@ -41,11 +33,14 @@ const SAMPLE_REF: TabRef = { kind: "sample-workspace", id: "sample-workspace" };
 const SAMPLE_PATH = "/sample-workspace";
 const HISTORY_ENVELOPE_KEY = "__traycerTabNavigation";
 
-type NavigateMock = Mock<(options: NavigateOptions) => Promise<void>>;
+interface NavigationCall {
+  readonly to: unknown;
+  readonly state: NavigateOptions["state"];
+}
 
 interface DeferredNavigate {
   readonly asNavigate: UseNavigateResult<string>;
-  readonly calls: NavigateOptions[];
+  readonly calls: NavigationCall[];
   resolve: (index: number) => Promise<void>;
   envelopeAt: (index: number) => TabNavigationEnvelope;
 }
@@ -95,13 +90,11 @@ function readEnvelope(value: unknown): TabNavigationEnvelope | null {
 
 function makeDeferredNavigate(): DeferredNavigate {
   const resolvers: Array<() => void> = [];
-  const calls: NavigateOptions[] = [];
-  const mock: NavigateMock = vi.fn((options: NavigateOptions) => {
-    calls.push(options);
+  const calls: NavigationCall[] = [];
+  const asNavigate: UseNavigateResult<string> = (options) => {
+    calls.push({ to: options.to, state: options.state });
     return new Promise<void>((resolve) => resolvers.push(resolve));
-  });
-  const asNavigate: UseNavigateResult<string> = ((options: NavigateOptions) =>
-    mock(options)) as UseNavigateResult<string>;
+  };
   return {
     asNavigate,
     calls,

@@ -1,3 +1,4 @@
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { CustomizeDropSlot } from "@/components/customize/customize-drop-slot";
 import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
 import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
@@ -62,6 +63,7 @@ import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR,
   shouldMountChatTurnMinimap,
+  shouldRunChatTurnMinimapRail,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -2791,13 +2793,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
   const chatTurnMinimapSide = useLayoutSetting("chatTurnMinimapSide");
   const isMobileViewport = useIsMobileViewport();
-  const minimapEmptyCondition = !hasContent ? "No messages yet" : null;
+  const coarsePointer = useCoarsePointer();
+  const minimapDrawn =
+    hasContent &&
+    shouldRunChatTurnMinimapRail({
+      side: chatTurnMinimapSide,
+      coarsePointer,
+      mobileViewport: isMobileViewport,
+    });
+  let minimapCondition: string | null = null;
+  if (!hasContent) minimapCondition = "No messages yet";
+  if (coarsePointer)
+    minimapCondition = "Minimap is unavailable with a coarse pointer";
+  if (chatTurnMinimapSide === "hide") minimapCondition = "Hidden";
   const { ref: minimapHotspotRef, editing: minimapEditing } = useLayoutHotspot({
     settingId: "chat.minimapSide",
     tileId: taskId,
-    ghost: chatTurnMinimapSide === "hide" || !hasContent,
-    condition:
-      chatTurnMinimapSide === "hide" ? "Hidden" : minimapEmptyCondition,
+    ghost: !minimapDrawn,
+    condition: minimapCondition,
   });
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
@@ -3983,7 +3996,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           }) ? (
             <div className="contents max-md:hidden">
               <ChatTurnMinimap
-                ref={minimapHotspotRef}
+                ref={minimapDrawn ? minimapHotspotRef : null}
                 rows={listRows}
                 transcriptWindow={transcriptWindow}
                 inViewRefreshRef={minimapInViewRefreshRef}
@@ -3995,9 +4008,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                 side={chatTurnMinimapSide}
               />
             </div>
-          ) : (
-            minimapGhostRail
-          )}
+          ) : null}
+          {!minimapDrawn ? minimapGhostRail : null}
           {hasContent ? (
             <ScrollToEndPill
               state={scrollToEndPillState}

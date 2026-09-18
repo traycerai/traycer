@@ -22,6 +22,8 @@ export interface TabStripItem {
   readonly kind: "tab";
   readonly id: string;
   readonly ref: TabRef;
+  /** Only the transient sample tab carries this; null remembers Home. */
+  readonly sampleReturnItemId?: string | null;
 }
 
 export interface SplitStripItem {
@@ -408,11 +410,19 @@ export function removeLayoutRef(
   );
   if (item.kind === "tab") {
     const items = layout.items.filter((_entry, index) => index !== itemIndex);
-    const activeItemId =
+    let activeItemId =
       layout.activeItemId === item.id
         ? (activationHistoryItemId(items, activationHistory) ??
           neighboringItemId(items, itemIndex))
         : layout.activeItemId;
+    if (
+      ref.kind === "sample-workspace" &&
+      layout.activeItemId === item.id &&
+      item.sampleReturnItemId !== undefined &&
+      (item.sampleReturnItemId === null ||
+        items.some((candidate) => candidate.id === item.sampleReturnItemId))
+    )
+      activeItemId = item.sampleReturnItemId;
     return {
       ...layout,
       items,
@@ -648,7 +658,7 @@ function repairStripItem(
       context.usedIds,
     );
     recordRepairedItemId(context, item.id, id);
-    return { kind: "tab", id, ref: item.ref };
+    return { ...item, id };
   }
   const left = repairSplitSide(
     item.left,

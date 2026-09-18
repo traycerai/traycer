@@ -236,7 +236,16 @@ export function ensureSampleWorkspaceTab(
       kind: "sample-workspace",
       id: "sample-workspace",
     });
-    return { items: layout.items, stripOrder: flattenLayoutRefs(layout) };
+    const items = layout.items.map((item) => {
+      if (
+        item.kind !== "tab" ||
+        item.ref.kind !== "sample-workspace" ||
+        state.items.some((existing) => existing.id === item.id)
+      )
+        return item;
+      return { ...item, sampleReturnItemId: state.activeItemId };
+    });
+    return { items, stripOrder: flattenLayoutRefs(layout) };
   });
   return { kind: "sample-workspace" };
 }

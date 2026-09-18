@@ -11,20 +11,33 @@ import {
 import { useTabsStore } from "@/stores/tabs/store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 
+// A window has one canonical sample tab; a replacement mount takes ownership.
+let activationGeneration = 0;
+
 export function SampleWorkspaceSurface({ tabId }: { readonly tabId: string }) {
   const active = useTabsStore(
     (state) => state.activeItemId === `tab:sample-workspace:${tabId}`,
   );
   useEffect(() => {
+    const generation = ++activationGeneration;
     if (!active) return;
     enterCustomize({
       scene: "sample",
       opener: getSampleWorkspaceOpener(),
       target: null,
     });
+    const session = useCustomizeStore.getState().session;
     return () => {
-      if (useCustomizeStore.getState().session?.scene === "sample")
-        exitCustomize("studio-closed");
+      // StrictMode immediately sets up the same activation again. A real
+      // unmount has no next setup and releases ownership in this microtask.
+      queueMicrotask(() => {
+        if (
+          activationGeneration === generation &&
+          session?.scene === "sample" &&
+          useCustomizeStore.getState().session === session
+        )
+          exitCustomize("studio-closed");
+      });
     };
   }, [active]);
   useEffect(() => {

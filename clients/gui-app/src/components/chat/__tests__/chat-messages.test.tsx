@@ -1,3 +1,9 @@
+import { CustomizeDnd } from "@/components/customize/customize-dnd";
+import { CustomizeProxies } from "@/components/customize/customize-proxies";
+import { useHotspotRects } from "@/components/customize/use-hotspot-rects";
+import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useTileMinimapStore } from "@/stores/tile-minimap";
 import {
   act,
   cleanup,
@@ -749,6 +755,7 @@ async function selectLastChatTurnMinimapItem(): Promise<void> {
 }
 
 interface RenderChatMessagesOptions {
+  readonly tileMinimapInstanceId?: string;
   readonly messages: ReadonlyArray<ChatMessageModel>;
   /**
    * Tab-key half of the dual-key identity (ticket 15). Prefer this over a
@@ -969,12 +976,22 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       </TileFindContext.Provider>
     );
   };
-  const jsx = (): ReactNode =>
-    options.strictMode === true ? (
-      <StrictMode>{contentWithFindContext()}</StrictMode>
+  const jsx = (): ReactNode => {
+    const inner = contentWithFindContext();
+    const scoped =
+      options.tileMinimapInstanceId === undefined ? (
+        inner
+      ) : (
+        <TileMinimapScope tileInstanceId={options.tileMinimapInstanceId}>
+          {inner}
+        </TileMinimapScope>
+      );
+    return options.strictMode === true ? (
+      <StrictMode>{scoped}</StrictMode>
     ) : (
-      contentWithFindContext()
+      scoped
     );
+  };
 
   const result = render(jsx());
   return {
@@ -2779,6 +2796,185 @@ describe("ChatMessages scroll policy", () => {
         expect(screen.queryByTestId("chat-turn-minimap")).toBeNull(),
       );
       expect(screen.getByTestId("chat-minimap-ghost")).not.toBeNull();
+    });
+    describe("S4: coarse pointer (real ChatMessages wiring)", () => {
+      const COARSE_REASON = "Minimap is unavailable with a coarse pointer";
+      const TILE = "tile-coarse";
+
+      function setPointerForThisTest(coarse: boolean): void {
+        const original = window.matchMedia.bind(window);
+        const fake: MediaQueryList = {
+          ...original("(pointer: coarse)"),
+          matches: coarse,
+          media: "(pointer: coarse)",
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          dispatchEvent: () => true,
+        };
+        Object.defineProperty(window, "matchMedia", {
+          configurable: true,
+          writable: true,
+          value: (query: string): MediaQueryList =>
+            query.includes("pointer: coarse") ? fake : original(query),
+        });
+        onTestFinished(() => {
+          Object.defineProperty(window, "matchMedia", {
+            configurable: true,
+            writable: true,
+            value: original,
+          });
+        });
+      }
+
+      function minimapInstance() {
+        const found = [...useCustomizeStore.getState().instances.values()].find(
+          (candidate) => candidate.settingId === "chat.minimapSide",
+        );
+        if (found === undefined)
+          throw new Error("chat.minimapSide did not register");
+        return found;
+      }
+
+      function giveRect(node: HTMLElement): void {
+        const measured = new DOMRect(40, 40, 8, 200);
+        node.getBoundingClientRect = () => measured;
+        node.getClientRects = () =>
+          Object.assign([measured], {
+            item: (index: number) => (index === 0 ? measured : null),
+          });
+      }
+
+      function RealProxyLayer(): ReactNode {
+        const instances = useCustomizeStore((state) => state.instances);
+        const measurements = useHotspotRects(instances);
+        return (
+          <TooltipProvider>
+            <CustomizeDnd>
+              <CustomizeProxies
+                instances={[...instances.values()]}
+                rects={measurements.rects}
+              />
+            </CustomizeDnd>
+          </TooltipProvider>
+        );
+      }
+
+      function proxyFor(key: string): Element | null {
+        return document.querySelector(`[data-customize-proxy="${key}"]`);
+      }
+
+      it("registers a connected ghost anchor with the coarse reason, keeps the outline published, and gets a real proxy", async () => {
+        setPointerForThisTest(true);
+        useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+        renderChatMessages({
+          messages: makeTranscript(20),
+          scrollStateKey: "s4-coarse-ghost",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        // No drawn rail...
+        expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+        // ...a ghost anchor instead, and it IS the registered hotspot node.
+        const ghost = screen.getByTestId("chat-minimap-ghost");
+        expect(ghost.isConnected).toBe(true);
+        const instance = minimapInstance();
+        expect(instance.ghost).toBe(true);
+        expect(instance.condition).toBe(COARSE_REASON);
+        expect(instance.node).toBe(ghost);
+        // The live ChatTurnMinimap stayed MOUNTED for the tile bar's outline.
+        const adapter =
+          useTileMinimapStore.getState().targetsByTileInstanceId[TILE]?.adapter;
+        expect(adapter).toBeDefined();
+        expect(adapter?.getSnapshot().items.length).toBeGreaterThan(0);
+
+        // Real reachability + real proxy for that ghost.
+        giveRect(ghost);
+        render(<RealProxyLayer />);
+        await waitFor(() => expect(proxyFor(instance.key)).not.toBeNull());
+      });
+
+      it.each(["left", "right"] as const)(
+        "%s placement under coarse keeps the same ghost target on that side",
+        async (side) => {
+          setPointerForThisTest(true);
+          useSettingsStore.setState({ chatTurnMinimapSide: side });
+          renderChatMessages({
+            messages: makeTranscript(20),
+            scrollStateKey: `s4-coarse-${side}`,
+            tileMinimapInstanceId: TILE,
+          });
+          await settleLegendList();
+
+          expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+          const ghost = screen.getByTestId("chat-minimap-ghost");
+          expect(ghost.className).toContain(
+            side === "left" ? "left-3" : "right-3",
+          );
+          expect(minimapInstance()).toMatchObject({
+            ghost: true,
+            condition: COARSE_REASON,
+          });
+          expect(minimapInstance().node).toBe(ghost);
+        },
+      );
+
+      it("hide wins the wording over coarse, and stays a ghost", async () => {
+        setPointerForThisTest(true);
+        useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+        renderChatMessages({
+          messages: makeTranscript(20),
+          scrollStateKey: "s4-coarse-hide",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        expect(minimapInstance()).toMatchObject({
+          ghost: true,
+          condition: "Hidden",
+        });
+      });
+
+      it("coarse wins the wording over 'No messages yet'", async () => {
+        setPointerForThisTest(true);
+        useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+        renderChatMessages({
+          messages: [],
+          scrollStateKey: "s4-coarse-empty",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        expect(minimapInstance()).toMatchObject({
+          ghost: true,
+          condition: COARSE_REASON,
+        });
+      });
+
+      it("control: a fine pointer draws the real rail and registers IT (not a ghost)", async () => {
+        setPointerForThisTest(false);
+        useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+        renderChatMessages({
+          messages: makeTranscript(20),
+          scrollStateKey: "s4-fine",
+          tileMinimapInstanceId: TILE,
+        });
+        await settleLegendList();
+
+        const region = await screen.findByRole("group", {
+          name: "Message minimap controls",
+        });
+        expect(screen.queryByTestId("chat-minimap-ghost")).toBeNull();
+        const instance = minimapInstance();
+        expect(instance.ghost).toBe(false);
+        expect(instance.condition).toBeNull();
+        expect(instance.node).toBe(region);
+
+        giveRect(region);
+        render(<RealProxyLayer />);
+        await waitFor(() => expect(proxyFor(instance.key)).not.toBeNull());
+      });
     });
   });
 

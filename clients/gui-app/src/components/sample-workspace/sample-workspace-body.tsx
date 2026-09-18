@@ -1,3 +1,4 @@
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { resolveMinimapVisibleItemCapacity } from "@/components/minimap/minimap-track-geometry";
 import { useEffect, useRef, useState } from "react";
 import { Wrench } from "lucide-react";
@@ -231,11 +232,16 @@ function SampleTranscript() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [capacity, setCapacity] = useState(12);
   const side = useLayoutSetting("chatTurnMinimapSide");
+  const coarsePointer = useCoarsePointer();
+  let minimapCondition: string | null = null;
+  if (coarsePointer)
+    minimapCondition = "Minimap is unavailable with a coarse pointer";
+  if (side === "hide") minimapCondition = "Hidden";
   const { ref: minimapRef } = useLayoutHotspot({
     settingId: "chat.minimapSide",
     tileId: SAMPLE_TILE_ID,
-    ghost: side === "hide",
-    condition: side === "hide" ? "Hidden" : null,
+    ghost: minimapCondition !== null,
+    condition: minimapCondition,
   });
   useEffect(() => {
     const scroller = viewport.current;
@@ -311,12 +317,15 @@ function SampleTranscript() {
           ))}
         </div>
       </div>
-      {side === "hide" ? (
+      {side === "hide" || coarsePointer ? (
         <div
           ref={minimapRef}
-          className="absolute right-3 top-1/2 rounded border border-dashed p-2 text-ui-xs text-muted-foreground"
+          className={cn(
+            "absolute top-1/2 rounded border border-dashed p-2 text-ui-xs text-muted-foreground",
+            side === "left" ? "left-3" : "right-3",
+          )}
         >
-          Hidden minimap
+          {minimapCondition}
         </div>
       ) : (
         <ChatTurnMinimapView

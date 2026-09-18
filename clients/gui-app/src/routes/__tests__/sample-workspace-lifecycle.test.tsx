@@ -251,7 +251,7 @@ describe("SampleWorkspaceSurface - tab-switch retains the tab", () => {
 });
 
 describe("SampleWorkspaceSurface - unmount", () => {
-  it("unmount ends the session (studio-closed) without restoring the opener", () => {
+  it("unmount ends the session (studio-closed) without restoring the opener", async () => {
     const modal = fakeModalApi();
     setSystemTabModalApi(modal);
     ensureSampleWorkspaceTab({
@@ -264,6 +264,9 @@ describe("SampleWorkspaceSurface - unmount", () => {
     expect(session()).not.toBeNull();
 
     view.unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(session()).toBeNull();
     expect(modal.openSettings).not.toHaveBeenCalled();
