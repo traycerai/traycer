@@ -22,9 +22,7 @@ export interface MintNewEpicTerminalTileTarget extends TerminalLaunchTarget {
  * `legacyFallback` keeps the released local fields so a downgraded host can
  * still spawn through the legacy tile path.
  */
-export function buildTerminalTileRef(
-  target: TerminalLaunchTarget,
-): EpicTerminalRef {
+function buildTerminalTileRef(target: TerminalLaunchTarget): EpicTerminalRef {
   const name = DEFAULT_TERMINAL_TITLE;
   return {
     id: `term-${uuidv4()}`,
