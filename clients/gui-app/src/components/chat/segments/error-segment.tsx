@@ -7,6 +7,11 @@ import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
+import {
+  agentFailureHeadline,
+  agentFailurePresentation,
+} from "@/components/chat/segments/agent-failure-presentation";
+import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { buildReportIssueDraftContext } from "@/lib/report-issue-draft-context";
 import { capturePersistedAgentError } from "@/lib/report-issue-error-capture";
@@ -95,6 +100,53 @@ function FallbackAuthSettingsAction() {
   );
 }
 
+/**
+ * The row's first line: either the failure's own name, or the ERROR overline.
+ *
+ * `headline` non-null is the INTERRUPTED row and carries the reason in the same
+ * words every other routing surface uses for it - "Rate limit reached" is what
+ * the countdown card's chip says, what the per-error settings row is called,
+ * and what the transcript notice says afterwards. Sentence case, in the warning
+ * foreground, because nothing is broken.
+ *
+ * `null` keeps what the row always had. The uppercase overline and the raw code
+ * chip belong to a turn that genuinely died, where the code is the most useful
+ * thing on screen for whoever ends up reading the bug report. On the
+ * interrupted row that same chip put `rate_limit` in red monospace as the
+ * loudest element on a card about an account being out of quota - a raw reason
+ * code in front of a user, which the routing vocabulary bans everywhere else.
+ * The report-issue action still captures the code either way.
+ */
+function ErrorSegmentHeading({
+  headline,
+  harnessId,
+  code,
+}: {
+  readonly headline: string | null;
+  readonly harnessId: GuiHarnessId | null;
+  readonly code: string | null;
+}) {
+  if (headline !== null) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-warning-foreground">{headline}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-overline font-semibold uppercase text-destructive">
+        {harnessId === "codex" ? "Codex turn failed" : "Error"}
+      </span>
+      {code !== null && code.length > 0 ? (
+        <span className="rounded border border-destructive/30 bg-destructive/10 px-1 font-mono text-code-xs text-destructive">
+          {code}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 // Static error row. Auth errors (`code: "auth"`) render here like any other
 // error - the durable transcript row is what keeps a headless (A2A-triggered)
 // auth failure visible after the composer's re-auth banner clears.
@@ -137,27 +189,40 @@ export function ErrorSegment({
       ),
     [code, message, recoverable],
   );
+  // Which of the two rows this is. A provider refusing a turn is not a crash,
+  // and rendering it as one - red rule, uppercase ERROR, the raw reason code in
+  // a red monospace chip - made the commonest thing that happens to a working
+  // setup look like something broke. See `agent-failure-presentation.ts` for
+  // why this classification is its own question rather than routing eligibility
+  // reused for colour.
+  const presentation = agentFailurePresentation(failure?.reason ?? null);
+  const interrupted = presentation === "interrupted";
+  const headline = agentFailureHeadline(failure?.reason ?? null);
   return (
     <div
       data-chat-find-unit={findUnitId ?? undefined}
-      className="flex w-full flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm"
+      data-failure-presentation={presentation}
+      className={cn(
+        "flex w-full flex-col gap-2 rounded-md border px-3 py-2 text-ui-sm",
+        interrupted
+          ? "border-warning/40 bg-warning/5"
+          : "border-destructive/30 bg-destructive/5",
+      )}
     >
       <div className="flex items-start gap-2">
         <AlertTriangle
-          className="mt-0.5 size-3.5 shrink-0 text-destructive"
+          className={cn(
+            "mt-0.5 size-3.5 shrink-0",
+            interrupted ? "text-warning-foreground" : "text-destructive",
+          )}
           aria-hidden
         />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="text-overline font-semibold uppercase text-destructive">
-              {harnessId === "codex" ? "Codex turn failed" : "Error"}
-            </span>
-            {code !== null && code.length > 0 ? (
-              <span className="rounded border border-destructive/30 bg-destructive/10 px-1 font-mono text-code-xs text-destructive">
-                {code}
-              </span>
-            ) : null}
-          </div>
+          <ErrorSegmentHeading
+            headline={interrupted ? headline : null}
+            harnessId={harnessId}
+            code={code}
+          />
           <span className="whitespace-pre-wrap break-words text-foreground/90">
             {message}
           </span>

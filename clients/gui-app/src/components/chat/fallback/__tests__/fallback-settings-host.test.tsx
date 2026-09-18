@@ -24,6 +24,25 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+// `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s
+// identical double for the full rationale. Slug passthrough, matching the
+// no-catalogue degradation none of this file's cases render anyway (only
+// `openFallbackSettings` navigation is under test here).
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
     mutate: mocks.mutate,
@@ -92,7 +111,7 @@ describe("fallback settings links carry the tab host", () => {
         />
       </TabHostProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model routing" }));
     assertSettingsLandedOnTabHost();
   });
 
@@ -123,7 +142,7 @@ describe("fallback settings links carry the tab host", () => {
         />
       </TabHostProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model routing" }));
     assertSettingsLandedOnTabHost();
   });
 
@@ -142,7 +161,7 @@ describe("fallback settings links carry the tab host", () => {
       </TabHostProvider>,
     );
     fireEvent.click(screen.getByRole("button"));
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model routing" }));
     assertSettingsLandedOnTabHost();
   });
 
@@ -158,7 +177,7 @@ describe("fallback settings links carry the tab host", () => {
       </TabHostProvider>,
     );
     fireEvent.click(screen.getByText("Resumed after waiting"));
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model routing" }));
     assertSettingsLandedOnTabHost();
   });
 
@@ -178,7 +197,7 @@ describe("fallback settings links carry the tab host", () => {
         </TabHostProvider>
       </TooltipProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model routing" }));
     assertSettingsLandedOnTabHost();
   });
 });

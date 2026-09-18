@@ -44,6 +44,38 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 /**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module -
+ * see `fallback-model-labels.test.tsx` for the resolver's own resolution
+ * rules, which are not this file's concern. Two modes, chosen by
+ * `modelLabelOverride`:
+ *
+ *   - `null` (every existing case in this file): passes the slug straight
+ *     through, exactly what the resolver degrades to with no catalogue - so
+ *     every literal model string already pinned below stays correct unchanged.
+ *   - a `Map`: the ONE case that cares whether this card actually reads the
+ *     resolver's answer rather than `tuple.model` directly - see "renders
+ *     whatever the model-label resolver returns, not the raw tuple.model".
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
+/**
  * The double delivers the host's answer to the MUTATION-LEVEL `onSuccess`.
  *
  * It used to be a bare `mutate: vi.fn()` that recorded the call and answered
@@ -148,6 +180,7 @@ describe("FallbackGraceCard", () => {
     mocks.outcome = "applied";
     mocks.deferOnSuccess = false;
     mocks.capturedOnSuccess = null;
+    modelLabelOverride.value = null;
     useSettingsHostScopeStore.getState().setScopedHostId(APP_HOST);
   });
 
@@ -175,6 +208,34 @@ describe("FallbackGraceCard", () => {
     expect(card.textContent).toMatch(/Claude Code · failed01/);
     expect(card.textContent).not.toMatch(/Codex · target01/);
     expect(card.textContent).not.toMatch(BANNED_VOCABULARY);
+  });
+
+  // The label-resolution wiring, not the resolver's own rules (that's
+  // `fallback-model-labels.test.tsx`). This is the assertion that would catch
+  // a regression back to reading `tuple.model` raw: a card that bypassed
+  // `useFallbackModelLabels` would still show the fixture's literal slug here
+  // even with the override installed. The destination sentence is the one
+  // place on this card a model is named at all - the header names only
+  // provider/profile for the failed side (see `fallback-grace-card.tsx`).
+  it("renders whatever the model-label resolver returns for the destination, not the raw tuple.model", () => {
+    modelLabelOverride.value = new Map([
+      [
+        `${TARGET_CODEX_TUPLE.harnessId}:${TARGET_CODEX_TUPLE.model}`,
+        "GPT Astra",
+      ],
+    ]);
+    renderCard({
+      pending: gracePending({
+        state: "hold",
+        reason: "rate_limit",
+        targetTuple: TARGET_CODEX_TUPLE,
+        deadline: Date.now() + 12_000,
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+    });
+    const text = screen.getByTestId("fallback-grace-card").textContent;
+    expect(text).toContain("GPT Astra");
+    expect(text).not.toContain(TARGET_CODEX_TUPLE.model);
   });
 
   it("renders Switching to the target plus a countdown on hold, and This turn failed when there is no target", () => {

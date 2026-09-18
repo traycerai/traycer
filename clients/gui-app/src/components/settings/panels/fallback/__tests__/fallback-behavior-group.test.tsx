@@ -40,7 +40,7 @@ describe("FallbackBehaviorGroup - out-of-range stored values", () => {
       />,
     );
 
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     const option = screen.getByRole("option", { name: "42 seconds" });
     // `data-state` reflects selection alone (Radix's `isSelected`), unlike
     // `aria-selected`, which is additionally gated on focus timing.
@@ -64,7 +64,7 @@ describe("FallbackBehaviorGroup - out-of-range stored values", () => {
       />,
     );
 
-    openCombobox("Longest wait for a reset");
+    openCombobox("Longest wait for a usage limit to reset");
     const option = screen.getByRole("option", { name: "999 minutes" });
     expect(option.getAttribute("data-state")).toBe("checked");
     expect(onChange).not.toHaveBeenCalled();
@@ -88,7 +88,7 @@ describe("FallbackBehaviorGroup - out-of-range stored values", () => {
         status={null}
       />,
     );
-    openCombobox("Longest wait for a reset");
+    openCombobox("Longest wait for a usage limit to reset");
     const labels = screen
       .getAllByRole("option")
       .map((option) => option.textContent);
@@ -115,7 +115,7 @@ describe("FallbackBehaviorGroup - selecting a value", () => {
         status={null}
       />,
     );
-    openCombobox("Time to cancel before switching");
+    openCombobox("Time to cancel a switch");
     chooseOption("11 seconds");
     expect(onChange).toHaveBeenCalledWith(policy({ graceWindowSeconds: 11 }));
   });
@@ -160,7 +160,7 @@ describe("FallbackBehaviorGroup - AX8: the return-to-preferred radiogroup is nam
       "When the original provider's limit resets",
     );
     expect(textOf(group.getAttribute("aria-describedby"))).toContain(
-      "Switching back costs a fresh session",
+      "Switching back also starts a new agent session",
     );
   });
 
@@ -176,7 +176,7 @@ describe("FallbackBehaviorGroup - AX8: the return-to-preferred radiogroup is nam
       name: "Switch back automatically",
     });
     expect(textOf(auto.getAttribute("aria-describedby"))).toContain(
-      "Starts a fresh session and moves queued messages back",
+      "Messages waiting to run move back to the original account or model",
     );
   });
 

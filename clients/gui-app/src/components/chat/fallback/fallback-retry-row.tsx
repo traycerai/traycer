@@ -4,6 +4,7 @@ import { LivePulse } from "@/components/ui/live-pulse";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   fallbackTupleIdentity,
+  useFallbackModelLabels,
   useFallbackProfileLabels,
 } from "./fallback-identity";
 
@@ -39,13 +40,24 @@ export function FallbackRetryRow({
   // traversal issues no query.
   const retrying = pending !== undefined && pending.state === "retrying";
   const labelFor = useFallbackProfileLabels(client, retrying);
+  // One tuple: a transient retry is the same tuple again by definition, so
+  // `targetTuple` is null here and there is no destination to name.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    [pending?.failedTuple.harnessId ?? null],
+    retrying,
+  );
   if (pending === undefined || pending.state !== "retrying") return null;
 
   // The tuple being retried is the one that FAILED: a transient retry is the
   // same tuple again by definition (D57 - a retry never commits settings and
   // never restamps), so `targetTuple` is null here and reading it would render
   // an empty chip.
-  const identity = fallbackTupleIdentity(pending.failedTuple, labelFor);
+  const identity = fallbackTupleIdentity(
+    pending.failedTuple,
+    labelFor,
+    modelLabelFor,
+  );
   return (
     <div className="pointer-events-none px-4">
       <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-2">

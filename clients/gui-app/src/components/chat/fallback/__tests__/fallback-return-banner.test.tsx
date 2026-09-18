@@ -20,6 +20,32 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s
+ * identical double for the full rationale and `fallback-model-labels.test.tsx`
+ * for the resolver's own rules. `null` (every existing case here) degrades to
+ * the raw slug, matching the no-catalogue behaviour every literal below was
+ * written against.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
     mutate: mocks.mutate,
@@ -54,6 +80,7 @@ function renderBanner(input: {
 describe("FallbackReturnBanner", () => {
   beforeEach(() => {
     mocks.mutate.mockReset();
+    modelLabelOverride.value = null;
   });
 
   afterEach(() => {
@@ -141,6 +168,35 @@ describe("FallbackReturnBanner", () => {
     const text = screen.getByTestId("fallback-return-banner").textContent;
     expect(text).toMatch(/workacct/);
     expect(text).not.toMatch(/Claude Code · claude-opus-4/);
+  });
+
+  // The label-resolution wiring, not the resolver's own rules (that's
+  // `fallback-model-labels.test.tsx`). Both tuples this banner contrasts, so
+  // both must route through the resolver rather than either falling back to
+  // `tuple.model` raw.
+  it("renders whatever the model-label resolver returns for BOTH tuples, not the raw tuple.model", () => {
+    modelLabelOverride.value = new Map([
+      [
+        `${TARGET_CODEX_TUPLE.harnessId}:${TARGET_CODEX_TUPLE.model}`,
+        "GPT Astra",
+      ],
+      [
+        `${PREFERRED_CLAUDE_TUPLE.harnessId}:${PREFERRED_CLAUDE_TUPLE.model}`,
+        "Claude Fable",
+      ],
+    ]);
+    // Cross-provider on both sides of the "switch back" question, so both the
+    // fallback (this account) and the preferred (switch-back target) tuples
+    // get their identity built and are each candidates to render a model.
+    renderBanner({
+      fallbackTuple: TARGET_CODEX_TUPLE,
+      preferredTuple: PREFERRED_CLAUDE_TUPLE,
+      queuedItemsMoving: 0,
+      lowUsage: null,
+    });
+    const text = screen.getByTestId("fallback-return-banner").textContent;
+    expect(text).toContain("GPT Astra");
+    expect(text).not.toContain(TARGET_CODEX_TUPLE.model);
   });
 
   it("shows no low-usage clause when lowUsage is null", () => {

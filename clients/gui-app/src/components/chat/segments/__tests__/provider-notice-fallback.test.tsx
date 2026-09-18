@@ -34,10 +34,10 @@ describe("ProviderNoticeSegment fallback details", () => {
     fireEvent.click(screen.getByRole("button"));
     expect(screen.getByText("via:")).toBeDefined();
     expect(screen.getByText("Claude Code → Codex")).toBeDefined();
-    const settings = screen.getByRole("button", { name: "Fallback settings" });
+    const settings = screen.getByRole("button", { name: "Model routing" });
     const detailsBox = screen.getByText("via:").closest("dl")?.parentElement;
     expect(detailsBox?.querySelectorAll("button")).toHaveLength(1);
-    expect(settings.textContent).toBe("Fallback settings");
+    expect(settings.textContent).toBe("Model routing");
     expect(detailsBox?.textContent).not.toMatch(/Switch elsewhere/);
     unmount();
 
@@ -57,9 +57,7 @@ describe("ProviderNoticeSegment fallback details", () => {
     fireEvent.click(screen.getByRole("button"));
     expect(screen.getByText("via:")).toBeDefined();
     // Falsification: make isFallbackNoticeKind return true unconditionally and THIS control assertion must go red.
-    expect(
-      screen.queryByRole("button", { name: "Fallback settings" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
   });
 
   /**
@@ -112,9 +110,7 @@ describe("ProviderNoticeSegment fallback details", () => {
     // FALLBACK_NOTICE_KINDS in fallback/fallback-notice-kinds.ts and THIS
     // assertion must go red - the same mutation the notice-kinds cell pins,
     // reaching the affordance through the real component instead of the set.
-    expect(
-      screen.getByRole("button", { name: "Fallback settings" }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Model routing" })).toBeDefined();
     const detailsBox = screen
       .getByText("Staying on")
       .closest("dl")?.parentElement;
