@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Default branch: `main`. Bun 1.3.12 workspaces + Nx.
+Default branch: `main`. Bun 1.3.14 workspaces + Nx.
 
 Open-source **clients, CLI, and protocol**. The Traycer Host and cloud backends
 are **not** here — the CLI provisions a signed host from GitHub Releases; see

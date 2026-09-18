@@ -51,13 +51,23 @@ export interface CommGraphLayoutEdge {
 }
 
 /**
+ * What the layout reads off a node. Narrower than `CommGraphAgentNode` so a
+ * peer-task stand-in (see `commGraphPeerTaskStubs`) is laid out beside the
+ * agents without pretending to be one.
+ */
+export type CommGraphLayoutNode = Pick<
+  CommGraphAgentNode,
+  "id" | "parentId" | "createdAt"
+>;
+
+/**
  * Insertion order decides dagre's tie-breaks, so it is pinned to
  * `(createdAt, id)` rather than left to the projection's iteration order - two
  * renders of the same graph must not shuffle.
  */
 function orderedForLayout(
-  nodes: ReadonlyArray<CommGraphAgentNode>,
-): ReadonlyArray<CommGraphAgentNode> {
+  nodes: ReadonlyArray<CommGraphLayoutNode>,
+): ReadonlyArray<CommGraphLayoutNode> {
   return [...nodes].sort((left, right) => {
     if (left.createdAt !== right.createdAt) {
       return left.createdAt - right.createdAt;
@@ -67,7 +77,7 @@ function orderedForLayout(
 }
 
 export function layoutCommGraphNodes(
-  nodes: ReadonlyArray<CommGraphAgentNode>,
+  nodes: ReadonlyArray<CommGraphLayoutNode>,
   edges: ReadonlyArray<CommGraphLayoutEdge>,
 ): ReadonlyMap<string, CommGraphNodePosition> {
   const positions = new Map<string, CommGraphNodePosition>();

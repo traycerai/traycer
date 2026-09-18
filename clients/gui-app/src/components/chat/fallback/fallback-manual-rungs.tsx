@@ -5,6 +5,7 @@ import type {
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
@@ -21,11 +22,18 @@ import {
   describeWaitDisposition,
   switchConsequencesText,
 } from "./fallback-copy";
-import { fallbackProviderModelLabel } from "./fallback-identity";
+import {
+  fallbackProviderModelLabel,
+  useFallbackModelLabels,
+  type FallbackModelLabelResolver,
+} from "./fallback-identity";
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import { useFallbackRunManualRung } from "./use-fallback-actions";
-import { useChatLastFailedAttempt } from "./use-last-failed-attempt";
+import {
+  useChatFallbackTraversalIsLive,
+  useChatLastFailedAttempt,
+} from "./use-last-failed-attempt";
 import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
 
@@ -46,14 +54,21 @@ import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-o
  *
  * ## What decides whether these appear
  *
- * Not this component, and deliberately. `lastFailedAttempt` is defined by the
- * HOST iff its own manual-rung guard chain would admit something - the latest
- * attempt is a terminal failure, nothing is running, no traversal holds
- * dispatch, and any terminal traversal record settled as a failure. Three of
- * those four cannot be checked in a renderer without racing, and a second copy
- * disagrees on exactly the frames that matter. So the rule here is short:
- * render what the host named, on the row the host named, and let
- * `chat.fallback.runManualRung` answer `rung_unavailable` for the rest.
+ * Mostly not this component, and deliberately. `lastFailedAttempt` is defined
+ * by the HOST iff its own manual-rung guard chain would admit something - the
+ * latest attempt is a terminal failure, nothing is running, and any terminal
+ * traversal record settled as a failure. Those cannot be checked in a renderer
+ * without racing, and a second copy disagrees on exactly the frames that
+ * matter. So the rule here is short: render what the host named, on the row the
+ * host named, and let `chat.fallback.runManualRung` answer `rung_unavailable`
+ * for the rest.
+ *
+ * That list used to carry a fourth item - "no traversal holds dispatch" - and
+ * this component genuinely needed no gating of its own while it held. It does
+ * not hold any more: the grace card was given manual rungs, so the host now
+ * defines the field during a `hold` as well, for the card. `ManualRungActions`
+ * below carries the one gate that costs us, and its comment says why the row
+ * cannot simply share the field.
  *
  * That also answers "hides them once a later turn exists": a later turn means
  * the host stops defining the value, and the affordances clear. There is no
@@ -106,8 +121,48 @@ function ManualRungActions({
 }) {
   const client = useHostClientForHostId(hostId);
   const attempt = useChatLastFailedAttempt({ epicId, chatId, hostId });
+  const traversalIsLive = useChatFallbackTraversalIsLive({
+    epicId,
+    chatId,
+    hostId,
+  });
 
   if (attempt === undefined) return null;
+  // While a traversal is live the COMPOSER's card owns these affordances, and
+  // this row must not offer a second copy of them.
+  //
+  // This gate is the price of the grace card's own rungs. The doc above still
+  // says `lastFailedAttempt` means "no traversal holds dispatch" - that WAS the
+  // host's whole guard chain, and it is why this component was written with no
+  // hiding logic. Giving the countdown card manual rungs required the host to
+  // define the field during a `hold` too, and this row reads the same field, so
+  // it came back on with it: a `Switch…` here, EMPHASISED for rate_limit and
+  // billing, directly above a countdown card offering its own.
+  //
+  // Two copies would be bad enough. The one that must not be reachable is this
+  // one: `ManualRungAffordances` builds this surface's menu `preparing={false}`
+  // - "No hold to take: there is no countdown here to freeze" - so a pick made
+  // here does NOT freeze the window it is now racing. The user opens the menu,
+  // the grace window expires under the popover, the ladder commits, and the
+  // pick lands `rung_unavailable`. That race is precisely what the choice lease
+  // exists to prevent, and the card's menu is the surface that takes it.
+  //
+  // Nothing has to be remembered: `pendingFallback` clearing is the same frame
+  // that ends the traversal, so this row returns exactly when it becomes the
+  // only surface again.
+  //
+  // One case DOES lose an affordance, and it is the right trade rather than an
+  // oversight: a user who DISMISSES the card. A dismissal is not an answer to
+  // the card's question - the banner returns null at its own `if (dismissed)`
+  // while the traversal runs on, untouched and still holding dispatch - so
+  // `pendingFallback` stays defined, this row stands down, and that chat has no
+  // rungs anywhere until the ladder ends. Restoring them here would restore
+  // them LEASELESS, into the exact race two paragraphs up, which the dismissal
+  // did nothing to end: the countdown a pick would lose to is still running,
+  // merely no longer drawn. No affordance and an affordance that silently
+  // fails are not a close call. If that gap is ever worth closing, it closes by
+  // giving this row the lease, not by ungating it.
+  if (traversalIsLive) return null;
   // The row must be the one the host is describing. A transcript holding three
   // failed attempts offers these once, not three times - and a legacy record
   // (no turn identity, so no `turnId` prop) never reaches this component at
@@ -126,6 +181,68 @@ function ManualRungActions({
       epicId={epicId}
       chatId={chatId}
       hostId={hostId}
+      surface="error_card"
+    />
+  );
+}
+
+/**
+ * The same manual rungs, on the GRACE CARD instead of the error row.
+ *
+ * ## Why this exists
+ *
+ * The countdown card used to offer three things: "Don't switch", "Sign in
+ * instead" and a destination menu - so a user who had already fixed the
+ * failure by hand (topped up an account, switched a profile in Settings) had no
+ * way to say so. The only controls were "abandon the recovery" and "go
+ * somewhere else", and neither is "the thing you were trying to do will work
+ * now, just run it". They watched the switch happen instead; that report is
+ * what this closes.
+ *
+ * `retry` is the rung that says it, because `retry` re-runs whatever the chat
+ * is set to NOW - which after a manual fix is the fixed tuple.
+ *
+ * ## No `turnId` here, deliberately
+ *
+ * The error-card wrapper takes one because durable transcript can hold several
+ * failed attempts and the affordances belong to exactly one row. This card is
+ * one per chat and is rendered from the LIVE traversal, and the host defines
+ * `lastFailedAttempt` during a hold only for the attempt that hold armed for
+ * (`fallbackHeldFailureFor` matches both attempt ids). So there is no "which
+ * row" question to answer, and inventing one here would mean re-deriving an
+ * identity the host has already scoped.
+ *
+ * Renders nothing when the host offers no attempt - which includes every
+ * traversal state except `hold`, since that carve-out is the host's and this
+ * component does not second-guess which state it is in.
+ */
+export function FallbackGraceRungActions({
+  epicId,
+  chatId,
+  hostId,
+  client,
+}: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}) {
+  const attempt = useChatLastFailedAttempt({ epicId, chatId, hostId });
+  if (attempt === undefined) return null;
+  // The same link-only carve-out the error card makes, and it has to be
+  // repeated rather than shared: a retry on a signed-out account sends the
+  // identical request to the identical account. The re-auth banner is the way
+  // back in, and on this card "Sign in instead" is already the control that
+  // says so.
+  if (attempt.failure.reason === "auth") return null;
+  return (
+    <ManualRungAffordances
+      attempt={attempt}
+      client={client}
+      epicId={epicId}
+      chatId={chatId}
+      hostId={hostId}
+      surface="grace_card"
     />
   );
 }
@@ -196,6 +313,25 @@ function useChatFallbackActionsCanAct(input: {
 }
 
 /**
+ * The catalogue read the card below needs: its subject, and whether there is one.
+ *
+ * Gated on HAVING a failed tuple rather than on the switch disposition. The
+ * durable failed tuple is the one thing this card always holds or does not,
+ * whereas re-deriving `describeSwitchDisposition`'s branch here to decide
+ * whether to read a catalogue would be a second copy of the copy module's rule
+ * - the defect this module is organised against.
+ */
+function manualRungCatalogueRead(failedTuple: ChatRunSettings | null): {
+  readonly subjects: ReadonlyArray<string | null>;
+  readonly enabled: boolean;
+} {
+  return {
+    subjects: [failedTuple === null ? null : failedTuple.harnessId],
+    enabled: failedTuple !== null,
+  };
+}
+
+/**
  * The affordances themselves, and the pick's in-flight state with them.
  *
  * ## Why this is a THIRD component
@@ -229,18 +365,108 @@ function useChatFallbackActionsCanAct(input: {
  * still here, which is exactly how {@link FallbackWaitingMenu} already gets
  * this right.
  */
+/**
+ * The three switch decisions, resolved together because they are ONE decision
+ * seen from three angles: whether this surface draws the switch, whether it
+ * carries the emphasis, and what to say when it is missing.
+ *
+ * Extracted rather than left inline for two reasons. The honest one is the
+ * complexity budget - adding the `surface` distinction pushed
+ * `ManualRungAffordances` past it. The better one is that all three were
+ * already reading `surface` separately, and three separate reads of the same
+ * fact is how two of them end up disagreeing.
+ *
+ * ## The grace card draws no switch
+ *
+ * That card's own leased menu (`<FallbackGraceMenu>`) is the switch there, and
+ * it is not a duplicate of this one: it takes a grace-hold lease that pauses
+ * the countdown while the popover is open. Rendering both would put two switch
+ * controls side by side and the wrong one would be the leaseless one.
+ *
+ * The EXPLANATION goes with it, and that is the same argument rather than an
+ * exception to it. The sentence exists because a control that simply vanishes
+ * reads as a broken product and a user cannot act on an absence - but on the
+ * grace card the switch is not absent, so printing "no other provider is
+ * available to switch to" beside a working Switch control would be that same
+ * broken-product reading, pointed the other way.
+ *
+ * So the grace card answers all three at once and never consults the rungs: no
+ * switch, no emphasis, nothing to explain.
+ *
+ * ## On the error card
+ *
+ * Retry re-runs the SAME account and model (`retry` is the same tuple by
+ * definition). For a failure the provider will keep refusing until something
+ * changes - a spent quota, an unpaid bill - that is very unlikely to do
+ * anything, and the engine agrees: `rate_limit` and `billing` get no transient
+ * retry either, only the outage-shaped failures do. So the switch leads and
+ * Retry sits beside it as the secondary; offering them as equals made the
+ * useless one the leftmost thing on the card.
+ *
+ * The explanation's subject is the FAILED tuple the host named, resolved
+ * through the same module every other fallback surface names a tuple with.
+ * Never the chat's current settings: this is bound to an attempt, and a chat
+ * reconfigured since would be explained in terms of a model that never ran.
+ */
+function switchAffordanceFor(input: {
+  readonly surface: "error_card" | "grace_card";
+  readonly attempt: LastFailedAttempt;
+  readonly modelLabelFor: FallbackModelLabelResolver;
+}): {
+  readonly offersSwitch: boolean;
+  readonly switchLeads: boolean;
+  readonly switchExplanation: string | null;
+} {
+  const { surface, attempt, modelLabelFor } = input;
+  if (surface === "grace_card") {
+    return { offersSwitch: false, switchLeads: false, switchExplanation: null };
+  }
+  const offersSwitch = attempt.eligibleRungs.includes("switch");
+  const failedTuple = attempt.failedTuple;
+  return {
+    offersSwitch,
+    switchLeads:
+      offersSwitch &&
+      (attempt.failure.reason === "rate_limit" ||
+        attempt.failure.reason === "billing"),
+    switchExplanation: describeSwitchDisposition(
+      attempt.switchDisposition,
+      failedTuple === null
+        ? null
+        : fallbackProviderModelLabel(failedTuple, modelLabelFor),
+    ),
+  };
+}
+
 function ManualRungAffordances({
   attempt,
   client,
   epicId,
   chatId,
   hostId,
+  surface,
 }: {
   readonly attempt: LastFailedAttempt;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatId: string;
   readonly hostId: string;
+  /**
+   * Which surface these affordances are mounted on, and the ONE thing it
+   * changes is whether the switch is offered here.
+   *
+   * `error_card` is durable transcript and owns the whole set. `grace_card` is
+   * the countdown in the composer, which already has a destination menu of its
+   * own - `<FallbackGraceMenu>`, in its `menu` slot - and that menu is not a
+   * duplicate of this one: it takes a grace-hold LEASE that pauses the
+   * countdown while the popover is open. Rendering both would put two
+   * switch controls side by side, and the wrong one would be the leaseless one.
+   *
+   * A required prop rather than an optional flag, so a new call site has to say
+   * which surface it is; a defaulted one would silently take the transcript's
+   * answer.
+   */
+  readonly surface: "error_card" | "grace_card";
 }) {
   const publishConfirmed = usePublishConfirmedManualFallbackAction({
     epicId,
@@ -253,6 +479,25 @@ function ManualRungAffordances({
     hostId,
   });
   const canAct = useChatFallbackActionsCanAct({ epicId, chatId, hostId });
+  // One tuple: the only model this card names is the FAILED one, in the
+  // sentence explaining why there is no Switch… button. The destination menu
+  // this card opens resolves its own rows - it names harnesses this card has no
+  // way to know about until the listing answers.
+  //
+  // Gated on having a subject rather than on the sentence being on screen. A
+  // durable failed tuple is the one thing this component always holds or does
+  // not, and re-deriving `describeSwitchDisposition`'s branch here to decide
+  // whether to read a catalogue would be a second copy of the copy module's
+  // rule - the defect this whole module is organised against. The read itself
+  // is the shared `listModels` slot the app-load prefetcher already fills, and
+  // the hook's own availability gate keeps a harness the user has since
+  // disabled from being asked about at all.
+  const catalogueRead = manualRungCatalogueRead(attempt.failedTuple);
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    catalogueRead.subjects,
+    catalogueRead.enabled,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const runManualRung = useFallbackRunManualRung(
@@ -382,163 +627,248 @@ function ManualRungAffordances({
       ? null
       : formatWaitTime(attempt.failure.resetsAt, now),
   );
-  // Why there is no Switch… button, in the host's own terms - the exact
-  // counterpart to `waitExplanation`, and added for the same reason F6 added
-  // that one: a control that simply vanishes reads as a broken product, and a
-  // user cannot act on an absence.
-  //
-  // The subject is the FAILED tuple the host named, resolved through the same
-  // module every other fallback surface names a tuple with. Never the chat's
-  // current settings: this row is bound to an attempt, and a chat reconfigured
-  // since would be explained in terms of a model that never ran.
-  const failedTuple = attempt.failedTuple;
-  const switchExplanation = describeSwitchDisposition(
-    attempt.switchDisposition,
-    failedTuple === null ? null : fallbackProviderModelLabel(failedTuple),
-  );
+  // All three switch decisions in one call - see the helper for why they are
+  // one decision and not three.
+  const { offersSwitch, switchLeads, switchExplanation } = switchAffordanceFor({
+    surface,
+    attempt,
+    modelLabelFor,
+  });
 
+  // Whether the RETRY is the request in flight, as opposed to a switch or a
+  // wait sent from the same hook. Without this the card answered a press with
+  // nothing at all: `runManualRung.isPending` only ever reached `disabled`, so
+  // a user pressed Retry, the button greyed for a moment, the affordances then
+  // vanished when the host stopped naming this attempt, and the next thing on
+  // screen was an identical error card. Every one of those steps is correct and
+  // the sequence still reads as a dead button - which is exactly the report.
+  // `variables` is only meaningful while a request is in flight, and the `&&`
+  // is what makes reading it safe - no optional chain, which the type says is
+  // unnecessary anyway.
+  const retryInFlight =
+    runManualRung.isPending && runManualRung.variables.rung === "retry";
+  const retryButton = rungs.includes("retry") ? (
+    <ManualRetryButton
+      disabled={busy}
+      inFlight={retryInFlight}
+      // The weaker of the two when the switch leads, so the row has ONE
+      // emphasized control rather than two filled boxes competing.
+      variant={switchLeads ? "ghost" : "secondary"}
+      onRetry={() => {
+        run("retry");
+      }}
+    />
+  ) : null;
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
-      {rungs.includes("retry") ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={busy}
-          onClick={() => {
-            run("retry");
-          }}
-        >
-          Retry
-        </Button>
-      ) : null}
-      {rungs.includes("switch") ? (
-        <FallbackDestinationMenu
-          triggerLabel={SWITCH_LABEL}
-          triggerDisabled={busy}
-          // `null` for the count, and that is the honest answer rather than a
-          // gap: this card acts on a failed ATTEMPT, and `lastFailedAttempt`
-          // carries no queue figure - the traversal that would have counted
-          // one is over. The copy says the queue moves without naming a
-          // number it does not have.
-          header={switchConsequencesText(null)}
-          // The ATTEMPT selector, not a traversal one. This card renders where
-          // there is no dispatch-holding traversal to name - a terminal failure,
-          // an exhausted ladder, a `completed_awaiting_return` left over from an
-          // earlier success - which is the whole reason `runManualRung` is bound
-          // to the failed attempt instead.
-          selector={{
-            kind: "attempt",
-            userMessageId: attempt.userMessageId,
-            turnId: attempt.turnId,
-          }}
-          epicId={epicId}
-          chatId={chatId}
-          client={client}
-          open={menuOpen}
-          onOpenChange={onMenuOpenChange}
-          onPick={onPickTarget}
-          // `busy`, not `runManualRung.isPending`: `picking` is the channel the
-          // menu ORs into every row's own `disabled`, and the trigger going
-          // quiet is not enough on its own. A stream that drops while this
-          // popover is already OPEN leaves the rows behind it clickable, and
-          // each of them sends the same `runManualRung` the buttons outside
-          // were just refused.
-          picking={busy}
-          // No hold to take: there is no countdown here to freeze.
-          preparing={false}
-          refusal={refusal}
-          // The one entry point that HAS the rungs to repeat, so it does. The
-          // two card menus pass `null` because their equivalents are already on
-          // the card the popover is anchored to.
-          emptyStateActions={
-            <div className="flex w-full flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                {rungs.includes("retry") ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => {
-                      run("retry");
-                    }}
-                  >
-                    Retry
-                  </Button>
-                ) : null}
-                {waitUntil === null ? null : (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => {
-                      run("wait_once");
-                    }}
-                  >
-                    {waitUntil}
-                  </Button>
+    // A COLUMN, not one wrapping row. Everything below used to live in a single
+    // `flex flex-wrap items-center gap-2` - the buttons, the settings link and
+    // both explanation sentences together - with the sentences carrying `w-full`
+    // so flex-wrap would break the line for them. That is what made the card
+    // look ragged: prose and controls were peers in one row, the line breaks
+    // were an artefact of a width hack rather than structure, and the vertical
+    // rhythm changed depending on which sentences happened to be present.
+    //
+    // Two bands instead, each with one job: what the host wants to tell you,
+    // then what you can do about it.
+    <div className="mt-3 flex flex-col gap-2.5">
+      <ManualRungExplanations
+        switchExplanation={switchExplanation}
+        waitExplanation={waitExplanation}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        {switchLeads ? null : retryButton}
+        {offersSwitch ? (
+          <FallbackDestinationMenu
+            triggerLabel={SWITCH_LABEL}
+            triggerDisabled={busy}
+            // Emphasized where switching is the thing that helps; see the prop's
+            // own doc for why this is not one fixed weight.
+            triggerVariant={switchLeads ? "secondary" : "ghost"}
+            // `null` for the count, and that is the honest answer rather than a
+            // gap: this card acts on a failed ATTEMPT, and `lastFailedAttempt`
+            // carries no queue figure - the traversal that would have counted
+            // one is over. The copy says the queue moves without naming a
+            // number it does not have.
+            header={switchConsequencesText(null)}
+            // The ATTEMPT selector, not a traversal one. This card renders where
+            // there is no dispatch-holding traversal to name - a terminal failure,
+            // an exhausted ladder, a `completed_awaiting_return` left over from an
+            // earlier success - which is the whole reason `runManualRung` is bound
+            // to the failed attempt instead.
+            selector={{
+              kind: "attempt",
+              userMessageId: attempt.userMessageId,
+              turnId: attempt.turnId,
+            }}
+            epicId={epicId}
+            chatId={chatId}
+            client={client}
+            open={menuOpen}
+            onOpenChange={onMenuOpenChange}
+            onPick={onPickTarget}
+            // `busy`, not `runManualRung.isPending`: `picking` is the channel the
+            // menu ORs into every row's own `disabled`, and the trigger going
+            // quiet is not enough on its own. A stream that drops while this
+            // popover is already OPEN leaves the rows behind it clickable, and
+            // each of them sends the same `runManualRung` the buttons outside
+            // were just refused.
+            picking={busy}
+            // No hold to take: there is no countdown here to freeze.
+            preparing={false}
+            refusal={refusal}
+            // The one entry point that HAS the rungs to repeat, so it does. The
+            // two card menus pass `null` because their equivalents are already on
+            // the card the popover is anchored to.
+            emptyStateActions={
+              <div className="flex w-full flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* The SAME element the card renders, not a second copy of it.
+                    These two were hand-duplicated, so the in-flight spinner
+                    would have landed on one of them and the empty menu would
+                    have kept answering a press with nothing. */}
+                  {retryButton}
+                  {waitUntil === null ? null : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        run("wait_once");
+                      }}
+                    >
+                      {waitUntil}
+                    </Button>
+                  )}
+                </div>
+                {/*
+                 * The SAME disposition the card renders, repeated here because
+                 * this is where its absence is confusing. The empty menu offers
+                 * Retry and (sometimes) a wait button; when the wait button is
+                 * missing, the reader is looking at the one surface that could
+                 * explain why and previously said nothing - the sentence lived
+                 * only on the card BEHIND the popover. F6 promised both halves
+                 * and shipped one.
+                 *
+                 * Same string, one source (`describeWaitDisposition`), so the
+                 * two surfaces cannot drift into two explanations of one fact.
+                 */}
+                {waitExplanation === null ? null : (
+                  <div className="text-ui-xs text-muted-foreground">
+                    {waitExplanation}
+                  </div>
                 )}
               </div>
-              {/*
-               * The SAME disposition the card renders, repeated here because
-               * this is where its absence is confusing. The empty menu offers
-               * Retry and (sometimes) a wait button; when the wait button is
-               * missing, the reader is looking at the one surface that could
-               * explain why and previously said nothing - the sentence lived
-               * only on the card BEHIND the popover. F6 promised both halves
-               * and shipped one.
-               *
-               * Same string, one source (`describeWaitDisposition`), so the
-               * two surfaces cannot drift into two explanations of one fact.
-               */}
-              {waitExplanation === null ? null : (
-                <div className="text-ui-xs text-muted-foreground">
-                  {waitExplanation}
-                </div>
-              )}
-            </div>
-          }
+            }
+          />
+        ) : null}
+        {switchLeads ? retryButton : null}
+        {waitUntil === null ? null : (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              run("wait_once");
+            }}
+          >
+            {waitUntil}
+          </Button>
+        )}
+        {/*
+         * ALWAYS, not only when there is nothing else. Hiding it beside buttons
+         * made the escape available in exactly the state where the user had
+         * least need of it and unavailable in the state where a destination
+         * turned out to be unusable and the policy was the thing to go and look
+         * at. "No buttons is a real state, and the host said so" is still true -
+         * the difference is that the link is not the consolation prize for it.
+         *
+         * `ml-auto` puts it at the FAR end of the row, away from the actions.
+         * It sat inline among them before, which made a link that navigates to
+         * Settings read as a fourth thing you could do to this turn - and on a
+         * row where it was the only control left, it read as the primary one.
+         * Actions act on the message; this one leaves for a different screen,
+         * and the gap is what says so.
+         */}
+        <div className="ml-auto flex items-center">
+          <FallbackNoticeSettingsLink />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The host's reasons a control is missing, as one muted block above the row.
+ *
+ * Its own component for the reason the two sentences are grouped at all: they
+ * are the same KIND of thing - a fact about this failure that the reader cannot
+ * act on directly - and they belong together, above the controls that remain,
+ * rather than trailing underneath them as two separately-`w-full` orphans.
+ *
+ * Order is unchanged and still deliberate. The switch sentence names the chat
+ * and is what the settings link is the remedy for; the wait sentence is about a
+ * provider's reset boundary. A reader with both wants the actionable one first.
+ *
+ * `null` when there is nothing to say, so the column above contributes no gap
+ * for an empty block - which is the other half of why the old version's rhythm
+ * changed depending on which sentences were present.
+ */
+function ManualRungExplanations({
+  switchExplanation,
+  waitExplanation,
+}: {
+  readonly switchExplanation: string | null;
+  readonly waitExplanation: string | null;
+}) {
+  if (switchExplanation === null && waitExplanation === null) return null;
+  return (
+    <div className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
+      {switchExplanation === null ? null : <span>{switchExplanation}</span>}
+      {waitExplanation === null ? null : <span>{waitExplanation}</span>}
+    </div>
+  );
+}
+
+/**
+ * Retry, with the one thing it was missing: an answer to the press.
+ *
+ * The convention this follows is the app's own for a pending mutation -
+ * `disabled` plus an UNCHANGED label plus inline `AgentSpinningDots`, never a
+ * swapped "Retrying…" caption. It matters more here than in most places: a
+ * manual retry has no other feedback anywhere. The engine's own transient
+ * retries get `FallbackRetryRow` at the turn tail, but that row is driven by
+ * `pending.state === "retrying"` and a manual rung never enters that state, so
+ * between the click and the next frame the card said nothing whatsoever - and
+ * when the retry then failed on the same still-limited account, the whole
+ * episode read as a button that does nothing.
+ */
+function ManualRetryButton({
+  disabled,
+  inFlight,
+  variant,
+  onRetry,
+}: {
+  readonly disabled: boolean;
+  readonly inFlight: boolean;
+  /**
+   * `secondary` when retrying is the best thing on offer, `ghost` when a switch
+   * is. The row carries exactly one filled control either way - two of them is
+   * what made the old card read as a pile of equally-weighted boxes.
+   */
+  readonly variant: "secondary" | "ghost";
+  readonly onRetry: () => void;
+}) {
+  return (
+    <Button size="sm" variant={variant} disabled={disabled} onClick={onRetry}>
+      Retry
+      {inFlight ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
         />
       ) : null}
-      {waitUntil === null ? null : (
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={busy}
-          onClick={() => {
-            run("wait_once");
-          }}
-        >
-          {waitUntil}
-        </Button>
-      )}
-      {/*
-       * ALWAYS, not only when there is nothing else. Hiding it beside buttons
-       * made the escape available in exactly the state where the user had
-       * least need of it and unavailable in the state where a destination
-       * turned out to be unusable and the policy was the thing to go and look
-       * at. "No buttons is a real state, and the host said so" is still true -
-       * the difference is that the link is not the consolation prize for it.
-       */}
-      <FallbackNoticeSettingsLink />
-      {switchExplanation === null ? null : (
-        // ABOVE the wait sentence, and full-width for the same reason. Ordered
-        // this way because the two are not peers on a row that has neither
-        // control: this one names the chat and is what the Settings link beside
-        // it is the remedy for, while the wait sentence is about a provider's
-        // reset boundary. A reader with both wants the actionable one first.
-        <div className="w-full text-ui-xs text-muted-foreground">
-          {switchExplanation}
-        </div>
-      )}
-      {waitExplanation === null ? null : (
-        // Full-width below the buttons rather than inline beside them: it is a
-        // sentence, not a control, and `beyond_cap`'s version names a time the
-        // Settings link next to it is the remedy for.
-        <div className="w-full text-ui-xs text-muted-foreground">
-          {waitExplanation}
-        </div>
-      )}
-    </div>
+    </Button>
   );
 }
 

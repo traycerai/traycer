@@ -19,11 +19,28 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
-);
+// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+// `HostBusyForceDeferDialog`, both reachable from this card's Restart
+// controls) calls `useFocusModel()` -> `useConnectableHostIds()` ->
+// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
+// at render time and subscribes via `directory.onChange` in an effect. A
+// binding mock with no `directory` throws ("Invalid value used as weak map
+// key" / "directory.onChange is not a function") the moment either dialog
+// opens, so every fixture below needs one even though this suite never reads
+// its answer.
+interface HostBindingMock {
+  readonly hostClient: unknown;
+  readonly directory: {
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
+    readonly getLocalEntry: () => null;
+  };
+}
+const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
+  current: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -105,6 +122,23 @@ function scopeFrom(
     hostId,
     status: "ready",
     client: fixture.client,
+  };
+}
+
+/**
+ * A host binding whose `directory` answers with an empty listing and inert
+ * change subscription — this suite never asserts on the directory itself,
+ * only on the fact that `HostRestartSessions` can mount beneath it without
+ * throwing.
+ */
+function bindingWith(hostClient: unknown): HostBindingMock {
+  return {
+    hostClient,
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalEntry: () => null,
+    },
   };
 }
 
@@ -446,7 +480,7 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -474,7 +508,7 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -514,7 +548,7 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -562,7 +596,7 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -589,7 +623,7 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -611,7 +645,7 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -673,7 +707,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
     return screen.findByTestId("host-overview-operation-card");
@@ -719,7 +753,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -783,7 +817,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -821,7 +855,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -853,7 +887,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -909,7 +943,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -951,7 +985,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1029,7 +1063,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordFloorCapableHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1079,7 +1113,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1146,7 +1180,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1204,7 +1238,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
 
@@ -1262,7 +1296,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
 
@@ -1301,7 +1335,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1340,7 +1374,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -1400,7 +1434,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -1456,7 +1490,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -1555,7 +1589,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1630,7 +1664,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1696,7 +1730,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1769,7 +1803,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1872,7 +1906,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1951,7 +1985,7 @@ describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1974,7 +2008,7 @@ describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1998,7 +2032,7 @@ describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2032,7 +2066,7 @@ describe("HostOverviewOperationCard — capability gates", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2095,7 +2129,7 @@ describe("HostOverviewOperationCard — capability gates", () => {
       "host-a",
       ALL_OVERVIEW_METHODS.filter((method) => method !== "host.update.install"),
     );
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2168,7 +2202,7 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
   it("reads the command-line-tools sentence, not the zero-session count", async () => {
     const fixture = floorParkFixture(floorStagedManifest("1.3.0-rc.3"));
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2200,7 +2234,7 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
     // substitution that ignored the flag) turns this red.
     const fixture = floorParkFixture(clearStagedManifest("1.3.0-rc.3"));
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2242,7 +2276,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     methods: readonly string[],
   ) {
     recordNegotiatedHostMethods("host-a", methods);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
   }
 

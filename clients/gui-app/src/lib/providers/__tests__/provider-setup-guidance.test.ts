@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type {
   ProviderCliState,
+  ProviderId,
   ProviderLoginCapability,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   defaultTerminalSignInGuidance,
+  PROVIDER_SETUP_GUIDANCE,
   providerSetupActionPlacement,
   providerSetupGuidance,
   providerSetupPreparingLabel,
   providerSetupSteps,
+  providerTerminalGuidance,
   resolveProviderTerminalSetup,
+  TERMINAL_SIGN_IN_COPY,
 } from "@/lib/providers/provider-setup-guidance";
 
 function capabilityWithTerminalLogin(
@@ -20,6 +24,8 @@ function capabilityWithTerminalLogin(
     token: null,
     codePaste: null,
     terminalLogin: {},
+    remoteSafe: null,
+    selfOpensBrowser: null,
   };
 }
 
@@ -89,8 +95,101 @@ describe("providerSetupGuidance", () => {
     );
   });
 
+  it("returns hermes's setup guidance with the manual 'hermes setup model' command and three post-action steps", () => {
+    const guidance = providerSetupGuidance("hermes");
+    expect(guidance).not.toBeNull();
+    expect(guidance?.manualCommand).toBe("hermes setup model");
+    expect(guidance?.summary).toBe(
+      "Hermes Agent keeps provider API keys in its own store, not in your shell environment.",
+    );
+    expect(guidance?.stepsAfterAction).toEqual([
+      "Choose your inference provider from the list in that terminal.",
+      "Give that provider an API key when Hermes asks for one.",
+      "Refresh this list.",
+    ]);
+    expect(guidance?.stepsAfterAction).toHaveLength(3);
+    expect(guidance?.noSurfaceStep).toBe(
+      "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Hermes' setup wizard on the host that composer runs on.",
+    );
+    expect(guidance?.epicOnlyStep).toBe(
+      "Open a chat and choose “Set up in terminal” from its model picker. This host's version can open Hermes' setup wizard from a chat, but not from the start page.",
+    );
+    expect(guidance?.terminalActionLabel).toBe("Set up in terminal");
+    expect(guidance?.terminalHint).toBe(
+      "Hermes asks for an inference provider and its API key in that terminal. Finish there, then use Refresh above.",
+    );
+    expect(providerTerminalGuidance("hermes")).toEqual(guidance);
+  });
+
   it("returns null for a provider with no guidance entry (cursor)", () => {
     expect(providerSetupGuidance("cursor")).toBeNull();
+  });
+});
+
+describe("TERMINAL_SIGN_IN_COPY", () => {
+  it("re-words Kilo Code like OpenCode: a terminal picker, generic sign-in labels, no manual command", () => {
+    const guidance = providerTerminalGuidance("kilocode");
+    expect(providerSetupGuidance("kilocode")).toBeNull();
+    expect(guidance.summary).toBe(
+      "Kilo Code signs in from a terminal, one provider account at a time.",
+    );
+    expect(guidance.stepsAfterAction).toEqual([
+      "Pick the provider and sign-in method in that terminal and follow the prompts.",
+      "Refresh this list.",
+    ]);
+    expect(guidance.terminalHint).toBe(
+      "Kilo Code asks for the provider and sign-in method in that terminal. Complete it there, then use Refresh above.",
+    );
+    expect(guidance.terminalActionLabel).toBe("Sign in from a terminal");
+    expect(guidance.manualCommand).toBeNull();
+  });
+
+  it("re-words Amp around a printed sign-in link that finishes in the terminal, without promising a code paste or that a browser opens", () => {
+    const guidance = providerTerminalGuidance("amp");
+    expect(providerSetupGuidance("amp")).toBeNull();
+    expect(guidance.summary).toBe(
+      "Amp signs in from a terminal: it prints a sign-in link, and finishes in that terminal.",
+    );
+    expect(guidance.summary).not.toContain("opens your browser");
+    expect(guidance.stepsAfterAction).toEqual([
+      "Open the link that terminal prints — on your own machine Amp may open it for you — then follow it through and answer whatever the terminal asks for next.",
+      "Refresh this list.",
+    ]);
+    expect(guidance.stepsAfterAction[0]).not.toMatch(/paste/i);
+    expect(guidance.terminalHint).toBe(
+      "Amp prints a sign-in link and waits in that terminal. Finish there, then use Refresh above.",
+    );
+    expect(guidance.terminalActionLabel).toBe("Sign in from a terminal");
+    expect(guidance.manualCommand).toBeNull();
+  });
+
+  it("re-words Kiro around choosing an account first, without requiring every arm to print a link", () => {
+    const guidance = providerTerminalGuidance("kiro");
+    expect(providerSetupGuidance("kiro")).toBeNull();
+    expect(guidance.summary).toBe(
+      "Kiro signs in from a terminal, and asks which account to use first.",
+    );
+    expect(guidance.stepsAfterAction).toEqual([
+      "Choose a sign-in method in that terminal, then follow what it shows — for a social account that is a link to open and a code to confirm.",
+      "Refresh this list.",
+    ]);
+    expect(guidance.terminalHint).toBe(
+      "Kiro asks which account to use in that terminal, then walks you through that account's sign-in. Finish there, then use Refresh above.",
+    );
+    expect(guidance.terminalActionLabel).toBe("Sign in from a terminal");
+    expect(guidance.manualCommand).toBeNull();
+  });
+});
+
+describe("provider guidance table exclusivity", () => {
+  // `providerTerminalGuidance` returns a PROVIDER_SETUP_GUIDANCE override
+  // outright and never consults TERMINAL_SIGN_IN_COPY, so a provider in both
+  // silently drops the copy-table half.
+  it("does not let any provider carry both a PROVIDER_SETUP_GUIDANCE override and a TERMINAL_SIGN_IN_COPY entry", () => {
+    const overlap = Object.keys(PROVIDER_SETUP_GUIDANCE).filter((id) =>
+      Object.hasOwn(TERMINAL_SIGN_IN_COPY, id),
+    );
+    expect(overlap).toEqual([]);
   });
 });
 
@@ -175,6 +274,70 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.manualCommand).toBe("reasonix setup");
     expect(setup?.guidance.terminalActionLabel).toBe("Set up in terminal");
   });
+
+  it("returns the hermes override, with canStartTerminal: true, for hermes with the capability", () => {
+    const setup = resolveProviderTerminalSetup(
+      "hermes",
+      stateWith(capabilityWithTerminalLogin(["setup", "model"])),
+    );
+    expect(setup).not.toBeNull();
+    expect(setup?.canStartTerminal).toBe(true);
+    expect(setup?.guidance.manualCommand).toBe("hermes setup model");
+    expect(setup?.guidance.terminalActionLabel).toBe("Set up in terminal");
+  });
+
+  it("preserves hermes's guidance with canStartTerminal: false when the capability is absent", () => {
+    const setup = resolveProviderTerminalSetup(
+      "hermes",
+      stateWith({
+        ...capabilityWithTerminalLogin(["setup", "model"]),
+        terminalLogin: null,
+      }),
+    );
+    expect(setup).not.toBeNull();
+    expect(setup?.canStartTerminal).toBe(false);
+    expect(setup?.guidance.manualCommand).toBe("hermes setup model");
+    expect(setup?.guidance.summary).toBe(
+      "Hermes Agent keeps provider API keys in its own store, not in your shell environment.",
+    );
+  });
+
+  it("preserves hermes's guidance with canStartTerminal: false when the row itself is null", () => {
+    const setup = resolveProviderTerminalSetup("hermes", null);
+    expect(setup).not.toBeNull();
+    expect(setup?.canStartTerminal).toBe(false);
+    expect(setup?.guidance.manualCommand).toBe("hermes setup model");
+  });
+
+  it.each(["kilocode", "amp", "kiro"] as const)(
+    "gives %s the terminal-sign-in copy when the capability is present, and nothing when it is absent",
+    (providerId: ProviderId) => {
+      const withCapability = resolveProviderTerminalSetup(
+        providerId,
+        stateWith(capabilityWithTerminalLogin(["login"])),
+      );
+      expect(withCapability).not.toBeNull();
+      expect(withCapability?.canStartTerminal).toBe(true);
+      expect(withCapability?.guidance).toEqual(
+        providerTerminalGuidance(providerId),
+      );
+      expect(withCapability?.guidance.terminalActionLabel).toBe(
+        "Sign in from a terminal",
+      );
+      expect(withCapability?.guidance.manualCommand).toBeNull();
+
+      expect(
+        resolveProviderTerminalSetup(
+          providerId,
+          stateWith({
+            ...capabilityWithTerminalLogin(["login"]),
+            terminalLogin: null,
+          }),
+        ),
+      ).toBeNull();
+      expect(resolveProviderTerminalSetup(providerId, null)).toBeNull();
+    },
+  );
 
   it("preserves reasonix's guidance with canStartTerminal: false when the capability is absent (terminalLogin null) - the fix for old hosts losing Reasonix's manual instructions", () => {
     const setup = resolveProviderTerminalSetup(

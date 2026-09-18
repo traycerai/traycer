@@ -1,5 +1,8 @@
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+// Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
+// module this file mocks.
+import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
 import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
@@ -47,6 +50,14 @@ import {
   wasEpicCreatedRecentlyThisSession,
   wasEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
+import {
+  clearEpicCreateSeedPending,
+  EPIC_CREATE_SEED_HOLD_TIMEOUT_MS,
+  readEpicCreateSeed,
+} from "@/lib/worktree/pending-epic-create-seeds";
+import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createOutcomeIsDecidable } from "@/lib/epics/epic-existence-poll";
 
 interface CapturedNavigation {
   readonly search?: (
@@ -61,6 +72,10 @@ const landingMocks = vi.hoisted(() => ({
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
   floorsRequested: new Array<unknown>(),
+  dispatchOptions: new Array<{
+    readonly method: string;
+    readonly options: unknown;
+  }>(),
   getActiveHost: vi.fn(() => ({
     hostId: "host-landing",
     label: "Local",
@@ -92,6 +107,26 @@ vi.mock("@/lib/host", () => ({
       requiredHostMethodVersion: unknown,
     ): Promise<unknown> => {
       landingMocks.floorsRequested.push(requiredHostMethodVersion);
+      return landingMocks.request(method, payload);
+    },
+    // A KEYED dispatch takes this entry point instead - it is the only one
+    // that can carry the idempotency key and the version floor at once, so
+    // `epic.create` reaches it whatever the auth verdict is. The floor is
+    // pushed to the SAME array the narrow entry point above uses, so a case
+    // asserting "this create paid a floor" stays true wherever it was decided,
+    // and the whole option bag is recorded beside it for the key.
+    requestWithOptions: (
+      method: string,
+      payload: unknown,
+      options: {
+        readonly idempotencyKey: string | null;
+        readonly requiredHostMethodVersion: unknown;
+      },
+    ): Promise<unknown> => {
+      landingMocks.dispatchOptions.push({ method, options });
+      if (options.requiredHostMethodVersion !== null) {
+        landingMocks.floorsRequested.push(options.requiredHostMethodVersion);
+      }
       return landingMocks.request(method, payload);
     },
     getActiveHostId: landingMocks.getActiveHostId,
@@ -135,6 +170,22 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// Every other rejection settles immediately through `settleUnlandedLandingEpic`
+// (a plain `Error` is not even `instanceof HostRpcError`, so it never reaches
+// this seam) - only the ambiguous-drop/keyReuseConflict arm calls
+// `pollEpicExistence`, and only the by-hash cases below drive that arm.
+// `createOutcomeIsDecidable` stays REAL (via `importOriginal`) so a case that
+// exercises it is pinning the actual classifier, not a stub of it.
+const pollMocks = vi.hoisted(() => ({
+  pollEpicExistence:
+    vi.fn<(input: unknown) => Promise<"exists" | "absent" | "unknown">>(),
+}));
+vi.mock("@/lib/epics/epic-existence-poll", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/epics/epic-existence-poll")>();
+  return { ...actual, pollEpicExistence: pollMocks.pollEpicExistence };
+});
+
 const imageStoreMocks = vi.hoisted(() => ({
   sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
   getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
@@ -146,8 +197,34 @@ const imageStoreMocks = vi.hoisted(() => ({
     Promise.resolve(),
   ),
   releaseSession: vi.fn(),
+  // The partition is EMPTY AND ALREADY ENUMERATED, which is one stand-in, not
+  // five: `imageHashKeys` answering `[]` is only coherent alongside a hydration
+  // that has finished and a presence set that agrees with it.
+  //
+  // `landingImageSizesHydrated` answers `true` for that reason and not because
+  // a case here depends on it - no assertion in this file moves when it is
+  // flipped, which was checked. A from-scratch factory never runs the startup
+  // pass, so `false` would not model "not yet measured"; it would model a
+  // partition whose contents are unknown while `imageHashKeys` beside it claims
+  // to know they are none, and `rootByteCost` prices those two answers very
+  // differently.
+  ensureMeasuredImageSizes: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  landingImageSizesHydrated: vi.fn<() => boolean>(() => true),
+  measuredLandingImageSize: vi.fn<(hash: string) => number | null>(() => null),
+  hasLandingImageBytes: vi.fn<(hash: string) => boolean>(() => false),
+  flushReclaimCustody: vi.fn<() => Promise<number>>(() => Promise.resolve(0)),
+  // Unreachable with an empty partition - the sweep only reclaims a hash it
+  // enumerated - so this answers the one outcome that matches that emptiness
+  // rather than pretending a delete happened.
+  reclaimImageBytes: vi.fn<
+    (hash: string, isRooted: () => boolean) => Promise<ImageReclaimOutcome>
+  >(() => Promise.resolve("absent")),
 }));
 
+// Every export the module graph under test actually reads, not only the ones
+// this file calls: `landing-image-gc` and `landing-image-budget` import from
+// here too, and a from-scratch factory that omits one makes vitest warn and the
+// importer read `undefined` at call time.
 vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionImageBytes: imageStoreMocks.sessionImageBytes,
   getImageBytes: imageStoreMocks.getImageBytes,
@@ -155,6 +232,12 @@ vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionHashKeys: imageStoreMocks.sessionHashKeys,
   deleteImageBytesUnchecked: imageStoreMocks.deleteImageBytesUnchecked,
   releaseSession: imageStoreMocks.releaseSession,
+  ensureMeasuredImageSizes: imageStoreMocks.ensureMeasuredImageSizes,
+  landingImageSizesHydrated: imageStoreMocks.landingImageSizesHydrated,
+  measuredLandingImageSize: imageStoreMocks.measuredLandingImageSize,
+  hasLandingImageBytes: imageStoreMocks.hasLandingImageBytes,
+  flushReclaimCustody: imageStoreMocks.flushReclaimCustody,
+  reclaimImageBytes: imageStoreMocks.reclaimImageBytes,
 }));
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
@@ -174,6 +257,17 @@ function foldedChatIdFromCreateEpicPayload(payload: unknown): string | null {
 // Same structural-narrowing shape as the chat-id reader above, for the
 // epic's own id - present on both flows' `epic.create` payload (`chat` is
 // `null` on the terminal-agent flow, but `epic.id` always rides along).
+function deferWorktreeProvisioningFromCreateEpicPayload(
+  payload: unknown,
+): boolean | "absent" {
+  if (typeof payload !== "object" || payload === null) return "absent";
+  if (!("chat" in payload)) return "absent";
+  const chat = payload.chat;
+  if (typeof chat !== "object" || chat === null) return "absent";
+  if (!("deferWorktreeProvisioning" in chat)) return "absent";
+  return chat.deferWorktreeProvisioning === true;
+}
+
 function epicIdFromCreateEpicPayload(payload: unknown): string | null {
   if (typeof payload !== "object" || payload === null) return null;
   if (!("epic" in payload)) return null;
@@ -269,6 +363,11 @@ describe("useLandingComposerActions", () => {
     // own exact-array assertion.) A later case cannot reach back and change an
     // assertion that has already run; only what precedes it can.
     landingMocks.floorsRequested.length = 0;
+    // Same residue risk as `floorsRequested` just above: an earlier test's
+    // `drafts.putBlob` dispatch would otherwise still be sitting here when a
+    // later by-hash case asserts "no putBlob went out", reading as a false
+    // failure that has nothing to do with that later case's own behavior.
+    landingMocks.dispatchOptions.length = 0;
     landingMocks.request.mockResolvedValue({ roomInfo: null });
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
     landingMocks.getActiveHostId.mockReset();
@@ -288,6 +387,9 @@ describe("useLandingComposerActions", () => {
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     imageStoreMocks.getImageBytes.mockReset();
     imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
+    pollMocks.pollEpicExistence.mockReset();
+    pollMocks.pollEpicExistence.mockResolvedValue("unknown");
+    resetDraftBlobTransportForTests();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     useWorkspaceFoldersStore.setState({ byHost: {} });
@@ -917,9 +1019,26 @@ describe("useLandingComposerActions", () => {
         landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
       ).toBe(true);
     });
-    const imageNode = submittedImageNodeFromHandoff();
-    expect(imageNode.attrs?.b64content).toBe(HELLO_BASE64);
-    expect(imageNode.attrs?.hash).toBeNull();
+    // The BYTES go on the wire, re-inlined, with no hash left for the host to
+    // resolve. That is what "re-inlines a same-session image" claims.
+    const sentAttrs = imageAttrsFromEpicCreate();
+    expect(sentAttrs.b64content).toBe(HELLO_BASE64);
+    // `?? null` because `inlineHashOnlyImageBytes` DROPS the `hash` attr
+    // rather than nulling it - a re-inlined node is byte-for-byte the shape a
+    // fresh inline paste produces, which is what makes an old host's ingest
+    // work unchanged. Absent and explicit-null both mean the same thing here:
+    // nothing left for the host to resolve.
+    expect(sentAttrs.hash ?? null).toBeNull();
+    // The handoff copy is the mirror image, and deliberately so: hash-only, so
+    // nothing base64 is persisted under the handoff key, and the hash roots
+    // those bytes against the image GC until the resend inlines them.
+    const handoffNode = handoffImageNode();
+    // `?? null` because ABSENT and explicit-null both mean "no bytes here": the
+    // node this document started from never carried a `b64content` key, and
+    // only the persist-time strip normalizes one to null. The invariant being
+    // pinned is that nothing base64 reaches the handoff, either way.
+    expect(handoffNode.attrs?.b64content ?? null).toBeNull();
+    expect(handoffNode.attrs?.hash).toBe("hash-same-session");
 
     queryClient.clear();
   });
@@ -1019,9 +1138,15 @@ describe("useLandingComposerActions", () => {
         landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
       ).toBe(true);
     });
-    const imageNode = submittedImageNodeFromHandoff();
-    expect(imageNode.attrs?.b64content).toBe(HELLO_BASE64);
-    expect(imageNode.attrs?.hash).toBeNull();
+    // The awaited bytes are what went out - the point of the await.
+    const sentAttrs = imageAttrsFromEpicCreate();
+    expect(sentAttrs.b64content).toBe(HELLO_BASE64);
+    // Absent OR explicit null: the rewrite drops the attr (see above).
+    expect(sentAttrs.hash ?? null).toBeNull();
+    // And the persisted handoff still holds only the hash.
+    const handoffNode = handoffImageNode();
+    expect(handoffNode.attrs?.b64content ?? null).toBeNull();
+    expect(handoffNode.attrs?.hash).toBe("hash-restored");
 
     queryClient.clear();
   });
@@ -3040,6 +3165,746 @@ describe("useLandingComposerActions", () => {
       queryClient.clear();
     });
   });
+
+  describe("deferWorktreeProvisioning opt-in", () => {
+    it("a plain local-folder create on a 1.2 host ships no deferWorktreeProvisioning key and marks seedRows only", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const payload = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      )?.[1];
+      expect(deferWorktreeProvisioningFromCreateEpicPayload(payload)).toBe(
+        "absent",
+      );
+      const epicId = epicIdFromCreateEpicPayload(payload);
+      const chatId = foldedChatIdFromCreateEpicPayload(payload);
+      if (epicId === null || chatId === null) {
+        throw new Error("expected epic and chat ids");
+      }
+      expect(readEpicCreateSeed(epicId, chatId)).toMatchObject({
+        seedRows: true,
+        heldForDeferredCreate: false,
+      });
+
+      createGate.resolve({ roomInfo: null });
+      clearEpicCreateSeedPending(epicId, chatId);
+      queryClient.clear();
+    });
+
+    it("a worktree-intent create on a 1.2 host ships true and marks held", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      useWorktreeIntentStagingStore.getState().setIntent(
+        { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
+        {
+          entries: [
+            {
+              kind: "worktree",
+              scripts: null,
+              workspacePath: WORKSPACE_PATH,
+              repoIdentifier: null,
+              isPrimary: true,
+              branch: {
+                type: "new",
+                name: "feat-defer",
+                source: "main",
+                carryUncommittedChanges: false,
+              },
+            },
+          ],
+        },
+      );
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const payload = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      )?.[1];
+      expect(deferWorktreeProvisioningFromCreateEpicPayload(payload)).toBe(
+        true,
+      );
+      const epicId = epicIdFromCreateEpicPayload(payload);
+      const chatId = foldedChatIdFromCreateEpicPayload(payload);
+      if (epicId === null || chatId === null) {
+        throw new Error("expected epic and chat ids");
+      }
+      expect(readEpicCreateSeed(epicId, chatId)).toMatchObject({
+        seedRows: true,
+        heldForDeferredCreate: true,
+      });
+
+      createGate.resolve({ roomInfo: null });
+      clearEpicCreateSeedPending(epicId, chatId);
+      queryClient.clear();
+    });
+
+    it("a null negotiated read ships no deferWorktreeProvisioning key", async () => {
+      setSingleWorkspace();
+      useWorktreeIntentStagingStore.getState().setIntent(
+        { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
+        {
+          entries: [
+            {
+              kind: "worktree",
+              scripts: null,
+              workspacePath: WORKSPACE_PATH,
+              repoIdentifier: null,
+              isPrimary: true,
+              branch: {
+                type: "new",
+                name: "feat-no-handshake",
+                source: "main",
+                carryUncommittedChanges: false,
+              },
+            },
+          ],
+        },
+      );
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const payload = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      )?.[1];
+      expect(deferWorktreeProvisioningFromCreateEpicPayload(payload)).toBe(
+        "absent",
+      );
+      const epicId = epicIdFromCreateEpicPayload(payload);
+      const chatId = foldedChatIdFromCreateEpicPayload(payload);
+      if (epicId === null || chatId === null) {
+        throw new Error("expected epic and chat ids");
+      }
+      expect(readEpicCreateSeed(epicId, chatId)?.heldForDeferredCreate).toBe(
+        false,
+      );
+
+      createGate.resolve({ roomInfo: null });
+      clearEpicCreateSeedPending(epicId, chatId);
+      queryClient.clear();
+    });
+  });
+
+  describe("recovered-success hold lifecycle (B3-3)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      pollMocks.pollEpicExistence.mockReset();
+      pollMocks.pollEpicExistence.mockResolvedValue("unknown");
+    });
+
+    it("restores the binding seed and arms the backstop when a lost response's create actually landed", async () => {
+      // The ambiguous post-send drop `createOutcomeIsDecidable` accepts -
+      // checked directly here so the rest of this test is built on a real
+      // classification of the fixture error, not an assumption about what
+      // "ambiguous" means.
+      const ambiguousDrop = new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before next frame",
+        requestId: "req-drop",
+        method: "epic.create",
+        fatalDetails: null,
+      });
+      expect(createOutcomeIsDecidable(ambiguousDrop)).toBe(true);
+
+      setSingleWorkspace();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create"
+          ? Promise.reject(ambiguousDrop)
+          : Promise.resolve({}),
+      );
+      pollMocks.pollEpicExistence.mockResolvedValue("exists");
+
+      // `gcTime: Infinity` - see the accepted-create control above: an
+      // observer-less seed under the shared `gcTime: 0` is collected the
+      // instant it is written, and reading it back would answer `undefined`
+      // whether or not the restore ran.
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+      });
+
+      // Fake timers from BEFORE submit, and for the whole test: the backstop
+      // this case has to prove is armed by a REAL `window.setTimeout` call
+      // made inside the recovery closure, and timers faked only after that
+      // call would never see it - advancing them later would do nothing.
+      // Nothing between submit and the recovery closure running needs a
+      // timer of its own (the rejection and the mocked poll are both plain
+      // microtasks), so installing this early costs nothing.
+      vi.useFakeTimers();
+
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt("recovered success"),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      // Drain the promise chain to its end: the rejection, the decidability
+      // check, the mocked poll's resolution and the recovery closure it
+      // runs - all plain microtasks, so no `waitFor`/real-interval polling
+      // is used here. This suite installs no `jest` global, so `waitFor`
+      // never recognizes fake timers as active and would schedule its own
+      // polling `setInterval` as a FAKE one that nothing is advancing -
+      // exactly the hang this drain avoids.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const payload = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      )?.[1];
+      const epicId = epicIdFromCreateEpicPayload(payload);
+      const chatId = foldedChatIdFromCreateEpicPayload(payload);
+      if (epicId === null || chatId === null) {
+        throw new Error("expected epic and chat ids");
+      }
+
+      // (a) the entry is back, and matches the submit-time entry -
+      // `heldForDeferredCreate` especially: a recovery that re-registered
+      // with the wrong value would hand a deferred create's epic to the
+      // first refetch that asked.
+      expect(readEpicCreateSeed(epicId, chatId)).toMatchObject({
+        hostId: TEST_HOST_ID,
+        seedRows: true,
+        heldForDeferredCreate: false,
+      });
+
+      // (b) the seeded bindings query data is back.
+      expect(
+        queryClient.getQueryData(
+          hostQueryKeys.method(TEST_HOST_ID, "worktree.listBindingsForEpic", {
+            epicId,
+          }),
+        ),
+      ).toEqual({
+        rows: [expect.objectContaining({ workspacePath: WORKSPACE_PATH })],
+      });
+
+      // (c) the backstop is ARMED - proved by its effect, not by a spy:
+      // advance past its ceiling and the entry must be gone.
+      act(() => {
+        vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+      });
+      expect(readEpicCreateSeed(epicId, chatId)).toBeNull();
+
+      queryClient.clear();
+    });
+  });
+
+  describe("missing-attachment-bytes refusal retry survives the seed (B3-7)", () => {
+    // Held, not unheld: an UNHELD entry is cleared by the success arm's own
+    // `clearUnheldEpicCreateSeed` the moment the create accepts, which would
+    // make "the seed survives" true whether or not the retry behaved - a
+    // worktree intent (`heldForDeferredCreate: true`) is what keeps the
+    // entry alive past a plain success, so its survival here is evidence
+    // about the REFUSAL never reaching the teardown, not about the create
+    // having merely succeeded.
+    it("the seed and its seeded bindings survive a first refusal the retry then succeeds past", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      useWorktreeIntentStagingStore.getState().setIntent(
+        { surface: "landing", hostId: TEST_HOST_ID, draftId: null },
+        {
+          entries: [
+            {
+              kind: "worktree",
+              scripts: null,
+              workspacePath: WORKSPACE_PATH,
+              repoIdentifier: null,
+              isPrimary: true,
+              branch: {
+                type: "new",
+                name: "feat-mab-retry",
+                source: "main",
+                carryUncommittedChanges: false,
+              },
+            },
+          ],
+        },
+      );
+      const hash = "hash-mab-retry";
+      imageStoreMocks.getImageBytes.mockResolvedValue(HELLO_BYTES);
+      let epicCreateCalls = 0;
+      landingMocks.request.mockImplementation((method) => {
+        if (method === "drafts.putBlob") {
+          return Promise.resolve({ ok: true });
+        }
+        if (method === "epic.create") {
+          const call = epicCreateCalls;
+          epicCreateCalls += 1;
+          return Promise.resolve(
+            call === 0
+              ? {
+                  roomInfo: null,
+                  refusal: {
+                    kind: "missing-attachment-bytes",
+                    message:
+                      "Traycer couldn't find the bytes for one of these images.",
+                    remedy: "Re-upload the image and try again.",
+                  },
+                }
+              : { roomInfo: null, initialTurnStarted: true },
+          );
+        }
+        return Promise.resolve({});
+      });
+      // `gcTime: Infinity` - same reason as the recovered-success control
+      // above: an observer-less seed under the shared `gcTime: 0` is
+      // collected the instant it is written.
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForByHashImage(hash, "retry past a refusal"),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      // Both the refusal AND the retry's redispatch happened under this one
+      // `submit()` - proof the retry actually ran, not just that the create
+      // eventually succeeded some other way.
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.filter((c) => c[0] === "epic.create"),
+        ).toHaveLength(2);
+      });
+      // The re-upload the refusal's remedy drives - a second `drafts.putBlob`
+      // for the same hash, since the retry bypasses the confirmed-blob memo
+      // on purpose.
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.filter(
+            (c) => c[0] === "drafts.putBlob",
+          ),
+        ).toHaveLength(2);
+      });
+
+      const finalCall = landingMocks.request.mock.calls
+        .filter((c) => c[0] === "epic.create")
+        .at(-1);
+      const epicId = epicIdFromCreateEpicPayload(finalCall?.[1]);
+      const chatId = foldedChatIdFromCreateEpicPayload(finalCall?.[1]);
+      if (epicId === null || chatId === null) {
+        throw new Error("expected epic and chat ids");
+      }
+
+      await waitFor(() => {
+        expect(readEpicCreateSeed(epicId, chatId)).not.toBeNull();
+      });
+      // The intervening refusal never reached `createLandingEpic`'s own
+      // `.then` - which would have torn this down UNCONDITIONALLY, held or
+      // not - because only the mutation's FINAL, already-retried response
+      // ever reaches it.
+      expect(readEpicCreateSeed(epicId, chatId)).toMatchObject({
+        hostId: TEST_HOST_ID,
+        heldForDeferredCreate: true,
+      });
+      expect(
+        queryClient.getQueryData(
+          hostQueryKeys.method(TEST_HOST_ID, "worktree.listBindingsForEpic", {
+            epicId,
+          }),
+        ),
+      ).toEqual({
+        rows: [expect.objectContaining({ workspacePath: WORKSPACE_PATH })],
+      });
+
+      clearEpicCreateSeedPending(epicId, chatId);
+      queryClient.clear();
+    });
+  });
+
+  describe("attachments by hash - the landing composer's gate", () => {
+    it("uploads an eligible hash then ships a hash-only create on a @1.2 host", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      imageStoreMocks.getImageBytes.mockResolvedValue(HELLO_BYTES);
+      landingMocks.request.mockImplementation((method) =>
+        method === "drafts.putBlob"
+          ? Promise.resolve({ ok: true })
+          : Promise.resolve({ roomInfo: null }),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForByHashImage("hash-eligible-1", "by hash"),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      // Positive control: the upload actually happened, keyed on the blob's
+      // own digest, before the create - not a document that silently took the
+      // inline arm and passed while proving nothing.
+      const putBlobCall = landingMocks.dispatchOptions.find(
+        (c) => c.method === "drafts.putBlob",
+      );
+      if (putBlobCall === undefined) {
+        throw new Error("expected a drafts.putBlob dispatch");
+      }
+      expect(putBlobCall.options).toMatchObject({
+        idempotencyKey: "hash-eligible-1",
+      });
+      expect(attachmentsByHashFromEpicCreate()).toBe(true);
+      const sentAttrs = imageAttrsFromEpicCreate();
+      expect(sentAttrs.hash).toBe("hash-eligible-1");
+      expect(sentAttrs.b64content ?? null).toBeNull();
+
+      queryClient.clear();
+    });
+
+    it("stays on the inline path when the host has not negotiated epic.create@1.2", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 1 },
+      });
+      imageStoreMocks.getImageBytes.mockResolvedValue(HELLO_BYTES);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForByHashImage("hash-old-host", "inline please"),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      expect(
+        landingMocks.dispatchOptions.some((c) => c.method === "drafts.putBlob"),
+      ).toBe(false);
+      expect(attachmentsByHashFromEpicCreate()).toBe(false);
+      const sentAttrs = imageAttrsFromEpicCreate();
+      expect(sentAttrs.b64content).toBe(HELLO_BASE64);
+      // Absent OR explicit null: the rewrite drops the attr (see above).
+      expect(sentAttrs.hash ?? null).toBeNull();
+
+      queryClient.clear();
+    });
+
+    it("stays on the inline path for a node the preparer did not mark by-hash eligible", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      imageStoreMocks.getImageBytes.mockResolvedValue(HELLO_BYTES);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForIneligibleHashImage(
+            "hash-ineligible",
+            "not eligible",
+          ),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      expect(
+        landingMocks.dispatchOptions.some((c) => c.method === "drafts.putBlob"),
+      ).toBe(false);
+      expect(attachmentsByHashFromEpicCreate()).toBe(false);
+      const sentAttrs = imageAttrsFromEpicCreate();
+      expect(sentAttrs.b64content).toBe(HELLO_BASE64);
+
+      queryClient.clear();
+    });
+
+    it("inlines only the unconfirmed hash and keeps the confirmed one hash-only (mixed document)", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      // "confirmed" has local bytes and acks; "unconfirmed" has local bytes
+      // (so the inline fallback can still fill it in) but the host digest-
+      // mismatches its upload - the case `confirmAttachmentsByHash` diffs
+      // against the ack, not the upload attempt, to catch.
+      imageStoreMocks.getImageBytes.mockResolvedValue(HELLO_BYTES);
+      landingMocks.request.mockImplementation((method, payload) => {
+        if (method === "drafts.putBlob") {
+          const body = payload as { readonly sha256: string };
+          return Promise.resolve({ ok: body.sha256 === "hash-confirmed" });
+        }
+        return Promise.resolve({ roomInfo: null });
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForTwoByHashImages(
+            "hash-confirmed",
+            "hash-unconfirmed",
+            "mixed",
+          ),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      expect(attachmentsByHashFromEpicCreate()).toBe(true);
+      const call = landingMocks.request.mock.calls.find(
+        (entry) => entry[0] === "epic.create",
+      );
+      if (call === undefined) throw new Error("expected an epic.create call");
+      const allAttrs = allImageAttrsFromEpicCreatePayload(call[1]);
+      expect(allAttrs).toHaveLength(2);
+      const confirmedAttrs = allAttrs.find(
+        (attrs) => attrs.hash === "hash-confirmed",
+      );
+      const unconfirmedAttrs = allAttrs.find(
+        (attrs) => attrs.b64content === HELLO_BASE64,
+      );
+      if (confirmedAttrs === undefined || unconfirmedAttrs === undefined) {
+        throw new Error("expected one hash-only and one inlined node");
+      }
+      expect(confirmedAttrs.b64content ?? null).toBeNull();
+      // Absent OR explicit null: the rewrite drops the attr (see above).
+      expect(unconfirmedAttrs.hash ?? null).toBeNull();
+
+      queryClient.clear();
+    });
+
+    it("refuses over the per-message hash cap with a toast, before uploading anything", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      imageStoreMocks.getImageBytes.mockResolvedValue(HELLO_BYTES);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForManyByHashImages(33),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith("Too many images to attach.", {
+          description:
+            "A single message can carry at most 32 images. Remove some and try again.",
+        });
+      });
+      expect(
+        landingMocks.dispatchOptions.some((c) => c.method === "drafts.putBlob"),
+      ).toBe(false);
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(false);
+
+      queryClient.clear();
+    });
+
+    it("reports isPending while the by-hash upload is in flight and clears it after", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 2 },
+      });
+      imageStoreMocks.getImageBytes.mockResolvedValue(HELLO_BYTES);
+      const putBlobGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "drafts.putBlob"
+          ? putBlobGate.promise
+          : Promise.resolve({ roomInfo: null }),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      expect(result.current.isPending).toBe(false);
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForByHashImage("hash-pending", "pending"),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(true);
+      });
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(false);
+
+      await act(async () => {
+        putBlobGate.resolve({ ok: true });
+        await putBlobGate.promise;
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(false);
+      });
+
+      queryClient.clear();
+    });
+  });
 });
 
 function queryClientWrapper(
@@ -3140,6 +4005,122 @@ function editorHandleForHashImage(
   };
 }
 
+// A hash-only image node the preparer marked `byHashEligible: true` - the
+// shape `planAttachmentsByHash` needs to route a node into `eligible` rather
+// than `ineligible`.
+function editorHandleForByHashImage(
+  hash: string,
+  prompt: string,
+): ComposerPromptEditorHandle {
+  const content: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "img-1",
+              fileName: "shot.png",
+              hash,
+              mimeType: "image/png",
+              size: 5,
+              byHashEligible: true,
+            },
+          },
+          { type: "text", text: prompt },
+        ],
+      },
+    ],
+  };
+  return {
+    ...editorHandleForPrompt(prompt),
+    getJSON: () => content,
+  };
+}
+
+// Same shape as {@link editorHandleForHashImage} - `byHashEligible` absent,
+// which `imageAttachmentByHashEligible` reads as ineligible - so the gate's
+// "at least one eligible node" condition is deliberately unmet.
+function editorHandleForIneligibleHashImage(
+  hash: string,
+  prompt: string,
+): ComposerPromptEditorHandle {
+  return editorHandleForHashImage(hash, prompt);
+}
+
+function editorHandleForTwoByHashImages(
+  hashA: string,
+  hashB: string,
+  prompt: string,
+): ComposerPromptEditorHandle {
+  const content: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "img-a",
+              fileName: "a.png",
+              hash: hashA,
+              mimeType: "image/png",
+              size: 5,
+              byHashEligible: true,
+            },
+          },
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "img-b",
+              fileName: "b.png",
+              hash: hashB,
+              mimeType: "image/png",
+              size: 5,
+              byHashEligible: true,
+            },
+          },
+          { type: "text", text: prompt },
+        ],
+      },
+    ],
+  };
+  return {
+    ...editorHandleForPrompt(prompt),
+    getJSON: () => content,
+  };
+}
+
+function editorHandleForManyByHashImages(
+  count: number,
+): ComposerPromptEditorHandle {
+  const imageNodes: JsonContent[] = [];
+  for (let i = 0; i < count; i++) {
+    imageNodes.push({
+      type: "imageAttachment",
+      attrs: {
+        id: `img-${String(i)}`,
+        fileName: `shot-${String(i)}.png`,
+        hash: `hash-cap-${String(i)}`,
+        mimeType: "image/png",
+        size: 5,
+        byHashEligible: true,
+      },
+    });
+  }
+  const content: JsonContent = {
+    type: "doc",
+    content: [{ type: "paragraph", content: imageNodes }],
+  };
+  return {
+    ...editorHandleForPrompt(""),
+    getJSON: () => content,
+  };
+}
+
 function findImageNode(node: JsonContent): JsonContent | null {
   if (node.type === "imageAttachment") return node;
   for (const child of node.content ?? []) {
@@ -3149,11 +4130,19 @@ function findImageNode(node: JsonContent): JsonContent | null {
   return null;
 }
 
-// The re-inlined content lands in the initial-chat handoff store synchronously
-// in `finalizeSubmission` (before the host round-trip), which is the canonical
-// source of the submitted content regardless of whether `initialMessage` is
-// folded in (that depends on an auth profile the test doesn't seed).
-function submittedImageNodeFromHandoff(): JsonContent {
+/**
+ * The handoff's image node, which is HASH-ONLY by design.
+ *
+ * This helper used to be read as "the canonical source of the submitted
+ * content". It is not, and has not been since the composer went hash-first:
+ * `finalizeSubmission` builds the handoff entry from `hashOnlyContent` and the
+ * wire payload from `resolvedContent`, deliberately, because the handoff is
+ * PERSISTED - keeping base64 out of it is what keeps it out of `localStorage`,
+ * and the hash is what lets the entry root those bytes against the image GC
+ * until the resend inlines them itself. A case about re-inlined BYTES reads
+ * {@link imageAttrsFromEpicCreate}; this one is for asserting the hash.
+ */
+function handoffImageNode(): JsonContent {
   const handoffs = Object.values(
     useInitialChatHandoffStore.getState().handoffs,
   );
@@ -3163,6 +4152,97 @@ function submittedImageNodeFromHandoff(): JsonContent {
   const imageNode = findImageNode(handoffs[0].content);
   if (imageNode === null) throw new Error("expected an image node in content");
   return imageNode;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The image attrs on the document `epic.create` actually carried - the only
+ * place the re-inlined bytes exist. Walked from `unknown` rather than typed,
+ * because the request mock is `(method: string, payload: unknown)`; each step
+ * throws with what was missing so a shape change reads as a shape change
+ * rather than as `undefined`.
+ */
+function imageAttrsFromEpicCreate(): Readonly<Record<string, unknown>> {
+  const call = landingMocks.request.mock.calls.find(
+    (entry) => entry[0] === "epic.create",
+  );
+  if (call === undefined) throw new Error("expected an epic.create call");
+  const payload = call[1];
+  if (!isRecord(payload))
+    throw new Error("epic.create payload is not an object");
+  const chat = payload.chat;
+  if (!isRecord(chat)) throw new Error("epic.create carried no chat");
+  const initialMessage = chat.initialMessage;
+  if (!isRecord(initialMessage)) {
+    throw new Error("epic.create carried no initialMessage");
+  }
+  const attrs = findImageAttrs(initialMessage.content);
+  if (attrs === null) {
+    throw new Error("expected an image node on the epic.create content");
+  }
+  return attrs;
+}
+
+function findImageAttrs(
+  value: unknown,
+): Readonly<Record<string, unknown>> | null {
+  if (!isRecord(value)) return null;
+  if (value.type === "imageAttachment" && isRecord(value.attrs)) {
+    return value.attrs;
+  }
+  const content = value.content;
+  if (!Array.isArray(content)) return null;
+  for (const child of content) {
+    const found = findImageAttrs(child);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+// All image nodes' attrs on a raw `epic.create` payload, for a mixed
+// document carrying more than one - {@link imageAttrsFromEpicCreate} only
+// finds the first.
+function allImageAttrsFromEpicCreatePayload(
+  payload: unknown,
+): ReadonlyArray<Readonly<Record<string, unknown>>> {
+  const found: Array<Readonly<Record<string, unknown>>> = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (!isRecord(value)) return;
+    if (value.type === "imageAttachment" && isRecord(value.attrs)) {
+      found.push(value.attrs);
+      return;
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(payload);
+  return found;
+}
+
+// The wire-level `attachmentsByHash` flag on the dispatched `epic.create` -
+// absent reads as `false`, matching the spread-only-when-true encoding
+// `finalizeSubmission` writes it with.
+function attachmentsByHashFromEpicCreate(): boolean {
+  const call = landingMocks.request.mock.calls.find(
+    (entry) => entry[0] === "epic.create",
+  );
+  if (call === undefined) throw new Error("expected an epic.create call");
+  const payload = call[1];
+  if (!isRecord(payload))
+    throw new Error("epic.create payload is not an object");
+  const chat = payload.chat;
+  if (!isRecord(chat)) throw new Error("epic.create carried no chat");
+  const initialMessage = chat.initialMessage;
+  if (!isRecord(initialMessage)) {
+    throw new Error("epic.create carried no initialMessage");
+  }
+  return initialMessage.attachmentsByHash === true;
 }
 
 const HELLO_BYTES = new Uint8Array([104, 101, 108, 108, 111]);

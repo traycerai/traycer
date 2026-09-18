@@ -5,6 +5,7 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useArtifactReadStateStore } from "@/stores/epics/artifact-read-state-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
@@ -66,6 +67,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useComposerDraftStore",
     useComposerDraftStore,
     "traycer-gui-app:composer-drafts",
+  ],
+  [
+    "useNewConversationModalStore",
+    useNewConversationModalStore,
+    "traycer-gui-app:new-conversation-drafts",
   ],
   // NOTE: useInterviewDraftStore is intentionally absent. It no longer uses the
   // zustand `persist` middleware (so it has no `.persist.getOptions().name`): it

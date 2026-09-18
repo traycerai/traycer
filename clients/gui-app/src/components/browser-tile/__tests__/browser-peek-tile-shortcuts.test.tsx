@@ -1,5 +1,14 @@
 import "../../../../__tests__/test-browser-apis";
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  screen,
+  waitFor,
+  type RenderResult,
+} from "@testing-library/react";
+import { createMemoryHistory } from "@tanstack/react-router";
 import { renderPeekTile } from "@/components/browser-tile/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +18,7 @@ import {
   hostDirectoryEntryModule,
   hostStreamClientForWithAuthModule,
   liveStream as fixtureLiveStream,
+  registeredHostsModule,
   streamAuthRevalidatorModule,
   tabHostIdModule,
   runnerOpenExternalLinkModule,
@@ -21,6 +31,48 @@ import {
 } from "@/components/browser-tile/browser-peek-tile";
 import { isMac } from "@/lib/keybindings/platform";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
+import { DEFAULT_BROWSER_TILE_URL } from "@/lib/browser-view/browser-tile-defaults";
+// Imported after the fixture above, not just textually but in evaluation
+// order: `KeybindingProvider`'s module graph reaches the real
+// `@/providers/use-runner-host` (through `host-runtime-provider.tsx`), which
+// this file's `vi.mock` intercepts with a factory that calls
+// `tileRoleRunnerHostModule()`. That factory only runs the first time
+// something actually imports the mocked specifier - if this import ran
+// earlier than the fixture import above, it would trigger the factory before
+// `tileRoleRunnerHostModule` was initialized and crash with a TDZ error.
+import { KeybindingProvider } from "@/providers/keybinding-provider";
+import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
+
+/**
+ * Just enough of the host boundary for `<BrowserStartPage>` to render for
+ * real (`resources.listLocalServers`) - the same three-mock recipe
+ * `browser-start-page.test.tsx` uses, so the "return to the real about:blank
+ * start page" tests below reproduce the actual bug surface instead of
+ * standing in for it with a blur.
+ */
+const startPageClient = vi.hoisted(() => ({
+  requestWithSignal: (method: string) => {
+    if (method !== "resources.listLocalServers") {
+      return Promise.reject(new Error(`unexpected method ${method}`));
+    }
+    return Promise.resolve({ servers: [] });
+  },
+  getActiveHostId: () => "host-test",
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => ({
+    requestWithSignal: startPageClient.requestWithSignal,
+    request: startPageClient.requestWithSignal,
+    requestWithResponseTimeout: startPageClient.requestWithSignal,
+    getActiveHostId: startPageClient.getActiveHostId,
+  }),
+  useHostDirectoryEntryForHostId: () => ({ kind: "local" }),
+}));
+
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({ canExecute: true, hostId: "host-test" }),
+}));
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -39,6 +91,16 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
 
 vi.mock("@/hooks/host/use-host-directory-entry", () =>
   hostDirectoryEntryModule(),
+);
+
+// use-screencast-session.ts's hostIsMac derivation falls through to this
+// hook once useHostDirectoryEntry answers no `kind`. Pinned to `data: null`
+// (no registered hosts) so hostIsMac deterministically resolves to `null`
+// ("host platform unknown") for the undo/redo wire-shape assertions below,
+// rather than depending on the real TanStack Query hook's disabled-query
+// default settling the same way.
+vi.mock("@/hooks/auth/use-registered-hosts-query", () =>
+  registeredHostsModule(),
 );
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () =>
@@ -126,6 +188,52 @@ function pastePlainText(target: HTMLElement, text: string): void {
       getData: (type: string) => (type === "text/plain" ? text : ""),
     },
   });
+}
+
+function buildProviderRouterSource(
+  initialPathname: string,
+): KeybindingRouterSource {
+  const history = createMemoryHistory({ initialEntries: [initialPathname] });
+  const navigate: KeybindingRouterSource["navigate"] = () => Promise.resolve();
+  return {
+    get state() {
+      return { location: { pathname: history.location.pathname } };
+    },
+    history,
+    navigate,
+  };
+}
+
+/**
+ * Dispatched on the actual focused element (never bare `window`): a real
+ * keydown originates at `document.activeElement` and bubbles up through the
+ * capture phase to the window listener `KeybindingProvider` installs, and
+ * `focusBrowserAddressForShortcut` reads `event.target` / `composedPath()` to
+ * decide whether that origin counts as "inside the tile" or "editable" - a
+ * window-targeted event answers neither question the way a real one would.
+ */
+function dispatchTargetKey(
+  target: EventTarget,
+  type: "keydown" | "keyup",
+  init: KeyboardEventInit,
+): KeyboardEvent {
+  const event = new KeyboardEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+/** Same tile render, plus the real app-wide keydown listener this suite's own tests bypass by dispatching straight on the IME input. */
+function renderPeekTileWithProvider(
+  router: KeybindingRouterSource,
+  ui: ReactElement,
+): RenderResult {
+  return renderPeekTile(
+    <KeybindingProvider router={router}>{ui}</KeybindingProvider>,
+  );
 }
 
 async function flushMacrotask(): Promise<void> {
@@ -357,17 +465,17 @@ describe("BrowserPeekTile shortcuts and paste", () => {
   });
 
   /**
-   * The same row, on a layout where the physical key does not produce a `w`.
+   * The same physical position the row-close test above uses, but on a
+   * layout where it produces `z` instead of `w`.
    *
-   * AZERTY reports `key: "z"` for `code: "KeyW"`. The streamed matcher was the
-   * third of the three that decide this chord - after the renderer's and the
-   * native guest's, both moved onto `code` earlier - and the only one still
-   * comparing the CHARACTER, so an armed screencast typed the reader's close
-   * chord at the remote page and closed the row on whichever key produced a
-   * `w` instead. Nothing else could catch it: an armed tile suppresses the
-   * browser-scoped app registry.
+   * AZERTY reports `key: "z"` for `code: "KeyW"`. The streamed matcher
+   * compares physical `code` for `mod+w`, so before `isTextHistoryShortcut`
+   * existed this WAS the close-tab chord and closed the row - on an AZERTY
+   * keyboard, that is also the reader's mod+Z undo. Editing conventions now
+   * win over physical browser chords (`handleTileKeyDown`'s guard), so this
+   * must be left to the page as undo instead, not claimed as close-tab.
    */
-  it("closes the landing row on the physical close key on a non-US layout", async () => {
+  it("leaves mod+Z to the page as undo, even at the physical close-tab position, on a non-US layout", async () => {
     const onRequestCloseTab = vi.fn<() => void>();
     renderPeekTile(
       <BrowserPeekTile
@@ -387,8 +495,8 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     firePlatformModKey(imeInput(), "keydown", "z", "KeyW");
     firePlatformModKey(imeInput(), "keyup", "z", "KeyW");
 
-    expect(onRequestCloseTab).toHaveBeenCalledOnce();
-    expect(keyboardFramesFor(stream, "z", "KeyW")).toEqual([]);
+    expect(onRequestCloseTab).not.toHaveBeenCalled();
+    expect(keyboardFramesFor(stream, "z", "KeyW")).not.toEqual([]);
   });
 
   /**
@@ -420,6 +528,63 @@ describe("BrowserPeekTile shortcuts and paste", () => {
 
     expect(onRequestCloseTab).not.toHaveBeenCalled();
     expect(keyboardFramesFor(stream, "w", "KeyZ")).not.toEqual([]);
+  });
+
+  /**
+   * The baseline, no-layout-collision case for the same guard: on a US
+   * layout, mod+Z/mod+Shift+Z are not registered chords at all today, but
+   * `handleTileKeyDown` now checks `isTextHistoryShortcut` before any chord
+   * lookup, so this pins that undo/redo reach the page even if a future
+   * chord were ever registered on that letter.
+   */
+  it("forwards mod+Z and mod+Shift+Z (undo/redo) to the page as distinct down/up frames", async () => {
+    // `useRegisteredHosts` is pinned to no registered hosts by this file's
+    // mocks, so `hostIsMac` resolves to `null` ("host platform unknown") and
+    // `screencastHistoryKey` passes the event through unmodified rather than
+    // translating it - the frames below carry the event's own key/modifiers
+    // verbatim. A weaker "some frame for key z went out" assertion would
+    // pass even if the redo (Shift) frame were silently dropped, since the
+    // plain undo keydown/keyup alone already satisfy it - this checks each
+    // frame individually, including the Shift bit that distinguishes redo
+    // from undo.
+    renderPeekTile(
+      <BrowserPeekTile
+        scope={{ kind: "independent" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    const mods = platformModKeys();
+    const baseModifiers = (mods.metaKey ? 4 : 2) as number;
+
+    firePlatformModKey(imeInput(), "keydown", "z", "KeyZ");
+    firePlatformModKey(imeInput(), "keyup", "z", "KeyZ");
+    fireEvent.keyDown(imeInput(), {
+      key: "Z",
+      code: "KeyZ",
+      shiftKey: true,
+      ...mods,
+    });
+
+    const frames = framesOfKind(stream, "keyboard");
+    expect(frames).toMatchObject([
+      { type: "rawKeyDown", key: "z", code: "KeyZ", modifiers: baseModifiers },
+      { type: "keyUp", key: "z", code: "KeyZ", modifiers: baseModifiers },
+      {
+        type: "rawKeyDown",
+        key: "Z",
+        code: "KeyZ",
+        modifiers: baseModifiers | 8,
+      },
+    ]);
   });
 
   /**
@@ -1012,5 +1177,255 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     await flushMacrotask();
     expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
     expect(screen.getByText("Controlling")).not.toBeNull();
+  });
+});
+
+/**
+ * The tests above dispatch straight onto the tile's own IME input, which only
+ * proves the screencast's OWN listener claims the chord while armed. The bug
+ * this suite exists for is the app's WINDOW-level listener stealing mod+L
+ * before it ever reaches the tile - which needs the real `KeybindingProvider`
+ * in the tree and a keydown dispatched the way a real one arrives (at
+ * `document.activeElement`, bubbling to the window's capture listener).
+ */
+describe("BrowserPeekTile address shortcut through the real KeybindingProvider", () => {
+  beforeEach(() => {
+    hookState.visible = true;
+    hookState.streamClient = new FakeStreamClient(true);
+    clearScreencastOwner();
+  });
+
+  afterEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    clearScreencastOwner();
+    vi.restoreAllMocks();
+  });
+
+  it("focuses and fully selects the address bar on mod+L before the tile is armed", async () => {
+    const router = buildProviderRouterSource("/");
+    renderPeekTileWithProvider(
+      router,
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    await flushMacrotask();
+    document.body.focus();
+
+    let event: KeyboardEvent | undefined;
+    act(() => {
+      event = dispatchTargetKey(document.body, "keydown", {
+        code: "KeyL",
+        key: "l",
+        ...platformModKeys(),
+      });
+    });
+
+    const input = addressInput();
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+    expect(event?.defaultPrevented).toBe(true);
+    // The shortcut is not a control claim - it works without ever arming the
+    // stream, and must not arm it as a side effect either.
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
+    expect(keyboardFramesFor(stream, "l", "KeyL")).toEqual([]);
+  });
+
+  // The literal about:blank reproduction: the tile is never armed, and the
+  // tab is on the real Start Page from the start - no guest/stream input path
+  // is claiming anything, so only the window listener stands between mod+L
+  // and `group.focus-editor`.
+  it("focuses the address bar on mod+L on the real about:blank start page while unarmed", async () => {
+    const router = buildProviderRouterSource("/");
+    renderPeekTileWithProvider(
+      router,
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={{ ...PEEK_NODE, initialUrl: DEFAULT_BROWSER_TILE_URL }}
+        completeMeans="ended"
+      />,
+    );
+    liveStream();
+    await waitFor(() => {
+      expect(screen.getByText("Local servers")).not.toBeNull();
+    });
+    document.body.focus();
+
+    act(() => {
+      dispatchTargetKey(document.body, "keydown", {
+        code: "KeyL",
+        key: "l",
+        ...platformModKeys(),
+      });
+    });
+
+    const input = addressInput();
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
+  // The `return-to-blank` case: an armed tile whose page navigates to the
+  // real about:blank start page (no in-page focus target survives it) must
+  // still route mod+L to its own chrome instead of losing it to
+  // `group.focus-editor`, and must stay armed rather than being disarmed by
+  // the shortcut.
+  it("still focuses the address bar on mod+L after arming, once the tab returns to the real about:blank start page", async () => {
+    const router = buildProviderRouterSource("/");
+    renderPeekTileWithProvider(
+      router,
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+    expect(document.activeElement).toBe(imeInput());
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+
+    // Blurred while still enabled, before the navigation below disables it:
+    // jsdom does not implement the spec's "unfocusing steps" a real browser
+    // runs when a focused control becomes disabled, so blurring (or
+    // refocusing) it after that point is a no-op there - blur has to happen
+    // while the element can still legitimately hold focus.
+    act(() => {
+      imeInput().blur();
+    });
+    expect(document.activeElement).toBe(document.body);
+
+    // The real navigation the bug report describes: the armed tab lands back
+    // on about:blank, which flips `showStartPage` and disables/hides the IME
+    // input - exactly what leaves keyboard focus with nowhere to go but body.
+    act(() => {
+      stream.emit(
+        {
+          kind: "navState",
+          hasBinaryPayload: false,
+          url: DEFAULT_BROWSER_TILE_URL,
+          canGoBack: true,
+          canGoForward: false,
+          loading: false,
+        },
+        null,
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Local servers")).not.toBeNull();
+    });
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => {
+      dispatchTargetKey(document.body, "keydown", {
+        code: "KeyL",
+        key: "l",
+        ...platformModKeys(),
+      });
+    });
+
+    const input = addressInput();
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+    expect(keyboardFramesFor(stream, "l", "KeyL")).toEqual([]);
+  });
+
+  it("releases forwarded page keys once the mod+L shortcut moves focus into the address bar", async () => {
+    const router = buildProviderRouterSource("/");
+    renderPeekTileWithProvider(
+      router,
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    const stream = liveStream();
+    armPeekTile(stream);
+    await flushMacrotask();
+
+    // A key held down before the shortcut fires: proves an actual RELEASE
+    // happened (a synthetic keyUp for the still-held key), the same signal
+    // the direct-focus version of this test uses - not just that a key typed
+    // afterwards fails to reach the page, which would be true even if release
+    // were never called.
+    fireEvent.keyDown(imeInput(), { key: "a", code: "KeyA" });
+    expect(keyboardFramesFor(stream, "a", "KeyA")).toEqual([
+      expect.objectContaining({ type: "rawKeyDown", key: "a", code: "KeyA" }),
+      expect.objectContaining({ type: "char", key: "a", code: "KeyA" }),
+    ]);
+
+    act(() => {
+      dispatchTargetKey(imeInput(), "keydown", {
+        code: "KeyL",
+        key: "l",
+        ...platformModKeys(),
+      });
+    });
+    await flushMacrotask();
+
+    expect(keyboardFramesFor(stream, "a", "KeyA")).toEqual([
+      expect.objectContaining({ type: "rawKeyDown", code: "KeyA" }),
+      expect.objectContaining({ type: "char", code: "KeyA" }),
+      expect.objectContaining({ type: "keyUp", code: "KeyA", seq: 2 }),
+    ]);
+    expect(keyboardFramesFor(stream, "l", "KeyL")).toEqual([]);
+  });
+
+  it("leaves mod+L to a blocking dialog instead of the address bar", async () => {
+    const router = buildProviderRouterSource("/");
+    renderPeekTileWithProvider(
+      router,
+      <BrowserPeekTile
+        scope={{ kind: "epic", epicId: "epic-1" }}
+        visible={hookState.visible}
+        onConvertToPip={() => {}}
+        onRequestNewTab={null}
+        onRequestCloseTab={null}
+        node={PEEK_NODE}
+        completeMeans="ended"
+      />,
+    );
+    liveStream();
+    await flushMacrotask();
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-state", "open");
+    document.body.appendChild(dialog);
+    document.body.focus();
+
+    act(() => {
+      dispatchTargetKey(document.body, "keydown", {
+        code: "KeyL",
+        key: "l",
+        ...platformModKeys(),
+      });
+    });
+
+    expect(document.activeElement).not.toBe(addressInput());
   });
 });

@@ -38,25 +38,39 @@ const UNKNOWN_HOST_ID = "unknown-host-id";
 const OLD_HOST_ID = "old-host-id";
 const ABSENT_HOST_ID = "absent-host-id";
 
+type ChatForkCreateSource =
+  | {
+      readonly boundary: "assistantMessage";
+      readonly sourceChatId: string;
+      readonly assistantMessageId: string;
+      readonly sourceOwnerUserId: string | null;
+    }
+  | {
+      readonly boundary: "latest";
+      readonly sourceChatId: string;
+      readonly sourceOwnerUserId: string | null;
+    };
+
 interface ChatForkCreateInput {
   readonly hostId: string;
   readonly title: string;
   readonly worktreeIntent: WorktreeIntent | null;
-  readonly forkSource: {
-    readonly boundary: "assistantMessage";
-    readonly sourceChatId: string;
-    readonly assistantMessageId: string;
-    readonly sourceOwnerUserId: string | null;
-  };
+  readonly forkSource: ChatForkCreateSource;
 }
 
 interface CreateVariables {
   readonly hostId: string;
-  readonly forkSource: {
-    readonly boundary: "assistantMessage";
-    readonly sourceChatId: string;
-    readonly assistantMessageId: string;
-  } | null;
+  readonly forkSource:
+    | {
+        readonly boundary: "assistantMessage";
+        readonly sourceChatId: string;
+        readonly assistantMessageId: string;
+      }
+    | {
+        readonly boundary: "latest";
+        readonly sourceChatId: string;
+      }
+    | null;
 }
 
 interface ChatForkMutationOptions {
@@ -105,11 +119,16 @@ const dialogMocks = vi.hoisted(() => ({
   publicationQueryEnabled: false,
   publicationQueryIsError: false,
   publicationQueryIsFetching: false,
+  /** Last `boundaryMessageId` the mocked `epic.chatPublicationState` read was
+   *  issued with; `undefined` until a read has fired. */
+  publicationQueryLastBoundaryMessageId: undefined as string | null | undefined,
   selectById: vi.fn<(hostId: string) => void>(),
   clientsByHostId: new Map<string, unknown>(),
   directoryHosts: [] as HostDirectoryEntry[],
   lastWorkspace: null as CapturedWorkspaceProps | null,
   cloneOwnerCalls: [] as readonly unknown[],
+  /** What `useCloneSourceOwnerUserId` resolves to for this render. */
+  cloneOwnerReturn: null as string | null,
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
@@ -122,11 +141,17 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
       ) => {
         dialogMocks.createVariables = {
           hostId: input.hostId,
-          forkSource: {
-            boundary: input.forkSource.boundary,
-            sourceChatId: input.forkSource.sourceChatId,
-            assistantMessageId: input.forkSource.assistantMessageId,
-          },
+          forkSource:
+            input.forkSource.boundary === "assistantMessage"
+              ? {
+                  boundary: "assistantMessage",
+                  sourceChatId: input.forkSource.sourceChatId,
+                  assistantMessageId: input.forkSource.assistantMessageId,
+                }
+              : {
+                  boundary: "latest",
+                  sourceChatId: input.forkSource.sourceChatId,
+                },
         };
         dialogMocks.createMutate(input, options);
       },
@@ -167,7 +192,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/chats/use-clone-source-owner", () => ({
   useCloneSourceOwnerUserId: (args: unknown) => {
     dialogMocks.cloneOwnerCalls = [...dialogMocks.cloneOwnerCalls, args];
-    return null;
+    return dialogMocks.cloneOwnerReturn;
   },
 }));
 
@@ -180,6 +205,9 @@ vi.mock("@/hooks/host/use-host-query", () => ({
     readonly method?: string;
     readonly client?: unknown;
     readonly options?: { readonly enabled?: boolean } | null;
+    readonly params:
+      | { readonly boundaryMessageId: string | null | undefined }
+      | undefined;
   }) => {
     if (args.method === "host.status") {
       const enabled = args.options?.enabled ?? false;
@@ -254,6 +282,8 @@ vi.mock("@/hooks/host/use-host-query", () => ({
     if (args.method === "epic.chatPublicationState") {
       const enabled = args.options?.enabled ?? false;
       dialogMocks.publicationQueryEnabled = enabled;
+      dialogMocks.publicationQueryLastBoundaryMessageId =
+        args.params?.boundaryMessageId ?? null;
       // TanStack retains cached data when the observer is disabled, the
       // refetch errors, OR a stale query is refetching. The hook, not
       // the query object, must treat those as unknown — handing
@@ -526,16 +556,29 @@ function dialogProps(
   };
 }
 
+// Every call site here builds a target with an explicit assistantMessageId -
+// `E_FORK_BOUNDARY_NOT_PUBLISHED` is scoped to the "assistantMessage" arm in
+// production (`boundaryNotPublished` checks `boundary === "assistantMessage"`
+// before anything else), so a null (latest-boundary) target has no equivalent
+// to build here. The runtime check below is what lets this stay typed against
+// the full `ChatForkDialogTarget` while still narrowing to the non-null
+// `assistantMessageId` the "assistantMessage" variant requires.
 function failedForkVariables(
   hostId: string,
   target: ChatForkDialogTarget,
 ): CreateVariables {
+  const assistantMessageId = target.assistantMessageId;
+  if (assistantMessageId === null) {
+    throw new Error(
+      "failedForkVariables is for an explicit-message target only",
+    );
+  }
   return {
     hostId,
     forkSource: {
       boundary: "assistantMessage",
       sourceChatId: target.sourceChatId,
-      assistantMessageId: target.assistantMessageId,
+      assistantMessageId,
     },
   };
 }
@@ -635,8 +678,10 @@ describe("ChatForkDialog cross-host routing", () => {
     dialogMocks.publicationQueryEnabled = false;
     dialogMocks.publicationQueryIsError = false;
     dialogMocks.publicationQueryIsFetching = false;
+    dialogMocks.publicationQueryLastBoundaryMessageId = undefined;
     dialogMocks.lastWorkspace = null;
     dialogMocks.cloneOwnerCalls = [];
+    dialogMocks.cloneOwnerReturn = null;
     dialogMocks.clientsByHostId.clear();
     dialogMocks.clientsByHostId.set(TAB_HOST_ID, TAB_HOST_CLIENT);
     dialogMocks.clientsByHostId.set(OTHER_HOST_ID, OTHER_HOST_CLIENT);
@@ -1518,5 +1563,101 @@ describe("ChatForkDialog cross-host routing", () => {
 
     expect(selectedHostScopeHostId()).toBe(TAB_HOST_ID);
     expect(screen.queryByTestId("chat-fork-target-notices")).toBeNull();
+  });
+
+  it("a null-boundary target preselected onto a remote host submits a latest-boundary forkSource carrying the source owner", async () => {
+    dialogMocks.cloneOwnerReturn = "owner-abc";
+    const remoteLatestTarget = forkTarget({
+      assistantMessageId: null,
+      initialHostId: OTHER_HOST_ID,
+    });
+    // Same mount-closed-then-open pattern as the initialHostId tests above:
+    // the seeding branch only runs on an open TRANSITION.
+    const view = render(
+      <ChatForkDialog
+        {...dialogProps(remoteLatestTarget, ignoreOpenChange, false)}
+      />,
+    );
+    view.rerender(
+      <ChatForkDialog
+        {...dialogProps(remoteLatestTarget, ignoreOpenChange, true)}
+      />,
+    );
+
+    expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
+
+    const request = await submitFork();
+    expect(request.hostId).toBe(OTHER_HOST_ID);
+    expect(request.forkSource).toEqual({
+      boundary: "latest",
+      sourceChatId: remoteLatestTarget.sourceChatId,
+      sourceOwnerUserId: "owner-abc",
+    });
+  });
+
+  it("a null-boundary target is published-checked with no specific boundary message id", () => {
+    advertiseSourcePublication();
+    dialogMocks.publicationQuery = {
+      data: {
+        published: true,
+        boundaryCovered: null,
+        publishedThroughTs: null,
+      },
+    };
+    renderDialog(forkTarget({ assistantMessageId: null }), ignoreOpenChange);
+
+    // Enabled from open (a remote host exists), and asked with NO boundary -
+    // the coarser "is this chat backed up at all" question, not a specific
+    // message id resolved from a null target.
+    expect(dialogMocks.publicationQueryEnabled).toBe(true);
+    expect(dialogMocks.publicationQueryLastBoundaryMessageId).toBeNull();
+    expect(screen.queryByTestId("chat-fork-publication-notice")).toBeNull();
+  });
+
+  it("null-boundary target: same-host notice names the latest checkpoint, cross-host names the latest cloud backup", () => {
+    renderDialog(forkTarget({ assistantMessageId: null }), ignoreOpenChange);
+
+    expect(
+      screen.getByText(/uses the latest saved checkpoint available/),
+    ).not.toBeNull();
+    expect(screen.queryByText(/latest usable cloud backup/)).toBeNull();
+
+    fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+
+    expect(
+      screen.getByText(/uses the latest usable cloud backup available/),
+    ).not.toBeNull();
+    expect(screen.queryByText(/latest saved checkpoint/)).toBeNull();
+  });
+
+  it("an explicit assistantMessageId retains the assistantMessage boundary cross-host and shows no latest-boundary notice", async () => {
+    const explicitTarget = forkTarget({ initialHostId: OTHER_HOST_ID });
+    const view = render(
+      <ChatForkDialog
+        {...dialogProps(explicitTarget, ignoreOpenChange, false)}
+      />,
+    );
+    view.rerender(
+      <ChatForkDialog
+        {...dialogProps(explicitTarget, ignoreOpenChange, true)}
+      />,
+    );
+
+    expect(selectedHostScopeHostId()).toBe(OTHER_HOST_ID);
+    // The dialog only names a "latest" boundary when the target's
+    // assistantMessageId is null; an explicit boundary shows neither variant.
+    expect(screen.queryByText(/latest usable cloud backup/)).toBeNull();
+    expect(screen.queryByText(/latest saved checkpoint/)).toBeNull();
+
+    const request = await submitFork();
+    expect(request.hostId).toBe(OTHER_HOST_ID);
+    // toMatchObject, not toEqual: the "assistantMessage" arm also carries
+    // interviewBlockId/carriedInterviews, which this regression isn't about.
+    expect(request.forkSource).toMatchObject({
+      boundary: "assistantMessage",
+      sourceChatId: explicitTarget.sourceChatId,
+      assistantMessageId: explicitTarget.assistantMessageId,
+      sourceOwnerUserId: null,
+    });
   });
 });

@@ -19,11 +19,28 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
-);
+// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+// `HostBusyForceDeferDialog`, both reachable from this suite's restart
+// confirms) calls `useFocusModel()` -> `useConnectableHostIds()` ->
+// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
+// at render time and subscribes via `directory.onChange` in an effect. A
+// binding mock with no `directory` throws ("Invalid value used as weak map
+// key" / "directory.onChange is not a function") the moment the confirm
+// dialog opens, so the fixture below needs one even though this suite never
+// reads its answer.
+interface HostBindingMock {
+  readonly hostClient: unknown;
+  readonly directory: {
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
+    readonly getLocalEntry: () => null;
+  };
+}
+const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
+  current: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -156,6 +173,23 @@ const FREE_PORT_ISSUE: HostDoctorIssue = {
 };
 
 /**
+ * A host binding whose `directory` answers with an empty listing and inert
+ * change subscription — this suite never asserts on the directory itself,
+ * only on the fact that `HostRestartSessions` can mount beneath it without
+ * throwing.
+ */
+function bindingWith(hostClient: unknown): HostBindingMock {
+  return {
+    hostClient,
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalEntry: () => null,
+    },
+  };
+}
+
+/**
  * The one place these suites mount the panel. Everything the three scenario
  * builders used to repeat — the fixture, the negotiated-method record, the
  * scope override, the host binding, the runner host, the QueryClient and the
@@ -190,7 +224,7 @@ function renderDoctorPanel(options: {
     status: "ready",
     client: fixture.client,
   };
-  hostBindingMock.current = { hostClient: fixture.client };
+  hostBindingMock.current = bindingWith(fixture.client);
 
   const runnerHost: IRunnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",

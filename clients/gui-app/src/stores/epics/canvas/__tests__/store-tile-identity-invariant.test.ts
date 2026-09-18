@@ -1294,7 +1294,7 @@ describe("canvas tile identity invariant: legitimate flows pass untouched", () =
           .renameTab(tab1, `Chaos One renamed ${suffix}`);
         useEpicCanvasStore
           .getState()
-          .renameArtifactInTab(tab1, a.id, `A renamed ${suffix}`);
+          .renameArtifactInTab(tab1, a.id, `A renamed ${suffix}`, a.hostId);
 
         useEpicCanvasStore.getState().tearOffTabIntoNewHeaderTab({
           sourceTabId: tab2,

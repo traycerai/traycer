@@ -123,6 +123,7 @@ import {
   chatRecordSchema,
   chatSkeletonChunkSchema,
   chatTranscriptDerivedSchema,
+  chatTranscriptDerivedSchemaPreSetupPlacement,
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreFallback,
@@ -1241,11 +1242,22 @@ export type PendingReturn = z.infer<typeof pendingReturnSchema>;
  * DEFINED IFF THE HOST WOULD ADMIT A RUNG. The value is present only when the
  * chat's latest attempt is a terminal failure that passes the same eligibility
  * chain `runManualFallbackRungLocked` walks - it is the latest attempt, nothing
- * is running, no dispatch-holding traversal is live, and a terminal traversal
- * record counts as a failure only when its settlement notifies failure
- * (D122/D133). Three of those four are host facts a renderer cannot see without
- * racing, and a client that re-derived them would be a second decider that
- * disagrees on exactly the frames that matter.
+ * is running, no dispatch-holding traversal is live OTHER THAN A GRACE `hold`,
+ * and a terminal traversal record counts as a failure only when its settlement
+ * notifies failure (D122/D133). Three of those four are host facts a renderer
+ * cannot see without racing, and a client that re-derived them would be a
+ * second decider that disagrees on exactly the frames that matter.
+ *
+ * The `hold` carve-out is deliberate and is the one case where this value and
+ * `pendingFallback` are BOTH defined. A hold is the only dispatch-holding state
+ * whose purpose is to ask the user a question, and withholding the rungs there
+ * made the countdown's answer unreachable from the card - a user who had
+ * already fixed the failure by hand could neither say so nor pick a different
+ * destination. So a renderer must not treat a live `pendingFallback` as a
+ * reason to suppress these affordances; the two surfaces coexist, and the host
+ * settles the traversal itself when a rung is actually run. Every other
+ * dispatch-holding state (`retrying`, `choosing`, `switching`, `waiting`) still
+ * clears this value.
  *
  * What it deliberately does NOT answer is whether any PARTICULAR rung is
  * available for this failure's reason - that stays the verb's, which answers
@@ -4024,7 +4036,7 @@ const chatWindowedSnapshotSchemaV18 = z.object({
    */
   tail: chatTranscriptWindowSchemaV18,
   /** Whole-transcript folds a windowed client cannot compute for itself. */
-  derived: chatTranscriptDerivedSchema,
+  derived: chatTranscriptDerivedSchemaPreSetupPlacement,
 });
 // The chat record as every pre-`auto` windowed line ships it: `chatRecordSchema`
 // with the settings tuple held to the pre-`auto` enum (`chatSchemaV18` is the
@@ -4066,7 +4078,7 @@ const chatWindowedSnapshotSchemaV110 = z.object({
   rowCount: z.number().int().nonnegative(),
   indexRevision: z.number().int().nonnegative().nullable(),
   tail: chatTranscriptWindowSchemaPreShellHost,
-  derived: chatTranscriptDerivedSchema,
+  derived: chatTranscriptDerivedSchemaPreSetupPlacement,
   pendingFallback: pendingFallbackSchemaPreAuto.optional(),
   pendingReturn: pendingReturnSchemaPreAuto.optional(),
   lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
@@ -4098,6 +4110,7 @@ export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV111.extend(
     queue: chatQueueStateSchema,
     pendingApprovals: z.array(chatApprovalStateSchema),
     tail: chatTranscriptWindowSchema,
+    derived: chatTranscriptDerivedSchema,
     // Re-widened here and only here: `1.10` froze the fallback tuples pre-`auto`
     // and `1.11` inherited that freeze, so `1.13` is where a tuple may name the
     // mode again.
@@ -4282,7 +4295,7 @@ const chatWindowedSnapshotSchemaV19 = z.object({
   rowCount: z.number().int().nonnegative(),
   indexRevision: z.number().int().nonnegative().nullable(),
   tail: chatTranscriptWindowSchemaPreFallback,
-  derived: chatTranscriptDerivedSchema,
+  derived: chatTranscriptDerivedSchemaPreSetupPlacement,
 });
 
 const chatSubscribeServerFrameSchemaV19 = z.discriminatedUnion("kind", [

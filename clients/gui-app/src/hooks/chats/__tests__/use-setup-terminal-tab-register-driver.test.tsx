@@ -13,7 +13,8 @@ import {
 } from "@/stores/worktree/setup-terminals";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
-import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import { collectPanes, type TilePane } from "@/stores/epics/canvas/tile-tree";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const EPIC_ID = "epic-setup-title";
@@ -74,6 +75,43 @@ function resetStores(): void {
   );
 }
 
+/** The view's globally-active pane id, or a hard failure - test-only. */
+function activePaneIdOrThrow(viewTabId: string): string {
+  const paneId =
+    useEpicCanvasStore.getState().canvasByTabId[viewTabId]?.activePaneId ??
+    null;
+  if (paneId === null) throw new Error("expected an active pane");
+  return paneId;
+}
+
+/** Look up one pane of the view's canvas by id, or a hard failure. */
+function paneOrThrow(viewTabId: string, paneId: string): TilePane {
+  const root =
+    useEpicCanvasStore.getState().canvasByTabId[viewTabId]?.root ?? null;
+  const pane = collectPanes(root).find((candidate) => candidate.id === paneId);
+  if (pane === undefined) throw new Error(`expected pane ${paneId}`);
+  return pane;
+}
+
+/** `pane`'s tab payloads, in strip order - test-only wrapper over `paneTabRefs`. */
+function tabsOf(
+  viewTabId: string,
+  pane: TilePane,
+): ReadonlyArray<EpicCanvasTileRef> {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+  if (canvas === undefined) throw new Error("expected a live canvas");
+  return paneTabRefs(canvas, pane);
+}
+
+/** Whether the auto-opened setup terminal tab is present anywhere in the view. */
+function hasTerminalTab(viewTabId: string): boolean {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+  if (canvas === undefined || canvas.root === null) return false;
+  return collectPanes(canvas.root)
+    .flatMap((pane) => paneTabRefs(canvas, pane))
+    .some((tile) => tile.id === WORKTREE_ENTRY.setupTerminalSessionId);
+}
+
 describe("useSetupTerminalTabRegisterDriver", () => {
   afterEach(() => {
     resetStores();
@@ -99,9 +137,15 @@ describe("useSetupTerminalTabRegisterDriver", () => {
       });
     });
 
-    renderHook(() => useSetupTerminalTabRegisterDriver({ handle, viewTabId }), {
-      wrapper: Wrapper,
-    });
+    renderHook(
+      () =>
+        useSetupTerminalTabRegisterDriver({
+          handle,
+          viewTabId,
+          owningTileInstanceId: "chat-instance",
+        }),
+      { wrapper: Wrapper },
+    );
 
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     expect(canvas?.root).not.toBeNull();
@@ -149,6 +193,7 @@ describe("useSetupTerminalTabRegisterDriver", () => {
         useSetupTerminalTabRegisterDriver({
           handle,
           viewTabId: secondViewTabId,
+          owningTileInstanceId: "chat-instance-2",
         }),
       { wrapper: Wrapper },
     );
@@ -200,9 +245,15 @@ describe("useSetupTerminalTabRegisterDriver", () => {
       });
     });
 
-    renderHook(() => useSetupTerminalTabRegisterDriver({ handle, viewTabId }), {
-      wrapper: Wrapper,
-    });
+    renderHook(
+      () =>
+        useSetupTerminalTabRegisterDriver({
+          handle,
+          viewTabId,
+          owningTileInstanceId: "chat-instance",
+        }),
+      { wrapper: Wrapper },
+    );
 
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     expect(canvas).toBeDefined();
@@ -223,5 +274,94 @@ describe("useSetupTerminalTabRegisterDriver", () => {
       "setup-terminal-session",
       "setup-web",
     ]);
+  });
+
+  it("places the background terminal in the owning chat's pane, not the active pane, and never reopens it once closed", () => {
+    resetStores();
+    const handle = createHandle();
+    const viewTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(EPIC_ID, "Epic");
+
+    // Pane B: the owning chat's pane - the only (so active) root pane first.
+    useEpicCanvasStore.getState().openTileInTab(viewTabId, {
+      id: CHAT_ID,
+      instanceId: "chat-instance",
+      type: "chat",
+      name: "Chat",
+      hostId: HOST_ID,
+    });
+    const paneB = activePaneIdOrThrow(viewTabId);
+
+    // Pane A: split off an UNRELATED chat (also "conversation" category, so
+    // the old affinity fallback - "the active pane already hosting a
+    // conversation tile wins outright" - would misplace the setup terminal
+    // here instead of the owner's pane). The new pane becomes active.
+    useEpicCanvasStore.getState().splitPaneWithNode(viewTabId, paneB, "right", {
+      id: "unrelated-chat",
+      instanceId: "unrelated-chat-instance",
+      type: "chat",
+      name: "Unrelated chat",
+      hostId: HOST_ID,
+    });
+    const paneA = activePaneIdOrThrow(viewTabId);
+    expect(paneA).not.toBe(paneB);
+
+    act(() => {
+      handle.store.setState({
+        worktreeBinding: { entries: [WORKTREE_ENTRY] },
+      });
+    });
+
+    const { rerender } = renderHook(
+      () =>
+        useSetupTerminalTabRegisterDriver({
+          handle,
+          viewTabId,
+          owningTileInstanceId: "chat-instance",
+        }),
+      { wrapper: Wrapper },
+    );
+
+    const ownerPane = paneOrThrow(viewTabId, paneB);
+    const activePane = paneOrThrow(viewTabId, paneA);
+    const terminalRef = tabsOf(viewTabId, ownerPane).find(
+      (tile) => tile.id === WORKTREE_ENTRY.setupTerminalSessionId,
+    );
+
+    // The terminal lands as a tab of the OWNER's pane (B), never the
+    // unrelated active pane (A), and focus is left exactly where it was -
+    // pane A is still globally active and its own active tab is unchanged,
+    // and pane B's own active tab is STILL the owning chat, not the newly
+    // inserted background terminal - exactly as a background (host-pushed)
+    // open must leave both panes.
+    expect(terminalRef).toBeDefined();
+    expect(
+      tabsOf(viewTabId, activePane).some(
+        (tile) => tile.id === WORKTREE_ENTRY.setupTerminalSessionId,
+      ),
+    ).toBe(false);
+    expect(activePaneIdOrThrow(viewTabId)).toBe(paneA);
+    expect(activePane.activeTabId).toBe("unrelated-chat-instance");
+    expect(ownerPane.activeTabId).toBe("chat-instance");
+    if (terminalRef === undefined) throw new Error("expected a terminal tab");
+
+    // The user closes the auto-opened setup terminal tab.
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .closeCanvasTab(viewTabId, paneB, terminalRef.instanceId);
+    });
+    expect(hasTerminalTab(viewTabId)).toBe(false);
+
+    // Binding churn (a fresh object identity, still running) plus a driver
+    // rerender, while the view is still mounted, must not reopen it.
+    act(() => {
+      handle.store.setState({
+        worktreeBinding: { entries: [{ ...WORKTREE_ENTRY }] },
+      });
+    });
+    rerender();
+    expect(hasTerminalTab(viewTabId)).toBe(false);
   });
 });

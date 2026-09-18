@@ -4,7 +4,7 @@ import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicRenameTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
-import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicRecordMutationClient } from "@/hooks/epic/use-epic-record-mutation-client";
 import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
@@ -41,21 +41,14 @@ export function tileRenameKind(ref: EpicCanvasTileRef): SwitcherRowKind | null {
 }
 
 /**
- * Fires the canonical rename mutation for a renameable kind: the same host RPCs
- * the desktop sidebar rows drive, so every mobile rename affordance - list rows
- * and the current-tile title alike - lands through one path.
+ * Renames a mobile switcher list row through the same mutations as the desktop
+ * sidebar. Current-tile titles use `useRenameCanvasTab`, which also maintains
+ * the tile's saved name.
  *
  * `nodeId` is the content id for agents and artifacts, the session id for a raw
  * terminal.
  *
- * ## Why this stamps an overlay now
- *
- * This hook had NO local update: it fired the RPC and waited. That was not a
- * mobile product decision - `useIsMobileViewport()` is a 768px media query, so
- * the same user on the same device got different persistence feedback either
- * side of a window drag. The overlay is what removes that width dependency;
- * the wide-viewport twin is `use-rename-canvas-tab.ts`, and the two must stay
- * observably identical (the resize test is 1.1's acceptance criterion).
+ * The overlay keeps the list's title current until the host's record arrives.
  *
  * A raw `terminal` is deliberately excluded: it is a host session rather than
  * an epic node, has no row in the projection to patch, and its own rename
@@ -63,6 +56,7 @@ export function tileRenameKind(ref: EpicCanvasTileRef): SwitcherRowKind | null {
  */
 export function useSwitcherRename(
   epicId: string,
+  hostId: string | null,
 ): (kind: SwitcherRowKind, nodeId: string, title: string) => void {
   const epicHandle = useOpenEpicHandle();
   const renameChat = useEpicRenameChat();
@@ -71,7 +65,8 @@ export function useSwitcherRename(
   // callback, not at hook-call time, and no caller of this hook reads
   // `isPending`.
   const renameArtifact = useEpicRenameArtifact(null, true);
-  const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
+  const resolveClient = useEpicRecordMutationClient();
+  const renameTerminal = useTerminalRenameFor(resolveClient({ hostId }));
 
   const commit = useCallback(
     async (
@@ -92,13 +87,20 @@ export function useSwitcherRename(
         renameTerminal.mutate({ sessionId: nodeId, title: trimmed });
         return;
       }
+      // A same-id clone on another host must not receive this rename overlay.
+      const state = epicHandle.store.getState();
+      const projectedHostId =
+        (kind === "chat"
+          ? state.chats.byId[nodeId]?.hostId
+          : state.tuiAgents.byId[nodeId]?.hostId) ?? hostId;
+      const matchesProjection = projectedHostId === hostId;
       // DOC-RESIDENT terminal agents keep the direct doc write - see the
       // same branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent`
       // refuses a row the serving host has no registry entry for
       // (`E_AGENT_NOT_LOCAL`), so the overlay path would only ever roll
       // back. No snapshot on this surface; the doc write is its own
       // synchronous feedback.
-      if (kind === "terminal-agent") {
+      if (kind === "terminal-agent" && matchesProjection) {
         const agents = epicHandle.store.getState().tuiAgents.byId;
         if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
           // `void`: the doc write is a round trip now, and this arm's whole
@@ -134,6 +136,7 @@ export function useSwitcherRename(
       // row that renames and then snaps back, which is the dnd commit's rule
       // for a move it cannot make.
       if (
+        matchesProjection &&
         resolveChatWriteRoute({
           chatsById: epicHandle.store.getState().chats.byId,
           isChatRow: kind === "chat",
@@ -143,9 +146,9 @@ export function useSwitcherRename(
       ) {
         return;
       }
-      const requestId = await epicHandle.store
-        .getState()
-        .beginRenameMutation(nodeId, trimmed);
+      const requestId = matchesProjection
+        ? await epicHandle.store.getState().beginRenameMutation(nodeId, trimmed)
+        : null;
       // Retire rides the `mutateAsync` promise - never a per-call
       // `onSettled`, which TanStack drops on unmount and replaces on a
       // consecutive `mutate()`. Contract note in `use-rename-canvas-tab.ts`.
@@ -164,7 +167,7 @@ export function useSwitcherRename(
       if (kind === "chat") {
         settleDetachedEpicMutation(
           renameChat
-            .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+            .mutateAsync({ epicId, chatId: nodeId, title: trimmed, hostId })
             .then(landed, failed),
           "mobile switcher",
           "chat rename settlement",
@@ -172,7 +175,7 @@ export function useSwitcherRename(
       } else {
         settleDetachedEpicMutation(
           renameTuiAgent
-            .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+            .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed, hostId })
             .then(landed, failed),
           "mobile switcher",
           "terminal-agent rename settlement",
@@ -182,6 +185,7 @@ export function useSwitcherRename(
     [
       epicHandle,
       epicId,
+      hostId,
       renameArtifact,
       renameChat,
       renameTerminal,

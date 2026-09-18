@@ -99,6 +99,32 @@ function isTransportClassFailure(error: HostRpcError): boolean {
 }
 
 /**
+ * The AMBIGUOUS post-send drop - the one condition {@link transportNoticeToast}
+ * narrates as "may or may not have gone through".
+ *
+ * Exported for the one kind of caller that can do better than narrating it: a
+ * request carrying an IDEMPOTENCY KEY is replayable, and its outcome is
+ * DECIDABLE by asking the host what exists, so telling that user it is
+ * unknowable is a worse answer than looking. Such a caller suppresses the
+ * notice on this predicate and raises its own only after its existence poll
+ * comes back negative. Every other caller keeps the notice, because for them
+ * the ambiguity is real.
+ *
+ * NO CALLER YET, deliberately: the keyed `epic.create` dispatch and its poll
+ * land together, and retiring the notice before the poll exists would trade a
+ * vague sentence for silence. This is the seam they attach to.
+ *
+ * Both exclusions are the cases that are NOT ambiguous: `RetryableTransportError`
+ * carries the host's no-dispatch guarantee ("that didn't go through"), and an
+ * abort is a caller-owned cancellation, not a network condition.
+ */
+export function isUnknownOutcomeTransportFailure(error: HostRpcError): boolean {
+  if (error instanceof HostRequestAbortedError) return false;
+  if (error instanceof RetryableTransportError) return false;
+  return isTransportClassFailure(error);
+}
+
+/**
  * The transport-class branch shared by both gesture-path helpers.
  *
  * Three things it deliberately does NOT do, each of which the reportable path

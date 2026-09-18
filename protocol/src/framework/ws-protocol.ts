@@ -86,6 +86,30 @@ export const RPC_REQUEST_TIMEOUT_FATAL_CODE = "RPC_REQUEST_TIMEOUT";
 export const UNARY_CAPABILITY_IDEMPOTENCY_KEY = "unary.idempotencyKey";
 
 /**
+ * The invariant fragment of the sentence the host writes when its idempotency
+ * cache refuses a reused key (`keyReuseConflict` in the host's
+ * `transport/rpc/idempotency-cache.ts`).
+ *
+ * ONE DEFINITION, imported by both sides. The host builds its message from
+ * this constant; the renderer's `isIdempotencyKeyReuseConflict` matches it
+ * case-insensitively, by substring, so a reworded prefix or a wrapped message
+ * still lands. It used to be a string literal written out twice in two repos
+ * with a docblock on each pointing at the other - a coupling nothing could
+ * fail on when one side was reworded.
+ *
+ * THIS IS NOW THE FALLBACK, not the contract. The wire answer is the
+ * `IDEMPOTENCY_KEY_REUSE` error code; this fragment only recognises hosts that
+ * predate it, which narrow the unknown code to `RPC_ERROR` and leave the prose
+ * as the sole discriminator. Read the code first and reach for this second.
+ * It cannot be deleted until no such host is in the field.
+ *
+ * Lower-cased at the definition so the comparison has one direction to worry
+ * about: callers lower-case the message, not this.
+ */
+export const IDEMPOTENCY_KEY_REUSE_MESSAGE_FRAGMENT =
+  "idempotency key was already used";
+
+/**
  * Client-to-host capability for the first write-path command contract.
  *
  * A host may emit write-path-specific typed errors only after the caller

@@ -2,6 +2,9 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { CopyPathButton } from "@/components/copy-path-button";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
 import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
@@ -311,6 +314,7 @@ function WorkspaceImageFileTile(props: {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceMediaFileToolbar
+          workspacePath={node.workspacePath}
           filePath={node.filePath}
           svgToggle={props.svgToggle}
           openExternally={null}
@@ -332,6 +336,7 @@ function WorkspaceImageFileTile(props: {
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
       <WorkspaceMediaFileToolbar
+        workspacePath={node.workspacePath}
         filePath={node.filePath}
         svgToggle={props.svgToggle}
         openExternally={
@@ -416,6 +421,7 @@ function WorkspaceDocumentFileTile(props: {
     return (
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceMediaFileToolbar
+          workspacePath={node.workspacePath}
           filePath={node.filePath}
           svgToggle={null}
           openExternally={null}
@@ -462,6 +468,7 @@ function WorkspaceDocumentFileTile(props: {
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
       <WorkspaceMediaFileToolbar
+        workspacePath={node.workspacePath}
         filePath={node.filePath}
         svgToggle={null}
         openExternally={
@@ -525,6 +532,7 @@ function OpenExternallyIconButton(props: {
  * `WorkspaceFileToolbar` below, the text/markdown tile's toolbar.
  */
 function WorkspaceMediaFileToolbar(props: {
+  readonly workspacePath: string;
   readonly filePath: string;
   readonly svgToggle: ReactNode;
   readonly openExternally: {
@@ -537,9 +545,10 @@ function WorkspaceMediaFileToolbar(props: {
       className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
       data-testid="workspace-file-toolbar"
     >
-      <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
-        {props.filePath}
-      </StartTruncatedText>
+      <WorkspaceFilePath
+        workspacePath={props.workspacePath}
+        filePath={props.filePath}
+      />
       {props.svgToggle}
       {props.openExternally !== null ? (
         <OpenExternallyIconButton
@@ -858,7 +867,10 @@ function WorkspaceFileTileLive(props: {
     >
       <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
         <WorkspaceFileToolbar
+          workspacePath={node.workspacePath}
           filePath={node.filePath}
+          hasContent={renderedContent !== null}
+          isLoading={query.isLoading}
           truncated={truncated}
           markdownFile={markdownFile}
           markdownPreviewDisabled={markdownPreviewDisabled}
@@ -920,7 +932,10 @@ function WorkspaceFileTileLive(props: {
 }
 
 function WorkspaceFileToolbar(props: {
+  readonly workspacePath: string;
   readonly filePath: string;
+  readonly hasContent: boolean;
+  readonly isLoading: boolean;
   readonly truncated: boolean;
   readonly markdownFile: boolean;
   readonly markdownPreviewDisabled: boolean;
@@ -938,6 +953,7 @@ function WorkspaceFileToolbar(props: {
   // and only where the mobile layout is live, so desktop never carries the
   // scope. Same arrangement as the diff tab header.
   const isMobileViewport = useIsMobileViewport();
+  const showContentControls = props.hasContent && !props.isLoading;
 
   return (
     <div
@@ -945,16 +961,17 @@ function WorkspaceFileToolbar(props: {
       data-mobile-shell-touch-scope={isMobileViewport ? "" : undefined}
       data-testid="workspace-file-toolbar"
     >
-      <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
-        {props.filePath}
-      </StartTruncatedText>
-      {props.truncated ? (
+      <WorkspaceFilePath
+        workspacePath={props.workspacePath}
+        filePath={props.filePath}
+      />
+      {showContentControls && props.truncated ? (
         <span className="shrink-0 text-badge text-muted-foreground">
           Preview truncated
         </span>
       ) : null}
       {props.status}
-      {props.markdownFile && !props.editing ? (
+      {showContentControls && props.markdownFile && !props.editing ? (
         <MarkdownViewModeToggle
           previewDisabled={props.markdownPreviewDisabled}
           mode={props.viewMode}
@@ -964,13 +981,76 @@ function WorkspaceFileToolbar(props: {
       {/* Wrapping only describes the source surface. Rendered markdown reflows
           on its own and has no line to wrap, so the control stays out of the
           preview's toolbar rather than sitting there doing nothing. */}
-      {props.viewMode === "source" ? (
+      {showContentControls && props.viewMode === "source" ? (
         <WorkspaceFileSettingsMenu
           wordWrap={props.wordWrap}
           onWordWrapChange={props.onWordWrapChange}
         />
       ) : null}
       {props.svgToggle}
+    </div>
+  );
+}
+
+function WorkspaceFilePath(props: {
+  readonly workspacePath: string;
+  readonly filePath: string;
+}) {
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const absolutePath = resolveAbsolutePath(props.workspacePath, props.filePath);
+  const details = (
+    <div className="flex max-w-[min(28rem,90vw)] items-center gap-2 px-3 py-1.5 text-ui-xs">
+      <span className="min-w-0 font-mono wrap-anywhere">{absolutePath}</span>
+      <CopyPathButton
+        path={absolutePath}
+        ariaLabel="Copy file path"
+        testId="workspace-file-copy-path"
+        appearance="tooltip"
+      />
+    </div>
+  );
+  return (
+    <div className="flex h-full min-w-0 flex-1 items-center">
+      <Popover
+        open={popoverOpen}
+        onOpenChange={(open) => {
+          setPopoverOpen(open);
+          if (open) setHoverOpen(false);
+        }}
+      >
+        <HoverPreviewCard
+          appearance="tooltip"
+          content={details}
+          side="bottom"
+          sideOffset={4}
+          align="start"
+          open={!popoverOpen && hoverOpen}
+          onOpenChange={(open) => {
+            if (!popoverOpen) setHoverOpen(open);
+          }}
+        >
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex h-full max-w-full min-w-0 items-center text-left text-ui-xs text-muted-foreground"
+              aria-label="Show full file path"
+            >
+              <StartTruncatedText className="block min-w-0">
+                {props.filePath}
+              </StartTruncatedText>
+            </button>
+          </PopoverTrigger>
+        </HoverPreviewCard>
+        <PopoverContent
+          appearance="tooltip"
+          layout="bare"
+          align="start"
+          className="w-auto"
+        >
+          {details}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

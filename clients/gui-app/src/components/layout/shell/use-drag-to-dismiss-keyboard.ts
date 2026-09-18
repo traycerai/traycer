@@ -5,6 +5,7 @@ import {
   declaresOwnTouchHandling,
   isTextEntryFocused,
   isWithinFocusedTextEntry,
+  isWithinTextEntryPopup,
   verticalScrollTargetForDownwardDrag,
   type DirectionalCommitLimits,
 } from "@/components/layout/shell/shell-gestures";
@@ -87,12 +88,12 @@ interface ScrollSample {
  *
  * THREE ARMS, and the first one carries the behaviour.
  *
- *  - TAP anywhere outside the focused field dismisses. This is the arm users
- *    reach for, and the only one that needs no gesture arbitration at all: a
- *    touch that never travels is unambiguous, so it can be honoured over a
- *    scroller and a static surface alike. It is also what the rest of the
- *    platform has trained people to expect; without it a keyboard covering the
- *    screen has no obvious way out.
+ *  - TAP anywhere outside the focused field and its popups dismisses. This is
+ *    the arm users reach for, and the only one that needs no gesture
+ *    arbitration at all: a touch that never travels is unambiguous, so it can
+ *    be honoured over a scroller and a static surface alike. It is also what
+ *    the rest of the platform has trained people to expect; without it a
+ *    keyboard covering the screen has no obvious way out.
  *
  * The other two catch the drags, and are split by whether a scroll exists to
  * read.
@@ -238,11 +239,16 @@ export function useDragToDismissKeyboard(): void {
       sampled: ScrollSample | null,
     ): boolean => {
       if (tapped !== null && !tapped.cancelled) {
-        // A tap INSIDE the field being edited is a caret move, not a request
-        // to put the keyboard away. Nothing else is exempt: taps on buttons and
-        // links still dismiss, and their own click runs regardless, because
-        // these listeners are passive and never cancel anything.
-        return !isWithinFocusedTextEntry(tapped.target);
+        // A tap INSIDE the field being edited is a caret move, and a tap on
+        // one of its popups (a picker row, the picker's own chrome) is part of
+        // editing it; neither is a request to put the keyboard away. Every
+        // other tap dismisses, buttons and links included, and their own click
+        // runs regardless, because these listeners are passive and never
+        // cancel anything.
+        return (
+          !isWithinFocusedTextEntry(tapped.target) &&
+          !isWithinTextEntryPopup(tapped.target)
+        );
       }
       if (sampled === null) return false;
       const elapsedMs = sampled.at - sampled.previousAt;
