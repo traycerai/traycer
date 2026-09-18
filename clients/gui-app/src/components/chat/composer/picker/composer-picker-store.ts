@@ -121,6 +121,15 @@ export interface ComposerPickerState {
    */
   readonly itemsForSlashScope: ComposerSlashScope | null;
   readonly activeIndex: number;
+  /**
+   * True once the user has moved the highlight with the arrow keys since the
+   * list was last reset (open, query change, step change). While set, a
+   * replacement list keeps the highlight on the same ROW (by id) wherever it
+   * lands - including index 0, where an un-navigated highlight deliberately
+   * stays on whatever the best match now is. Hover does not set it: a pointer
+   * resting on a row is not a choice the way an arrow press is.
+   */
+  readonly navigated: boolean;
   readonly loading: boolean;
   /**
    * Background-refetch indicator, distinct from `loading`: true while a
@@ -200,6 +209,14 @@ export interface ComposerPickerState {
    */
   readonly knownSlashCommands: ReadonlyMap<string, SlashCommand> | null;
   /**
+   * Told about every mention row the user actually picks (a commit that
+   * inserts something - never a category navigation or Back), so the pick
+   * memory behind the root search's recency nudge can record it. Registered
+   * by the mention item hook, which knows the composer's target host; it is
+   * hook-owned like `knownSlashCommands`, so it survives close/reset.
+   */
+  readonly onMentionPick: ((entry: MentionMenuEntry) => void) | null;
+  /**
    * Which suggestion session currently owns this store.
    *
    * Several suggestion plugins (`/`, `$`, `@`) drive one store, and a single
@@ -271,6 +288,9 @@ export interface ComposerPickerActions {
   readonly setKnownSlashCommands: (
     commands: ReadonlyMap<string, SlashCommand> | null,
   ) => void;
+  readonly setMentionPickObserver: (
+    observer: ((entry: MentionMenuEntry) => void) | null,
+  ) => void;
   /** Unconditional close, for callers that are not a suggestion session. */
   readonly close: () => void;
   /** Close only if `sessionId` still owns the store. See {@link ComposerPickerState.sessionId}. */
@@ -297,6 +317,7 @@ const INITIAL_STATE: ComposerPickerState = {
   itemsForStepId: null,
   itemsForSlashScope: null,
   activeIndex: 0,
+  navigated: false,
   loading: false,
   fetching: false,
   commit: null,
@@ -307,7 +328,18 @@ const INITIAL_STATE: ComposerPickerState = {
   stepChrome: null,
   clientRect: null,
   knownSlashCommands: null,
+  onMentionPick: null,
 };
+
+/**
+ * A commit that puts something in the prompt. Category rows and Back only
+ * move between steps, and recording those would nudge a category row the
+ * root search never ranks anyway.
+ */
+function isMentionPick(entry: MentionMenuEntry): boolean {
+  const kind = entry.action.kind;
+  return kind === "complete" || kind === "attach-tab-preview";
+}
 
 function stepIdOf(step: MentionFlowStep): string {
   if (step.kind === "root") return "root";
@@ -326,17 +358,21 @@ function wrapIndex(index: number, length: number): number {
 /**
  * Active index to carry across an item-list replacement. A refresh of the same
  * query can reorder rows as slower sources land (root mention search ranks all
- * sources into one flat list); once the user has moved the highlight off the
- * top row, it follows the item they chose - matched by id - rather than the
- * index it happened to sit at. At index 0 the highlight stays on the top row,
- * so the best match keeps the selection as better results arrive.
+ * sources into one flat list); once the user has chosen a row with the arrow
+ * keys, or moved the highlight off the top row by any means, it follows that
+ * row - matched by id - rather than the index it happened to sit at. An
+ * un-navigated highlight at index 0 stays on the top row, so the best match
+ * keeps the selection as better results arrive. A NAVIGATED highlight at
+ * index 0 (arrow down, arrow up) is a choice like any other and is carried:
+ * the row under a highlight the user put there must not change under them.
  */
 function carriedActiveIndex(
   previous: ComposerPickerState,
   items: ReadonlyArray<ComposerPickerItem>,
 ): number {
   if (
-    previous.activeIndex > 0 &&
+    (previous.navigated || previous.activeIndex > 0) &&
+    previous.activeIndex >= 0 &&
     previous.activeIndex < previous.items.length
   ) {
     const activeId = previous.items[previous.activeIndex].id;
@@ -403,6 +439,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         itemsForSlashScope: null,
         activeIndex: 0,
+        navigated: false,
         loading: false,
         fetching: false,
         commit,
@@ -445,6 +482,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         query,
         slashScope,
         activeIndex: 0,
+        navigated: false,
         clientRect: clientRect ?? previous.clientRect,
         items: scopeChanged ? [] : previous.items,
         itemsForQuery: scopeChanged ? null : previous.itemsForQuery,
@@ -463,6 +501,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         itemsForSlashScope: null,
         activeIndex: 0,
+        navigated: false,
         loading: false,
         fetching: false,
         loadFailed: false,
@@ -561,8 +600,13 @@ export function createComposerPickerStore(): ComposerPickerStore {
         clampIndex(previous.activeIndex, length) + direction,
         length,
       );
-      if (next === previous.activeIndex) return;
-      set({ activeIndex: next });
+      // A wrap on a single row lands on the same index; the press is still a
+      // choice, so the flag is set either way.
+      if (next === previous.activeIndex) {
+        if (!previous.navigated) set({ navigated: true });
+        return;
+      }
+      set({ activeIndex: next, navigated: true });
     },
 
     commitActiveItem: () => {
@@ -573,6 +617,13 @@ export function createComposerPickerStore(): ComposerPickerStore {
       }
       const item = state.items[state.activeIndex];
       if (pickerItemDisabledReason(item) !== null) return false;
+      if (
+        state.onMentionPick !== null &&
+        item.kind === "mention" &&
+        isMentionPick(item.entry)
+      ) {
+        state.onMentionPick(item.entry);
+      }
       state.commit(item);
       return true;
     },
@@ -582,12 +633,20 @@ export function createComposerPickerStore(): ComposerPickerStore {
       set({ knownSlashCommands: commands });
     },
 
-    // `close`/`reset` clear transient popover state but preserve the loaded
-    // command catalog - it is host/harness data, not per-popover-session state.
+    setMentionPickObserver: (observer) => {
+      if (get().onMentionPick === observer) return;
+      set({ onMentionPick: observer });
+    },
+
+    // `close`/`reset` clear transient popover state but preserve the hook-owned
+    // pieces: the loaded command catalog (host/harness data) and the pick
+    // observer (registered once per composer), neither of which is
+    // per-popover-session state.
     close: () => {
       set((previous) => ({
         ...INITIAL_STATE,
         knownSlashCommands: previous.knownSlashCommands,
+        onMentionPick: previous.onMentionPick,
       }));
     },
 
@@ -596,6 +655,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
       set((previous) => ({
         ...INITIAL_STATE,
         knownSlashCommands: previous.knownSlashCommands,
+        onMentionPick: previous.onMentionPick,
       }));
     },
 
@@ -603,6 +663,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
       set((previous) => ({
         ...INITIAL_STATE,
         knownSlashCommands: previous.knownSlashCommands,
+        onMentionPick: previous.onMentionPick,
       }));
     },
   }));

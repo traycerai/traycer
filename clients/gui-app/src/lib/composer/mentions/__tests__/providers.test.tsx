@@ -44,6 +44,7 @@ function context(
       supported: true,
       now: 0,
     },
+    recentPicks: new Map(),
     ...overrides,
   };
 }
@@ -1164,6 +1165,71 @@ describe("mention provider registry", () => {
       method: "epic.mentionEpics",
       params: { query: "" },
     });
+  });
+});
+
+describe("root search recency and path ranking", () => {
+  it("ranks a folder whose name exactly matches the query above a file inside it", () => {
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "compos",
+        workspaceEntries: [
+          {
+            kind: "file",
+            id: "file:/repo:src/lib/composer/composer-content.ts",
+            label: "composer-content.ts",
+            relPath: "src/lib/composer/composer-content.ts",
+            absolutePath: "/repo/src/lib/composer/composer-content.ts",
+            workspacePath: "/repo",
+            description: "src/lib/composer",
+          },
+          {
+            kind: "folder",
+            id: "folder:/repo:src/lib/composer/",
+            label: "composer",
+            relPath: "src/lib/composer/",
+            absolutePath: "/repo/src/lib/composer",
+            workspacePath: "/repo",
+            description: "src/lib",
+          },
+        ],
+      }),
+    );
+
+    expect(entries[0].label).toBe("composer");
+  });
+
+  it("nudges a recently picked file above an otherwise equal sibling file via recentPicks", () => {
+    const fileA = {
+      kind: "file" as const,
+      id: "file:/repo:src/lib/auth-a.ts",
+      label: "auth-a.ts",
+      relPath: "src/lib/auth-a.ts",
+      absolutePath: "/repo/src/lib/auth-a.ts",
+      workspacePath: "/repo",
+      description: "src/lib",
+    };
+    const fileB = {
+      kind: "file" as const,
+      id: "file:/repo:src/lib/auth-b.ts",
+      label: "auth-b.ts",
+      relPath: "src/lib/auth-b.ts",
+      absolutePath: "/repo/src/lib/auth-b.ts",
+      workspacePath: "/repo",
+      description: "src/lib",
+    };
+
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        query: "auth",
+        workspaceEntries: [fileA, fileB],
+        recentPicks: new Map([[fileB.id, 5]]),
+      }),
+    );
+
+    expect(entries[0].id).toBe(fileB.id);
   });
 });
 
