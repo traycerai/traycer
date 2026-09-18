@@ -1,3 +1,4 @@
+import { mergeOrder } from "@/lib/order-merge";
 import { CustomizeDropSlot } from "@/components/customize/customize-drop-slot";
 import { use, useEffect, useState, type ReactNode } from "react";
 import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
@@ -332,9 +333,16 @@ function StatusBarUsageSlot(props: {
       : "The selected host is unavailable",
   });
 
+  const segmentOrder = useLayoutStore((state) => state.statusBar.segmentOrder);
+  const orderedProviders = mergeOrder(
+    segmentOrder,
+    props.providers.map((provider) => provider.providerId),
+  ).flatMap((id) =>
+    props.providers.filter((provider) => provider.providerId === id),
+  );
   const providerGhosts =
     props.editing && props.scopedToOwnHost
-      ? props.providers.flatMap((provider) =>
+      ? orderedProviders.flatMap((provider) =>
           resolveStatusBarProfileIds(
             props.profileSelection,
             provider.providerId,

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
-import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { ContextUsageChipView } from "@/components/chat/context-usage-chip";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
@@ -37,7 +37,7 @@ const SAMPLE_FIGURES_CAPTION =
 /**
  * The context indicator as the settings below it draw it.
  *
- * It renders the REAL `ContextUsageChip`, from a fixed sample usage, so the
+ * It renders the REAL `ContextUsageChipView`, from a fixed sample usage, so the
  * pin switch, the field chips and the three indicator styles are answered by
  * the component that answers them in a chat rather than by a second drawing of
  * it that could drift. That is the whole design: there is no preview-only
@@ -94,7 +94,9 @@ export function ContextUsagePreview(): ReactNode {
           workspaceControls={
             <>
               <div className="min-w-0" />
-              <ContextUsageChip
+              <ContextUsageChipView
+                ref={null}
+                contextEditing={false}
                 usage={CONTEXT_USAGE_PREVIEW_SAMPLE}
                 onCompact={previewCompact}
               />

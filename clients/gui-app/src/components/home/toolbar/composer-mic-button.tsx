@@ -249,14 +249,20 @@ export function ComposerMicSlot(props: {
   }
   if (props.dictation !== null) {
     return (
-      <span ref={ref} className="inline-flex items-center">
+      <span
+        ref={ref}
+        className={cn(editing ? "inline-flex items-center" : "contents")}
+      >
         <ComposerMicButton control={props.dictation} />
       </span>
     );
   }
   if (props.dictationPreparing !== null) {
     return (
-      <span ref={ref} className="inline-flex items-center">
+      <span
+        ref={ref}
+        className={cn(editing ? "inline-flex items-center" : "contents")}
+      >
         <ComposerMicPreparing status={props.dictationPreparing} />
       </span>
     );

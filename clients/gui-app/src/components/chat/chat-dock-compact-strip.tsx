@@ -1,3 +1,5 @@
+import { useCustomizeStore } from "@/stores/customize/customize-store";
+import { cn } from "@/lib/utils";
 import { useCallback, useRef, type ReactNode } from "react";
 import { Bot, FileDiff, type LucideIcon } from "lucide-react";
 import { MessageSquareClock } from "@/components/notifications/message-square-clock";
@@ -149,6 +151,7 @@ function ChipGlyph(props: {
  * is either on screen or empty.
  */
 export function ChatDockCompactStrip(): ReactNode {
+  const editing = useCustomizeStore((state) => state.session !== null);
   const value = useChatDockCompactStrip();
   if (value === null || value.chips.length === 0) return null;
   return (
@@ -159,7 +162,7 @@ export function ChatDockCompactStrip(): ReactNode {
       {value.chips.map((chip) => (
         <span
           key={chip.section}
-          className="inline-flex items-center"
+          className={cn(editing ? "inline-flex items-center" : "contents")}
           ref={chip.hotspotRef}
         >
           <ChatDockCompactChip

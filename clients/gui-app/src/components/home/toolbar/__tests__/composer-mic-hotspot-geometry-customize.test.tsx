@@ -158,6 +158,30 @@ describe("composer.mic real hotspot geometry (B1/B2)", () => {
 
     await waitFor(() => expect(proxyFor(key ?? "")).not.toBeNull());
   });
+
+  // R2S3: outside editing the wrapper has no box of its own (`contents`) -
+  // only a real Customize session needs it to measure. `resetStores` above
+  // starts a session by default for every other test in this file, so this
+  // one explicitly turns it off before rendering.
+  it("the live mic's wrapper is `contents` (no box) outside a Customize session", () => {
+    act(() => {
+      useCustomizeStore.setState({ session: null });
+    });
+    render(
+      <ComposerMicSlot
+        dictation={{
+          state: "idle",
+          onToggle: () => undefined,
+          onStop: () => undefined,
+          onCancel: () => undefined,
+          getStream: () => null,
+        }}
+        dictationPreparing={null}
+      />,
+    );
+    const button = screen.getByRole("button", { name: /voice input/i });
+    expect(button.parentElement?.className).toBe("contents");
+  });
 });
 
 describe("composer.mic single-owner recording through the real proxy + popover (B3)", () => {

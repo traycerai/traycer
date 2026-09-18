@@ -225,9 +225,13 @@ function HeaderUsageControls(): ReactNode {
       </HeaderClusterContextMenu>
     );
   }
+  if (!editing && !usageEnabled && !showGlobalResourceMonitor) return null;
   return (
     <HeaderClusterContextMenu>
-      <span ref={ref} className="inline-flex items-center">
+      <span
+        ref={ref}
+        className={cn(editing ? "inline-flex items-center gap-2" : "contents")}
+      >
         {usageEnabled ? <RateLimitIconButton /> : null}
         {editing && !usageEnabled && !showGlobalResourceMonitor ? (
           <span className="inline-flex size-6 rounded-sm border border-dashed border-border/60" />

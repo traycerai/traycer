@@ -180,66 +180,95 @@ export interface NavigatorResourceHotspotChipProps {
   readonly registersHotspot: boolean;
 }
 
-function resourceChipGhostCondition(
-  noMetrics: boolean,
-  hasOwner: boolean,
-): string | null {
-  if (noMetrics) return "No metrics selected";
-  if (!hasOwner) return "This row has no resource usage to show";
-  return null;
-}
-
-/**
- * `OwnerResourceChip`, plus - for the one row a navigator designates - the
- * `sidebar.resourceChips` hotspot: a ghost when there is nothing to show
- * (no metrics selected, or this particular row owns no tracked process), the
- * real chip wrapped in a ref otherwise. Every other row stays exactly
- * `OwnerResourceChip`.
- */
+/** Resolve the snapshot before deciding whether this row has a measurable chip. */
 export function NavigatorResourceHotspotChip(
   props: NavigatorResourceHotspotChipProps,
 ): ReactNode {
-  const noMetrics = props.metrics.length === 0;
-  const nothingToShow = noMetrics || props.owner === null;
-  const { ref, editing } = useLayoutHotspot({
-    settingId: "sidebar.resourceChips",
-    tileId: null,
-    ghost: nothingToShow,
-    condition: resourceChipGhostCondition(noMetrics, props.owner !== null),
-  });
-  if (!props.registersHotspot) {
-    if (nothingToShow) return null;
+  if (props.owner === null) {
+    if (!props.registersHotspot) return null;
+    return (
+      <NavigatorResourceHotspotFrame
+        condition={
+          props.metrics.length === 0
+            ? "No metrics selected"
+            : "This row has no resource usage to show"
+        }
+      >
+        {null}
+      </NavigatorResourceHotspotFrame>
+    );
+  }
+  if (!props.registersHotspot)
     return (
       <OwnerResourceChip
-        epicId={props.owner.epicId}
-        kind={props.owner.kind}
-        ownerId={props.owner.ownerId}
-        hostId={props.owner.hostId}
+        {...props.owner}
         metrics={props.metrics}
         className={props.className}
       />
     );
-  }
-  if (nothingToShow) {
+  return (
+    <NavigatorOwnerResourceHotspotChip
+      owner={props.owner}
+      metrics={props.metrics}
+      className={props.className}
+    />
+  );
+}
+
+function NavigatorOwnerResourceHotspotChip(props: {
+  owner: NavigatorResourceHotspotOwner;
+  metrics: ReadonlyArray<NavigatorResourceMetric>;
+  className: string | undefined;
+}): ReactNode {
+  const usage = useOwnerResourceUsage(
+    props.owner.epicId,
+    props.owner.kind,
+    props.owner.ownerId,
+    props.owner.hostId,
+  );
+  let condition: string | null = null;
+  if (props.metrics.length === 0) condition = "No metrics selected";
+  else if (usage === null) condition = "No reading yet";
+  return (
+    <NavigatorResourceHotspotFrame condition={condition}>
+      {usage === null ? null : (
+        <ResourceUsageChip
+          {...usage}
+          metrics={props.metrics}
+          label="Resource usage"
+          className={props.className}
+        />
+      )}
+    </NavigatorResourceHotspotFrame>
+  );
+}
+
+function NavigatorResourceHotspotFrame(props: {
+  condition: string | null;
+  children: ReactNode;
+}): ReactNode {
+  const { ref, editing } = useLayoutHotspot({
+    settingId: "sidebar.resourceChips",
+    tileId: null,
+    ghost: props.condition !== null,
+    condition: props.condition,
+  });
+  if (props.condition !== null) {
     if (!editing) return null;
     return (
       <span
         ref={ref}
         data-testid="sidebar-resource-chip-ghost"
-        className="h-3 w-10 shrink-0 rounded-sm border border-dashed border-border/60 opacity-70"
+        className="inline-flex h-3 w-10 shrink-0 rounded-sm border border-dashed border-border/60 opacity-70"
       />
     );
   }
   return (
-    <span ref={ref} className="inline-flex items-center">
-      <OwnerResourceChip
-        epicId={props.owner.epicId}
-        kind={props.owner.kind}
-        ownerId={props.owner.ownerId}
-        hostId={props.owner.hostId}
-        metrics={props.metrics}
-        className={props.className}
-      />
+    <span
+      ref={ref}
+      className={cn(editing ? "inline-flex shrink-0 items-center" : "contents")}
+    >
+      {props.children}
     </span>
   );
 }

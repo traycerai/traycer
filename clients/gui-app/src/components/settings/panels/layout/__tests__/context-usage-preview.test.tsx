@@ -1,3 +1,4 @@
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { domAnimation, LazyMotion } from "motion/react";
@@ -222,5 +223,41 @@ describe("<ContextUsagePreview />", () => {
     });
 
     expect(screen.queryByTestId("context-usage-compact-action")).toBeNull();
+  });
+});
+
+describe("<ContextUsagePreview /> registers no chat.context hotspot while editing (R2)", () => {
+  beforeEach(() => {
+    resetStores();
+    useCustomizeStore.setState({
+      session: {
+        scene: "in-place",
+        opener: { kind: "none" },
+        startedAt: Date.now(),
+      },
+      instances: new Map(),
+      activeKey: null,
+      popoverKey: null,
+      invoker: null,
+      disclosure: null,
+      pendingTarget: null,
+      history: { past: [], future: [] },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useCustomizeStore.setState({ session: null, instances: new Map() });
+    resetStores();
+  });
+
+  it("registers no chat.context instance even during an active Customize session", () => {
+    renderPreview(<ContextUsagePreview />);
+
+    const chatContextInstances = [
+      ...useCustomizeStore.getState().instances.values(),
+    ].filter((instance) => instance.settingId === "chat.context");
+    expect(chatContextInstances).toHaveLength(0);
+    expect(useCustomizeStore.getState().instances.size).toBe(0);
   });
 });

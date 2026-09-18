@@ -147,7 +147,12 @@ export function ContextUsageChipView({
 
   if (pinContextUsageBreakdown) {
     return (
-      <span ref={contextHotspotRef} className="col-span-full block min-w-0">
+      <span
+        ref={contextHotspotRef}
+        className={cn(
+          contextEditing ? "col-span-full block min-w-0" : "contents",
+        )}
+      >
         <ContextUsagePinnedStrip
           rows={rows}
           effective={effective}

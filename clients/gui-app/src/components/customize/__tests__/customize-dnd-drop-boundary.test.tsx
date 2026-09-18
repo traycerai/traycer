@@ -29,7 +29,9 @@ vi.mock("@/components/settings/panels/layout/track-layout-setting", () => ({
 // Only the DndContext boundary is faked: real pointer sensing is not
 // reproducible in jsdom, so capture the callbacks CustomizeDnd hands it and
 // invoke them the way dnd-kit would at drop / cancel.
-const captured = vi.hoisted(() => ({ props: null as DndContextProps | null }));
+const captured = vi.hoisted<{ props: DndContextProps | null }>(() => ({
+  props: null,
+}));
 vi.mock("@dnd-kit/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@dnd-kit/core")>();
   return {
