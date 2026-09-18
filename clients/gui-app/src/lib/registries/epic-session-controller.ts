@@ -111,6 +111,7 @@ import {
   handleHostIds,
   handleStreamClients,
   isEpicSessionHandleDead,
+  subscribeEpicOwnershipReleased,
   type EpicSessionPresentationState,
 } from "@/lib/registries/epic-session-registry";
 import {
@@ -520,6 +521,19 @@ function createEpicSessionController(): EpicSessionController {
    * queued and drained once the outer one returns, so no entry is reconciled
    * while an arm of its own run is still on the stack.
    */
+  /**
+   * Bumped at every auth boundary; captured before an await and re-checked
+   * after it, so a continuation issued under one identity cannot act under
+   * the next (or under none).
+   */
+  let authEpoch = 0;
+  /**
+   * Set by the TRANSITION into signed-out and cleared by the next identity.
+   * Deliberately not `status === "signed-out"`: a fresh renderer starts there
+   * with no identity, before hydration, and sessions have always been allowed
+   * to open in that state. What is fenced is acting after a sign-out.
+   */
+  let signedOutFence = false;
   let reconciling = false;
   const pendingReconcile = new Set<string>();
   let reconcileAllPending = false;
@@ -659,23 +673,38 @@ function createEpicSessionController(): EpicSessionController {
       return;
     }
     membership.ownership = "claiming";
+    // Captured BEFORE the await, both of them. The membership OBJECT, not the
+    // tab id: a tab closed and reopened under the same id is a new membership
+    // with its own claim, and an old reply - a denial above all, which
+    // discards the tab - must not land on it. The auth epoch, because a
+    // long-lived controller has no effect cleanup to cancel this continuation
+    // when the identity it was issued under ends.
+    const issuedEpoch = authEpoch;
     void claimDesktopEpicOwnership(tabId, entry.epicId).then((claim) => {
-      // Fenced on MEMBERSHIP: the tab may have closed while the claim was in
-      // flight, and a claim that lands for a departed tab is released rather
-      // than recorded on a record nobody holds.
       const live = entries.get(entry.epicId);
       const current = live?.tabs.get(tabId);
-      if (live !== entry || current === undefined) {
-        if (claim.ok) void releaseDesktopEpicOwnership(tabId);
+      if (
+        live !== entry ||
+        current !== membership ||
+        issuedEpoch !== authEpoch
+      ) {
+        // A grant nobody holds is handed back - unless a NEWER membership of
+        // the same tab id is already holding or seeking the claim, in which
+        // case it is that membership's to keep or release.
+        const heldByNewer =
+          live === entry &&
+          current !== undefined &&
+          (current.ownership === "claiming" || current.ownership === "claimed");
+        if (claim.ok && !heldByNewer) void releaseDesktopEpicOwnership(tabId);
         return;
       }
       if (claim.ok) {
-        current.claimHeld = true;
-        current.ownership = "claimed";
+        membership.claimHeld = true;
+        membership.ownership = "claimed";
         requestReconcile(entry.epicId);
         return;
       }
-      current.ownership = "denied";
+      membership.ownership = "denied";
       denyTab(entry, tabId, claim.currentOwner);
     });
   }
@@ -708,6 +737,82 @@ function createEpicSessionController(): EpicSessionController {
       }
       if (bridge !== null) await bridge.requestFocus(currentOwner);
     })();
+  }
+
+  /**
+   * Put every desktop membership of `entry` back to `unclaimed`, as a FRESH
+   * membership object so a claim still in flight for the old one is dropped
+   * by `claimTab`'s identity fence. `browser`/`denied` are left alone: there
+   * is nothing to claim, or the tab is already on its way out.
+   *
+   * `releaseHeld` says whether the claims still have to be handed back here
+   * (an auth boundary) or already were by whoever told us (the registry's
+   * release listener).
+   */
+  function resetDesktopMemberships(
+    entry: ControllerEntry,
+    releaseHeld: boolean,
+  ): void {
+    for (const [tabId, membership] of Array.from(entry.tabs)) {
+      if (
+        membership.ownership !== "claimed" &&
+        membership.ownership !== "claiming"
+      ) {
+        continue;
+      }
+      if (releaseHeld) releaseTabClaim(tabId, membership);
+      entry.tabs.set(tabId, { ownership: "unclaimed", claimHeld: false });
+    }
+  }
+
+  /**
+   * The registry released this epic's desktop ownership: a cap eviction, a
+   * dead retirement, an identity discard - every route out of the registry
+   * except a re-point and a park (`pendingPark`), which keep it on purpose.
+   *
+   * ONE owner for the claimed flag, reconciled to what actually happened: the
+   * memberships go back to `unclaimed`, so the next demand RE-CLAIMS before it
+   * acquires and another window's denial is seen. Left `claimed`, a re-shown
+   * tab would skip the claim and publish a session for a tab that now belongs
+   * to someone else.
+   */
+  function onOwnershipReleased(epicId: string): void {
+    const entry = entries.get(epicId);
+    if (entry === undefined) return;
+    resetDesktopMemberships(entry, false);
+    publishSnapshots(entry);
+    requestReconcile(epicId);
+  }
+
+  /**
+   * The identity these entries were built under has ended (sign-out, or a
+   * different user). The provider got this boundary from being unmounted with
+   * the auth-gated surface; the controller outlives that surface - its bridge
+   * is mounted above it - so it is stated:
+   *
+   *  - every pending continuation is invalidated (`authEpoch`, and each run);
+   *  - the ladder is disarmed, so nothing retries into the next identity;
+   *  - the create-host seed is dropped - it was a fact about the last user's
+   *    create race;
+   *  - desktop claims are handed back and re-issued on the next demand;
+   *  - a hidden entry suspends. A surfaced one resumes when its inputs move,
+   *    which for a user switch is this same notification.
+   *
+   * Sessions themselves are not touched here: `disposeAll` (sign-out) and the
+   * run's identity arm (user switch) own that, as before.
+   */
+  function onAuthBoundary(): void {
+    authEpoch += 1;
+    for (const entry of Array.from(entries.values())) {
+      cancelRun(entry);
+      cancelGapDeadline(entry);
+      entry.backoff.cancel();
+      entry.requestedHostId = null;
+      entry.seededCreateHost = false;
+      resetDesktopMemberships(entry, true);
+      if (surfaceCount(entry.epicId) === 0) suspend(entry);
+      publishSnapshots(entry);
+    }
   }
 
   function releaseTabClaim(tabId: string, membership: TabMembership): void {
@@ -955,6 +1060,13 @@ function createEpicSessionController(): EpicSessionController {
     }
   }
 
+  function needsMetadataHold(entry: ControllerEntry): boolean {
+    if (entry.metadataDemandSpent) return false;
+    return Array.from(entry.tabs.keys()).some(
+      (tabId) => !tabHasRealName(tabId),
+    );
+  }
+
   function cancelMetadataHold(entry: ControllerEntry): void {
     const hold = entry.metadataHold;
     if (hold === null) return;
@@ -977,6 +1089,9 @@ function createEpicSessionController(): EpicSessionController {
     cancelMetadataHold(entry);
     const end = (): void => {
       if (entry.metadataHold?.handle !== handle) return;
+      // Ran to its end - a real title, or the backstop. A hold that was
+      // cancelled (a park, an eviction, sign-out) spends nothing.
+      entry.metadataDemandSpent = true;
       cancelMetadataHold(entry);
       settleDemand(entry);
       publishSnapshots(entry);
@@ -1188,6 +1303,9 @@ function createEpicSessionController(): EpicSessionController {
       return null;
     }
     if (inputs.targetHostId === null || environment === null) return null;
+    // No acquisition, and so no construction failure to arm a ladder with,
+    // after a sign-out and before the next identity.
+    if (signedOutFence) return null;
     return [
       inputs.userId ?? "",
       inputs.targetHostId,
@@ -1402,10 +1520,9 @@ function createEpicSessionController(): EpicSessionController {
     readonly entry: ControllerEntry;
     readonly run: ActiveRun;
     readonly inputs: RunInputs;
-    readonly previous: MountedSessionState | null;
     readonly createHandle: () => OpenEpicStoreHandle;
   }): void {
-    const { entry, run, inputs, previous, createHandle } = args;
+    const { entry, run, inputs, createHandle } = args;
     const { epicId } = entry;
     const { targetHostId } = inputs;
     // GUARDED, because `createHandle` runs synchronously inside this call
@@ -1420,7 +1537,6 @@ function createEpicSessionController(): EpicSessionController {
     }
     entry.demandHeld = true;
     entry.constructionFailed = false;
-    entry.metadataDemandSpent = true;
     // The stamp is written once, at construction. When the registry returns
     // a WARM handle the factory never ran and the stamp names the host the
     // handle's transport was built for - not necessarily `targetHostId`.
@@ -1442,7 +1558,12 @@ function createEpicSessionController(): EpicSessionController {
     // this session actually served - for a warm adoption, the handle's
     // bound host rather than wherever the window moved meanwhile.
     entry.originalHostId ??= nextSession.hostId;
-    if (previous?.handle !== nextHandle && surfaceCount(epicId) === 0) {
+    // Unobserved metadata is its OWN demand source, not a property of being
+    // hidden: a session acquired while a pane happens to be showing an unnamed
+    // tab still has a title to observe, and the pane can leave first. So the
+    // bounded hold starts whatever the surface count, and the one-shot is
+    // spent only by a hold that ran to its end.
+    if (needsMetadataHold(entry) && entry.metadataHold?.handle !== nextHandle) {
       startMetadataHold(entry, nextHandle);
       // The hold can end inside its own first observation (a title already
       // real), which drops the demand and lets the cap take the session.
@@ -1456,10 +1577,30 @@ function createEpicSessionController(): EpicSessionController {
       originalHostId: entry.originalHostId,
     });
     // A warm handle bound elsewhere re-points on the NEXT pass, which the
-    // stamp forces: re-run now rather than wait for an unrelated input.
-    if (nextSession.hostId !== targetHostId && inputs.mounted) {
-      requestReconcileRun(entry);
-    }
+    // stamp forces: re-run now rather than wait for an unrelated input. A
+    // hidden one does not re-point, but its tuple was recorded honest-absent
+    // (the reading described the target, not the handle's host) and still has
+    // to be completed.
+    if (nextSession.hostId === targetHostId) return;
+    if (inputs.mounted) requestReconcileRun(entry);
+    else scheduleOwnerIdentityCompletion(entry);
+  }
+
+  /**
+   * A tuple recorded honest-ABSENT (R-1, B5) has to be COMPLETED from its own
+   * host's reading before any rotation of that host can be seen - otherwise
+   * the first rotation is read as the initial completion, and the old worker
+   * and document are carried across an identity boundary.
+   *
+   * The provider got this for free: `setSession(next)` re-rendered, the render
+   * read the new host's key, and the effect re-ran. Nothing re-renders a
+   * controller, and the registry's own notification lands inside
+   * `replaceMounted`, BEFORE `entry.session` moves, so it cannot be the
+   * trigger. Stated instead: one reconcile, which reads the key off the
+   * session's new host and takes the `completed` arm.
+   */
+  function scheduleOwnerIdentityCompletion(entry: ControllerEntry): void {
+    requestReconcile(entry.epicId);
   }
 
   /**
@@ -1501,7 +1642,7 @@ function createEpicSessionController(): EpicSessionController {
     const createHandle = handleFactoryFor(entry, env, inputs);
     const current = settleSessionIdentity(entry, inputs);
     if (current === null || (wantsDemand(entry) && !entry.demandHeld)) {
-      acquireForRun({ entry, run, inputs, previous: current, createHandle });
+      acquireForRun({ entry, run, inputs, createHandle });
       return;
     }
     // Held but not yet shown: the run that acquired it was superseded before
@@ -1624,6 +1765,7 @@ function createEpicSessionController(): EpicSessionController {
         });
       }
       publishSnapshots(entry);
+      scheduleOwnerIdentityCompletion(entry);
     };
     const commitReplacement = (): void => {
       if (run.cancelled || settled) return;
@@ -1753,6 +1895,7 @@ function createEpicSessionController(): EpicSessionController {
         originalHostId: entry.originalHostId,
       });
       publishSnapshots(entry);
+      scheduleOwnerIdentityCompletion(entry);
     }
 
     const unsubscribe = nextHandle.store.subscribe(commitReplacement);
@@ -1909,14 +2052,21 @@ function createEpicSessionController(): EpicSessionController {
   subscribeEpicParking(onParkingChanged);
   useSelectionAuthorityStore.subscribe(requestReconcileAll);
   useAuthStore.subscribe((state, previous) => {
-    if (
-      state.profile?.userId === previous.profile?.userId &&
-      state.profile?.email === previous.profile?.email
-    ) {
-      return;
+    const userId = state.profile?.userId ?? null;
+    const previousUserId = previous.profile?.userId ?? null;
+    const signedOutNow =
+      state.status === "signed-out" && previous.status !== "signed-out";
+    const identityEnded = previousUserId !== null && previousUserId !== userId;
+    const boundary = signedOutNow || identityEnded;
+    if (boundary) onAuthBoundary();
+    signedOutFence =
+      state.status === "signed-out" && (signedOutFence || boundary);
+    const emailMoved = state.profile?.email !== previous.profile?.email;
+    if (boundary || userId !== previousUserId || emailMoved) {
+      requestReconcileAll();
     }
-    requestReconcileAll();
   });
+  subscribeEpicOwnershipReleased(onOwnershipReleased);
   // A same-host public-key rotation is a ROW change (R-1), observed the same
   // way a host move is.
   subscribeAnyHostRowChanged(requestReconcileAll);
@@ -1982,6 +2132,8 @@ function createEpicSessionController(): EpicSessionController {
       surfaces.clear();
       pendingReconcile.clear();
       reconcileAllPending = false;
+      authEpoch += 1;
+      signedOutFence = false;
       emit();
     },
   };

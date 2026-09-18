@@ -3491,6 +3491,58 @@ describe("<TestEpicSessionTab />", () => {
       });
       expect(streams).toHaveLength(3);
     });
+
+    /**
+     * The opposite of the late-row test above: host-b's row is published
+     * BEFORE the re-point even starts, so nothing ever notifies the
+     * completion into place - the commit's own follow-up reconcile
+     * (`scheduleOwnerIdentityCompletion`) has to read the already-published
+     * row on its own. A rebuild here would mean the tuple was left
+     * honest-absent even though a real reading was available the whole
+     * time, and the NEXT genuine rotation on host-b has to prove the
+     * completion actually recorded a key rather than silently doing
+     * nothing that happened to look the same.
+     */
+    it("completes the replacement's owner identity with no extra notification, so the next rotation is enforced", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      rotateRow("host-b", "pubkey-b0");
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      await act(async () => {
+        deliverSnapshot(streams[0], "room-a");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(providerBody((handle) => seenHandles.push(handle)));
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-a");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      const mergedHandle = seenHandles.at(-1);
+      await act(() => Promise.resolve());
+
+      // No further `rotateRow` call for host-b: the tuple must already have
+      // been completed from the row published before render, purely from
+      // the commit's own internal reconcile.
+      act(() => {
+        rotateRow("host-b", "pubkey-b1");
+      });
+      await waitFor(() => {
+        expect(seenHandles.at(-1)).not.toBe(mergedHandle);
+      });
+      expect(streams).toHaveLength(3);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
   });
 
   describe("warm-handle adoption after a provider remount (F1)", () => {

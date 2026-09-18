@@ -56,7 +56,10 @@ import {
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
 import { TITLE_GENERATION_PENDING_TIMEOUT_MS } from "@/stores/epics/canvas/canvas-title-timers";
-import { PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS } from "@/lib/host/plan-restricted-session-rebuild-backoff";
+import {
+  PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS,
+  PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
+} from "@/lib/host/plan-restricted-session-rebuild-backoff";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityPlaneAnsweringForTests,
@@ -67,9 +70,14 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type {
   DesktopOwnershipClaimResult,
+  DesktopOwnershipEntry,
   DesktopPerWindowStatePatch,
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
+import {
+  clearSessionCreatedEpics,
+  markEpicCreatedThisSession,
+} from "@/lib/epics/session-created-epics";
 
 // ── Mocks needed only by the React mount test ───────────────────────────────
 // `TestEpicSessionTab` renders the real `<EpicSessionProvider>`, which reads
@@ -228,6 +236,15 @@ function createTestDesktopBridge(
   calls: TestDesktopBridgeCalls,
   claim: DesktopOwnershipClaimForTests,
 ): DesktopWindowsBridge {
+  // STATEFUL, unlike an unconditional `[]`: a granted claim records an entry,
+  // a release removes it, and `snapshot()` reports the current set. This is
+  // what the registry's release listener
+  // (`releaseDesktopEpicOwnershipForEpic` in
+  // `@/lib/windows/desktop-epic-ownership`) reads to release every entry for
+  // an evicted/disposed epic - an unconditional `[]` here silently defeated
+  // that release path for every suite in this file, because `snapshot()`
+  // never reported the grant that a cap eviction or a sign-out needed to walk.
+  const records = new Map<string, DesktopOwnershipEntry>();
   return {
     windowId: "window-under-test",
     list: () => Promise.resolve([]),
@@ -244,13 +261,23 @@ function createTestDesktopBridge(
         windowId: "window-elsewhere",
       }),
     ownership: {
-      snapshot: () => Promise.resolve([]),
+      snapshot: () => Promise.resolve(Array.from(records.values())),
       claim: (tabId, epicId) => {
         calls.claims.push({ tabId, epicId });
-        return claim(tabId, epicId);
+        return claim(tabId, epicId).then((result) => {
+          if (result.ok) {
+            records.set(tabId, {
+              tabId,
+              epicId,
+              windowId: "window-under-test",
+            });
+          }
+          return result;
+        });
       },
       release: (tabId) => {
         calls.releases.push(tabId);
+        records.delete(tabId);
         return Promise.resolve();
       },
       onChange: () => ({ dispose: () => undefined }),
@@ -860,5 +887,291 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     await waitFor(() => {
       expect(presentations.at(-1)?.kind).toBe("ready");
     });
+  });
+
+  it("a claim pending across sign-out builds nothing, arms no backoff, and is released", async () => {
+    const EPIC_ID = "epic-claim-across-signout";
+    const TAB_ID = "tab-claim-across-signout";
+
+    const capturedClaimResolvers: Array<
+      (result: DesktopOwnershipClaimResult) => void
+    > = [];
+    const calls: TestDesktopBridgeCalls = {
+      claims: [],
+      releases: [],
+      focusRequests: [],
+    };
+    const bridge = createTestDesktopBridge(
+      calls,
+      () =>
+        new Promise<DesktopOwnershipClaimResult>((resolve) => {
+          capturedClaimResolvers.push(resolve);
+        }),
+    );
+    setDesktopEpicOwnershipBridge(bridge);
+
+    try {
+      resetAuth("signed-in", "alice@example.com");
+      markEpicCreatedThisSession(EPIC_ID, "host-create");
+
+      openTestEpicTab(TAB_ID, EPIC_ID, "");
+      expect(calls.claims).toEqual([{ tabId: TAB_ID, epicId: EPIC_ID }]);
+      expect(constructionCount).toBe(0);
+
+      resetAuth("signed-out", null);
+      disposeAllOpenEpicSessions();
+
+      // Counted separately from `constructionCount`: this factory replaces
+      // the counting one and THROWS, so a call that failed still shows up
+      // here even though it built nothing - which is exactly what "no
+      // construction was ever attempted" has to distinguish from "an attempt
+      // failed".
+      let throwingFactoryCalls = 0;
+      __setEpicRuntimeWorkerFactoryForTests(() => {
+        throwingFactoryCalls += 1;
+        throw new Error(
+          "no construction should be attempted for a claim resolved after sign-out",
+        );
+      });
+
+      const settle = capturedClaimResolvers.at(0);
+      if (settle === undefined) {
+        throw new Error("expected a captured claim resolver");
+      }
+      settle({ ok: true });
+
+      await waitFor(() => {
+        expect(calls.releases).toContain(TAB_ID);
+      });
+      expect(constructionCount).toBe(0);
+      expect(throwingFactoryCalls).toBe(0);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(0);
+
+      // No backoff was armed by any of this: advancing all the way past the
+      // ladder's own maximum rung produces zero further construction
+      // attempts, because `signedOutFence` keeps every run key `null` until
+      // the next sign-in - there is no rung to fire in the first place.
+      vi.useFakeTimers();
+      try {
+        vi.advanceTimersByTime(PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(throwingFactoryCalls).toBe(0);
+      expect(constructionCount).toBe(0);
+    } finally {
+      clearSessionCreatedEpics();
+    }
+  });
+
+  it("cap eviction hands the claim back, and a re-shown tab re-claims and honours another window's denial", async () => {
+    const EPIC_X = "epic-cap-evict-x";
+    const TAB_T = "tab-cap-evict-t";
+    const controller = getEpicSessionController();
+
+    let denyT = false;
+    const calls: TestDesktopBridgeCalls = {
+      claims: [],
+      releases: [],
+      focusRequests: [],
+    };
+    const bridge = createTestDesktopBridge(calls, (tabId) => {
+      if (tabId === TAB_T && denyT) {
+        return Promise.resolve({
+          ok: false,
+          currentOwner: "window-other",
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    setDesktopEpicOwnershipBridge(bridge);
+
+    openTestEpicTab(TAB_T, EPIC_X, "Epic X");
+    const detachX = controller.attachSurface(EPIC_X, TAB_T);
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_X, TAB_T).handle).not.toBeNull();
+    });
+    expect(calls.claims).toEqual([{ tabId: TAB_T, epicId: EPIC_X }]);
+
+    // Warm: demand drops to zero and the entry suspends, but the session and
+    // its desktop claim stay held - exactly what a backgrounded pane looks
+    // like before the cap ever touches it.
+    detachX();
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_X)).not.toBeNull();
+
+    // Five OTHER epics, surfaces attached and left attached (a mounted entry
+    // is never a prune candidate), so X - the only warm, demand-free entry -
+    // is what the cap picks once the sixth entry crosses `maxLiveEpics` (5).
+    for (let i = 0; i < 5; i += 1) {
+      const otherTab = `tab-cap-evict-other-${i}`;
+      const otherEpic = `epic-cap-evict-other-${i}`;
+      openTestEpicTab(otherTab, otherEpic, `Other ${i}`);
+      controller.attachSurface(otherEpic, otherTab);
+      await waitFor(() => {
+        expect(__getOpenEpicRegistryForTests().peek(otherEpic)).not.toBeNull();
+      });
+    }
+
+    await waitFor(() => {
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_X)).toBeNull();
+    });
+    await waitFor(() => {
+      expect(calls.releases).toContain(TAB_T);
+    });
+
+    // The tab is still open with no surface attached. Re-showing it must
+    // re-claim from scratch rather than trust the ownership the cap just
+    // handed back, and this window now loses that claim to another one.
+    denyT = true;
+    const denied: Array<{ epicId: string; tabId: string }> = [];
+    const unsubscribeDenied = controller.subscribeOwnershipDenied(
+      (epicId, tabId) => {
+        denied.push({ epicId, tabId });
+      },
+    );
+    try {
+      controller.attachSurface(EPIC_X, TAB_T);
+      // Filtered by tab id: the loop above issued its own claim per OTHER
+      // epic on this same bridge, so the raw call list is not T's alone.
+      const claimsForT = calls.claims.filter((call) => call.tabId === TAB_T);
+      expect(claimsForT).toHaveLength(2);
+      expect(claimsForT.at(-1)).toEqual({ tabId: TAB_T, epicId: EPIC_X });
+
+      await waitFor(() => {
+        expect(useEpicCanvasStore.getState().tabsById[TAB_T]).toBeUndefined();
+      });
+      expect(denied).toEqual([{ epicId: EPIC_X, tabId: TAB_T }]);
+      await waitFor(() => {
+        expect(calls.focusRequests).toContain("window-other");
+      });
+
+      expect(controller.readTabSnapshot(EPIC_X, TAB_T).handle).toBeNull();
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_X)).toBeNull();
+    } finally {
+      unsubscribeDenied();
+    }
+  });
+
+  it("a stale claim reply cannot touch a tab reopened under the same id", async () => {
+    const EPIC_E = "epic-stale-claim-reply";
+    const TAB_S = "tab-stale-claim-sibling";
+    const TAB_T = "tab-stale-claim-reopened";
+    const controller = getEpicSessionController();
+
+    const capturedClaimResolvers: Array<
+      (result: DesktopOwnershipClaimResult) => void
+    > = [];
+    const calls: TestDesktopBridgeCalls = {
+      claims: [],
+      releases: [],
+      focusRequests: [],
+    };
+    const bridge = createTestDesktopBridge(calls, (tabId) => {
+      if (tabId === TAB_S) return Promise.resolve({ ok: true });
+      return new Promise<DesktopOwnershipClaimResult>((resolve) => {
+        capturedClaimResolvers.push(resolve);
+      });
+    });
+    setDesktopEpicOwnershipBridge(bridge);
+
+    openTestEpicTab(TAB_S, EPIC_E, "Sibling S");
+    const detachS = controller.attachSurface(EPIC_E, TAB_S);
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_E, TAB_S).handle).not.toBeNull();
+    });
+
+    openTestEpicTab(TAB_T, EPIC_E, "Tab T");
+    const detachT1 = controller.attachSurface(EPIC_E, TAB_T);
+    expect(capturedClaimResolvers).toHaveLength(1);
+
+    // T closes and reopens under the SAME id before its claim ever answers -
+    // a new membership object, per the module's identity fence.
+    detachT1();
+    closeTestEpicTab(TAB_T);
+    openTestEpicTab(TAB_T, EPIC_E, "Tab T");
+    const detachT2 = controller.attachSurface(EPIC_E, TAB_T);
+    expect(capturedClaimResolvers).toHaveLength(2);
+
+    const denied: Array<{ epicId: string; tabId: string }> = [];
+    const unsubscribeDenied = controller.subscribeOwnershipDenied(
+      (epicId, tabId) => {
+        denied.push({ epicId, tabId });
+      },
+    );
+    try {
+      const settleFirst = capturedClaimResolvers.at(0);
+      const settleSecond = capturedClaimResolvers.at(1);
+      if (settleFirst === undefined || settleSecond === undefined) {
+        throw new Error("expected two captured claim resolvers");
+      }
+      // The STALE reply: denied, for the tab id's now-abandoned FIRST
+      // membership. Nothing about the reopened tab may react to it.
+      settleFirst({ ok: false, currentOwner: "window-other" });
+      // The live reply: granted, for the reopened tab's own membership.
+      settleSecond({ ok: true });
+
+      await waitFor(() => {
+        expect(controller.readTabSnapshot(EPIC_E, TAB_T).handle).not.toBeNull();
+      });
+      expect(useEpicCanvasStore.getState().openTabOrder).toContain(TAB_T);
+      expect(denied).toEqual([]);
+      expect(calls.focusRequests).toEqual([]);
+    } finally {
+      unsubscribeDenied();
+      detachS();
+      detachT2();
+    }
+  });
+
+  it("acquired with a surface attached, detached before the title: the hold keeps the session until the title lands and renames the tab", async () => {
+    const EPIC_ID = "epic-hold-survives-surface-detach";
+    const TAB_ID = "tab-hold-survives-surface-detach";
+    const controller = getEpicSessionController();
+    const streams: ControlledEpicStream[] = [];
+    installLegacyStreamFactory(streams);
+
+    // The surface attaches FIRST, so the acquisition below happens with a
+    // surface present - the metadata hold must not depend on that surface
+    // once it exists, which is exactly what detaching before the title lands
+    // proves.
+    const detach = controller.attachSurface(EPIC_ID, TAB_ID);
+    openTestEpicTab(TAB_ID, EPIC_ID, "");
+
+    const handle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+    if (handle === null) throw new Error("expected an acquired handle");
+    let status = controller.readEntryStatusForTests(EPIC_ID);
+    expect(status?.hasSession).toBe(true);
+    expect(status?.metadataHold).toBe(true);
+
+    detach();
+
+    status = controller.readEntryStatusForTests(EPIC_ID);
+    expect(status?.hasSession).toBe(true);
+    expect(status?.demandHeld).toBe(true);
+    expect(status?.metadataHold).toBe(true);
+    expect(status?.suspended).toBe(false);
+
+    await waitFor(() => {
+      expect(streams).toHaveLength(1);
+    });
+    const stream = streams.at(0);
+    if (stream === undefined) throw new Error("expected a stream");
+    deliverSnapshot(stream, "room-hold-survives-detach");
+    await seedLocalRootEdit(handle, "title", "Detached Hold Title");
+
+    await waitFor(
+      () => {
+        expect(controller.readEntryStatusForTests(EPIC_ID)?.metadataHold).toBe(
+          false,
+        );
+      },
+      { timeout: 5000 },
+    );
+    const finalStatus = controller.readEntryStatusForTests(EPIC_ID);
+    expect(finalStatus?.demandHeld).toBe(false);
+    expect(finalStatus?.suspended).toBe(true);
+    expect(useEpicCanvasStore.getState().tabsById[TAB_ID]?.name).toBe(
+      "Detached Hold Title",
+    );
   });
 });
