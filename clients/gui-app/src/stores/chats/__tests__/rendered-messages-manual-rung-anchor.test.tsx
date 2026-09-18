@@ -317,6 +317,31 @@ vi.mock("@/components/chat/fallback/open-fallback-settings", () => ({
   useOpenFallbackSettings: () => () => undefined,
 }));
 
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module - see
+ * `fallback-grace-card.test.tsx`'s copy of this double for the argument.
+ *
+ * This file is about WHERE the recovery group anchors, not about what it says:
+ * it counts Retry buttons and asserts nothing on a model string. The double is
+ * here only so the real resolver's TanStack queries do not demand a
+ * `QueryClientProvider` this suite has no other use for, so a pass-through is
+ * the whole of it.
+ */
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
 function renderMounted(ui: ReactNode) {
   return render(
     <TooltipProvider delayDuration={0}>

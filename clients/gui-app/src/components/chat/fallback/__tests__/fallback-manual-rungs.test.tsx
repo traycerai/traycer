@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   act,
   cleanup,
@@ -161,6 +162,36 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s copy of
+ * this double for the argument, and `fallback-model-labels.test.tsx` for the
+ * resolver's own rules. The real hook mounts TanStack queries this suite has no
+ * `QueryClientProvider` for, and every model string pinned below would
+ * otherwise depend on a catalogue fixture.
+ *
+ * `null` (the default) passes the slug through, which is what the resolver
+ * degrades to with no catalogue; a `Map` keyed `harnessId:model` is the one
+ * case that cares whether this card reads the resolver's answer.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   useExistingChatSessionHandle: () => ({ store: harness.store }),
 }));
@@ -181,58 +212,76 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
         | ((response: { readonly outcome: string }, variables: unknown) => void)
         | undefined;
     },
-  ) => ({
-    mutate: (
-      vars: unknown,
-      opts:
-        | {
-            readonly onSuccess:
-              | ((
-                  response: { readonly outcome: string },
-                  variables: unknown,
-                ) => void)
-              | undefined;
+  ) => {
+    // Real `useState`, not a static `isPending: false` - the spinner + Retry/
+    // Switch reordering behaviour reads `runManualRung.isPending` and
+    // `.variables.rung` (both real TanStack fields), and a mutation that never
+    // reports itself pending can never exercise either. Mirrors TanStack's own
+    // shape closely enough for this file's purposes: `isPending` flips true the
+    // instant `mutate` is called and false the instant the result is
+    // delivered, `variables` is set alongside `isPending` and is only ever
+    // read by production code while `isPending` is true (an `&&` short-circuit
+    // in `fallback-manual-rungs.tsx`), so its value once settled is moot.
+    const [state, setState] = useState<{
+      readonly isPending: boolean;
+      readonly variables: { readonly rung: string } | undefined;
+    }>({ isPending: false, variables: undefined });
+    return {
+      mutate: (
+        vars: { readonly rung: string },
+        opts:
+          | {
+              readonly onSuccess:
+                | ((
+                    response: { readonly outcome: string },
+                    variables: unknown,
+                  ) => void)
+                | undefined;
+            }
+          | undefined,
+      ) => {
+        harness.mutate(vars);
+        setState({ isPending: true, variables: vars });
+        // TanStack runs the hook-level onSuccess in addition to the per-call
+        // one. The Switch-vs-toast pin depends on both firing.
+        //
+        // BOTH receive `vars` as the second argument, because that is TanStack's
+        // real signature - `onSuccess(data, variables, context)` - and the
+        // hook-level handler reads it: the confirmed-action record is built from
+        // `variables.rung` / `.userMessageId` / `.turnId` / `.target`, which the
+        // response does not carry. Passing only `result` here modelled the
+        // callback too narrowly, and the omission was invisible for as long as
+        // nothing read the second parameter; the moment the record landed it
+        // surfaced as `TypeError: Cannot read properties of undefined (reading
+        // 'rung')` thrown INSIDE `use-fallback-actions.ts`, which reads as a
+        // production bug rather than a fixture gap. Model the full signature even
+        // where a parameter is currently unread.
+        const deliver = (result: { readonly outcome: string }): void => {
+          setState({ isPending: false, variables: undefined });
+          if (args.onSuccess !== undefined) {
+            args.onSuccess(result, vars);
           }
-        | undefined,
-    ) => {
-      harness.mutate(vars);
-      // TanStack runs the hook-level onSuccess in addition to the per-call
-      // one. The Switch-vs-toast pin depends on both firing.
-      //
-      // BOTH receive `vars` as the second argument, because that is TanStack's
-      // real signature - `onSuccess(data, variables, context)` - and the
-      // hook-level handler reads it: the confirmed-action record is built from
-      // `variables.rung` / `.userMessageId` / `.turnId` / `.target`, which the
-      // response does not carry. Passing only `result` here modelled the
-      // callback too narrowly, and the omission was invisible for as long as
-      // nothing read the second parameter; the moment the record landed it
-      // surfaced as `TypeError: Cannot read properties of undefined (reading
-      // 'rung')` thrown INSIDE `use-fallback-actions.ts`, which reads as a
-      // production bug rather than a fixture gap. Model the full signature even
-      // where a parameter is currently unread.
-      const deliver = (result: { readonly outcome: string }): void => {
-        if (args.onSuccess !== undefined) {
-          args.onSuccess(result, vars);
+          // Deliberately delivered even when the initiating subtree has since
+          // unmounted, where real TanStack would SKIP this one. The double is
+          // conservative in the safe direction: if the per-call handler ever
+          // became a second reporting channel, a duplicate-publication pin would
+          // catch it here rather than be hidden by a faithful skip.
+          if (opts !== undefined && opts.onSuccess !== undefined) {
+            opts.onSuccess(result, vars);
+          }
+        };
+        if (harness.deferResponses) {
+          harness.pendingResponses.push(deliver);
+          return;
         }
-        // Deliberately delivered even when the initiating subtree has since
-        // unmounted, where real TanStack would SKIP this one. The double is
-        // conservative in the safe direction: if the per-call handler ever
-        // became a second reporting channel, a duplicate-publication pin would
-        // catch it here rather than be hidden by a faithful skip.
-        if (opts !== undefined && opts.onSuccess !== undefined) {
-          opts.onSuccess(result, vars);
-        }
-      };
-      if (harness.deferResponses) {
-        harness.pendingResponses.push(deliver);
-        return;
-      }
-      const result = harness.mutationResult;
-      if (result === null) return;
-      deliver(result);
-    },
-    isPending: false,
-  }),
+        const result = harness.mutationResult;
+        if (result === null) return;
+        deliver(result);
+      },
+      isPending: state.isPending,
+      variables: state.variables,
+    };
+  },
 }));
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -385,6 +434,9 @@ describe("FallbackManualRungActions", () => {
     // the wrong diagnosis entirely.
     seedActCapability({ canAct: true, connectionStatus: "open" });
     seedAttempt(undefined);
+    // Pass-through by default, so every model string pinned below reads back
+    // the tuple it was seeded with.
+    modelLabelOverride.value = null;
   });
 
   afterEach(() => {
@@ -545,10 +597,13 @@ describe("FallbackManualRungActions", () => {
 
   // F6: `describeWaitDisposition`'s sentence is shared by the card (`Body`'s
   // full-width line) AND the Switch… menu's empty state - one source, two
-  // renderers - and nothing pinned either half. `attempt_unavailable`'s
-  // sentence was also rewritten (D220): the withdrawn wording claimed the
-  // message "can't be re-sent on the account it ran on", which the host never
-  // told us; the fixed sentence says only that waiting is not on offer.
+  // renderers - and nothing pinned either half.
+  //
+  // Uses `no_verified_reset` rather than `attempt_unavailable`: the latter
+  // now returns `null` from `describeWaitDisposition` (the "Model routing"
+  // rename also dropped the sentence itself - see that module) and so is no
+  // longer a fixture that demonstrates two renderers sharing one source. The
+  // null-sentence behaviour has its own pin below.
   it("states the wait disposition on the card, and repeats it inside the empty Switch… menu", () => {
     seedAttempt(
       positiveAttempt({
@@ -560,7 +615,7 @@ describe("FallbackManualRungActions", () => {
         // needed to reach the menu's empty-state branch below.
         eligibleRungs: ["switch"],
         resetsAt: undefined,
-        waitDisposition: "attempt_unavailable",
+        waitDisposition: "no_verified_reset",
       }),
     );
     // Empty listing, so the menu's own empty-state branch (which carries
@@ -573,11 +628,13 @@ describe("FallbackManualRungActions", () => {
       modelTargetsSkip: null,
     });
     renderActions(TURN_ID);
-    // Falsification: revert `attempt_unavailable`'s copy to the withdrawn
-    // sentence ("This message can't be re-sent on the account it ran on.")
-    // and both assertions below go red - they are pinned to the FIXED wording.
+    // Falsification: change `no_verified_reset`'s copy in
+    // `describeWaitDisposition` and both assertions below go red - they are
+    // pinned to the FIXED wording.
     expect(
-      screen.getByText("Waiting isn't available for this message."),
+      screen.getByText(
+        "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+      ),
     ).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
@@ -587,7 +644,9 @@ describe("FallbackManualRungActions", () => {
     // whole reason F6 needs its own menu-side pin rather than trusting the
     // card's copy to cover both renderers.
     expect(
-      screen.getAllByText("Waiting isn't available for this message."),
+      screen.getAllByText(
+        "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+      ),
     ).toHaveLength(2);
   });
 
@@ -609,11 +668,7 @@ describe("FallbackManualRungActions", () => {
     renderActions(TURN_ID);
     // Falsification: change the `checking` arm of `describeWaitDisposition`
     // to any other wording - this literal goes red.
-    expect(
-      screen.getByText(
-        "Checking whether this account has a confirmed reset time.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Checking when this limit resets…")).toBeDefined();
   });
 
   it("renders the beyond-cap sentence, with and without a named reset time", () => {
@@ -632,9 +687,7 @@ describe("FallbackManualRungActions", () => {
     // `describeWaitDisposition`'s `beyond_cap` arm - this goes red for a
     // failure with no verified reset time in hand.
     expect(
-      screen.getByText(
-        "This limit resets later than your longest wait allows.",
-      ),
+      screen.getByText("This limit resets later than Traycer is set to wait."),
     ).toBeDefined();
     unmount();
 
@@ -651,7 +704,7 @@ describe("FallbackManualRungActions", () => {
     renderActions(TURN_ID);
     expect(
       screen.getByText(
-        `This limit resets at ${formatClockTime(RESETS_AT)}, later than your longest wait allows.`,
+        `This limit resets at ${formatClockTime(RESETS_AT)} — longer than Traycer is set to wait.`,
       ),
     ).toBeDefined();
   });
@@ -673,11 +726,12 @@ describe("FallbackManualRungActions", () => {
     );
     renderActions(TURN_ID);
     const resetsAtLabel = formatResetDateTime(farResetsAt);
-    const beyondCap = "later than your longest wait allows.";
     // Falsification: `formatWaitTime` always returning `formatClockTime` -
     // this reads the bare clock time instead of the weekday-qualified form.
     expect(
-      screen.getByText(`This limit resets at ${resetsAtLabel}, ${beyondCap}`),
+      screen.getByText(
+        `This limit resets at ${resetsAtLabel} — longer than Traycer is set to wait.`,
+      ),
     ).toBeDefined();
   });
 
@@ -701,18 +755,18 @@ describe("FallbackManualRungActions", () => {
     // this literal goes red independently of the button-absence check above.
     expect(
       screen.getByText(
-        "No confirmed reset time for this account yet, so there's nothing to wait for.",
+        "The provider hasn't said when this limit resets, so there's nothing to wait for.",
       ),
     ).toBeDefined();
   });
 
-  // Cold-review re-review, F6 gap 3: every `attempt_unavailable` case so far
-  // deliberately excluded Retry. The contract the sentence has to keep is
-  // that it stays TRUTHFUL while Retry is still on offer - this is the
-  // control that would have caught the withdrawn copy claiming something
-  // about the account the message ran on, since that claim would have read
-  // as false beside a live, clickable Retry button.
-  it("keeps Retry enabled and clickable beside the attempt-unavailable sentence", () => {
+  // `attempt_unavailable` now returns `null` from `describeWaitDisposition`
+  // (see that module: the withdrawn sentence claimed no cause and named no
+  // remedy, so the honest copy is none) - the row renders no wait sentence at
+  // all, silently. Retry still has to stay enabled and clickable beside that
+  // silence: this is the control that would catch a regression back to a
+  // sentence claiming something false about the account the message ran on.
+  it("renders no wait sentence for attempt_unavailable, and keeps Retry enabled beside its absence", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -724,16 +778,16 @@ describe("FallbackManualRungActions", () => {
       }),
     );
     renderActions(TURN_ID);
+    // Falsification: revert the `attempt_unavailable` arm of
+    // `describeWaitDisposition` to return a sentence instead of `null` - this
+    // assertion must go red.
     expect(
-      screen.getByText("Waiting isn't available for this message."),
-    ).toBeDefined();
+      screen.queryByText("Waiting isn't available for this message."),
+    ).toBeNull();
     const retry = screen.getByRole("button", { name: "Retry" });
     if (!(retry instanceof HTMLButtonElement)) {
       throw new Error("expected the Retry button");
     }
-    // Falsification: this is the control the withdrawn copy would have
-    // failed - "can't be re-sent on the account it ran on" beside an ENABLED
-    // Retry button is a contradiction the sentence must not make.
     expect(retry.disabled).toBe(false);
   });
 
@@ -753,9 +807,7 @@ describe("FallbackManualRungActions", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Fallback settings" }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Model routing" })).toBeDefined();
   });
 
   // F12: the companion case to the one above. The Settings link is not the
@@ -781,9 +833,7 @@ describe("FallbackManualRungActions", () => {
     // menu case (F12's other half, `fallback-destination-menu.test.tsx`)
     // stays green: that split is what distinguishes "the link exists
     // somewhere" from "the link exists where the user has other options".
-    expect(
-      screen.getByRole("button", { name: "Fallback settings" }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Model routing" })).toBeDefined();
   });
 
   it("renders nothing when lastFailedAttempt is undefined", () => {
@@ -792,9 +842,7 @@ describe("FallbackManualRungActions", () => {
     // Falsification: delete the if (attempt === undefined) return null line — this assertion must go red.
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Fallback settings" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
   });
 
   it("renders nothing on a row whose turnId does not match the attempt, and clears by value", () => {
@@ -900,6 +948,141 @@ describe("FallbackManualRungActions", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 
+  // The manual retry had no feedback of its own between the click and the
+  // next frame - `disabled` was the only signal, and it read identically to
+  // every other rung's mutation being in flight. `ManualRetryButton` now
+  // carries its OWN inline spinner, driven by `retryInFlight` - `isPending`
+  // AND `variables.rung === "retry"` - so a Switch pick in flight does not
+  // light up a Retry button that never fired.
+  it("shows the inline spinner on Retry only while ITS OWN mutation is in flight, not while a Switch is", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.deferResponses = true;
+    renderActions(TURN_ID);
+
+    const retry = buttonNamed("Retry");
+    // No spinner before the click - falsification: render `inFlight` `true`
+    // unconditionally and this goes red.
+    expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
+
+    fireEvent.click(retry);
+    // Falsification: drop the `runManualRung.variables.rung === "retry"` half
+    // of `retryInFlight` (leaving only `isPending`) - this still passes on its
+    // own, but the next assertion (a Switch in flight) would then go red.
+    expect(retry.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(harness.pendingResponses).toHaveLength(1);
+
+    act(() => {
+      harness.pendingResponses[0]({ outcome: "applied" });
+    });
+    // Delivered, not removed - the recorder only ever pushes. Clear it so the
+    // Switch below is unambiguously the NEXT entry.
+    harness.pendingResponses.length = 0;
+    expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
+
+    // Now drive a SWITCH through the same shared mutation instance (one hook
+    // serves all three rungs - see `useFallbackRunManualRung`'s own doc for
+    // why) and confirm Retry stays quiet: `variables.rung` is `"switch"`
+    // while this one is in flight, so `retryInFlight` must read `false`.
+    harness.listData = listTargetsResponse({
+      outcome: "listed",
+      failedTuple: FAILED_CLAUDE_TUPLE,
+      profileTargets: [],
+      modelTargets: [
+        fallbackModelTarget({
+          groupId: "grp-internal-secret-xyz",
+          harnessId: "codex",
+          modelFamily: "gpt-5",
+          model: "gpt-5",
+          reasoningEffort: null,
+          profileId: TARGET_CODEX_TUPLE.profileId,
+          severity: "ok",
+          usedPercent: 10,
+          target: TARGET_CODEX_TUPLE,
+          warnings: [],
+          selectable: true,
+          skip: null,
+        }),
+      ],
+      modelTargetsSkip: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
+    });
+    expect(harness.pendingResponses).toHaveLength(1);
+    expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
+  // F-reorder: Retry moves to AFTER the Switch… menu when the failure is
+  // `rate_limit` or `billing` AND a switch is on offer - see `switchLeads`'s
+  // own doc for why (retrying the same account for a spent quota is unlikely
+  // to help, so the useful control leads).
+  it("renders Retry after Switch… for rate_limit and billing when a switch is available", () => {
+    // Built literally rather than through `positiveAttempt`, whose `reason`
+    // is narrowed to `"rate_limit" | "auth"` (see its own type) - `billing`
+    // is outside that, and reaches this row exactly the way `rate_limit`
+    // does (both admit `retry`/`switch`/`wait_once`; only the presentation
+    // and the reordering rule single billing out).
+    for (const reason of ["rate_limit", "billing"] as const) {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason },
+          eligibleRungs: ["retry", "switch"],
+          waitDisposition: "no_verified_reset",
+          switchDisposition: "eligible",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+        }),
+      );
+      const { unmount } = renderActions(TURN_ID);
+      const buttons = screen.getAllByRole("button", {
+        name: /^(Retry|Switch…)$/,
+      });
+      // Falsification: delete the `switchLeads` gate around `retryButton`'s
+      // two placements in `fallback-manual-rungs.tsx` - Retry would render
+      // first regardless of `reason`, and this goes red for both reasons.
+      expect(
+        buttons.map((b) => b.textContent),
+        reason,
+      ).toEqual(["Switch…", "Retry"]);
+      unmount();
+    }
+  });
+
+  it("keeps Retry before Switch… for a reason outside the reordering rule, even with a switch available", () => {
+    // `positiveAttempt` only builds `"rate_limit" | "auth"` failures (see its
+    // own type), and `auth` never reaches this row at all (the auth guard in
+    // `ManualRungActions` returns before rungs render) - so the reason
+    // OUTSIDE the reordering rule is built literally here instead, the same
+    // way `withheldSwitchAttempt`'s sibling cases do.
+    seedAttempt(
+      lastFailedAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        failure: { reason: "model_unavailable" },
+        eligibleRungs: ["retry", "switch"],
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+    );
+    renderActions(TURN_ID);
+    const buttons = screen.getAllByRole("button", {
+      name: /^(Retry|Switch…)$/,
+    });
+    expect(buttons.map((b) => b.textContent)).toEqual(["Retry", "Switch…"]);
+  });
+
   it("sends the attempt's ids, not the row's, on Retry and Wait until", () => {
     seedAttempt(
       positiveAttempt({
@@ -911,6 +1094,10 @@ describe("FallbackManualRungActions", () => {
         waitDisposition: "eligible",
       }),
     );
+    // Settles the mutation immediately, so Retry's own pick does not leave
+    // every affordance `busy` (disabled) for the Wait-until click that
+    // follows it.
+    harness.mutationResult = { outcome: "applied" };
     renderActions(TURN_ID);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     // Falsification: hard-code userMessageId: "" at the call site — this assertion must go red.
@@ -1337,7 +1524,13 @@ describe("FallbackManualRungActions", () => {
       // control would satisfy the line above with the whole DTO withheld.
       expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
 
-      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
+      // Two levels up: the explanation now renders in its own band
+      // (`ManualRungExplanations`) above the button row, a sibling of the
+      // buttons' own row rather than a peer inside it - see that component's
+      // doc. `retry`'s immediate parent is only the button row; the card-level
+      // container is the grandparent both bands share.
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
       const text = root?.textContent ?? "";
       // The chat's own identity, resolved the way every other fallback surface
       // resolves one: the PROVIDER DISPLAY NAME, never the harness id that the
@@ -1348,6 +1541,42 @@ describe("FallbackManualRungActions", () => {
       // Engine words, "group" included - the reason this sentence could not be
       // the host's own `no-group` label.
       expect(text).not.toMatch(BANNED_VOCABULARY);
+    });
+
+    /**
+     * The same sentence with a SLUG-shaped model, which `DEFAULT_SHAPED_TUPLE`
+     * cannot show: "default" is already a word a user reads.
+     *
+     * This card's own destination menu resolves its rows, and the grace card
+     * one state earlier resolves its tuples - so an unresolved subject here was
+     * the one surface in the chat still printing a provider's internal
+     * identifier at a user being asked to decide something.
+     */
+    it("names the chat by its catalogue model label, not the raw slug", () => {
+      modelLabelOverride.value = new Map([
+        ["claude:claude-fable-5-1[1m]", "Claude Fable"],
+      ]);
+      seedAttempt(
+        withheldSwitchAttempt(
+          chatRunSettings({
+            harnessId: "claude",
+            model: "claude-fable-5-1[1m]",
+            profileId: null,
+          }),
+        ),
+      );
+      renderActions(TURN_ID);
+
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
+      const text = root?.textContent ?? "";
+      // Falsification: drop `modelLabelFor` from this card's
+      // `fallbackProviderModelLabel` call and this goes red - the sentence
+      // reads "…for Claude Code · claude-fable-5-1[1m]".
+      expect(text).toContain(
+        "No other model is set up for Claude Code · Claude Fable",
+      );
+      expect(text).not.toContain("claude-fable-5-1[1m]");
     });
 
     it("still offers Switch… when the host named a destination", () => {
