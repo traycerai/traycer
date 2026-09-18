@@ -64,6 +64,7 @@ function readyStatus(
   input: Partial<{
     readonly messages: ReadonlyArray<ChatSearchMessageMatch>;
     readonly indexState: "complete" | "partial";
+    readonly expansionBase: ChatSearchBaseRequest;
     readonly showMore: (() => void) | null;
     readonly loadingMore: boolean;
     readonly loadMoreError: ChatSearchPageError | null;
@@ -73,8 +74,9 @@ function readyStatus(
     kind: "ready",
     messages: input.messages ?? [],
     indexState: input.indexState ?? "complete",
-    // The list never reads it; a surface's `renderExpansion` does.
-    expansionBase: EXPANSION_BASE,
+    // A surface's `renderExpansion` reads it; the list itself uses it only as
+    // the identity it remounts on.
+    expansionBase: input.expansionBase ?? EXPANSION_BASE,
     showMore: input.showMore ?? null,
     loadingMore: input.loadingMore ?? false,
     loadMoreError: input.loadMoreError ?? null,
@@ -97,22 +99,36 @@ function renderList(overrides: Partial<ChatSearchMessageHitListProps>): {
   readonly renderExpansion: Mock<
     (target: ChatSearchExpansionTarget) => ReactNode
   >;
+  readonly rerenderWith: (next: ChatSearchMessageHitsStatus) => void;
 } {
   const onOpen = vi.fn<(target: ChatSearchOpenTarget) => void>();
   const renderExpansion = vi.fn<
     (target: ChatSearchExpansionTarget) => ReactNode
   >(() => null);
-  const { container } = render(
+  // `status` sits after the spread: it is the one prop `rerenderWith` drives,
+  // so an override may seed it but must not pin it.
+  const element = (status: ChatSearchMessageHitsStatus) => (
     <ChatSearchMessageHitList
-      status={readyStatus({})}
       onOpen={onOpen}
       renderExpansion={renderExpansion}
       taskTitles={new Map()}
       variant="full"
       {...overrides}
-    />,
+      status={status}
+    />
   );
-  return { container, onOpen, renderExpansion };
+  const { container, rerender } = render(
+    element(overrides.status ?? readyStatus({})),
+  );
+  return {
+    container,
+    onOpen,
+    renderExpansion,
+    // A surface mounts the list once and feeds it status after status, so a
+    // new request must arrive as a rerender of the same element, never as a
+    // fresh render.
+    rerenderWith: (next) => rerender(element(next)),
+  };
 }
 
 describe("ChatSearchMessageHitList: non-ready statuses render nothing", () => {
@@ -277,6 +293,67 @@ describe("ChatSearchMessageHitList: indexing notice", () => {
       }),
     });
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("ChatSearchMessageHitList: a new request", () => {
+  it("collapses an expanded group when the next ready status is a different request", async () => {
+    const user = userEvent.setup();
+    const match = messageMatch({ chatId: "c1", matchCount: 4 });
+    const { renderExpansion, rerenderWith } = renderList({
+      status: readyStatus({ messages: [match] }),
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "Show all 4 matches" }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Show all 4 matches" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    renderExpansion.mockClear();
+
+    // The same chat still matches the new query, so the row and its toggle
+    // survive the list's reconciliation - which is exactly how the expansion
+    // used to carry over, along with every expansion page already loaded.
+    rerenderWith(
+      readyStatus({
+        messages: [match],
+        expansionBase: { ...EXPANSION_BASE, query: "another query" },
+      }),
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "Show all 4 matches" })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(renderExpansion).not.toHaveBeenCalled();
+  });
+
+  it("keeps an expanded group while the request is unchanged", async () => {
+    const user = userEvent.setup();
+    const match = messageMatch({ chatId: "c1", matchCount: 4 });
+    const { rerenderWith } = renderList({
+      status: readyStatus({ messages: [match] }),
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "Show all 4 matches" }),
+    );
+    // A later page of the same request: more rows, same expansionBase.
+    rerenderWith(
+      readyStatus({
+        messages: [match, messageMatch({ chatId: "c2" })],
+      }),
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "Show all 4 matches" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 });
 
