@@ -29,7 +29,7 @@ import * as idb from "idb-keyval";
 import {
   encodedWebpBytesOfSize,
   pngBytesOfSize,
-} from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+} from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 
 import {
   makeHandle,

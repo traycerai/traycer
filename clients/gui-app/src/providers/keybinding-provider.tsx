@@ -38,6 +38,7 @@ import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-reg
 import { selectLandingTerminalSurfaceActive } from "@/components/home/terminal-panel/landing-terminal-surface-binding";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { isTextHistoryShortcut } from "@traycer-clients/shared/keybindings/text-history-shortcut";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -383,7 +384,11 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // whenever the panel is open with a tab - which a focused panel browser
       // guest, the state this exemption exists for, IS.
       const chord = resolveMatchingChord(event);
-      if (chord !== null && readForwardedChords().has(chord)) {
+      if (
+        !isTextHistoryShortcut(event, isMac()) &&
+        chord !== null &&
+        readForwardedChords().has(chord)
+      ) {
         useScreencastArmedStore.getState().releasePageKeys?.();
         return false;
       }

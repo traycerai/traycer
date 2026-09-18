@@ -12,7 +12,7 @@ import {
 // leak into these cases.
 import { resetNegotiatedStreamVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
 import type { HostRpcRegistry } from "@/lib/host";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { putImage } from "@/lib/composer/landing-image-store";
 import {
   putDraftBlobs,

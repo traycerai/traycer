@@ -77,6 +77,8 @@ function renderBridgeHook(initial: BridgeHookProps) {
         hostId: "host-1",
         editorRef: props.editorRef,
         editorReadyTick: props.editorReadyTick,
+        chatTitle: null,
+        epicTitle: null,
       }),
     { initialProps: initial },
   );
@@ -280,6 +282,8 @@ function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
     hostId: "host-1",
     editorRef,
     editorReadyTick,
+    chatTitle: null,
+    epicTitle: null,
   });
   const [pickerStore] = useState(() => createComposerPickerStore());
   return (

@@ -296,8 +296,6 @@ import {
   chatTileCanAct,
   findPendingInterview,
   findUnanswerableInterviews,
-  forkableAssistantMessageIdAfter,
-  latestForkableAssistantMessageId,
   selectContextUsage,
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
@@ -2146,7 +2144,11 @@ function useChatTileSessionViewModel(
   useSetupTerminalListRefreshDriver({ handle });
   // Persist the setup terminal as a saved (background) canvas tab so it survives
   // a restart like a user-opened terminal, instead of vanishing (no saved tab).
-  useSetupTerminalTabRegisterDriver({ handle, viewTabId });
+  useSetupTerminalTabRegisterDriver({
+    handle,
+    viewTabId,
+    owningTileInstanceId: node.instanceId,
+  });
 
   // A chat is editable only by its own owner; every other user is read-only.
   // Gate on a KNOWN non-owner (access resolved AND not the owner) rather than a
@@ -2601,59 +2603,13 @@ function useChatTileSessionViewModel(
       getDraftBlobBridgeSupported,
     });
 
-  // A primitive on purpose: `renderedMessages` takes a fresh identity every
-  // stream flush, so a callback closing over it would churn the memoized
-  // composer selector below once per flush. The latest completed boundary ID
-  // is stable across flushes (a streaming row is never forkable), so the
-  // gesture handler hanging off this stays quiet while a turn streams.
-  //
-  // On the windowed line the scan cannot run here - `renderedMessages` is the
-  // hydrated subset, and the latest completed boundary is routinely outside
-  // it (scrolled cold, or evicted). The host derives it from the whole
-  // transcript and ships it on every snapshot; `null` from it is the real
-  // "no boundary yet", never "not hydrated".
-  //
-  // But "on every snapshot" is the whole problem, because the GATE in front of
-  // the gesture below is cleared by a live `turnStateChanged` frame. A turn
-  // completes, the gate opens immediately, and the derived boundary still names
-  // the previous turn until a snapshot lands - so the fork the user asks for
-  // omits the turn they just watched finish, silently and plausibly. Two
-  // clocks. `forkableAssistantMessageIdAfter` is the second hand: it looks only
-  // PAST the host's answer, in the live tail where a just-completed turn always
-  // is, so it can move the boundary forward and never backward.
-  const latestForkBoundaryId = useMemo(() => {
-    if (state.transcriptDerived === null) {
-      return latestForkableAssistantMessageId(renderedMessages);
-    }
-    const derived = state.transcriptDerived.latestForkableAssistantMessageId;
-    return (
-      forkableAssistantMessageIdAfter(renderedMessages, derived) ?? derived
-    );
-  }, [state.transcriptDerived, renderedMessages]);
-  // The composer host picker's "switch host" gesture. Chats are host-bound for
-  // life (clone-not-migrate), so switching means FORKING onto the picked
-  // machine — through the same dialog the per-message fork buttons open,
-  // anchored at the chat's latest completed turn and preselected on the picked
-  // host. A chat mid-turn has no boundary that includes the turn the user is
-  // watching, and one that has never replied has no boundary at all; both say
-  // so instead of opening a dialog pointed at something else.
+  // Switching hosts clones the chat from the latest checkpoint available to
+  // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
     (targetHostId: string): void => {
-      if (composerActiveTurnStatus !== null) {
-        toast(
-          "This agent is still working — it can be forked to another host once the turn ends.",
-        );
-        return;
-      }
-      if (latestForkBoundaryId === null) {
-        toast(
-          "This agent hasn't replied yet — it can be forked to another host after its first reply.",
-        );
-        return;
-      }
-      forkAtAssistantMessage(latestForkBoundaryId, "plain", null, targetHostId);
+      forkAtAssistantMessage(null, "plain", null, targetHostId);
     },
-    [composerActiveTurnStatus, forkAtAssistantMessage, latestForkBoundaryId],
+    [forkAtAssistantMessage],
   );
 
   const snapshotTeardownHolders = useOwnerTeardownSnapshot({
@@ -2886,7 +2842,17 @@ function useChatTileSessionViewModel(
         ),
         placement: sideChatPlacementForTile(viewTabId, node.id),
         createChat: (request, callbacks) =>
-          createSideChat.mutate(request, callbacks),
+          createSideChat.mutate(request, {
+            ...callbacks,
+            onSuccess: (result) => {
+              // Consume the captured queue edit only after the fork exists;
+              // a failed create must leave the original queued prompt intact.
+              if (activeEditingQueueItemId !== null) {
+                chatActions.queueCancel(activeEditingQueueItemId);
+              }
+              callbacks.onSuccess(result);
+            },
+          }),
         onHistoryUnavailable: (reason) => {
           toast(
             reason === "no-checkpoint"
@@ -2896,12 +2862,20 @@ function useChatTileSessionViewModel(
         },
       });
       sideChatCancelsRef.current.add(cancel);
+      // The composer clears its accepted draft immediately. End that edit
+      // now too, so a delayed create cannot clear a subsequent queue edit.
+      if (activeEditingQueueItemId !== null) {
+        dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+      }
       return true;
     },
     [
       activeHostId,
+      activeEditingQueueItemId,
+      chatActions,
       createSideChat,
       currentEpicId,
+      dispatchUi,
       node.id,
       profile,
       state.chat,

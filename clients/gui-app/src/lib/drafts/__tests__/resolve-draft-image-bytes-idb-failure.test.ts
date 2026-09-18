@@ -22,7 +22,7 @@ import {
   resolveDraftImageBytes,
   type DraftImageByteTarget,
 } from "@/lib/drafts/resolve-draft-image-bytes";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 const storeMocks = vi.hoisted(() => ({
   getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(),

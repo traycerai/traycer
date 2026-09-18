@@ -70,7 +70,6 @@ export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-key
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
-export { draftsMutationKeys } from "@/lib/query-keys/drafts-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
 export { appearanceMutationKeys } from "@/lib/query-keys/appearance-mutation-keys";
 

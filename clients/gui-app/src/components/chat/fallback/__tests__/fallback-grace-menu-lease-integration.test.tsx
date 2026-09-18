@@ -263,6 +263,31 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module - see
+ * `fallback-grace-card.test.tsx`'s copy of this double for the argument.
+ *
+ * This file is about the LEASE, not about copy: it renders no assertion on a
+ * model string. The double exists only so the real resolver's TanStack queries
+ * do not demand a `QueryClientProvider` this suite deliberately does not have -
+ * its host plumbing is a hand-built stream, not a query cache. A pass-through
+ * is therefore the whole of it.
+ */
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
     mutate: vi.fn(),

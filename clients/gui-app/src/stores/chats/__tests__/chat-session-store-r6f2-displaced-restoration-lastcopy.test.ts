@@ -18,7 +18,6 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
-import type { PromptStashSnapshot } from "@/lib/composer/prompt-stash-codec";
 import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
 
 import {
@@ -28,34 +27,17 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  draftPlainText,
+  handedOffDrafts,
+  resetHandedOffDrafts,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
-}));
-
-const promptStashMocks = vi.hoisted(() => ({
-  save: vi.fn<(snapshot: PromptStashSnapshot) => Promise<void>>(),
-}));
-vi.mock("@/stores/composer/prompt-stash-store", () => ({
-  usePromptStashStore: {
-    getState: () => ({
-      save: promptStashMocks.save,
-      // The handoff calls `saveWhile`, not `save`. Routed through the same
-      // mock so these assertions keep observing it - but HONOURING the
-      // predicate, so a stale-generation write is skipped here exactly as the
-      // real store skips it.
-      saveWhile: (
-        snapshot: PromptStashSnapshot,
-        stillCurrent: () => boolean,
-      ) =>
-        stillCurrent()
-          ? promptStashMocks.save(snapshot)
-          : Promise.resolve(undefined),
-    }),
-  },
 }));
 
 const EPIC_ID = "epic-r6f2";
@@ -207,8 +189,7 @@ let harness: Harness | null = null;
 
 beforeEach(() => {
   installFreshIndexedDb();
-  promptStashMocks.save.mockReset();
-  promptStashMocks.save.mockResolvedValue(undefined);
+  resetHandedOffDrafts();
 });
 
 afterEach(() => {
@@ -269,8 +250,8 @@ describe("R6F2: stateFailedSendRestoration records the displaced prompt into las
     await vi.waitFor(
       () => {
         expect(
-          promptStashMocks.save.mock.calls.some(([snapshot]) =>
-            JSON.stringify(snapshot.entry.content).includes(TEXT),
+          handedOffDrafts().some((draft) =>
+            draftPlainText(draft.content).includes(TEXT),
           ),
         ).toBe(true);
       },

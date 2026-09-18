@@ -41,7 +41,7 @@ import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 // T4: the inline edit composer now runs `reingestPendingImages` on mount and
 // a real file paste through `putImage` - both write to the window's image

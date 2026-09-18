@@ -13,7 +13,7 @@ import type { InlineEditState } from "@/components/epic-canvas/renderers/chat-ti
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import type { HostRpcRegistry } from "@/lib/host";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";

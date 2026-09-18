@@ -265,6 +265,9 @@ export function FallbackGraceMenu({
       // `switching` has committed: there is no window left to freeze and no
       // choice left to make.
       triggerDisabled={!canAct || pending.state === "switching"}
+      // Quiet: a plan is already in motion and this is the escape from it,
+      // so the card's own refusal stays the louder control.
+      triggerVariant="ghost"
       header={null}
       selector={{
         kind: "traversal",
@@ -390,6 +393,9 @@ export function FallbackWaitingMenu({
     <FallbackDestinationMenu
       triggerLabel={SWITCH_INSTEAD_LABEL}
       triggerDisabled={!canAct}
+      // Quiet, same reason as the countdown card's: "Stop waiting" is the
+      // card's own answer and this is the alternative to it.
+      triggerVariant="ghost"
       header={waitingMenuHeader(
         pending.deadline,
         pending.queuedItemsMoving,

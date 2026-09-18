@@ -124,14 +124,14 @@ interface RenderComposerBodyOptions {
   readonly paste: UseComposerPasteResult;
   readonly header?: ReactNode;
   readonly topBanner?: ReactNode;
-  readonly stashControl?: ReactNode;
+  readonly draftsControl?: ReactNode;
   /** Omitted means the desktop toolbar, which is what most cases exercise. */
   readonly toolbarLayout?: "full" | "collapsed";
   readonly hostId: string | null;
 }
 
 function renderComposerBody(options: RenderComposerBodyOptions) {
-  const { composerMode, paste, header, topBanner, stashControl, hostId } =
+  const { composerMode, paste, header, topBanner, draftsControl, hostId } =
     options;
   const toolbarLayout = options.toolbarLayout ?? "full";
   const toolbarStore = createComposerToolbarStore({
@@ -169,7 +169,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       header={header}
       topBanner={topBanner}
       toolbarLayout={toolbarLayout}
-      stashControl={stashControl}
+      draftsControl={draftsControl}
       attachmentsStrip={null}
       workspaceControls={null}
       dictationControl={null}
@@ -337,40 +337,42 @@ describe("ComposerBody toolbar layout", () => {
 });
 
 describe("ComposerBody overlay utility visibility", () => {
-  it("shows prompt utilities in the chat overlay", () => {
+  const draftsControl = (
+    <div role="status" aria-label="Drafts">
+      Drafts 2
+    </div>
+  );
+
+  it("shows the drafts control in the chat overlay", () => {
     renderComposerBody({
       composerMode: "chat",
       paste: makePaste(),
-      stashControl: (
-        <div role="status" aria-label="Stashed prompts">
-          Stash 2
-        </div>
-      ),
+      draftsControl,
       hostId: null,
     });
-    const stash = screen.getByRole("status", { name: "Stashed prompts" });
+    const drafts = screen.getByRole("status", { name: "Drafts" });
     expect(
-      stash.closest('[data-testid="composer-utility-overlay"]'),
+      drafts.closest('[data-testid="composer-utility-overlay"]'),
     ).not.toBeNull();
     expect(
-      stash.closest('[data-testid="composer-attachment-rail"]'),
+      drafts.closest('[data-testid="composer-attachment-rail"]'),
     ).toBeNull();
   });
 
-  it("omits prompt utilities in terminal mode", () => {
+  // D11: a terminal-mode start-page draft is still a draft, so the rail is no
+  // longer gated on the composer's mode - only the attachments strip is.
+  it("keeps the drafts control in terminal mode", () => {
     renderComposerBody({
       composerMode: "terminal",
       paste: makePaste(),
-      stashControl: (
-        <div role="status" aria-label="Stashed prompts">
-          Stash 2
-        </div>
-      ),
+      draftsControl,
       hostId: null,
     });
     expect(
-      screen.queryByRole("status", { name: "Stashed prompts" }),
-    ).toBeNull();
+      screen
+        .getByRole("status", { name: "Drafts" })
+        .closest('[data-testid="composer-utility-overlay"]'),
+    ).not.toBeNull();
   });
 });
 

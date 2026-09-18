@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createComposerImagePreparationSession } from "@/lib/composer/composer-image-preparation";
-import { pngBytesOfSize } from "./prompt-stash-image-fixtures";
+import { pngBytesOfSize } from "./composer-image-preparation-fixtures";
 
 const originalCreateImageBitmap = globalThis.createImageBitmap;
 

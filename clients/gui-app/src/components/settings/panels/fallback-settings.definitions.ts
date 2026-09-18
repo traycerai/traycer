@@ -30,7 +30,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  * flight is live, so it goes in the row's `status` at the call site instead.
  */
 export const MASTER_TOGGLE_DESCRIPTION =
-  "Stops new Traycer recovery. Recovery already in progress continues; stop it from the chat. Your coding agent's own recovery settings are unchanged.";
+  "Turning this off stops Traycer starting new switches or waits. Chats already switching or waiting carry on - stop those from the chat. Your coding agent's own retries are separate and unaffected.";
 
 /**
  * Host-scoped, so nothing below the page owns an anchor: the page's scope gate
@@ -41,9 +41,17 @@ export const MASTER_TOGGLE_DESCRIPTION =
  */
 export const FALLBACK = defineSettingsSection("fallback", {
   page: {
-    label: "Fallback",
-    description: "When a turn fails on a provider error, try these in order.",
+    label: "Model routing",
+    description:
+      "What Traycer tries when a rate limit or another provider problem interrupts your chat.",
     keywords: [
+      // "fallback" and "failover" stay in the index on purpose: they were the
+      // shipped name and are what the category calls this, so muscle memory
+      // and a developer's first guess both still land on the page.
+      "fallback",
+      "failover",
+      "routing",
+      "route",
       "automatic",
       "rate limit",
       "usage limit",
@@ -69,7 +77,7 @@ export const FALLBACK = defineSettingsSection("fallback", {
   fallback: {
     kind: "group",
     search: { contributesTo: "page" },
-    label: "Fallback",
+    label: "Model routing",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
@@ -79,7 +87,7 @@ export const FALLBACK = defineSettingsSection("fallback", {
     kind: "row",
     group: "fallback",
     search: { contributesTo: "page" },
-    label: "Automatic fallback",
+    label: "Route automatically",
     description: MASTER_TOGGLE_DESCRIPTION,
     availableWhen: alwaysAvailable,
     keywords: [],
@@ -106,9 +114,9 @@ export const FALLBACK = defineSettingsSection("fallback", {
     kind: "row",
     group: "behavior",
     search: { contributesTo: "page" },
-    label: "Time to cancel before switching",
+    label: "Time to cancel a switch",
     description:
-      "How long a chat shows the switch card before it goes ahead. Opening the destination menu pauses this.",
+      "Traycer waits this long before switching, so you can cancel from the chat. Opening the menu to choose another account or model pauses the countdown.",
     availableWhen: alwaysAvailable,
     keywords: [],
   },
@@ -116,9 +124,9 @@ export const FALLBACK = defineSettingsSection("fallback", {
     kind: "row",
     group: "behavior",
     search: { contributesTo: "page" },
-    label: "Longest wait for a reset",
+    label: "Longest wait for a usage limit to reset",
     description:
-      "The waiting step is skipped when a provider's limit resets later than this.",
+      "If the limit resets later than this, Traycer skips waiting and moves on to the next step.",
     availableWhen: alwaysAvailable,
     keywords: [],
   },
@@ -153,8 +161,8 @@ export const FALLBACK = defineSettingsSection("fallback", {
     kind: "row",
     group: "dangerZone",
     search: { contributesTo: "page" },
-    label: "Reset all fallback settings",
-    description: "Puts every fallback setting back to its default.",
+    label: "Reset model routing",
+    description: "Puts every setting on this page back to its default.",
     availableWhen: alwaysAvailable,
     keywords: [],
   },

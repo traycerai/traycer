@@ -1713,6 +1713,16 @@ const epicCanvasAppWideReadExemptions = [
   // app is now pointed at - a dead tile's chat is cloned onto the effective
   // host. Reading anything else here would clone onto a host nobody chose.
   "src/components/epic-canvas/renderers/use-chat-clone-on-host-switch.ts",
+  // The Agents panel's message hits. Everything this section ACTS on is the
+  // session's: it searches `useEpicSessionHostClient`'s index and opens each
+  // hit on `useEpicSessionHostId`. The app-wide read is not a host to act on -
+  // it is the answer to "would a hostless intent land on that same host", which
+  // is the condition `routeEpicChatNotification` parks a transcript jump under
+  // when it has to open a CLOSED chat's tile. Passing the session host in its
+  // place would assert an agreement that may not hold and let another host's
+  // tile consume the jump; passing null would silently drop the jump for every
+  // hit whose chat is not already open, which is most of them.
+  "src/components/epic-canvas/sidebar/epic-sidebar-message-hits.tsx",
 ];
 
 // `src/hooks/epic/**` hooks that resolve the app-wide client BY CALLER: each is
@@ -1763,6 +1773,13 @@ const appChromeAppWideReadExemptions = [
   // searches the host the app is pointed at and routes every result to a tab
   // bound to that same host, so the effective host is the only right read.
   "src/components/chat-search/chat-search-panel.tsx",
+  // History's message-hit section, which is the same search from the other
+  // surface it is reachable from. History is a system tab / modal, not a tile
+  // and not inside an Epic session, and it lists the whole account; the hits
+  // under it come from the host the app is pointed at and open onto tabs bound
+  // to that host, so the effective host is what the header names and the only
+  // host it could honestly read.
+  "src/components/epics/history-message-hits.tsx",
 ];
 
 // Hook directories whose every RPC now takes the caller's client, because

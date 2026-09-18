@@ -16,7 +16,7 @@ import {
   type PendingImageIngestEditorHandle,
 } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { IMAGE_READ_TIMEOUT_MS } from "@/hooks/composer/use-composer-paste";
-import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/prompt-stash-image-preparation";
+import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
 import type { ImageAttachmentRewrite } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
@@ -24,12 +24,12 @@ import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
   encodedWebpBytesOfSize,
   pngBytesWithHeader,
-} from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+} from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 import {
   resetLandingImageBudgetReservationsForTesting,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 // F3 needs to see whether `reserveLandingImageBudget` was called at all (the
 // non-storable path must take no reservation) and, for the mixed-batch case,

@@ -246,6 +246,35 @@ describe("host.communicationGraph.subscribe@1.0 frames", () => {
   });
 });
 
+describe("host.communicationGraph.subscribe peerEpicId", () => {
+  const versions = hostStreamRpcRegistry[METHOD][1].versions;
+  const eventFrameWith = (event: object) => ({
+    kind: "event",
+    epicId: "epic-1",
+    event,
+    hasBinaryPayload: false,
+  });
+
+  it("carries peerEpicId on 1.1 and defaults it to null for a row without it", () => {
+    expect(
+      versions[1].contract.serverFrameSchema.parse(
+        eventFrameWith({ ...CLOUD_EVENT, peerEpicId: "epic-peer" }),
+      ),
+    ).toMatchObject({ event: { peerEpicId: "epic-peer" } });
+    expect(
+      versions[1].contract.serverFrameSchema.parse(eventFrameWith(CLOUD_EVENT)),
+    ).toMatchObject({ event: { peerEpicId: null } });
+  });
+
+  it("strips peerEpicId for a client that negotiated the released 1.0", () => {
+    expect(
+      versions[0].contract.serverFrameSchema.parse(
+        eventFrameWith({ ...CLOUD_EVENT, peerEpicId: "epic-peer" }),
+      ),
+    ).toEqual(eventFrameWith(CLOUD_EVENT));
+  });
+});
+
 describe("host.communicationGraph.subscribe@1.0 degrades against an older host", () => {
   it("fails only this method's subscribe, leaving every other stream method compatible", () => {
     const currentManifest = buildStreamManifest(

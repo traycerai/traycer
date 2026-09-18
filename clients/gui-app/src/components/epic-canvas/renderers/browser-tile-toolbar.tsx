@@ -14,6 +14,7 @@ import {
   RotateCw,
   SquareMousePointer,
   VenetianMask,
+  X,
 } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -183,29 +184,72 @@ function BrowserTileToolbarNav(props: {
           <ArrowRight />
         </Button>
       ) : null}
-      {capabilities.reload ? (
+      <BrowserTileReloadOrStop
+        controller={controller}
+        loading={props.loading}
+      />
+    </div>
+  );
+}
+
+/**
+ * The browser shape: while a navigation is in flight, Reload becomes Stop
+ * and the spinner sits beside it, so a slow page can be cancelled the way
+ * every browser allows. A runtime with no stop on its wire (screencast)
+ * keeps the spinner inside Reload, which is what it always did.
+ */
+function BrowserTileReloadOrStop(props: {
+  readonly controller: TileController;
+  readonly loading: boolean;
+}) {
+  const controller = props.controller;
+  const capabilities = controller.capabilities;
+  if (!capabilities.reload) return null;
+  if (props.loading && capabilities.stop) {
+    return (
+      <>
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label="Reload"
-          aria-busy={props.loading}
+          aria-label="Stop"
           disabled={controller.disabled}
-          onClick={controller.onReload}
+          onClick={controller.onStop}
         >
-          {props.loading ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId="browser-reload-loading"
-              variant={undefined}
-              tone="muted"
-            />
-          ) : (
-            <RotateCw />
-          )}
+          <X />
         </Button>
-      ) : null}
-    </div>
+        <span role="status" aria-label="Page loading" className="shrink-0">
+          <AgentSpinningDots
+            className={undefined}
+            testId="browser-reload-loading"
+            variant={undefined}
+            tone="muted"
+          />
+        </span>
+      </>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="Reload"
+      aria-busy={props.loading}
+      disabled={controller.disabled}
+      onClick={controller.onReload}
+    >
+      {props.loading ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId="browser-reload-loading"
+          variant={undefined}
+          tone="muted"
+        />
+      ) : (
+        <RotateCw />
+      )}
+    </Button>
   );
 }
 

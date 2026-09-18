@@ -46,7 +46,6 @@ import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-posit
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
-import { PendingEpicTitleFetcher } from "@/providers/pending-epic-title-fetcher";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -274,7 +273,6 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                           <LandingTerminalPersistLifecycleBridge>
                             <LandingTerminalTombstoneRecoveryBridge />
                             <EpicTabExistenceReconciler />
-                            <PendingEpicTitleFetcher />
                             <HostStreamProvider>
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />

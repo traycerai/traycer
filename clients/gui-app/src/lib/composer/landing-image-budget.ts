@@ -2,7 +2,7 @@
  * Canonical owner of landing-composer image capacity: the byte budget, live-root
  * / measured-referenced-byte accounting, and the in-flight reservation ledger.
  * Both normal landing paste (`use-landing-composer-paste.ts`,
- * `landing-composer.tsx`) and prompt-stash import (`landing-stash-import.ts`)
+ * `landing-composer.tsx`) and image import (`landing-image-import.ts`)
  * admit work through the single `reserveLandingImageBudget` below - there is no
  * second budget authority.
  *
@@ -34,10 +34,7 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
-import {
-  PREPARED_IMAGE_MAX_BYTES,
-  PROMPT_STASH_IMAGE_MAX_BYTES,
-} from "@/lib/composer/prompt-stash-image-preparation";
+import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
 import {
   hasLandingImageBytes,
   landingImageSizesHydrated,
@@ -134,6 +131,26 @@ function currentDrafts(): ReadonlyArray<LandingDraftTab> {
 export const LANDING_IMAGE_BUDGET_BYTES = 64 * 1024 * 1024;
 
 /**
+ * What the LEGACY prompt stash allowed a single blob to be, and therefore the
+ * most `landing-image-import.ts` can still put in this partition.
+ *
+ * The stash plane itself is gone - #1979 replaced it with the composer Drafts
+ * control and deleted the repository, codec, store and preparation policy. What
+ * survives is its DATA: that change migrates existing stash entries into closed
+ * start-page drafts, and the importer writes those blobs through `putImage`
+ * verbatim, with no ceiling of its own. The stash kept an animated GIF/WebP at
+ * full size up to this number because an animation cannot be re-encoded
+ * frame-faithfully, so a migrated one can still be this large.
+ *
+ * It is written here, beside the budget that reasons about it, rather than left
+ * in the preparer: it is no longer a preparation POLICY, it is a fact about
+ * bytes already on disk. When the migration is retired and no partition can
+ * still be holding one, this retires with it and the ceiling becomes the paste
+ * ceiling alone.
+ */
+export const LEGACY_STASH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
  * The most a single resident root can possibly be costing, and therefore what
  * an UNMEASURED one is charged (see `rootByteCost`).
  *
@@ -143,27 +160,27 @@ export const LANDING_IMAGE_BUDGET_BYTES = 64 * 1024 * 1024;
  *
  *  - The paste/ingest/annotation paths all prepare under
  *    `PREPARED_IMAGE_POLICY` and land at most {@link PREPARED_IMAGE_MAX_BYTES}.
- *  - The prompt-stash restore (`landing-stash-import.ts`) writes the STASH's
+ *  - The legacy-stash migration (`landing-image-import.ts`) writes the old
  *    blob bytes straight through with no ceiling of its own - its only
  *    per-image check is `stashImageMetadataAgreesWithBlob`, which compares
  *    declared MIME and size against the blob and is not a size limit. A stash
  *    blob is bounded by the stash's own policy, whose `animationCeiling` is
- *    {@link PROMPT_STASH_IMAGE_MAX_BYTES}: an animated GIF or WebP cannot be
+ *    {@link LEGACY_STASH_IMAGE_MAX_BYTES}: an animated GIF or WebP cannot be
  *    re-encoded frame-faithfully, so it is kept VERBATIM up to that ceiling
  *    rather than compressed to the static one.
  *  - `landing-image-move.ts` re-writes bytes an earlier site already admitted
  *    and adds no ceiling, so it cannot raise this.
  *
  * So the bound is the larger of the two, and taking the paste ceiling alone
- * would under-charge an animated stash import by 1.25 MiB per unmeasured root -
+ * would under-charge a migrated animation by 1.25 MiB per unmeasured root -
  * which on a cold start, where every root is unmeasured, is the budget admitting
  * more than {@link LANDING_IMAGE_BUDGET_BYTES} of real bytes. Written as a
- * `max` so a change to either policy moves this with it instead of silently
+ * `max` so a change to either bound moves this with it instead of silently
  * making it wrong.
  */
 export const LANDING_IMAGE_MAX_BYTES_PER_IMAGE = Math.max(
   PREPARED_IMAGE_MAX_BYTES,
-  PROMPT_STASH_IMAGE_MAX_BYTES,
+  LEGACY_STASH_IMAGE_MAX_BYTES,
 );
 
 export interface LandingImageBudgetCandidate {

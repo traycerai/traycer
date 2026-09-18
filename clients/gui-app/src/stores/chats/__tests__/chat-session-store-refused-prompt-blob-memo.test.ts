@@ -110,11 +110,6 @@ vi.mock("@/lib/composer/landing-image-store", () => ({
   ensureMeasuredImageSizes: () => Promise.resolve(),
 }));
 
-vi.mock("@/lib/composer/prompt-stash-repository", () => ({
-  readPromptStashRestoreBlobs: () =>
-    Promise.resolve({ status: "missing" as const }),
-}));
-
 interface UploadClient {
   readonly client: DraftBlobClient;
   readonly putCalls: ReadonlyArray<string>;

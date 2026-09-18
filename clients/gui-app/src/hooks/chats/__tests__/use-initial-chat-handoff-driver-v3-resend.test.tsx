@@ -17,7 +17,7 @@ import {
   useInitialChatHandoffStore,
   type InitialChatHandoffScope,
 } from "@/stores/epics/initial-chat-handoff-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { putImage } from "@/lib/composer/landing-image-store";
 import {
   putDraftBlobs,

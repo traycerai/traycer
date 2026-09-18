@@ -16,7 +16,7 @@ import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/ext
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { isHostStorableImageMimeType } from "@/lib/composer/host-storable-image-formats";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
-import { PREPARED_IMAGE_SOURCE_CEILING } from "@/lib/composer/prompt-stash-image-preparation";
+import { PREPARED_IMAGE_SOURCE_CEILING } from "@/lib/composer/composer-image-preparation-session";
 import {
   createComposerImagePreparationSession,
   prepareComposerImageBytesOrRefuse,

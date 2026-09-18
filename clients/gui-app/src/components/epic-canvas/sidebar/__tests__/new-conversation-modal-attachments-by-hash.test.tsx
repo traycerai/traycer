@@ -369,11 +369,17 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   return { useComposerToolbarStore: () => store };
 });
 
+// A full-replacement factory, so it has to carry every export the rendered
+// modal reaches - `useEpicTitle` arrived on `new-conversation-modal.tsx` from
+// main while this file was being written on the branch, which is a gap neither
+// side's diff can show: no conflict, no type error, and the three sibling
+// mocks that main did update look like proof the class was swept.
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => "owner",
   useEpicConnectionStatus: () => "open",
   useEpicNodeOwnerKind: () => "chat",
   useEpicNodeWorkspaceFolders: () => [],
+  useEpicTitle: () => "Epic",
 }));
 
 const stubHostClient = {

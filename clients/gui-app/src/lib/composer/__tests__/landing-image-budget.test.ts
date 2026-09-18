@@ -16,7 +16,7 @@ import {
   tryReserveLandingImageResidency,
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   awaitLandingImageSizes,
   imageHashKeys,
@@ -831,9 +831,9 @@ describe("landing-image-budget module isolation", () => {
  * budget module ON PURPOSE. An earlier version of this case hard-named
  * `PREPARED_IMAGE_MAX_BYTES`, on the premise that preparation resizes rather
  * than refusing so the largest thing that can BE in the partition is the paste
- * ceiling. That premise is false: `landing-stash-import.ts` writes a stash
+ * ceiling. That premise is false: `landing-image-import.ts` writes a stash
  * blob straight through with no ceiling of its own, and the stash keeps an
- * animated GIF/WebP VERBATIM up to `PROMPT_STASH_IMAGE_MAX_BYTES` because it
+ * animated GIF/WebP VERBATIM up to `LEGACY_STASH_IMAGE_MAX_BYTES` because it
  * cannot re-encode one frame-faithfully. Naming one writer's ceiling in the
  * pin is what let the merge substitute it in the module without a red.
  *

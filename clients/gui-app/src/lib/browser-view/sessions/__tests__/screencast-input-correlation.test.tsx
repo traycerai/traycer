@@ -22,7 +22,7 @@ function tapUnarmed(overlay: HTMLElement): void {
 
 describe("screencast input correlation", () => {
   it("replays the arming click against the viewport epoch in video mode", () => {
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     controller.setCaptureMode("video");
     controller.noteViewportEpoch(4);
 
@@ -47,7 +47,7 @@ describe("screencast input correlation", () => {
 
   it("normalizes against the video element while the video plane paints", () => {
     const { controller, sent, overlay, video, setVideoPainting } =
-      mountController();
+      mountController(undefined);
     setVideoPainting(true);
     // Deliberately a different box from the image, so a frame normalized
     // against the wrong surface is visible in the numbers.
@@ -73,7 +73,7 @@ describe("screencast input correlation", () => {
   });
 
   it("drops the arming click when the epoch moved while arming", () => {
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     controller.setCaptureMode("video");
     controller.noteViewportEpoch(4);
 
@@ -85,7 +85,7 @@ describe("screencast input correlation", () => {
   });
 
   it("sends nothing while no epoch is confirmed in video mode", () => {
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     controller.setCaptureMode("video");
 
     clickUnarmed(overlay);
@@ -95,7 +95,7 @@ describe("screencast input correlation", () => {
   });
 
   it("keeps the JPEG plane on its painted-frame correlation", () => {
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     // An epoch is announced on every plane; a JPEG tile must ignore it and
     // keep correlating against what it painted.
     controller.noteViewportEpoch(4);
@@ -115,7 +115,7 @@ describe("screencast input correlation", () => {
   });
 
   it("drops the arming click when the painted frame moved on, epoch or not", () => {
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     controller.noteViewportEpoch(4);
     controller.notePresentedSequence(7);
 
@@ -128,7 +128,7 @@ describe("screencast input correlation", () => {
   it("drops a gesture buffered on the other plane's token space", () => {
     // castSequence 7 and epoch 7 are different numbers that happen to be
     // equal; a press buffered under one must never replay under the other.
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     controller.notePresentedSequence(7);
 
     clickUnarmed(overlay);
@@ -142,7 +142,7 @@ describe("screencast input correlation", () => {
   it("drops a queued tap buffered on the other plane's token space", () => {
     // The finger's half of the case above: a tap waiting on `armed` carries
     // the JPEG plane's castSequence, which must not match an equal epoch.
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     controller.notePresentedSequence(7);
 
     tapUnarmed(overlay);
@@ -154,7 +154,7 @@ describe("screencast input correlation", () => {
   });
 
   it("keeps a buffered gesture when the mode frame repeats the current mode", () => {
-    const { controller, sent, overlay } = mountController();
+    const { controller, sent, overlay } = mountController(undefined);
     controller.notePresentedSequence(7);
 
     clickUnarmed(overlay);

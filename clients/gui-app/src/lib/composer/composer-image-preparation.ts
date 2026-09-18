@@ -5,7 +5,7 @@
  * Every composer surface goes through here — the shared paste core, the
  * landing composer's structured paste, and browser annotation crops — so the
  * bytes each one stores or sends have been through the same policy. The
- * preparer itself lives in `prompt-stash-image-preparation.ts`; this module
+ * preparer itself lives in `composer-image-preparation-session.ts`; this module
  * adds only what a composer needs on top of it: what to do when preparation
  * cannot run at all, and what to say when an image genuinely cannot fit.
  */
@@ -15,7 +15,7 @@ import {
   PREPARED_IMAGE_MAX_BYTES,
   PREPARED_IMAGE_POLICY,
   type ImagePreparationSession,
-} from "@/lib/composer/prompt-stash-image-preparation";
+} from "@/lib/composer/composer-image-preparation-session";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 export type { ImagePreparationSession };

@@ -3,7 +3,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@/lib/host";
 
 import { getImageBytes, putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {

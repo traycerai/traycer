@@ -2,8 +2,8 @@
  * Size matrix for the UNIVERSAL policy (`PREPARED_IMAGE_POLICY`): every
  * composer paste/drop surface prepares against this policy, so the ceilings
  * here (2000 px edge, 3.75 MiB output) are what a real paste actually sees —
- * distinct from the prompt-stash's own policy covered in
- * `prompt-stash-image-preparation-static.test.ts`.
+ * distinct from the split-ceiling fixture policy covered in
+ * `composer-image-preparation-static.test.ts`.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,7 +13,7 @@ import {
   PREPARED_IMAGE_SOURCE_CEILING,
   PREPARED_IMAGE_POLICY,
   ImageTooLargeError,
-} from "@/lib/composer/prompt-stash-image-preparation";
+} from "@/lib/composer/composer-image-preparation-session";
 import {
   encodedJpegBytesOfSize,
   encodedPngBytesOfSize,
@@ -22,12 +22,12 @@ import {
   pngBytesOfSize,
   pngBytesWithHeader,
   twoFrameGifBytesOfSize,
-} from "./prompt-stash-image-fixtures";
+} from "./composer-image-preparation-fixtures";
 import {
   emptyMockCodecOptions,
   makeMockCodec,
   type EncodeArgs,
-} from "./prompt-stash-image-preparation-test-helpers";
+} from "./composer-image-preparation-test-helpers";
 
 describe("prepared-image policy matrix (universal composer policy)", () => {
   describe("verbatim sniff path (no decode)", () => {

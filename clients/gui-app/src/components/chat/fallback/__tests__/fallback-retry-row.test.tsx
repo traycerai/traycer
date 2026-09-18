@@ -13,6 +13,30 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+/**
+ * `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s
+ * identical double for the full rationale and `fallback-model-labels.test.tsx`
+ * for the resolver's own rules. This row never renders a model at all (see
+ * `fallback-retry-row.tsx`: "Retrying on {providerLabel} · {profileLabel}",
+ * no `identity.model`), so there is nothing here for the override to prove -
+ * this double exists only so the real `useFallbackModelLabels` doesn't reach
+ * for a `QueryClientProvider` this file has no reason to stand up.
+ */
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
 function retryingPending() {
   return pendingFallback({
     state: "retrying",

@@ -19,7 +19,7 @@ import {
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";

@@ -13,7 +13,7 @@ import {
 import { reconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
 import {
@@ -217,6 +217,27 @@ describe("draft blob transport", () => {
     const client: DraftBlobClient = { request, requestWithOptions: request };
     const confirmed = await putDraftBlobs(HOST, client, [hash], OWNER);
     expect(confirmed).toEqual([]);
+  });
+
+  it("skips a hash the landing store does not hold", async () => {
+    let calls = 0;
+    // BOTH members count. The upload goes through `requestWithOptions` (it
+    // carries the blob's idempotency key and the enlarged response budget), so
+    // a double that only counted `request` would report zero calls whether the
+    // skip worked or not - passing for the wrong reason.
+    const request = ((_method, _params) => {
+      calls += 1;
+      return Promise.resolve({ ok: true as const });
+    }) as HostRequester<HostRpcRegistry>["request"];
+    const client: DraftBlobClient = { request, requestWithOptions: request };
+    const confirmed = await putDraftBlobs(
+      HOST,
+      client,
+      ["cd".repeat(32)],
+      null,
+    );
+    expect(confirmed).toEqual([]);
+    expect(calls).toBe(0);
   });
 
   it("readBlob missing collapses to no local bytes", async () => {

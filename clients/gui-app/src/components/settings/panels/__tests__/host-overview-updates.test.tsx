@@ -19,11 +19,28 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
-);
+// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+// `HostBusyForceDeferDialog`, both reachable from this suite's restart
+// confirms) calls `useFocusModel()` -> `useConnectableHostIds()` ->
+// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
+// at render time and subscribes via `directory.onChange` in an effect. A
+// binding mock with no `directory` throws ("Invalid value used as weak map
+// key" / "directory.onChange is not a function") the moment the confirm
+// dialog opens, so every fixture below needs one even though this suite
+// never reads its answer.
+interface HostBindingMock {
+  readonly hostClient: unknown;
+  readonly directory: {
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
+    readonly getLocalEntry: () => null;
+  };
+}
+const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
+  current: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -166,6 +183,23 @@ function scopeFrom(
     hostId,
     status: "ready",
     client: fixture.client,
+  };
+}
+
+/**
+ * A host binding whose `directory` answers with an empty listing and inert
+ * change subscription — this suite never asserts on the directory itself,
+ * only on the fact that `HostRestartSessions` can mount beneath it without
+ * throwing.
+ */
+function bindingWith(hostClient: unknown): HostBindingMock {
+  return {
+    hostClient,
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalEntry: () => null,
+    },
   };
 }
 
@@ -587,7 +621,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -639,7 +673,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -702,7 +736,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -805,7 +839,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1093,7 +1127,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // gate, so the downgrade is offerable at all - this test is about
     // downgrade mechanics, not the floor.
     recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1146,7 +1180,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 1, 0);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1188,7 +1222,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // gate, so the downgrade is offerable at all - this test is about
     // downgrade mechanics, not the floor.
     recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1234,7 +1268,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // Default minors: installMinor 2 supports downgrade at all (@1.2), but is
     // one minor short of the store floor (@1.3) - the exact fleet gap.
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1283,7 +1317,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1326,7 +1360,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1366,7 +1400,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = {
       ...scopeFrom("host-a", fixture),
       // `currentHostPlatformKey()` maps win32/arm64 to the emulated x64 build,
@@ -1412,7 +1446,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       "host.service.register",
       "host.service.deregister",
     ]);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1462,7 +1496,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1510,7 +1544,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1575,7 +1609,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1639,7 +1673,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1705,7 +1739,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1763,7 +1797,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         },
       });
       recordNegotiatedHostMethods(hostId, ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom(hostId, fixture);
       renderPanel();
       await openHostOverviewAdvanced();
@@ -1812,7 +1846,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1864,7 +1898,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     }
 
     const hostA = fixtureFor("host-a");
-    hostBindingMock.current = { hostClient: hostA.client };
+    hostBindingMock.current = bindingWith(hostA.client);
     scopeOverrides.current = scopeFrom("host-a", hostA);
     const view = renderPanel();
 
@@ -1886,7 +1920,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     );
 
     const hostB = fixtureFor("host-b");
-    hostBindingMock.current = { hostClient: hostB.client };
+    hostBindingMock.current = bindingWith(hostB.client);
     scopeOverrides.current = scopeFrom("host-b", hostB);
     view.rerender(panelElement(view.queryClient));
 
@@ -1922,7 +1956,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1966,7 +2000,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2010,7 +2044,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2044,7 +2078,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2091,7 +2125,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2129,7 +2163,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2165,7 +2199,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2193,7 +2227,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2261,7 +2295,7 @@ describe("Overview updates — CLI floor remedy", () => {
     expect(rendered.result.current.summary.remedy).toBeNull();
     rendered.unmount();
 
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
     await screen.findByText(
@@ -2309,7 +2343,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2351,7 +2385,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: yankedLatestFixture.client };
+    hostBindingMock.current = bindingWith(yankedLatestFixture.client);
     scopeOverrides.current = scopeFrom("host-a", yankedLatestFixture);
     renderPanel();
 
@@ -2401,7 +2435,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
 
@@ -2521,7 +2555,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2597,7 +2631,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2936,7 +2970,7 @@ describe("Overview updates — CLI floor remedy", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -3460,7 +3494,7 @@ describe("Overview updates — activation debt", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -3493,7 +3527,7 @@ describe("Overview updates — activation debt", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -3532,7 +3566,7 @@ describe("Overview updates — activation debt", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
 
@@ -3582,7 +3616,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
 
@@ -3671,7 +3705,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const { queryClient } = renderPanel();
 
@@ -3741,7 +3775,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -3814,7 +3848,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 

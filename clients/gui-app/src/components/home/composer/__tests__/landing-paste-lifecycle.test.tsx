@@ -31,7 +31,7 @@ import {
 } from "@/lib/composer/composer-clipboard";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
-import { pngBytesOfSize } from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 import {
   deleteImageBytesUnchecked,
   imageHashKeys,

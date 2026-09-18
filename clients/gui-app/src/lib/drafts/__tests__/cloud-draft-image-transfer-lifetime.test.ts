@@ -32,7 +32,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@/lib/host";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {

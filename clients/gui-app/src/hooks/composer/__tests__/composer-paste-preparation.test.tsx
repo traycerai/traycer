@@ -3,7 +3,7 @@
  * universal-policy preparer — not a mocked codec. The production session
  * (`createComposerImagePreparationSession`) always uses the real browser codec
  * with no injection seam, so these tests drive it the same way
- * `prompt-stash-image-preparation-browser-fallback.test.ts` does: a
+ * `composer-image-preparation-browser-fallback.test.ts` does: a
  * `createImageBitmap` double plus canvas `getContext`/`toBlob` doubles.
  *
  * Driven through `useComposerHashPaste`, the hook the chat composer, the
@@ -36,7 +36,7 @@ import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/ext
 import {
   encodedWebpBytesOfSize,
   pngBytesOfSize,
-} from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+} from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 
 /**
  * The two upstream PORTS an editor exposes, intersected: paste needs

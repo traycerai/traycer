@@ -39,7 +39,7 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   putDraftBlobs,
   resetDraftBlobTransportForTests,
@@ -49,7 +49,7 @@ import {
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
-import { pngBytesOfSize } from "@/lib/composer/__tests__/prompt-stash-image-fixtures";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/image-fixtures";
 
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,

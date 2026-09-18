@@ -144,8 +144,8 @@ export interface ChatMessageActionsResult {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   /**
-   * Opens the fork dialog to branch the chat through the given assistant
-   * message, pre-configured for the chosen fork mode ("cross-question" =
+   * Opens the fork dialog through the given assistant message, or the latest
+   * checkpoint when null, pre-configured for the chosen fork mode ("cross-question" =
    * source binding verbatim + carried questions settled as reference;
    * "ab-worktree" = new worktrees carrying the working tree + unanswered
    * carried questions re-opened as answerable). Used by pending and resolved
@@ -157,7 +157,7 @@ export interface ChatMessageActionsResult {
    * point passes `null` (open on the source chat's own host).
    */
   readonly forkAtAssistantMessage: (
-    assistantMessageId: string,
+    assistantMessageId: string | null,
     mode: ChatForkMode,
     interviewBlockId: string | null,
     initialHostId: string | null,
@@ -779,8 +779,8 @@ export function useChatMessageActions(
   );
 
   // Open the fork dialog seeded to branch the source chat through
-  // `assistantMessageId`. Shared by the per-message fork buttons and the
-  // interview actions so all entry points seed identically.
+  // `assistantMessageId`, or the latest available checkpoint when null. Shared
+  // by the host picker, per-message fork buttons, and interview actions.
   // Cross Question seeds the source binding VERBATIM (same working copy:
   // local stays local, an existing worktree is adopted — matching the "+ chat"
   // defaults in a Task) and settles carried questions as reference. A/B Fork
@@ -790,7 +790,7 @@ export function useChatMessageActions(
   // carried questions re-open as answerable.
   const forkAtAssistantMessage = useCallback(
     (
-      assistantMessageId: string,
+      assistantMessageId: string | null,
       mode: ChatForkMode,
       interviewBlockId: string | null,
       initialHostId: string | null,

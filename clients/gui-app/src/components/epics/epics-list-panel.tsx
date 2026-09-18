@@ -103,7 +103,10 @@ import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
-import { HistoryDraftsList } from "@/components/epics/history-drafts-list";
+import {
+  HistoryMessageHits,
+  type HistoryMessageHitsProps,
+} from "@/components/epics/history-message-hits";
 import {
   ROW_TARGET_SELECTOR,
   useHistoryListKeyboardNav,
@@ -706,6 +709,19 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const rowsScopeRef = useRef<HTMLDivElement>(null);
   const keyboardNav = useHistoryListKeyboardNav(searchInputRef, rowsScopeRef);
 
+  // The message-hit section under the list. `null` withholds it entirely:
+  // `picker` is a task picker, where a message is not a destination, and
+  // selection acts on tasks, which a message row is not one of.
+  const messageHits: HistoryMessageHitsProps | null =
+    variant === "picker" || selectionMode
+      ? null
+      : {
+          query: search.query,
+          filtersActive: hasActiveHistoryTaskFilters(search),
+          taskListSettled: !isPending,
+          onRowKeyDown: keyboardNav.onRowKeyDown,
+        };
+
   return (
     <TooltipProvider>
       <section
@@ -796,45 +812,41 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          <>
-            {variant === "picker" ? null : (
-              <HistoryDraftsList hostId={hostId} onBeforeOpen={onSelectEpic} />
-            )}
-            <HistoryListBody
-              variant={variant}
-              error={error}
-              isPending={isPending}
-              isFetching={isFetching}
-              hasActiveFilters={hasActiveFilters}
-              chatHostFilterUnsupported={chatHostFilterUnsupported}
-              hostRequiresCloudToList={hostRequiresCloudToList}
-              items={items}
-              onRetry={handleRetry}
-              selectionMode={selectionMode}
-              selectionEnabled={selectionEnabled}
-              selectedIds={selectedIds}
-              onToggleSelection={toggleSelection}
-              onRequestDelete={requestDelete}
-              onRequestSweep={requestSweep}
-              onSetPinned={handleSetPinned}
-              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-              hasNextPage={hasNextPage}
-              isFetchingNextPage={isFetchingNextPage}
-              onLoadMore={fetchNextPage}
-              onSelectEpic={onSelectEpic}
-              onOpenItem={onOpenItem}
-              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-              worktreesByEpicId={worktreesByEpicId}
-              surfaceHostId={hostId}
-              openEpicIds={openEpicIdSet}
-              completeness={view.completeness}
-              cloudPagePending={cloudPagePending}
-              rowsScopeRef={rowsScopeRef}
-              onRowKeyDown={keyboardNav.onRowKeyDown}
-              onRefresh={refreshHistory}
-            />
-          </>
+          <HistoryListBody
+            variant={variant}
+            error={error}
+            isPending={isPending}
+            isFetching={isFetching}
+            hasActiveFilters={hasActiveFilters}
+            chatHostFilterUnsupported={chatHostFilterUnsupported}
+            hostRequiresCloudToList={hostRequiresCloudToList}
+            items={items}
+            onRetry={handleRetry}
+            selectionMode={selectionMode}
+            selectionEnabled={selectionEnabled}
+            selectedIds={selectedIds}
+            onToggleSelection={toggleSelection}
+            onRequestDelete={requestDelete}
+            onRequestSweep={requestSweep}
+            onSetPinned={handleSetPinned}
+            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            onLoadMore={fetchNextPage}
+            onSelectEpic={onSelectEpic}
+            onOpenItem={onOpenItem}
+            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+            worktreesByEpicId={worktreesByEpicId}
+            surfaceHostId={hostId}
+            openEpicIds={openEpicIdSet}
+            completeness={view.completeness}
+            cloudPagePending={cloudPagePending}
+            rowsScopeRef={rowsScopeRef}
+            onRowKeyDown={keyboardNav.onRowKeyDown}
+            messageHits={messageHits}
+            onRefresh={refreshHistory}
+          />
         </NotificationIndicatorsProvider>
       </section>
       <DeleteTasksDialog
@@ -905,6 +917,24 @@ function hasActiveHistoryFilters(search: HistorySearchState): boolean {
     search.ownershipScopes.length > 0 ||
     (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
     search.query.trim().length > 0
+  );
+}
+
+/**
+ * The narrower question the message-hit section asks: is History showing a
+ * SUBSET of the account's tasks right now?
+ *
+ * Deliberately not {@link hasActiveHistoryFilters}. The query is not a
+ * narrowing the hits ignore - it is the thing they are searching for - and a
+ * sort reorders the task list without removing anything from it, so neither
+ * belongs in a label that says the hits below were not filtered the same way.
+ */
+function hasActiveHistoryTaskFilters(search: HistorySearchState): boolean {
+  return (
+    search.repos.length > 0 ||
+    search.workspaces.length > 0 ||
+    search.chatHosts.length > 0 ||
+    search.ownershipScopes.length > 0
   );
 }
 
@@ -1215,6 +1245,15 @@ interface HistoryListBodyProps extends EpicsListBodyProps {
    * and has no keyboard-row contract to anchor.
    */
   readonly rowsScopeRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * The message-hit section's inputs, or `null` when this History must not
+   * show one. It renders INSIDE `rowsScopeRef`'s node so its hit controls join
+   * the arrow traversal in DOM order, after the last task row - which is the
+   * whole reason it is threaded down here rather than mounted beside the list.
+   * The mobile branch does not take it, for the same reason it does not take
+   * the scope ref.
+   */
+  readonly messageHits: HistoryMessageHitsProps | null;
   readonly onRefresh: () => Promise<unknown>;
 }
 
@@ -1268,7 +1307,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
   // compiler lint treats a ref reached through `props` during render as a ref
   // ACCESS and rejects it (and then flags every sibling prop in the same
   // element). The base component did the same thing with its `listRef`.
-  const { rowsScopeRef } = props;
+  const { messageHits, rowsScopeRef } = props;
   return (
     <div ref={rowsScopeRef} className="min-h-0 flex-1 overflow-y-auto pb-10">
       <EpicsListBody
@@ -1302,6 +1341,14 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         cloudPagePending={props.cloudPagePending}
         onRowKeyDown={props.onRowKeyDown}
       />
+      {messageHits === null ? null : (
+        <HistoryMessageHits
+          query={messageHits.query}
+          filtersActive={messageHits.filtersActive}
+          taskListSettled={messageHits.taskListSettled}
+          onRowKeyDown={messageHits.onRowKeyDown}
+        />
+      )}
     </div>
   );
 }

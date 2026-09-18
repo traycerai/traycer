@@ -30,9 +30,9 @@
  *  - paste / drop / structured-paste ingest / browser-annotation crops all
  *    prepare under `PREPARED_IMAGE_POLICY` and land at most
  *    `PREPARED_IMAGE_MAX_BYTES`;
- *  - the prompt-stash restore writes the stash's blob straight through with no
+ *  - the legacy-stash migration writes the old blob straight through with no
  *    ceiling of its own, so its bound is the STASH policy's - and that policy
- *    keeps an animated GIF/WebP verbatim up to `PROMPT_STASH_IMAGE_MAX_BYTES`,
+ *    keeps an animated GIF/WebP verbatim up to `LEGACY_STASH_IMAGE_MAX_BYTES`,
  *    because an animation cannot be re-encoded frame-faithfully;
  *  - the cross-partition move re-writes bytes an earlier writer already
  *    admitted, so it cannot raise the bound.
@@ -41,11 +41,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { LANDING_IMAGE_MAX_BYTES_PER_IMAGE } from "@/lib/composer/landing-image-budget";
 import {
-  PREPARED_IMAGE_POLICY,
-  PROMPT_STASH_PREPARATION_POLICY,
-} from "@/lib/composer/prompt-stash-image-preparation";
+  LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
+  LEGACY_STASH_IMAGE_MAX_BYTES,
+} from "@/lib/composer/landing-image-budget";
+import { PREPARED_IMAGE_POLICY } from "@/lib/composer/composer-image-preparation-session";
 
 const GUI_APP_ROOT = join(import.meta.dirname, "..", "..", "..", "..");
 
@@ -144,9 +144,9 @@ const WRITERS = [
     why: "prepares the crop under PREPARED_IMAGE_POLICY",
   },
   {
-    path: "src/lib/composer/landing-stash-import.ts",
-    bound: PROMPT_STASH_PREPARATION_POLICY.animationCeiling,
-    why: "writes the stash blob verbatim; the stash keeps animations to its own ceiling",
+    path: "src/lib/composer/landing-image-import.ts",
+    bound: LEGACY_STASH_IMAGE_MAX_BYTES,
+    why: "migrates a legacy stash blob verbatim; the stash kept animations at full size",
   },
   {
     path: "src/lib/composer/landing-image-move.ts",
@@ -174,12 +174,19 @@ describe("the landing per-image ceiling bounds every writer", () => {
     expect(LANDING_IMAGE_MAX_BYTES_PER_IMAGE).toBe(largest);
   });
 
-  it("the two policies really do disagree, so the max above is doing work", () => {
-    // The control. If the stash ever adopts the paste ceiling, every assertion
-    // above passes with either constant and this file silently stops testing
-    // anything - the exact shape that let the substitution through. Then the
-    // `max` is redundant and this file should be re-derived, not deleted.
-    expect(PROMPT_STASH_PREPARATION_POLICY.animationCeiling).not.toBe(
+  it("the two bounds really do disagree, so the max above is doing work", () => {
+    // The control. If the two ever converge, every assertion above passes with
+    // either constant and this file silently stops testing anything - the exact
+    // shape that let the substitution through. Then the `max` is redundant and
+    // this file should be re-derived, not deleted.
+    //
+    // #1979 deleted the prompt stash, which is where the larger of the two came
+    // from. It did NOT retire the bound: that change MIGRATES existing stash
+    // entries into start-page drafts, and `landing-image-import.ts` writes those
+    // blobs through `putImage` verbatim. So the ceiling is still 5 MiB and still
+    // earns it - but for a population that only shrinks, which is why the
+    // constant is named for the legacy data rather than for a live policy.
+    expect(LEGACY_STASH_IMAGE_MAX_BYTES).not.toBe(
       PREPARED_IMAGE_POLICY.byteCeiling,
     );
   });
