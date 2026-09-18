@@ -77,31 +77,26 @@ export function stripBase64ImageNodesWithSelection<TSelection>(
   content: JsonContent,
   selection: TSelection | null,
 ): { readonly content: JsonContent; readonly selection: TSelection | null } {
-  // The strip runs unconditionally, and the predicate decides the CARET only.
-  // Short-circuiting the walk on `!containsBase64ImageNodes` looks equivalent
-  // and is not: the walker also drops an `attachmentGroup` that is already
-  // empty, which has no b64 node to detect. Skipping it there would quietly
-  // start persisting a shape these seams have always removed.
+  // The caret is keyed on REFERENCE IDENTITY, which is the walker's own answer
+  // to "did the tree change" rather than a second opinion about it.
+  //
+  // A separate `containsBase64ImageNodes(content)` predicate stood here and was
+  // subtly wrong, in a way worth keeping written down: the walk removes an
+  // `attachmentGroup` that is ALREADY empty, and an already-empty group holds no
+  // b64 node for such a predicate to find. So the content half stripped the
+  // group while the caret half declared nothing had changed and kept a position
+  // that every later node had just shifted under.
+  //
+  // Any predicate that answers this question by re-deriving it has to be kept in
+  // step with the walker by hand, forever, and this one had already fallen out
+  // of step. `stripBase64ImageNode` now returns its input unchanged when it
+  // changes nothing, so `stripped === content` IS "the tree is untouched" - not
+  // a proxy for it - and a new arm in the walker cannot silently escape it.
+  const stripped = stripBase64ImageNodes(content);
   return {
-    content: stripBase64ImageNodes(content),
-    selection: containsBase64ImageNodes(content) ? null : selection,
+    content: stripped,
+    selection: stripped === content ? selection : null,
   };
-}
-
-/**
- * Whether `content` still holds a pending base64 image node - i.e. whether
- * {@link stripBase64ImageNodes} would change it. Lets a caller skip both the
- * walk and the fresh object when there is nothing to strip, which is the
- * overwhelmingly common case (every persist of every draft that is not mid
- * paste).
- */
-export function containsBase64ImageNodes(content: JsonContent): boolean {
-  if (content.type === "imageAttachment") {
-    return typeof content.attrs?.b64content === "string";
-  }
-  const children = content.content;
-  if (children === undefined) return false;
-  return children.some(containsBase64ImageNodes);
 }
 
 function stripBase64ImageNode(node: JsonContent): JsonContent | null {
@@ -110,13 +105,26 @@ function stripBase64ImageNode(node: JsonContent): JsonContent | null {
   }
   const children = node.content;
   if (children === undefined) return node;
-  const nextChildren = children.flatMap((child) => {
-    const stripped = stripBase64ImageNode(child);
-    return stripped === null ? [] : [stripped];
-  });
+  // Deliberately not a `let changed = false` mutated inside the callback:
+  // TypeScript does not track an assignment made inside a function expression,
+  // so such a flag keeps its literal `false` type at the return below and the
+  // ternary reads as statically dead - correct at runtime, a lie in the types,
+  // and `no-unnecessary-condition` is right to reject it.
+  const strippedChildren = children.map(stripBase64ImageNode);
+  const changed = strippedChildren.some(
+    (stripped, index) => stripped !== children[index],
+  );
+  const nextChildren = strippedChildren.flatMap((stripped) =>
+    stripped === null ? [] : [stripped],
+  );
   // An `attachmentGroup` whose every child was a pending b64 node is left empty
   // by the strip, and the legacy leading-group shape is not valid empty - drop
-  // the group with its last child.
+  // the group with its last child. A group that arrived empty takes the same
+  // exit, which is why this is a change the caller must hear about even though
+  // no b64 node was involved.
   if (node.type === "attachmentGroup" && nextChildren.length === 0) return null;
-  return { ...node, content: nextChildren };
+  // Returning the input node when nothing changed is what makes identity a
+  // usable signal upstream; it also skips the allocation on every persist of
+  // every draft that is not mid-paste, which is nearly all of them.
+  return changed ? { ...node, content: nextChildren } : node;
 }
