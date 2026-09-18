@@ -26,9 +26,10 @@ import { Button } from "@/components/ui/button";
 import { ChatSearchExpandedRows } from "@/components/chat-search/chat-search-expanded-rows";
 import { ChatSearchMessageHitList } from "@/components/chat-search/chat-search-message-hit-list";
 import { ChatSearchNavProvider } from "@/components/chat-search/chat-search-keyboard-nav";
-import type {
-  ChatSearchExpansionTarget,
-  ChatSearchOpenTarget,
+import {
+  ChatSearchPartialIndexNote,
+  type ChatSearchExpansionTarget,
+  type ChatSearchOpenTarget,
 } from "@/components/chat-search/chat-search-results-view";
 import {
   useChatSearchMessageHits,
@@ -272,9 +273,21 @@ function HistoryMessageHitsBody(props: {
     status.loadMoreError === null
   ) {
     return (
-      <p className="px-3 py-1.5 text-ui-xs text-muted-foreground">
-        No messages match.
-      </p>
+      <>
+        {/* The caveat belongs with the EMPTY result most of all: a startup
+            sweep that has not finished is the likeliest reason there is
+            nothing here, and this branch returns before the list that would
+            otherwise have drawn it. Kept alongside "No messages match."
+            rather than in place of it, exactly as the dialog pairs the note
+            with "No chats match.": what was searched did not match, and the
+            note says what was not searched yet. */}
+        {status.indexState === "partial" ? (
+          <ChatSearchPartialIndexNote />
+        ) : null}
+        <p className="px-3 py-1.5 text-ui-xs text-muted-foreground">
+          No messages match.
+        </p>
+      </>
     );
   }
   // Every hit control joins History's own arrow traversal rather than running

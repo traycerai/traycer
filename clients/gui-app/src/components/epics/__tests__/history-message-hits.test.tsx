@@ -13,6 +13,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type {
   ChatSearchMessageHit,
   ChatSearchMessageMatch,
+  ChatSearchResponse,
 } from "@traycer/protocol/host/chat-search/schemas";
 import { HistoryMessageHits } from "@/components/epics/history-message-hits";
 import type {
@@ -147,11 +148,12 @@ const EXPANSION_BASE: ChatSearchBaseRequest = {
 
 function readyStatus(
   messages: ReadonlyArray<ChatSearchMessageMatch>,
+  indexState: ChatSearchResponse["indexState"],
 ): ChatSearchMessageHitsStatus {
   return {
     kind: "ready",
     messages,
-    indexState: "complete",
+    indexState,
     expansionBase: EXPANSION_BASE,
     showMore: null,
     loadingMore: false,
@@ -195,7 +197,7 @@ afterEach(() => {
 
 describe("HistoryMessageHits: when the question cannot be asked", () => {
   it("renders nothing, and asks nothing, below the body-search minimum", () => {
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     const { container } = renderSection({ query: " b " });
 
@@ -207,7 +209,7 @@ describe("HistoryMessageHits: when the question cannot be asked", () => {
 
   it("renders nothing with no host runtime above it", () => {
     testState.hostPresent = false;
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     const { container } = renderSection({});
 
@@ -222,7 +224,7 @@ describe("HistoryMessageHits: when the question cannot be asked", () => {
   });
 
   it("searches every accessible task on the effective host", () => {
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     renderSection({ query: "browser" });
 
@@ -244,7 +246,7 @@ describe("HistoryMessageHits: the header", () => {
       version: null,
       transportDialability: "dialable",
     };
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     renderSection({});
 
@@ -254,10 +256,10 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("says the hits are unfiltered only while a task filter is active", () => {
-    testState.status = readyStatus([
-      messageMatch("chat-1"),
-      messageMatch("chat-2"),
-    ]);
+    testState.status = readyStatus(
+      [messageMatch("chat-1"), messageMatch("chat-2")],
+      "complete",
+    );
 
     renderSection({ filtersActive: false });
     // The whole header IS the assertion that the label is absent, rather than
@@ -301,17 +303,48 @@ describe("HistoryMessageHits: loading and failure", () => {
   });
 
   it("says so when the search found nothing", () => {
-    testState.status = readyStatus([]);
+    testState.status = readyStatus([], "complete");
 
     renderSection({});
 
     expect(screen.getByText("No messages match.")).toBeTruthy();
+    // A complete index means the empty answer is the whole answer; there is
+    // no caveat to add, and adding one would imply doubt that does not exist.
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  // The regression: an unfinished startup sweep is the likeliest EXPLANATION
+  // for an empty result, and this branch returns before the shared list that
+  // renders the note - so the one case that needs the caveat most was the one
+  // case that lost it.
+  it("keeps the still-indexing caveat on an empty result from a partial index", () => {
+    testState.status = readyStatus([], "partial");
+
+    renderSection({});
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "Still indexing chats on this host. Some results may be missing.",
+    );
+    expect(screen.getByText("No messages match.")).toBeTruthy();
+  });
+
+  it("keeps the caveat on a partial index that DID find something", () => {
+    // The other half of the pair, so the note cannot regress to only ever
+    // appearing on the empty branch: here the shared list draws it.
+    testState.status = readyStatus([messageMatch("chat-1")], "partial");
+
+    renderSection({});
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "Still indexing chats on this host. Some results may be missing.",
+    );
+    expect(screen.queryByText("No messages match.")).toBeNull();
   });
 });
 
 describe("HistoryMessageHits: the two ways out", () => {
   it("opens a hit on the host that answered the search", () => {
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -329,7 +362,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
   it("dismisses the History overlay when a hit opens from the modal form", () => {
     testState.historyOverlayActive = true;
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -338,7 +371,7 @@ describe("HistoryMessageHits: the two ways out", () => {
   });
 
   it("leaves the overlay alone when History is a tab", () => {
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -348,7 +381,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
   it("hands the trimmed query to the dialog, scoped to every task", () => {
     testState.historyOverlayActive = true;
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     renderSection({ query: "  browser  " });
     fireEvent.click(
@@ -365,7 +398,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
 describe("HistoryMessageHits: keyboard", () => {
   it("binds History's traversal to every hit control", () => {
-    testState.status = readyStatus([messageMatch("chat-1")]);
+    testState.status = readyStatus([messageMatch("chat-1")], "complete");
 
     const { container, onRowKeyDown } = renderSection({});
     const row = screen.getByRole("button", { name: /Chat chat-1/ });
