@@ -147,9 +147,21 @@ function ManualRungActions({
   // pick lands `rung_unavailable`. That race is precisely what the choice lease
   // exists to prevent, and the card's menu is the surface that takes it.
   //
-  // Nothing is lost while the card is up, and nothing has to be remembered:
-  // `pendingFallback` clearing is the same frame that ends the traversal, so
-  // this row returns exactly when it becomes the only surface again.
+  // Nothing has to be remembered: `pendingFallback` clearing is the same frame
+  // that ends the traversal, so this row returns exactly when it becomes the
+  // only surface again.
+  //
+  // One case DOES lose an affordance, and it is the right trade rather than an
+  // oversight: a user who DISMISSES the card. A dismissal is not an answer to
+  // the card's question - the banner returns null at its own `if (dismissed)`
+  // while the traversal runs on, untouched and still holding dispatch - so
+  // `pendingFallback` stays defined, this row stands down, and that chat has no
+  // rungs anywhere until the ladder ends. Restoring them here would restore
+  // them LEASELESS, into the exact race two paragraphs up, which the dismissal
+  // did nothing to end: the countdown a pick would lose to is still running,
+  // merely no longer drawn. No affordance and an affordance that silently
+  // fails are not a close call. If that gap is ever worth closing, it closes by
+  // giving this row the lease, not by ungating it.
   if (traversalIsLive) return null;
   // The row must be the one the host is describing. A transcript holding three
   // failed attempts offers these once, not three times - and a legacy record
