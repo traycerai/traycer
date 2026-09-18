@@ -117,6 +117,7 @@ import {
   subagentOpenInitializedScopes,
   useSubagentOpenStore,
 } from "@/stores/chats/subagent-open-store";
+import { useLayoutSetting } from "@/lib/layout-overrides";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
 import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
@@ -2785,9 +2786,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const quoteReplyEnabled = useSettingsStore(
     (state) => state.quoteReplyEnabled,
   );
-  const chatTurnMinimapSide = useSettingsStore(
-    (state) => state.chatTurnMinimapSide,
-  );
+  const chatTurnMinimapSide = useLayoutSetting("chatTurnMinimapSide");
   const isMobileViewport = useIsMobileViewport();
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,

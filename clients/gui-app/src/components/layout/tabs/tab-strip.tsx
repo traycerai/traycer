@@ -51,7 +51,7 @@ import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { TabStripHomeItem } from "@/components/layout/tabs/tab-strip-home-item";
 import { useHomeBadgeCount } from "@/components/home-focus/use-home-badge-count";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutSetting } from "@/lib/layout-overrides";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import { useHeaderTabIndicators } from "./header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -77,7 +77,7 @@ import {
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
   const persistedStripCount = useTabsStore((s) => s.stripOrder.length);
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useLayoutSetting("homeTabEnabled");
   if (!hasHydrated) {
     return (
       <TabStripSkeleton
@@ -102,7 +102,7 @@ function TabStripBody() {
   const modalActive = useAnySystemOverlayActive();
   const handleWheel = useHorizontalWheelScroll();
   const activeItemId = useTabsStore((state) => state.activeItemId);
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useLayoutSetting("homeTabEnabled");
   // `activeItemId === null` over a populated strip means Home holds the
   // selection; over an empty one it means the same thing, since Home is the
   // only surface left to hold it.

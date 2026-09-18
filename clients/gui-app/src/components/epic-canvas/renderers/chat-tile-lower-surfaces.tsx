@@ -71,7 +71,7 @@ import {
   useHeldManagedCommandsForChat,
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useComposerLayout } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import type {
   PendingInterviewView,
@@ -623,7 +623,7 @@ const NO_BACKGROUND_ITEMS: ReadonlyArray<BackgroundItem> = [];
  * per-tile reveal exists to avoid.
  */
 function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
-  const composer = useLayoutStore((state) => state.composer);
+  const composer = useComposerLayout();
   const [expanded, setExpanded] = useState<ReadonlySet<ChatDockSection>>(
     () => new Set<ChatDockSection>(),
   );

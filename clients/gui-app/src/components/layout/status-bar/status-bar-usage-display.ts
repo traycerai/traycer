@@ -4,10 +4,8 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
-import {
-  useLayoutStore,
-  type PercentMode,
-} from "@/stores/settings/layout-store";
+import { useStatusBarLayout } from "@/lib/layout-overrides";
+import type { PercentMode } from "@/stores/settings/layout-store";
 
 /**
  * The box the readings sit in, at its NATURAL width.
@@ -115,21 +113,19 @@ export function statusBarUsageParts(
 }
 
 /**
- * Field by field rather than one object selector: a selector returning a fresh
- * object every call makes `useSyncExternalStore` see a new snapshot on each
- * read and re-render forever.
+ * Read through the override seam (`lib/layout-overrides.tsx`), so a Customize
+ * popover can draw the real readings under a different answer.
+ *
+ * `useStatusBarLayout()` selects the whole `statusBar` SLICE, which is a stable
+ * reference in the store and memoized against the override - not a fresh object
+ * per call. That distinction is what this hook used to spell out as four
+ * separate selectors: a selector that BUILDS an object each call makes
+ * `useSyncExternalStore` see a new snapshot on every read and re-render
+ * forever. Selecting an existing slice has never had that problem.
  */
 export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
-  const percentMode = useLayoutStore(
-    (state) => state.statusBar.rateLimits.percentMode,
-  );
-  const showModeWord = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showModeWord,
-  );
-  const showBar = useLayoutStore((state) => state.statusBar.rateLimits.showBar);
-  const showTimer = useLayoutStore(
-    (state) => state.statusBar.rateLimits.showTimer,
-  );
+  const { percentMode, showModeWord, showBar, showTimer } =
+    useStatusBarLayout().rateLimits;
   return { percentMode, showModeWord, showBar, showTimer };
 }
 

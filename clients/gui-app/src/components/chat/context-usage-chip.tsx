@@ -25,8 +25,8 @@ import {
   type ContextUsageRow,
   type EffectiveContextUsage,
 } from "@/components/chat/context-usage";
+import { useComposerLayout, useLayoutSetting } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
-import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
   useSettingsStore,
   type ContextIndicatorStyle,
@@ -68,13 +68,13 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   const pinnedUnpinActionRef = useRef<HTMLButtonElement>(null);
   const focusPinnedActionAfterPinRef = useRef(false);
   const focusCompactTriggerAfterUnpinRef = useRef(false);
-  const pinContextUsageBreakdown = useSettingsStore(
-    (s) => s.pinContextUsageBreakdown,
-  );
+  const pinContextUsageBreakdown = useLayoutSetting("pinContextUsageBreakdown");
+  // The SETTER still comes straight from the store: an override changes what
+  // this subtree draws, never where a real user gesture writes.
   const setPinContextUsageBreakdown = useSettingsStore(
     (s) => s.setPinContextUsageBreakdown,
   );
-  const indicatorStyle = useSettingsStore((s) => s.contextIndicatorStyle);
+  const indicatorStyle = useLayoutSetting("contextIndicatorStyle");
 
   useLayoutEffect(() => {
     if (pinContextUsageBreakdown && focusPinnedActionAfterPinRef.current) {
@@ -326,7 +326,7 @@ interface CompactActionProps {
  * the same compaction.
  */
 function CompactAction({ onCompact }: CompactActionProps) {
-  const compactButton = useLayoutStore((s) => s.composer.compactButton);
+  const compactButton = useComposerLayout().compactButton;
   if (compactButton === "hidden") return null;
   return (
     <TooltipWrapper
@@ -417,7 +417,7 @@ function ContextUsagePinnedStrip({
   onCompact,
   actionRef,
 }: ContextUsagePinnedStripProps) {
-  const fields = useSettingsStore((s) => s.pinnedContextBreakdownFields);
+  const fields = useLayoutSetting("pinnedContextBreakdownFields");
   // `rows` is already in canonical order and only ever carries rows the data
   // supports, so filtering it keeps both properties; the picker decides which
   // of those the strip prints, not what the data can say.

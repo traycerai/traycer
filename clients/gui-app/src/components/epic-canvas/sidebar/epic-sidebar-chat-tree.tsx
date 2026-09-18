@@ -198,7 +198,7 @@ import {
 import { AgentRoleBadges } from "./agent-role-badges";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutSetting } from "@/lib/layout-overrides";
 import {
   Archive,
   ArchiveRestore,
@@ -3349,9 +3349,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     },
     [onToggle],
   );
-  const navigatorResourceMetrics = useSettingsStore(
-    (state) => state.navigatorResourceMetrics,
-  );
+  const navigatorResourceMetrics = useLayoutSetting("navigatorResourceMetrics");
   const ownerKind = useEpicNodeOwnerKind(nodeId);
 
   const showRowControls = !selectionMode;

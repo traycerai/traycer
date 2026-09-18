@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useComposerLayout } from "@/lib/layout-overrides";
 import { DICTATION_ACTION_ID } from "@/hooks/composer/use-dictation-hotkey";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
@@ -57,7 +57,7 @@ export function ComposerMicButton({
   const isBusy = state === "requesting" || state === "transcribing";
   const isRecording = state === "recording";
   const label = labelFor(state);
-  const mic = useLayoutStore((s) => s.composer.mic);
+  const mic = useComposerLayout().mic;
   // Surface the (live, rebindable) shortcut in the tooltip when idle so it's
   // discoverable; omit it where the action is unbound, or where shortcut hints
   // are suppressed - the tooltip then carries the plain action label.
@@ -174,7 +174,7 @@ export function ComposerMicPreparing({
     status.downloadState === "downloading" ? status.progress : null;
   // Holds the mic's slot, so it follows the mic's own visibility: a toolbar
   // configured without a mic must not sprout one for the length of a download.
-  const mic = useLayoutStore((s) => s.composer.mic);
+  const mic = useComposerLayout().mic;
   if (mic === "hidden") return null;
   // A native `title` on a `disabled` button doesn't show on hover (the button
   // gets no pointer events). Put the tooltip on a wrapping span and make the

@@ -66,7 +66,7 @@ import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
 } from "@/stores/epics/left-panel-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutSetting } from "@/lib/layout-overrides";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -307,9 +307,7 @@ function TerminalRow(props: TerminalRowProps) {
     durable,
     authority,
   });
-  const navigatorResourceMetrics = useSettingsStore(
-    (state) => state.navigatorResourceMetrics,
-  );
+  const navigatorResourceMetrics = useLayoutSetting("navigatorResourceMetrics");
   const label = actions.label;
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
