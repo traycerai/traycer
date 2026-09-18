@@ -18,7 +18,7 @@ import {
   reserveLandingImageBudget,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
-import { putImage } from "@/lib/composer/landing-image-store";
+import { putImage } from "@/lib/composer/composer-image-store";
 import {
   stashImageMetadataAgreesWithBlob,
   type PromptStashEntry,

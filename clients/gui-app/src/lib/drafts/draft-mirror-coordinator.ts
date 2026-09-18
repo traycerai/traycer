@@ -5,7 +5,11 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  registerExtraImageContentSource,
+  registerExtraImageRootSource,
+} from "@/lib/composer/landing-image-budget";
 import {
   forgetBlobUnsupportedHost,
   putDraftBlobs,
@@ -858,21 +862,34 @@ export async function ingestCloudDraftSummary(input: {
   await applyHostDocument(input.document);
 }
 
-registerExtraImageRootSource({
-  hashes: () => {
-    const hashes: string[] = [];
+// THE DOCUMENTS, rooted and PRICED. Registering these as a content source is
+// what closes W-6: `referencedImageBytes` summed landing drafts alone, so every
+// paste into a chat or new-conversation composer was admitted against a usage
+// figure that never included the images already sitting in that same composer.
+registerExtraImageContentSource({
+  contents: () => {
+    const contents: JsonContent[] = [];
     for (const draft of Object.values(
       useComposerDraftStore.getState().drafts,
     )) {
       if (draft === undefined) continue;
-      hashes.push(...blobHashesFromContent(draft.content));
+      contents.push(draft.content);
     }
     for (const patch of Object.values(
       useNewConversationModalStore.getState().draftPatchesByEpicId,
     )) {
       if (patch === undefined || patch.content === null) continue;
-      hashes.push(...blobHashesFromContent(patch.content));
+      contents.push(patch.content);
     }
+    return contents;
+  },
+});
+
+// The stash keeps hashes, not documents - no `size` to price - so it stays a
+// root-only source.
+registerExtraImageRootSource({
+  hashes: () => {
+    const hashes: string[] = [];
     for (const row of usePromptStashStore.getState().rows) {
       if (row.kind !== "entry") continue;
       hashes.push(...row.entry.blobHashes);

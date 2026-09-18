@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canonicalPromptStashImageFileName,
   createPromptStashImagePreparationSession,
+  PREPARED_IMAGE_POLICY,
   PROMPT_STASH_IMAGE_MAX_BYTES,
+  PROMPT_STASH_PREPARATION_POLICY,
   PROMPT_STASH_STATIC_IMAGE_MAX_BYTES,
 } from "@/lib/composer/prompt-stash-image-preparation";
 import {
@@ -117,7 +119,11 @@ describe("prompt-stash-image-preparation static codecs/compression", () => {
     });
   });
   describe("GIF single-frame vs multi-frame policy", () => {
-    it("keeps a one-frame GIF at or below 975 KiB byte-identical after decode", async () => {
+    // The GIF fixtures carry a real Logical Screen Descriptor (1×1), so this is
+    // the one existing static fixture the header sniff can actually read - and
+    // reading it is the whole point: a still image already inside the policy is
+    // returned without ever allocating a bitmap.
+    it("keeps a one-frame GIF at or below 975 KiB byte-identical with no decode", async () => {
       const bytes = singleFrameGifBytesOfSize(STATIC_MAX);
       expect(bytes.byteLength).toBe(STATIC_MAX);
       const close = vi.fn<() => void>(() => undefined);
@@ -134,9 +140,10 @@ describe("prompt-stash-image-preparation static codecs/compression", () => {
       expect(prepared.bytes).toBe(bytes);
       expect(prepared.mimeType).toBe("image/gif");
       expect(prepared.fileName).toBe("still.gif");
-      expect(decode).toHaveBeenCalledTimes(1);
+      expect(prepared.step).toBe("verbatim");
+      expect(decode).not.toHaveBeenCalled();
       expect(encodeCalls).toHaveLength(0);
-      expect(close).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
     });
 
     it("decodes and compresses a one-frame GIF one byte above the static threshold", async () => {
@@ -224,14 +231,38 @@ describe("prompt-stash-image-preparation static codecs/compression", () => {
       if (first === undefined) {
         throw new Error("expected at least one encode call");
       }
-      // 4096×2160 → scale 2048/4096 = 0.5 → 2048×1080 at scale 1
+      // 4096×2160 → scale 2048/4096 = 0.5 → 2048×1080 at scale 1. A scale WAS
+      // applied, so the first attempt is the single source-family one (PNG in,
+      // PNG out); this codec answers WebP bytes to every request, so that
+      // attempt is discarded on the format sniff and the ladder takes over -
+      // at the same bounded size, which is what this pins.
+      expect(first.mimeType).toBe("image/png");
       expect(first.width).toBe(2048);
       expect(first.height).toBe(1080);
+      const ladderStart = encodeCalls.at(1);
+      if (ladderStart === undefined) {
+        throw new Error("expected the ladder to follow the source-family try");
+      }
+      expect(ladderStart.mimeType).toBe("image/webp");
+      expect(ladderStart.quality).toBe(0.92);
+      expect(ladderStart.width).toBe(2048);
+      expect(ladderStart.height).toBe(1080);
+      expect(
+        encodeCalls.filter((entry) => entry.mimeType === "image/png"),
+      ).toHaveLength(1);
     });
 
-    it("walks qualities .92/.85/.78/.68 then scales 1/.75/.55 for WebP then JPEG", async () => {
+    // Quality-OUTER, scale-INNER: every scale step is tried at q0.92 before the
+    // quality drops at all, because downscaling costs less legibility than
+    // lossy recompression on the text-heavy screenshots this path mostly sees.
+    it("walks scales 1/.75/.55 inside qualities .92/.85/.78/.68 for WebP then JPEG", async () => {
       const bytes = pngBytesOfSize(STATIC_MAX + 1);
       const qualities = [0.92, 0.85, 0.78, 0.68] as const;
+      const scaledSizes = [
+        { w: 1000, h: 800 },
+        { w: 750, h: 600 },
+        { w: 550, h: 440 },
+      ] as const;
       let call = 0;
       const totalWebP = 3 * 4;
       const totalJpeg = 3 * 4;
@@ -259,6 +290,7 @@ describe("prompt-stash-image-preparation static codecs/compression", () => {
       });
       expect(prepared.mimeType).toBe("image/jpeg");
       expect(prepared.fileName).toBe("ladder.jpg");
+      expect(prepared.step).toBe("recompressed");
       expect(encodeCalls).toHaveLength(totalWebP + totalJpeg);
 
       for (let i = 0; i < totalWebP; i += 1) {
@@ -266,31 +298,18 @@ describe("prompt-stash-image-preparation static codecs/compression", () => {
         if (entry === undefined) throw new Error(`missing encode call ${i}`);
         expect(entry.mimeType).toBe("image/webp");
         expect(entry.whiteMatte).toBe(false);
-        expect(entry.quality).toBe(qualities[i % 4]);
+        expect(entry.quality).toBe(qualities[Math.floor(i / 3)]);
+        expect(entry.width).toBe(scaledSizes[i % 3].w);
+        expect(entry.height).toBe(scaledSizes[i % 3].h);
       }
-      for (let i = totalWebP; i < totalWebP + totalJpeg; i += 1) {
-        const entry = encodeCalls.at(i);
+      for (let i = 0; i < totalJpeg; i += 1) {
+        const entry = encodeCalls.at(totalWebP + i);
         if (entry === undefined) throw new Error(`missing encode call ${i}`);
         expect(entry.mimeType).toBe("image/jpeg");
         expect(entry.whiteMatte).toBe(true);
-        expect(entry.quality).toBe(qualities[(i - totalWebP) % 4]);
-      }
-
-      const expectedSizes = [
-        { w: 1000, h: 800 },
-        { w: 750, h: 600 },
-        { w: 550, h: 440 },
-      ] as const;
-      for (let scaleIndex = 0; scaleIndex < 3; scaleIndex += 1) {
-        const expected = expectedSizes[scaleIndex];
-        for (let q = 0; q < 4; q += 1) {
-          const webpCall = encodeCalls.at(scaleIndex * 4 + q);
-          if (webpCall === undefined) {
-            throw new Error(`missing webp call ${scaleIndex}/${q}`);
-          }
-          expect(webpCall.width).toBe(expected.w);
-          expect(webpCall.height).toBe(expected.h);
-        }
+        expect(entry.quality).toBe(qualities[Math.floor(i / 3)]);
+        expect(entry.width).toBe(scaledSizes[i % 3].w);
+        expect(entry.height).toBe(scaledSizes[i % 3].h);
       }
     });
 
@@ -445,5 +464,24 @@ describe("prompt-stash-image-preparation static codecs/compression", () => {
   it("pins the static and total prompt-stash image byte limits", () => {
     expect(PROMPT_STASH_STATIC_IMAGE_MAX_BYTES).toBe(975 * 1024);
     expect(PROMPT_STASH_IMAGE_MAX_BYTES).toBe(5 * 1024 * 1024);
+  });
+
+  // The preparer is now shared with every composer paste surface, which runs a
+  // much wider policy. The stash's numbers must not drift toward it: its 2048
+  // px edge, its 975 KiB output ceiling, and - the one that is easy to lose -
+  // its animation ceiling, which is its SOURCE ceiling and not its output one.
+  it("pins the stash policy against the shared preparer's universal policy", () => {
+    expect(PROMPT_STASH_PREPARATION_POLICY).toEqual({
+      sourceCeiling: 5 * 1024 * 1024,
+      maxLongestEdge: 2048,
+      byteCeiling: 975 * 1024,
+      animationCeiling: 5 * 1024 * 1024,
+    });
+    expect(PREPARED_IMAGE_POLICY).toEqual({
+      sourceCeiling: 50 * 1024 * 1024,
+      maxLongestEdge: 2000,
+      byteCeiling: 3_932_160,
+      animationCeiling: 3_932_160,
+    });
   });
 });

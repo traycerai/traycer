@@ -1,8 +1,16 @@
 /**
- * Per-runtime, content-addressed image store for the landing / new-epic
- * composer.
+ * Per-runtime (window-partitioned), content-addressed image store for EVERY
+ * composer surface.
  *
- * The landing draft's persisted `content` never carries image base64 — only a
+ * It was the landing composer's alone when it was written, and the file name
+ * said so; it is now the one byte home behind the landing composer, the in-epic
+ * chat composer, the edit composer, the new-conversation modal, browser
+ * annotation crops, the prompt stash and the draft-blob transport. The name no
+ * longer claims otherwise, but the partition key (`landingImagePartition`) and
+ * the IndexedDB database name are UNCHANGED - renaming either would orphan
+ * every installed window's stored bytes.
+ *
+ * A composer draft's persisted `content` never carries image base64 — only a
  * content `hash` per image. The bytes for each hash live here, in an
  * IndexedDB store keyed by that hash, plus an in-memory session cache that
  * also powers flash-free same-session render.
@@ -40,7 +48,7 @@ const session = new Map<string, SessionEntry>();
  * (`putImage`) and on any successful read (`getImageBytes`, which the
  * restored-draft fetcher drives when an image renders), and pruned on
  * `deleteImage`. Backs the synchronous landing paste presence predicate
- * (`hasLandingImageBytes`): unlike the session map alone, it also reports a
+ * (`hasComposerImageBytes`): unlike the session map alone, it also reports a
  * restored draft's IndexedDB-backed hash as present once its image has rendered,
  * so a same-window copy→paste of that image is not falsely stripped.
  */
@@ -169,7 +177,7 @@ async function writeImageUnderHash(
   } catch (error) {
     // The durable write failed: roll back the optimistic seeding THIS call added
     // (a dedupe hit that found the hash already cached is left intact). Without
-    // this, `hasLandingImageBytes` would report present with no durable bytes, so
+    // this, `hasComposerImageBytes` would report present with no durable bytes, so
     // a later paste of that hash would pass validation into a blank preview.
     if (seededSession) releaseSession(hash);
     if (seededKnown) knownHashes.delete(hash);
@@ -209,7 +217,7 @@ export async function deleteImage(hash: string): Promise<void> {
 export async function imageHashKeys(): Promise<string[]> {
   const keysList = await keys<string>(imageStore());
   // Enumerating durable keys is the source of truth for presence, so fold them
-  // into `knownHashes`. This keeps `hasLandingImageBytes` honest even when a
+  // into `knownHashes`. This keeps `hasComposerImageBytes` honest even when a
   // restored image rendered from the app-wide blob cache (a cache hit never
   // calls the per-surface fetcher / `getImageBytes`, so that path wouldn't seed
   // it). Cheap and idempotent; the module also runs this once at init below.
@@ -223,11 +231,11 @@ export function sessionObjectUrl(hash: string): string | null {
 }
 
 /**
- * Whether `hash` has bytes reachable in this window's landing partition (session
- * cache or IndexedDB), as observed this session. Backs the landing paste presence
- * predicate (`hasPastedImageBytes` on the landing composer): a pasted hash-only
- * node whose bytes are not landing-reachable is stripped, closing the
- * phantom-preview fail-open. Synchronous, mirroring the chat composer's predicate.
+ * Whether `hash` has bytes reachable in this window's partition (session cache
+ * or IndexedDB), as observed this session. Backs every composer's paste presence
+ * predicate (`hasPastedImageBytes`): a pasted hash-only node whose bytes are not
+ * reachable here is stripped, closing the phantom-preview fail-open. Synchronous,
+ * because the paste handler has to decide before it can yield.
  *
  * Reflects durable IndexedDB bytes regardless of how the image was rendered:
  * `knownHashes` is seeded from the partition's stored keys at init (and on every
@@ -236,7 +244,7 @@ export function sessionObjectUrl(hash: string): string | null {
  * per-surface fetcher) still reports present, and a same-window copy→paste of it
  * is not a false negative.
  */
-export function hasLandingImageBytes(hash: string): boolean {
+export function hasComposerImageBytes(hash: string): boolean {
   return knownHashes.has(hash);
 }
 

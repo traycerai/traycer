@@ -17,6 +17,7 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
   chatSubscribeV110,
+  chatSubscribeV111,
   createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -2273,7 +2274,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 10 as chatSubscribeV110", () => {
+  it("registers chat.subscribe major 1 latestMinor 11 as chatSubscribeV111", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2289,18 +2290,28 @@ describe("chat.subscribe registry membership", () => {
     // full-snapshot contract above windowed `1.9` would silently un-window
     // every peer already capable of it. That is what these assertions together
     // protect - the ceiling, and the line shape at the ceiling.
-    expect(entry[1].latestMinor).toBe(10);
+    //
+    // `11` changes NO frame shape - `chatSubscribeV111` binds the SAME three
+    // schema instances as `chatSubscribeV110`. The minor exists only as a
+    // capability signal (images by reference on the send frame), so it is not
+    // a new windowed/full-snapshot surface line at all.
+    expect(entry[1].latestMinor).toBe(11);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
     expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
     expect(entry[1].versions[10].contract).toBe(chatSubscribeV110);
+    expect(entry[1].versions[11].contract).toBe(chatSubscribeV111);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
     expect(chatSubscribeV110.schemaVersion).toEqual({
       major: 1,
       minor: 10,
+    });
+    expect(chatSubscribeV111.schemaVersion).toEqual({
+      major: 1,
+      minor: 11,
     });
   });
 

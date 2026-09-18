@@ -279,6 +279,45 @@ export const draftsPutBlobRequestSchema = z.object({
 });
 export type DraftsPutBlobRequest = z.infer<typeof draftsPutBlobRequestSchema>;
 
+/**
+ * The `@1.1` wire ceiling for one draft blob, in base64 CHARACTERS: the
+ * 5 MiB decoded ceiling the client's image preparation targets, expanded by
+ * base64's 4-chars-per-3-bytes ratio.
+ *
+ * Decoded rather than encoded because the ceiling is a statement about the
+ * IMAGE - every provider budget, the preparation ladder and the host store's
+ * own guard are all in decoded bytes - and a cap written in encoded characters
+ * would drift from all of them.
+ */
+export const DRAFT_BLOB_MAX_BYTES = 5 * 1024 * 1024;
+export const DRAFT_BLOB_MAX_BASE64_LENGTH =
+  Math.ceil(DRAFT_BLOB_MAX_BYTES / 3) * 4;
+
+/**
+ * `drafts.putBlob@1.1` - the `@1.0` request with `bytesBase64` capped.
+ *
+ * A NEW INSTANCE, and `draftsPutBlobRequestSchema` stays pinned to
+ * `draftsPutBlobV10`: narrowing a released request schema in place would refuse
+ * a payload a released client is entitled to send, which is the one direction
+ * a same-version edit can break a peer that is already in the field.
+ *
+ * A DECLARATION, NOT THE ENFORCEMENT. It bites only when both peers negotiate
+ * `>= 1.1`, so it can never be the thing standing between an oversized image
+ * and the disk. The enforcement is the host store's version-independent decoded
+ * cap in `FileDraftBlobStore.put`, plus the client's own pre-send guard; what
+ * this buys is that an over-cap body is refused at the PARSE, before a
+ * multi-megabyte string is chunked onto the wire and re-materialized on the
+ * host's event loop.
+ */
+export const draftsPutBlobRequestSchemaV11 = z.object({
+  sha256: draftBlobSha256Schema,
+  /** Base64 of the RAW bytes — what `sha256` is over. */
+  bytesBase64: z.string().max(DRAFT_BLOB_MAX_BASE64_LENGTH),
+});
+export type DraftsPutBlobRequestV11 = z.infer<
+  typeof draftsPutBlobRequestSchemaV11
+>;
+
 export const draftsPutBlobResponseSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true) }),
   z.object({
@@ -314,6 +353,36 @@ export const draftsReadBlobResponseSchema = z.discriminatedUnion("ok", [
 ]);
 export type DraftsReadBlobResponse = z.infer<
   typeof draftsReadBlobResponseSchema
+>;
+
+/**
+ * `drafts.readBlob@1.1` - the same two arms with the SAME cap on the returned
+ * body, so the ceiling is one fact about a draft blob rather than a rule that
+ * only applies on the way in.
+ *
+ * The cap lands on the response because that is where this method's bytes are;
+ * its request carries only a digest, and `draftsReadBlobRequestSchema` is
+ * therefore shared by both minors unchanged.
+ *
+ * A `@1.1` reader that meets an over-cap body fails that one hash's parse,
+ * which the transport already treats exactly as `missing`: the per-image skip
+ * that renders the attachment unavailable. Such a body can only come from a
+ * blob written before the store's own decoded cap existed, so the alternative -
+ * no ceiling on the read line at all - would keep an unbounded string
+ * reachable on a path the write side has already closed.
+ */
+export const draftsReadBlobResponseSchemaV11 = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    bytesBase64: z.string().max(DRAFT_BLOB_MAX_BASE64_LENGTH),
+  }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal("missing"),
+  }),
+]);
+export type DraftsReadBlobResponseV11 = z.infer<
+  typeof draftsReadBlobResponseSchemaV11
 >;
 
 /**

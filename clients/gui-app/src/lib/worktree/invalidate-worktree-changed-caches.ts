@@ -1,7 +1,10 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { perPathEnrichmentQueryPath } from "@/lib/query-keys/worktree-enrichment-keys";
-import { isEpicCreateSeedPending } from "@/lib/worktree/pending-epic-create-seeds";
+import {
+  bindingsQueryEpicId,
+  isEpicCreateSeedPending,
+} from "@/lib/worktree/pending-epic-create-seeds";
 import type { WorktreeChangedAccumulatedScopes } from "@/lib/worktree/worktree-changed-invalidation-scheduler";
 
 /**
@@ -82,22 +85,31 @@ export function invalidateWorktreeChangedCaches(
   void queryClient.invalidateQueries({
     queryKey: bindingsScope,
     refetchType: "active",
-    predicate: (query) => !isPendingCreateSeedBindingsQuery(query.queryKey),
+    predicate: (query) =>
+      !isPendingCreateSeedBindingsQuery(hostId, query.queryKey),
   });
   void queryClient.invalidateQueries({
     queryKey: bindingsScope,
     refetchType: "none",
-    predicate: (query) => isPendingCreateSeedBindingsQuery(query.queryKey),
+    predicate: (query) =>
+      isPendingCreateSeedBindingsQuery(hostId, query.queryKey),
   });
 }
 
 // The binding-list key ends in its params object (`{ epicId }` - see
 // `hostQueryKeys.method`); a query belongs to a mid-create epic when that
-// epic's landing seed is still marked authoritative.
-function isPendingCreateSeedBindingsQuery(queryKey: QueryKey): boolean {
-  const params: unknown = queryKey[queryKey.length - 1];
-  if (params === null || typeof params !== "object") return false;
-  if (!("epicId" in params)) return false;
-  const epicId: unknown = params.epicId;
-  return typeof epicId === "string" && isEpicCreateSeedPending(epicId);
+// epic's landing seed is still marked authoritative ON THIS HOST.
+//
+// The host segment is not decoration. A DEFERRED create's mark outlives the
+// response for the whole provisioning hold, so a host-blind read would
+// downgrade another host's listing of the same epic to mark-only for up to
+// `EPIC_CREATE_SEED_HOLD_TIMEOUT_MS`, where before the hold the same blindness
+// lasted one round trip. `hostId` here is the burst's own host, which is also
+// the host segment of every key in this scope.
+function isPendingCreateSeedBindingsQuery(
+  hostId: string,
+  queryKey: QueryKey,
+): boolean {
+  const epicId = bindingsQueryEpicId(queryKey);
+  return epicId !== null && isEpicCreateSeedPending(hostId, epicId);
 }

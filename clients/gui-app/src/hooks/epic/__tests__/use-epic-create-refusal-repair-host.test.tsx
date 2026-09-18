@@ -19,9 +19,13 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   CreateEpicRequest,
+  CreateEpicRequestV12,
   CreateEpicResponse,
+  CreateEpicResponseV12,
   EpicCreateRefusal,
+  EpicCreateRefusalV12,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   RebindLocalStoreRequest,
   RebindLocalStoreResponse,
@@ -36,6 +40,15 @@ import {
 } from "@/stores/local-store/local-store-repair-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { putImage } from "@/lib/composer/composer-image-store";
+import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  clearEpicCreateSeedPending,
+  markEpicCreateSeedPending,
+  readEpicCreateSeed,
+} from "@/lib/worktree/pending-epic-create-seeds";
 
 /**
  * A refused `epic.create` offers its repair on the host that REFUSED - the
@@ -369,5 +382,283 @@ describe("a second refusal for the same host while the dialog is mounted", () =>
     expect(description).toContain(REFUSAL_B.remedy);
     expect(description).not.toContain(REBIND_REFUSAL.remedy);
     expect(description).not.toContain(REFUSAL_A.message);
+  });
+});
+
+describe("a missing-attachment-bytes refusal retries once under the same idempotency key", () => {
+  const MISSING_BYTES_REFUSAL: EpicCreateRefusalV12 = {
+    kind: "missing-attachment-bytes",
+    message: "Traycer couldn't find the bytes for one of these images.",
+    remedy: "Re-upload the image and try again.",
+  };
+
+  const SETTINGS = {
+    harnessId: "codex" as const,
+    model: "gpt-5.4",
+    permissionMode: "supervised" as const,
+    reasoningEffort: "high",
+    serviceTier: null,
+    agentMode: "epic" as const,
+    profileId: null,
+  };
+
+  function hashOnlyDoc(hash: string): JsonContent {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "imageAttachment",
+          attrs: {
+            id: "img-1",
+            fileName: "a.png",
+            mimeType: "image/png",
+            size: 9,
+            hash,
+            b64content: null,
+            byHashEligible: true,
+          },
+        },
+      ],
+    };
+  }
+
+  function createVariablesWithHash(hash: string): CreateEpicRequestV12 {
+    return {
+      epic: {
+        id: "epic-mab",
+        title: "Epic",
+        initialUserPrompt: "hi",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        createdBy: USER_ID,
+        version: "1",
+      },
+      repoIdentifiers: [],
+      workspaces: [],
+      chat: {
+        chatId: "chat-mab",
+        parentId: null,
+        hostId: PLACEMENT_HOST_ID,
+        title: "Chat",
+        worktreeIntent: null,
+        initialMessage: {
+          messageId: "msg-mab",
+          clientActionId: "action-mab",
+          content: hashOnlyDoc(hash),
+          sender: { type: "user", userId: USER_ID },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          attachmentsByHash: true,
+        },
+      },
+    };
+  }
+
+  /**
+   * A fixture whose `epic.create` handler can answer DIFFERENTLY per call
+   * (refusal, then success) and whose `drafts.putBlob` handler acks whatever
+   * it is asked to upload - the two RPCs the retry actually drives.
+   */
+  // `@1.2`, not the released response: `missing-attachment-bytes` exists only
+  // in the `@1.2` refusal enum, so a `CreateEpicResponse[]` cannot hold the one
+  // refusal this whole describe block is about.
+  function createRetryFixture(
+    createResponses: readonly CreateEpicResponseV12[],
+  ): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+    readonly createCalls: () => ReadonlyArray<{
+      readonly idempotencyKey: string | null;
+    }>;
+    readonly putBlobCalls: () => ReadonlyArray<{ readonly sha256: string }>;
+  } {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    let createCallCount = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-mab",
+      handlers: {
+        "epic.create": () => {
+          const call = createCallCount;
+          createCallCount += 1;
+          const response = createResponses[call];
+          if (response === undefined) {
+            throw new Error(`unexpected epic.create call ${String(call)}`);
+          }
+          return response;
+        },
+        "drafts.putBlob": () => ({ ok: true as const }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === PLACEMENT_HOST_ID ? mockLocalHostEntry : null,
+      messenger,
+      // `drafts.putBlob` dispatches through `requestWithOptions` with its own
+      // extended `responseTimeoutMs`, which `HostClient` validates against the
+      // registry-declared scheduling policy - the default policy declares no
+      // permitted timeout for ANY method, so without the app's real table this
+      // upload is refused before it ever reaches the messenger.
+      schedulingPolicy: hostRpcSchedulingPolicy,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        identity: { userId: USER_ID, username: USER_ID, providerHandle: null },
+        origin: "renderer",
+      }),
+    );
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    return {
+      client: spine.createRequester(mockLocalHostEntry),
+      Wrapper,
+      createCalls: () =>
+        messenger.calls
+          .filter((call) => call.method === "epic.create")
+          .map((call) => ({ idempotencyKey: call.idempotencyKey })),
+      putBlobCalls: () =>
+        messenger.calls
+          .filter((call) => call.method === "drafts.putBlob")
+          .map((call) => ({
+            sha256: (call.params as { readonly sha256: string }).sha256,
+          })),
+    };
+  }
+
+  beforeEach(() => {
+    installFreshIndexedDb();
+    resetDraftBlobTransportForTests();
+  });
+
+  afterEach(() => {
+    resetDraftBlobTransportForTests();
+    clearEpicCreateSeedPending("epic-mab", "chat-mab");
+  });
+
+  it("uploads exactly once and retries once under the same idempotency key, and onSuccess never sees the first refusal", async () => {
+    const hash = await putImage(new Uint8Array([1, 2, 3, 4]));
+    const acceptedTask = null;
+    const fixture = createRetryFixture([
+      { roomInfo: null, task: acceptedTask, refusal: MISSING_BYTES_REFUSAL },
+      // `roomInfo: null` IS the success shape - the wire's own comment says so,
+      // and a room carries no field this case reads. What separates this
+      // response from the refusal above it is the ABSENT `refusal`, nothing
+      // else. (The `{ docId }` this used to carry was on no schema at all.)
+      { roomInfo: null, task: acceptedTask, initialTurnStarted: true },
+    ]);
+    const rendered = renderHook(() => useEpicCreateForClient(fixture.client), {
+      wrapper: fixture.Wrapper,
+    });
+
+    const result = await rendered.result.current.mutateAsync(
+      createVariablesWithHash(hash),
+    );
+
+    const putBlobCalls = fixture.putBlobCalls();
+    const createCalls = fixture.createCalls();
+    expect(putBlobCalls).toHaveLength(1);
+    expect(putBlobCalls[0].sha256).toBe(hash);
+    expect(createCalls).toHaveLength(2);
+    expect(createCalls[0].idempotencyKey).toBe("epic-mab");
+    expect(createCalls[1].idempotencyKey).toBe("epic-mab");
+    // The FINAL response only - the refusal never reached the create's own
+    // resolution.
+    expect(result.refusal).toBeUndefined();
+    // `onSuccess`'s refusal branch (which toasts) never fired: it only ever
+    // saw the final, accepted response.
+    expect(toastErrorCalls).toHaveLength(0);
+  });
+
+  it("a SECOND missing-attachment-bytes refusal ends in a plain toast, never opening the repair dialog", async () => {
+    const hash = await putImage(new Uint8Array([5, 6, 7, 8]));
+    const fixture = createRetryFixture([
+      { roomInfo: null, task: null, refusal: MISSING_BYTES_REFUSAL },
+      { roomInfo: null, task: null, refusal: MISSING_BYTES_REFUSAL },
+    ]);
+    const rendered = renderHook(() => useEpicCreateForClient(fixture.client), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await rendered.result.current.mutateAsync(createVariablesWithHash(hash));
+
+    expect(fixture.createCalls()).toHaveLength(2);
+    expect(toastErrorCalls).toHaveLength(1);
+    const call = toastErrorCalls[0];
+    expect(call.message).toBe(MISSING_BYTES_REFUSAL.message);
+    expect(call.description).toBe(MISSING_BYTES_REFUSAL.remedy);
+    // No `action` at all - never the Repair affordance.
+    expect(call.action).toBeUndefined();
+    expect(useLocalStoreRepairStore.getState().pending).toBeNull();
+  });
+
+  // NARROWED (was "the binding seed survives the first refusal that the
+  // retry then succeeds past"): that title claimed to pin the seed's
+  // survival THROUGH the retry, but this harness mounts only
+  // `useEpicCreateForClient` - the mutation hook - and nothing in this hook
+  // ever CLEARS a seed entry, on a refusal, a retry, or a success. The
+  // clearing logic (`clearEpicCreateSeedPending` / `clearUnheldEpicCreateSeed`)
+  // lives entirely in `createLandingEpic`'s own `.then`/`.catch`
+  // (`use-landing-composer-actions.ts`), which this harness does not mount.
+  // So the old assertion passed even if a first refusal leaked straight
+  // through to a caller that DOES clear on refusal - it was proving that
+  // THIS hook doesn't touch the entry, not that the retry protects it.
+  //
+  // What this case still legitimately covers: `armEpicCreateSeedHoldTimer`
+  // is a no-op for a pair with no entry (documented at its own definition)
+  // and, more to the point, this mutation hook's `onSuccess` never calls any
+  // of the clearing functions - only the re-registering/arming ones. A
+  // pre-existing entry is therefore inert cargo to this hook regardless of
+  // how many refusals the retry absorbs underneath it.
+  //
+  // The real pin for "does the seed survive a missing-attachment-bytes
+  // refusal the retry then succeeds past" is in the landing suite, which
+  // owns the teardown this harness cannot reach:
+  // `src/components/home/__tests__/use-landing-composer-actions.test.tsx`,
+  // describe "missing-attachment-bytes refusal retry survives the seed
+  // (B3-7)".
+  it("never clears a pre-existing seed entry of its own accord, refusal-then-retry included", async () => {
+    const hash = await putImage(new Uint8Array([9, 9, 9, 9]));
+    const fixture = createRetryFixture([
+      { roomInfo: null, task: null, refusal: MISSING_BYTES_REFUSAL },
+      { roomInfo: null, task: null, initialTurnStarted: true },
+    ]);
+    const released: number[] = [];
+    markEpicCreateSeedPending("epic-mab", "chat-mab", {
+      hostId: PLACEMENT_HOST_ID,
+      seededMessageId: "msg-mab",
+      seedRows: true,
+      heldForDeferredCreate: false,
+      release: () => {
+        released.push(1);
+      },
+    });
+    const rendered = renderHook(() => useEpicCreateForClient(fixture.client), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await rendered.result.current.mutateAsync(createVariablesWithHash(hash));
+
+    // This hook's own `onSuccess` armed the entry's timer (it is unheld, so
+    // that timer alone would eventually release it) but never called a
+    // clearing function - `release` above proves that, since only a clear
+    // (direct or via the armed timer firing) invokes it.
+    expect(readEpicCreateSeed("epic-mab", "chat-mab")).not.toBeNull();
+    expect(released).toEqual([]);
   });
 });

@@ -25,7 +25,7 @@ import {
   imageHashKeys,
   deleteImage,
   releaseSession,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 import { queryClient } from "@/lib/query-client";
 import { prepareSavedDraft } from "@/lib/tab-recovery/saved-draft";
 import type { ClosedHeaderTab } from "@/lib/tab-recovery/history";

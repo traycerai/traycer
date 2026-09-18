@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import { type ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
-import { getImageBytes } from "@/lib/composer/landing-image-store";
+import { getImageBytes } from "@/lib/composer/composer-image-store";
 
 /**
  * Byte source for the landing composer's hash-only image chips: the per-runtime

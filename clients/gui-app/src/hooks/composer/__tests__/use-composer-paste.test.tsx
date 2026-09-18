@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import {
   act,
   cleanup,
@@ -11,23 +12,97 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import {
-  useComposerPaste,
-  useComposerPasteAdapter,
   isAttachmentIngestPending,
   IMAGE_READ_TIMEOUT_MS,
   FILE_PATH_RESOLUTION_TIMEOUT_MS,
+  MAX_IMAGE_SOURCE_BYTES,
   type ComposerFilePathIngestArgs,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
+import {
+  useComposerHashFirstPaste,
+  type ComposerHashFirstEditorHandle,
+} from "@/hooks/composer/use-composer-hash-first-paste";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/composer/composer-image-store")
+    >();
+  return {
+    ...actual,
+    putImage: vi.fn(() => Promise.resolve("paste-core-hash")),
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
   },
 }));
+
+const EMPTY_EDITOR_DOC = { type: "doc", content: [] };
+
+/**
+ * The deleted `useComposerPasteAdapter`'s SIGNATURE, over the hook that ships.
+ *
+ * Almost everything in this file pins the shared BASE — drag depth and overlay
+ * variants, clipboard and drop path resolution, the read timeout, the pending
+ * gates, unmount liveness — which lives in `useComposerPasteEvents` and is
+ * identical under any ingest. That coverage had no reason to die with the
+ * base64 adapter, so the adapter's two-argument shape is reproduced here and
+ * every assertion below is unchanged.
+ *
+ * `putImage` is doubled: these are not image-store pins, and the hash the job
+ * lands is never asserted.
+ */
+function useAdapterUnderTest(
+  insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
+  filePaths: ComposerFilePathIngestArgs,
+): UseComposerPasteResult {
+  // Read through refs: several call sites pass an inline arrow, so the handle
+  // must not close over the first render's callback.
+  const insertRef = useRef(insertAttrs);
+  insertRef.current = insertAttrs;
+  const filePathsRef = useRef(filePaths);
+  filePathsRef.current = filePaths;
+  const editorRef = useRef<ComposerHashFirstEditorHandle>({
+    isReady: () => true,
+    insertImageAttachments: (attrs) => {
+      insertRef.current(attrs);
+    },
+    beginPathInsertion: () => filePathsRef.current.beginPathInsertion(),
+    focus: () => undefined,
+    getJSON: () => EMPTY_EDITOR_DOC,
+    removeImageAttachmentById: () => undefined,
+    rewriteImageAttachmentHashById: () => true,
+  });
+  return useComposerHashFirstPaste({
+    editorRef,
+    budgetOwnerId: null,
+    disabled: false,
+    fileDrops: filePaths.fileDrops,
+    mentionRoots: filePaths.mentionRoots,
+  });
+}
+
+/** The deleted `useComposerPaste`'s signature, likewise over the shipping hook. */
+function usePasteUnderTest(
+  editorRef: { readonly current: ComposerHashFirstEditorHandle | null },
+  fileDrops: IFileDropHost,
+  mentionRoots: ReadonlyArray<string>,
+): UseComposerPasteResult {
+  return useComposerHashFirstPaste({
+    editorRef,
+    budgetOwnerId: null,
+    disabled: false,
+    fileDrops,
+    mentionRoots,
+  });
+}
 
 // Default fixture for tests that don't care about file-path resolution at
 // all (pure image-ingest coverage): every resolve/copy call comes back
@@ -49,7 +124,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("useComposerPasteAdapter - runPendingImageJob (landing in-place paste)", () => {
+describe("composer paste core - runPendingImageJob (landing in-place paste)", () => {
   // Item 8: pending image jobs gate isIngestingImages the same as file attach.
   it("holds isIngestingImages true while a runPendingImageJob is in flight, then clears", async () => {
     const gate: { release: (() => void) | null } = { release: null };
@@ -57,7 +132,7 @@ describe("useComposerPasteAdapter - runPendingImageJob (landing in-place paste)"
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
+      useAdapterUnderTest(insert, NOOP_FILE_PATHS),
     );
 
     act(() => {
@@ -96,42 +171,38 @@ describe("useComposerPasteAdapter - runPendingImageJob (landing in-place paste)"
   });
 });
 
-describe("useComposerPasteAdapter - attachImageFiles", () => {
-  it("exposes ingestion as pending until the FileReader settles", async () => {
-    const delayedReader = installDelayedFileReader();
+describe("composer paste core - attachImageFiles", () => {
+  it("exposes ingestion as pending until the file read settles", async () => {
+    const pending = delayedImageFile("pending.png");
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
+      useAdapterUnderTest(insert, NOOP_FILE_PATHS),
     );
 
-    attachImageFiles(result.current, [
-      new File(["pending"], "pending.png", { type: "image/png" }),
-    ]);
+    attachImageFiles(result.current, [pending.file]);
 
     expect(result.current.isIngestingImages).toBe(true);
     expect(insert).not.toHaveBeenCalled();
-    delayedReader.resolveNext("data:image/png;base64,cGVuZGluZw==");
+    pending.resolve(7);
     await waitFor(() => {
       expect(result.current.isIngestingImages).toBe(false);
     });
     expect(insert).toHaveBeenCalledTimes(1);
   });
 
-  it("releases the gate and reports a FileReader rejection", async () => {
-    const delayedReader = installDelayedFileReader();
+  it("releases the gate and reports a file-read rejection", async () => {
+    const broken = delayedImageFile("broken.png");
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
+      useAdapterUnderTest(insert, NOOP_FILE_PATHS),
     );
 
-    attachImageFiles(result.current, [
-      new File(["broken"], "broken.png", { type: "image/png" }),
-    ]);
-    delayedReader.rejectNext();
+    attachImageFiles(result.current, [broken.file]);
+    broken.reject();
 
     await waitFor(() => {
       expect(result.current.isIngestingImages).toBe(false);
@@ -143,19 +214,17 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     );
   });
 
-  it("times out a non-settling FileReader and releases the gate", async () => {
+  it("times out a non-settling file read and releases the gate", async () => {
     vi.useFakeTimers();
-    installDelayedFileReader();
+    const stuck = delayedImageFile("stuck.png");
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
+      useAdapterUnderTest(insert, NOOP_FILE_PATHS),
     );
 
-    attachImageFiles(result.current, [
-      new File(["stuck"], "stuck.png", { type: "image/png" }),
-    ]);
+    attachImageFiles(result.current, [stuck.file]);
     expect(result.current.isIngestingImages).toBe(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(IMAGE_READ_TIMEOUT_MS);
@@ -169,28 +238,29 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     );
   });
 
-  it("aborts an in-flight FileReader on unmount without showing a toast", async () => {
-    installDelayedFileReader();
-    const abort = vi
-      .spyOn(FileReader.prototype, "abort")
-      .mockImplementation(() => undefined);
+  it("abandons an in-flight file read on unmount without showing a toast", async () => {
+    const pending = delayedImageFile("pending.png");
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result, unmount } = renderHook(() =>
-      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
+      useAdapterUnderTest(insert, NOOP_FILE_PATHS),
     );
 
-    attachImageFiles(result.current, [
-      new File(["pending"], "pending.png", { type: "image/png" }),
-    ]);
+    attachImageFiles(result.current, [pending.file]);
     expect(result.current.isIngestingImages).toBe(true);
     unmount();
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
 
-    expect(abort).toHaveBeenCalledTimes(1);
+    // The unmount aborts the ingest's signal, which rejects the read; a late
+    // resolution of the underlying promise must still insert nothing and - the
+    // point of the abort branch - must not toast at a surface the user left.
+    pending.resolve(7);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
     expect(insert).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -198,7 +268,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   it("converts picker-selected image files into image attachment attrs", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
-      useComposerPasteAdapter((attrs) => {
+      useAdapterUnderTest((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
       }, NOOP_FILE_PATHS),
@@ -219,9 +289,17 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     expect(image).toBeDefined();
     expect(image.id.length).toBeGreaterThan(0);
     expect(image.fileName).toBe("sample.png");
-    expect(image.b64content).toBe("aGVsbG8=");
     expect(image.mimeType).toBe("image/png");
     expect(image.size).toBe(5);
+    // HASH-ONLY, and asserted both ways round on purpose. This pin used to read
+    // `b64content === "aGVsbG8="` — the base64 of "hello" — which is precisely
+    // the node shape that put megabytes into `localStorage` and into every
+    // debounced `drafts.upsert`. A file picked here now goes to the composer
+    // image store before any node exists, so the node names the bytes and never
+    // carries them. The negative half is the one that would catch a regression:
+    // it fails the moment an ingest starts inlining again.
+    expect(image.hash).toBe("paste-core-hash");
+    expect(image.b64content).toBeUndefined();
   });
 
   // `attachImageFiles` backs the image-only picker button (see
@@ -233,7 +311,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   it("drops non-image files and keeps only images from a mixed list", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
-      useComposerPasteAdapter((attrs) => {
+      useAdapterUnderTest((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
       }, NOOP_FILE_PATHS),
@@ -252,23 +330,32 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     expect(attrs[0].mimeType).toBe("image/png");
   });
 
-  it("rejects oversized images via a toast and does not insert them", async () => {
+  // The only size a paste refuses outright is the SOURCE ceiling, checked
+  // against `File.size` so nothing this big is ever read, let alone decoded.
+  // Everything under it is preparation's problem now, not this filter's.
+  it("rejects images over the source ceiling via a toast and does not read them", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
-      useComposerPasteAdapter((attrs) => {
+      useAdapterUnderTest((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
       }, NOOP_FILE_PATHS),
     );
-    const oversized = makeOversizedImage("big.png");
+    const read = vi.fn(() => Promise.resolve(new ArrayBuffer(0)));
+    const oversized = makeOversizedImage("big.png", MAX_IMAGE_SOURCE_BYTES + 1);
+    Object.defineProperty(oversized, "arrayBuffer", {
+      configurable: true,
+      value: read,
+    });
 
     attachImageFiles(result.current, [oversized]);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(inserted).toHaveLength(0);
+    expect(read).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
     const call = vi.mocked(toast.error).mock.calls[0];
-    expect(call[0]).toBe("Image too large");
+    expect(call[0]).toBe("Image too large even after resizing.");
     const opts = call[1];
     if (
       typeof opts !== "object" ||
@@ -277,13 +364,33 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     ) {
       throw new Error("expected toast options with description string");
     }
-    expect(opts.description).toContain("5MB");
+    expect(opts.description).toBe("big.png");
+  });
+
+  // The old 5 MiB refusal moved from the source to the OUTPUT: a 10 MB paste
+  // that used to be turned away now attaches.
+  it("accepts an image that the old 5 MiB source cap would have refused", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const { result } = renderHook(() =>
+      useAdapterUnderTest((attrs) => {
+        inserted.push([...attrs]);
+        return attrs.length;
+      }, NOOP_FILE_PATHS),
+    );
+    const big = makeOversizedImage("big.png", 10 * 1024 * 1024);
+
+    attachImageFiles(result.current, [big]);
+
+    await waitFor(() => {
+      expect(inserted).toHaveLength(1);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("does not insert when the file list is empty", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
-      useComposerPasteAdapter((attrs) => {
+      useAdapterUnderTest((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
       }, NOOP_FILE_PATHS),
@@ -298,54 +405,29 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   it("returns a stable attachImageFiles reference across renders", () => {
     const onInsert = (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0;
     const { result, rerender } = renderHook(() =>
-      useComposerPasteAdapter(onInsert, NOOP_FILE_PATHS),
+      useAdapterUnderTest(onInsert, NOOP_FILE_PATHS),
     );
     const first = result.current.attachImageFiles;
     rerender();
     expect(result.current.attachImageFiles).toBe(first);
   });
 
-  it("does not report an attachment when the live editor rejects insertion", async () => {
-    const track = vi.spyOn(Analytics.getInstance(), "track");
-    const insert = vi.fn(
-      (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0,
-    );
-    const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
-    );
-    const imageFile = new File(["hello"], "sample.png", {
-      type: "image/png",
-    });
-
-    attachImageFiles(result.current, [imageFile]);
-
-    await waitFor(() => expect(insert).toHaveBeenCalledOnce());
-    expect(track).not.toHaveBeenCalledWith(
-      AnalyticsEvent.AttachmentAdded,
-      expect.anything(),
-    );
-  });
-
   it("does not report an attachment when the editor ref disappears during conversion", async () => {
     const track = vi.spyOn(Analytics.getInstance(), "track");
     const insertImageAttachments = vi.fn();
-    const editorRef: {
-      current: {
-        insertImageAttachments: typeof insertImageAttachments;
-        beginPathInsertion: () => null;
-        isReady: () => boolean;
-        focus: () => void;
-      } | null;
-    } = {
+    const editorRef: { current: ComposerHashFirstEditorHandle | null } = {
       current: {
         insertImageAttachments,
         beginPathInsertion: () => null,
         isReady: () => true,
         focus: vi.fn(),
+        getJSON: () => EMPTY_EDITOR_DOC,
+        removeImageAttachmentById: () => undefined,
+        rewriteImageAttachmentHashById: () => true,
       },
     };
     const { result } = renderHook(() =>
-      useComposerPaste(editorRef, NOOP_FILE_PATHS.fileDrops, []),
+      usePasteUnderTest(editorRef, NOOP_FILE_PATHS.fileDrops, []),
     );
     const imageFile = new File(["hello"], "sample.png", {
       type: "image/png",
@@ -367,16 +449,20 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   it("does not report an attachment when a non-null editor is not ready", async () => {
     const track = vi.spyOn(Analytics.getInstance(), "track");
     const insertImageAttachments = vi.fn();
-    const editorRef = {
+    const editorRef: { current: ComposerHashFirstEditorHandle | null } = {
       current: {
         insertImageAttachments,
         beginPathInsertion: () => null,
+        // The subject of this pin: a live handle that is NOT ready.
         isReady: () => false,
         focus: vi.fn(),
+        getJSON: () => EMPTY_EDITOR_DOC,
+        removeImageAttachmentById: () => undefined,
+        rewriteImageAttachmentHashById: () => true,
       },
     };
     const { result } = renderHook(() =>
-      useComposerPaste(editorRef, NOOP_FILE_PATHS.fileDrops, []),
+      usePasteUnderTest(editorRef, NOOP_FILE_PATHS.fileDrops, []),
     );
 
     attachImageFiles(result.current, [
@@ -394,7 +480,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   });
 });
 
-describe("useComposerPasteAdapter - onPaste", () => {
+describe("composer paste core - onPaste", () => {
   it("collects image files from the clipboard and inserts them", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const png = new File(["pasted"], "from-clipboard.png", {
@@ -731,7 +817,7 @@ describe("useComposerPasteAdapter - onPaste", () => {
   });
 });
 
-describe("useComposerPasteAdapter - isResolvingFilePaths / attachment pending", () => {
+describe("composer paste core - isResolvingFilePaths / attachment pending", () => {
   // Finding 3: pure-path resolution must gate submit via isResolvingFilePaths.
   it("reports isResolvingFilePaths while a non-image file path is still resolving", async () => {
     let resolvePaths: ((paths: readonly string[]) => void) | null = null;
@@ -862,7 +948,7 @@ describe("useComposerPasteAdapter - isResolvingFilePaths / attachment pending", 
   });
 });
 
-describe("useComposerPasteAdapter - drag-and-drop", () => {
+describe("composer paste core - drag-and-drop", () => {
   it("ignores drop events that don't carry files", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     renderHarness(inserted, NOOP_FILE_PATHS);
@@ -1078,34 +1164,42 @@ function attachImageFiles(
   });
 }
 
-interface DelayedFileReaderControl {
-  readonly resolveNext: (dataUrl: string) => void;
-  readonly rejectNext: () => void;
+interface DelayedImageFile {
+  readonly file: File;
+  readonly resolve: (byteLength: number) => void;
+  readonly reject: () => void;
 }
 
-function installDelayedFileReader(): DelayedFileReaderControl {
-  const pending: FileReader[] = [];
-  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
-    this: FileReader,
-    _blob: Blob,
-  ) {
-    pending.push(this);
+interface PendingRead {
+  readonly resolve: (buffer: ArrayBuffer) => void;
+  readonly reject: (error: Error) => void;
+}
+
+/**
+ * An image `File` whose byte read is held open until the test settles it.
+ * Stubbed per file rather than on the prototype so one stalled read in a test
+ * can never gate another file's, which is exactly what the serial-preparation
+ * behaviour makes observable.
+ */
+function delayedImageFile(name: string): DelayedImageFile {
+  const file = new File(["pending"], name, { type: "image/png" });
+  let pending: PendingRead | null = null;
+  Object.defineProperty(file, "arrayBuffer", {
+    configurable: true,
+    value: () =>
+      new Promise<ArrayBuffer>((resolve, reject) => {
+        pending = { resolve, reject };
+      }),
   });
+  const takePending = (): PendingRead => {
+    const read = pending;
+    if (read === null) throw new Error("expected pending file read");
+    return read;
+  };
   return {
-    resolveNext: (dataUrl) => {
-      const reader = pending.shift();
-      if (reader === undefined) throw new Error("expected pending file read");
-      Object.defineProperty(reader, "result", {
-        configurable: true,
-        value: dataUrl,
-      });
-      reader.dispatchEvent(new ProgressEvent("load"));
-    },
-    rejectNext: () => {
-      const reader = pending.shift();
-      if (reader === undefined) throw new Error("expected pending file read");
-      reader.dispatchEvent(new ProgressEvent("error"));
-    },
+    file,
+    resolve: (byteLength) => takePending().resolve(new ArrayBuffer(byteLength)),
+    reject: () => takePending().reject(new Error("file read failed")),
   };
 }
 
@@ -1120,7 +1214,7 @@ function PasteHarness(props: {
   readonly inserted: ImageAttachmentAttrs[][];
   readonly filePaths: ComposerFilePathIngestArgs;
 }) {
-  const handlers = useComposerPasteAdapter((attrs) => {
+  const handlers = useAdapterUnderTest((attrs) => {
     props.inserted.push([...attrs]);
     return attrs.length;
   }, props.filePaths);
@@ -1146,7 +1240,7 @@ function PasteStateHarness({
   readonly inserted: ImageAttachmentAttrs[][];
   readonly filePaths: ComposerFilePathIngestArgs;
 }) {
-  const handlers = useComposerPasteAdapter((attrs) => {
+  const handlers = useAdapterUnderTest((attrs) => {
     inserted.push([...attrs]);
     return attrs.length;
   }, filePaths);
@@ -1282,8 +1376,8 @@ function makeFileAndUriListTransfer(file: File, uri: string): FileTransferLike {
   };
 }
 
-function makeOversizedImage(name: string): File {
+function makeOversizedImage(name: string, size: number): File {
   const file = new File(["x"], name, { type: "image/png" });
-  Object.defineProperty(file, "size", { value: 10 * 1024 * 1024 });
+  Object.defineProperty(file, "size", { value: size });
   return file;
 }

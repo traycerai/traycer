@@ -12,6 +12,7 @@ import type {
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 
@@ -1366,8 +1367,17 @@ export const HOST_METHOD_POLL_TABLE = {
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.claim": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Unary byte channel, same posture as `epic.readChatAttachment`.
-  "drafts.putBlob": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Unary byte channel, same posture as `epic.readChatAttachment` - but the
+  // only one of the drafts methods whose BODY is megabytes rather than KB, so
+  // it is also the only one that declares a budget. The value is declared once
+  // in `draft-blob-transport-budget.ts` and must match exactly: `putDraftBlobs`
+  // names it on every dispatch, and the host client refuses a budget this table
+  // does not declare for the method.
+  "drafts.putBlob": {
+    mode: "fifo",
+    joinResponseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected

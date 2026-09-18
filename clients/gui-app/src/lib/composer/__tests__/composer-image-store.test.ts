@@ -10,7 +10,7 @@ import {
 import {
   deleteImage,
   getImageBytes,
-  hasLandingImageBytes,
+  hasComposerImageBytes,
   imageHashKeys,
   imageStore,
   landingImagePartition,
@@ -19,7 +19,7 @@ import {
   sessionHashKeys,
   sessionImageBytes,
   sessionObjectUrl,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 
 // In-memory stand-in for idb-keyval. The store argument is ignored - the module
 // only ever keys by string hash, and each test drains the map via the module's
@@ -75,7 +75,7 @@ function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
 }
 
-describe("landing-image-store", () => {
+describe("composer-image-store", () => {
   beforeEach(async () => {
     URL.createObjectURL = createObjectURL;
     URL.revokeObjectURL = revokeObjectURL;
@@ -196,36 +196,36 @@ describe("landing-image-store", () => {
     );
   });
 
-  it("hasLandingImageBytes: IDB-only restored hash is absent until getImageBytes, then present, then pruned on delete", async () => {
+  it("hasComposerImageBytes: IDB-only restored hash is absent until getImageBytes, then present, then pruned on delete", async () => {
     // Simulate a restored draft image: bytes already in IndexedDB from a prior
     // session, but no session put and no knownHashes seed yet.
     const restoredHash = "a".repeat(64);
     const bytes = bytesOf([42, 43, 44]);
     await idbSet(restoredHash, bytes, imageStore());
 
-    expect(hasLandingImageBytes(restoredHash)).toBe(false);
+    expect(hasComposerImageBytes(restoredHash)).toBe(false);
 
     // Render path: fetcher reads through getImageBytes, which seeds knownHashes.
     expect(await getImageBytes(restoredHash)).toEqual(bytes);
-    expect(hasLandingImageBytes(restoredHash)).toBe(true);
+    expect(hasComposerImageBytes(restoredHash)).toBe(true);
 
     await deleteImage(restoredHash);
-    expect(hasLandingImageBytes(restoredHash)).toBe(false);
+    expect(hasComposerImageBytes(restoredHash)).toBe(false);
     expect(await getImageBytes(restoredHash)).toBeUndefined();
   });
 
-  it("hasLandingImageBytes: IDB keys enumeration seeds presence without getImageBytes", async () => {
+  it("hasComposerImageBytes: IDB keys enumeration seeds presence without getImageBytes", async () => {
     // Blob-cache hit path: a restored hash has durable bytes, but render reused
     // an app-wide object URL so the per-surface fetcher / getImageBytes never ran.
     const restoredHash = "b".repeat(64);
     const bytes = bytesOf([55, 56, 57]);
     await idbSet(restoredHash, bytes, imageStore());
 
-    expect(hasLandingImageBytes(restoredHash)).toBe(false);
+    expect(hasComposerImageBytes(restoredHash)).toBe(false);
 
     // Enumerating durable keys (also done once at module init) folds them in.
     expect(await imageHashKeys()).toContain(restoredHash);
-    expect(hasLandingImageBytes(restoredHash)).toBe(true);
+    expect(hasComposerImageBytes(restoredHash)).toBe(true);
     // Still no session entry - only knownHashes was seeded from keys.
     expect(sessionObjectUrl(restoredHash)).toBeNull();
     expect(sessionImageBytes(restoredHash)).toBeNull();
@@ -238,7 +238,7 @@ describe("landing-image-store", () => {
     await expect(putImage(bytes)).rejects.toThrow("idb write failed");
 
     const failedHash = await sha256Hex(bytes);
-    expect(hasLandingImageBytes(failedHash)).toBe(false);
+    expect(hasComposerImageBytes(failedHash)).toBe(false);
     expect(sessionHashKeys()).toEqual([]);
     expect(sessionObjectUrl(failedHash)).toBeNull();
     expect(sessionImageBytes(failedHash)).toBeNull();
@@ -252,7 +252,7 @@ describe("landing-image-store", () => {
     const hash = await putImage(bytes);
     const urlBefore = sessionObjectUrl(hash);
     expect(urlBefore).not.toBeNull();
-    expect(hasLandingImageBytes(hash)).toBe(true);
+    expect(hasComposerImageBytes(hash)).toBe(true);
 
     const setCallsBefore = vi.mocked(idbSet).mock.calls.length;
     // Any unexpected durable write would fail; the dedupe path must skip set
@@ -265,7 +265,7 @@ describe("landing-image-store", () => {
     expect(again).toBe(hash);
     // set was not invoked for the dedupe hit.
     expect(vi.mocked(idbSet).mock.calls.length).toBe(setCallsBefore);
-    expect(hasLandingImageBytes(hash)).toBe(true);
+    expect(hasComposerImageBytes(hash)).toBe(true);
     expect(sessionObjectUrl(hash)).toBe(urlBefore);
     expect(sessionImageBytes(hash)).toEqual(bytes);
     expect(await getImageBytes(hash)).toEqual(bytes);
@@ -319,7 +319,7 @@ describe("landing-image-store", () => {
     }
 
     // No torn state: presence false, no session, no durable bytes.
-    expect(hasLandingImageBytes(failedHash)).toBe(false);
+    expect(hasComposerImageBytes(failedHash)).toBe(false);
     expect(sessionHashKeys()).toEqual([]);
     expect(sessionObjectUrl(failedHash)).toBeNull();
     expect(sessionImageBytes(failedHash)).toBeNull();
@@ -331,9 +331,9 @@ describe("landing-image-store", () => {
   });
 
   // Finding 6: prune knownHashes only AFTER del resolves.
-  it("deleteImage keeps hasLandingImageBytes true when del rejects (bytes still present)", async () => {
+  it("deleteImage keeps hasComposerImageBytes true when del rejects (bytes still present)", async () => {
     const hash = await putImage(bytesOf([6, 6, 6]));
-    expect(hasLandingImageBytes(hash)).toBe(true);
+    expect(hasComposerImageBytes(hash)).toBe(true);
     expect(idbData.has(hash)).toBe(true);
 
     vi.mocked(idbDel).mockRejectedValueOnce(new Error("idb del failed"));
@@ -341,7 +341,7 @@ describe("landing-image-store", () => {
     await expect(deleteImage(hash)).rejects.toThrow("idb del failed");
 
     // Presence must remain true: durable bytes are still there.
-    expect(hasLandingImageBytes(hash)).toBe(true);
+    expect(hasComposerImageBytes(hash)).toBe(true);
     expect(idbData.has(hash)).toBe(true);
     expect(await getImageBytes(hash)).toEqual(bytesOf([6, 6, 6]));
 

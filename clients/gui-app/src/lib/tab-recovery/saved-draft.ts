@@ -15,7 +15,7 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { blobHashesOfDocument } from "@/lib/drafts/draft-write-codec";
 import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
-import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
+import { putImageBytesAtHash } from "@/lib/composer/composer-image-store";
 import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
 import type { ClosedHeaderTab } from "./history";
 

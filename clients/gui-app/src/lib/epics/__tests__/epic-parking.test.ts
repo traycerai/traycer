@@ -273,6 +273,7 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
     },
     restoreWorktreeIntent: null,
     displayWorktreeIntent: null,
+    sentContentHashes: null,
     messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,

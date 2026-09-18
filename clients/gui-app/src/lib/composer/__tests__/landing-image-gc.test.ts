@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-// In-memory stand-in for idb-keyval, mirroring landing-image-store.test. Keyed by
+// In-memory stand-in for idb-keyval, mirroring composer-image-store.test. Keyed by
 // string hash; the store argument is ignored. The Map is hoisted so tests can
 // reinstall a working `set` after a rejecting override without losing the body.
 const idbData = vi.hoisted(() => new Map<string, unknown>());
@@ -84,7 +84,7 @@ async function flush(): Promise<void> {
 
 type Modules = {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
-  readonly store: typeof import("@/lib/composer/landing-image-store");
+  readonly store: typeof import("@/lib/composer/composer-image-store");
   readonly draft: typeof import("@/stores/home/landing-draft-store");
   readonly runtime: typeof import("@/stores/home/draft-runtime-registry");
   readonly idb: typeof import("idb-keyval");
@@ -119,7 +119,7 @@ async function loadModules(opts: {
   vi.mocked(idb.keys).mockImplementation(() =>
     Promise.resolve(Array.from(idbData.keys())),
   );
-  const store = await import("@/lib/composer/landing-image-store");
+  const store = await import("@/lib/composer/composer-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
   const draft = await import("@/stores/home/landing-draft-store");
   const runtime = await import("@/stores/home/draft-runtime-registry");
@@ -530,11 +530,11 @@ describe("landing-image-gc", () => {
     );
 
     // (a) Failed hash is NOT left present with no durable bytes (putImage rollback).
-    expect(m.store.hasLandingImageBytes(failedHash)).toBe(false);
+    expect(m.store.hasComposerImageBytes(failedHash)).toBe(false);
     expect(await m.store.imageHashKeys()).not.toContain(failedHash);
     expect(m.store.sessionObjectUrl(failedHash)).toBeNull();
     // Successful sibling is still durable + session-cached (no node inserted).
-    expect(m.store.hasLandingImageBytes(successHash)).toBe(true);
+    expect(m.store.hasComposerImageBytes(successHash)).toBe(true);
     expect(await m.store.imageHashKeys()).toContain(successHash);
     expect(m.store.sessionObjectUrl(successHash)).not.toBeNull();
 
@@ -550,7 +550,7 @@ describe("landing-image-gc", () => {
     await vi.advanceTimersByTimeAsync(250);
     await flush();
     expect(await m.store.imageHashKeys()).not.toContain(successHash);
-    expect(m.store.hasLandingImageBytes(successHash)).toBe(false);
+    expect(m.store.hasComposerImageBytes(successHash)).toBe(false);
 
     // Restore a working set so later cases (same idb mock module) are not poisoned.
     vi.mocked(m.idb.set).mockImplementation((key, value) => {

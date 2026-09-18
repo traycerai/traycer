@@ -7,7 +7,7 @@ import {
   deleteImage,
   imageHashKeys,
   releaseSession,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 
 export function installIdbWorking(
   idbData: Map<string, unknown>,

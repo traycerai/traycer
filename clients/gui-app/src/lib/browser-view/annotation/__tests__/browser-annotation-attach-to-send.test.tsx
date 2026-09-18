@@ -32,9 +32,11 @@ const imageStoreMocks = vi.hoisted(() => ({
   sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
 }));
 
-vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
+vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
+    await importOriginal<
+      typeof import("@/lib/composer/composer-image-store")
+    >();
   return {
     ...actual,
     sessionImageBytes: imageStoreMocks.sessionImageBytes,
@@ -113,6 +115,11 @@ function mountSubmit(args: {
   return renderHook(() =>
     useChatComposerSubmit({
       taskId: args.taskId,
+      // Explicit `null`: these cases drive the INLINE submit arm, and a null
+      // host/client is what keeps the by-hash gate shut. The args type takes
+      // no optional params or defaults (lint rule), so every site states it.
+      hostId: null,
+      hostClient: null,
       editorRef: { current: args.editor },
       pickerStore: createComposerPickerStore(),
       toolbarStore,

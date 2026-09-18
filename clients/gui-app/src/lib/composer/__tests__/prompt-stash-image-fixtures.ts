@@ -280,6 +280,17 @@ export function encodedWebpBytesOfSize(
   return staticWebpBytesOfSize(byteLength);
 }
 
+/**
+ * A mock codec's PNG output. Only the signature matters: preparation sniffs an
+ * encode result to confirm the codec produced the format it was asked for, and
+ * never re-reads its dimensions.
+ */
+export function encodedPngBytesOfSize(
+  byteLength: number,
+): Uint8Array<ArrayBuffer> {
+  return pngBytesOfSize(byteLength);
+}
+
 export function encodedJpegBytesOfSize(
   byteLength: number,
 ): Uint8Array<ArrayBuffer> {
@@ -320,4 +331,68 @@ function writeGifSubBlocks(
   }
   out[o] = 0;
   return o + 1;
+}
+
+function writeUint32BigEndian(
+  out: Uint8Array,
+  offset: number,
+  value: number,
+): void {
+  out[offset] = (value >>> 24) & 0xff;
+  out[offset + 1] = (value >>> 16) & 0xff;
+  out[offset + 2] = (value >>> 8) & 0xff;
+  out[offset + 3] = value & 0xff;
+}
+
+/**
+ * PNG with a real, parseable IHDR (signature + length + "IHDR" + width/height
+ * big-endian at bytes 16/20) so `sniffPngDimensions` can answer without a
+ * decode. The header-less `pngBytesOfSize` deliberately does NOT do this — it
+ * exists to exercise the decode fallback, this one exercises the sniff path.
+ */
+export function pngBytesWithHeader(
+  width: number,
+  height: number,
+  byteLength: number,
+): Uint8Array<ArrayBuffer> {
+  if (byteLength < 24) {
+    throw new Error(
+      `Header-bearing PNG fixture requires at least 24 bytes, got ${byteLength}`,
+    );
+  }
+  const bytes = new Uint8Array(byteLength);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  writeUint32BigEndian(bytes, 8, 13); // IHDR chunk data length
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12); // "IHDR"
+  writeUint32BigEndian(bytes, 16, width);
+  writeUint32BigEndian(bytes, 20, height);
+  return bytes;
+}
+
+/**
+ * JPEG with a real SOF0 (baseline) segment carrying width/height, so
+ * `sniffJpegDimensions` can answer without a decode. `jpegBytesOfSize` stays
+ * header-less on purpose (decode-path fixture).
+ */
+export function jpegBytesWithHeader(
+  width: number,
+  height: number,
+  byteLength: number,
+): Uint8Array<ArrayBuffer> {
+  if (byteLength < 11) {
+    throw new Error(
+      `Header-bearing JPEG fixture requires at least 11 bytes, got ${byteLength}`,
+    );
+  }
+  const bytes = new Uint8Array(byteLength);
+  bytes.set([0xff, 0xd8], 0); // SOI
+  bytes.set([0xff, 0xc0], 2); // SOF0
+  bytes[4] = 0x00; // segment length high byte (value unused by the sniffer)
+  bytes[5] = 0x11;
+  bytes[6] = 0x08; // sample precision
+  bytes[7] = (height >>> 8) & 0xff;
+  bytes[8] = height & 0xff;
+  bytes[9] = (width >>> 8) & 0xff;
+  bytes[10] = width & 0xff;
+  return bytes;
 }

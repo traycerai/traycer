@@ -61,6 +61,7 @@ import {
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
 import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
+import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   notifyDraftLocalDelete,
@@ -1450,31 +1451,6 @@ function workspaceFolderInfoByPathToDesktopValue(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-// Strip pending base64 image nodes (and any `attachmentGroup` left empty) from
-// content at the two SERIALIZATION seams [Mechanism A] — the persist
-// `partialize` and `projectLandingDraftForDesktop` — NOT in `setDraftContent`
-// (in-memory draft content is canonical and may carry a paste's still-pending
-// b64 node). Hash-only image nodes (whose bytes are durably stored) are kept; a
-// still-pending b64 node is dropped from the serialized form until its background
-// job flips it to a hash and the next serialization captures the converted node.
-function stripBase64ImageNodes(content: JsonContent): JsonContent {
-  return stripBase64ImageNode(content) ?? EMPTY_LANDING_DRAFT_CONTENT;
-}
-
-function stripBase64ImageNode(node: JsonContent): JsonContent | null {
-  if (node.type === "imageAttachment") {
-    return typeof node.attrs?.b64content === "string" ? null : node;
-  }
-  const children = node.content;
-  if (children === undefined) return node;
-  const nextChildren = children.flatMap((child) => {
-    const stripped = stripBase64ImageNode(child);
-    return stripped === null ? [] : [stripped];
-  });
-  if (node.type === "attachmentGroup" && nextChildren.length === 0) return null;
-  return { ...node, content: nextChildren };
 }
 
 function sameDraftSelection(

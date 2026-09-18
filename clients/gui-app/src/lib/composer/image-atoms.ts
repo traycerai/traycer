@@ -11,6 +11,31 @@ export interface ComposerImageAtom {
   readonly hash: string | null;
   readonly mimeType: string;
   readonly size: number | null;
+  /**
+   * Whether these bytes may go to the host BY HASH rather than inline — the
+   * preparer's verdict, read back off the node. See
+   * `ImageAttachmentAttrs.byHashEligible`.
+   */
+  readonly byHashEligible: boolean;
+}
+
+/**
+ * The node attr read back as a boolean, defaulting to `false`.
+ *
+ * `dataAttributeMap` parses every attribute with `getAttribute`, which only
+ * returns strings, so a node that has round-tripped through the HTML clipboard
+ * (an ordinary Cmd+C of an image atom) carries `"true"`/`"false"` where the
+ * picker-built node carries a real boolean — the same split `numberValue` and
+ * the mention chip's `issueNumber` already live with.
+ *
+ * Absent (or anything else) is `false` ON PURPOSE. A node whose provenance this
+ * build cannot vouch for — a draft persisted before the attr existed, a paste
+ * from an older client — goes inline, which is exactly what happens today and
+ * cannot fail. Guessing `true` would put bytes of unknown format on the by-hash
+ * path and turn a working attachment into a host refusal.
+ */
+export function imageAttachmentByHashEligible(value: unknown): boolean {
+  return value === true || value === "true";
 }
 
 export function collectImageAtoms(
@@ -120,5 +145,6 @@ function atomFromAttrs(
     hash,
     mimeType: mimeType ?? "image/png",
     size: numberValue(attrs.size),
+    byHashEligible: imageAttachmentByHashEligible(attrs.byHashEligible),
   };
 }

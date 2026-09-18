@@ -16,11 +16,23 @@ import {
   appendImageAttachmentAtoms,
   containsImageAtoms,
 } from "@/lib/composer/image-atoms";
+import {
+  inlineImageHashesFromSession,
+  inlineLocalImageHashes,
+} from "@/lib/composer/composer-image-inlining";
+import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
+import { useImageContentRoot } from "@/hooks/composer/use-image-content-root";
+import {
+  planAttachmentsByHash,
+  resolveSendContentByHash,
+  sendAttachmentsByHashSupported,
+} from "@/lib/composer/attachments-by-hash";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import {
   getImageBytes,
   sessionImageBytes,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import { v4 as uuidv4 } from "uuid";
@@ -40,12 +52,25 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { Attachment } from "@/lib/composer/types";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 
 import type { ChatComposerSubmitInput } from "./chat-composer";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
 interface UseChatComposerSubmitArgs {
   readonly taskId: string;
+  /**
+   * The TAB's host - the machine this chat is bound to for life - and the
+   * client its requests go out on. Both are needed only by the image seam: the
+   * send's shape depends on what that host's chat stream negotiated, and a hash
+   * this window has not yet pushed has to be uploaded to THAT host's blob tier
+   * before the frame can reference it. Passed in rather than re-resolved here,
+   * so this hook cannot disagree with the composer around it about which
+   * machine it is talking to.
+   */
+  readonly hostId: string | null;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   readonly pickerStore: ComposerPickerStore;
   /**
@@ -142,6 +167,15 @@ export interface ChatComposerSubmitResult {
   readonly submitDraft: (source: ChatComposerSubmitSource) => void;
   readonly annotationPreparationPending: boolean;
   /**
+   * True while a submit is reading a session-cold image's bytes back out of
+   * IndexedDB to inline them. Kept separate from the annotation flag rather
+   * than folded into it: they are two different reads with two different
+   * failures, and a composer that reported "annotation preparation" for an
+   * ordinary restored draft would send the next reader looking in the wrong
+   * place. Both gate the send button the same way.
+   */
+  readonly imageResolutionPending: boolean;
+  /**
    * Confirm-dialog state for a `Mod-Enter` steer whose settings differ from the
    * running turn's baked settings (decision 6). Open means the send is staged
    * behind an interrupt-and-restart confirmation; the composer text is kept
@@ -160,6 +194,8 @@ export function useChatComposerSubmit(
 ): ChatComposerSubmitResult {
   const {
     taskId,
+    hostId,
+    hostClient,
     editorRef,
     pickerStore,
     toolbarStore,
@@ -180,9 +216,23 @@ export function useChatComposerSubmit(
   const appendMessage = useChatStore((state) => state.appendMessage);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
+  // GC root while the interrupt-restart dialog is open. This is the one send
+  // path that parks a fully built document in component state and waits for a
+  // human: `clearAcceptedDraft` has NOT run (the send has not gone out), but
+  // any other composer sending in the meantime schedules the reconcile, and
+  // the confirm would then dispatch hash-only nodes whose bytes were deleted
+  // while the dialog sat there. `restore.content` is the same document
+  // hash-only, so rooting `content` covers both.
+  useImageContentRoot(pendingConflict?.content ?? null);
   const [annotationPreparationPending, setAnnotationPreparationPending] =
     useState(false);
   const annotationPrepFlight = useRef(false);
+  const [imageResolutionPending, setImageResolutionPending] = useState(false);
+  // The editor is NOT cleared until a send is accepted, so a second Enter
+  // during the session-cold read would otherwise start a second send of the
+  // same message. Mirrors `annotationPrepFlight` (and the landing composer's
+  // `submissionInFlightRef`), which exist for exactly this reason.
+  const imageResolutionInFlight = useRef(false);
 
   // Everything an ACCEPTED submit does to the composer, shared by the send and
   // the side-chat paths so a refused one leaves the text in place on both.
@@ -252,32 +302,33 @@ export function useChatComposerSubmit(
       // and clear nothing, letting the just-submitted text resurrect once the
       // editor finishes initializing from that same stale initial content.
       if (editor === null || !editor.isReady()) return;
+      // The guard above narrows `editor`, but control-flow narrowing does not
+      // reach a hoisted function declaration - `runSubmitFromAnnotationStage`
+      // could in principle be called before the guard ran, so TS will not carry
+      // it in. Re-binding makes the handle NON-NULLABLE BY TYPE rather than by
+      // position, which every reader below then gets for free.
+      const readyEditor = editor;
       if (annotationPrepFlight.current) return;
-      const { annotationRecords } = readDraftSidecars(taskId);
-      const editorContent = editor.getJSON();
-      const contentText =
-        extractPlainTextFromComposerJSONContent(editorContent);
-      if (
-        isEmptyComposerSubmit({
-          contentText,
-          editorContent,
-          annotationRecords,
-        })
-      ) {
-        return;
-      }
 
       const submitPreparedDraft = (
         annotationImages: ReadonlyArray<AnnotationImageAtom>,
+        resolutionAttempt: number,
       ): void => {
         if (submitBlocked()) return;
+        // AHEAD OF EVERY DISPATCH PATH, the synchronous one included. It used to
+        // sit inside each async arm, which left this hole: a first submit goes
+        // async on a session-cold hash, the user types, a second submit now
+        // finds every hash session-warm, takes the SYNCHRONOUS fast path below
+        // and sends immediately - and then the first arm settles and sends the
+        // same message again. A resolution in flight owns this submit.
+        if (imageResolutionInFlight.current) return;
         // Re-read the document rather than comparing the `revision` captured
         // before the async annotation-image read. `revision` bumps on every
         // keystroke, so a single character typed during that read dropped the
         // send silently; and the pre-flight capture is not what the user is
         // looking at by the time we clear the editor, so sending it would
         // discard those keystrokes. The live document is both.
-        const liveContent = editor.getJSON();
+        const liveContent = readyEditor.getJSON();
         const liveContentText =
           extractPlainTextFromComposerJSONContent(liveContent);
         // Re-read the sidecar array for the same reason the document is
@@ -302,105 +353,271 @@ export function useChatComposerSubmit(
           ),
           annotationImages,
         );
-        const attachments: ReadonlyArray<Attachment> = [
-          ...buildAttachmentsFromJSONContent(submittedContent),
-          ...liveAnnotationRecords,
-        ];
 
-        // A `/btw` prompt never reaches this chat: the remainder is asked in a
-        // fork instead. Decided AFTER chip conversion (so a typed `/btw` and a
-        // picked chip read the same) and BEFORE the delivery/steer decision
-        // below - a side question asked mid-turn is the whole point, and it
-        // must neither steer nor queue. It sits inside the prepared-draft path
-        // so it reads the same live document the send would, and the annotation
-        // atoms appended above are transparent to the leading-token scan.
-        if (onSideChat !== null) {
-          const sideChat = splitLeadingSideChatCommand(submittedContent);
-          if (sideChat !== null) {
-            if (onSideChat({ content: sideChat.rest, settings })) {
-              clearAcceptedDraft();
+        // Everything from the side-chat split onwards, taking the content the
+        // host will actually receive. Split out because resolving a hash-only
+        // node's bytes can need an IndexedDB read, and the two paths below must
+        // not be able to drift from one another.
+        const dispatchSubmittedContent = (sendContent: JsonContent): void => {
+          const attachments: ReadonlyArray<Attachment> = [
+            ...buildAttachmentsFromJSONContent(sendContent),
+            ...liveAnnotationRecords,
+          ];
+
+          // A `/btw` prompt never reaches this chat: the remainder is asked in
+          // a fork instead. Decided AFTER chip conversion (so a typed `/btw`
+          // and a picked chip read the same) and BEFORE the delivery/steer
+          // decision below - a side question asked mid-turn is the whole point,
+          // and it must neither steer nor queue. It sits inside the
+          // prepared-draft path so it reads the same live document the send
+          // would, and the annotation atoms appended above are transparent to
+          // the leading-token scan.
+          if (onSideChat !== null) {
+            const sideChat = splitLeadingSideChatCommand(sendContent);
+            if (sideChat !== null) {
+              if (onSideChat({ content: sideChat.rest, settings })) {
+                clearAcceptedDraft();
+              }
+              return;
             }
-            return;
           }
-        }
 
-        const deliveryPolicy = resolveSubmitDeliveryPolicy({
-          source,
-          activeTurnStatus,
-          steerEnabled,
-          steerProtocolSupported,
-        });
-        const sendInput: ChatComposerSubmitInput = {
-          content: submittedContent,
-          contentText: liveContentText,
-          attachments,
-          settings,
-          deliveryPolicy,
-          restore: {
-            content: liveContent,
-            browserAnnotations: liveAnnotationRecords,
-          },
+          const deliveryPolicy = resolveSubmitDeliveryPolicy({
+            source,
+            activeTurnStatus,
+            steerEnabled,
+            steerProtocolSupported,
+          });
+          const sendInput: ChatComposerSubmitInput = {
+            content: sendContent,
+            contentText: liveContentText,
+            attachments,
+            settings,
+            deliveryPolicy,
+            // The RESTORE is the hash-only live document, never the inlined
+            // send: a refused send puts this straight back in the composer,
+            // where base64 is exactly what this change removed.
+            restore: {
+              content: liveContent,
+              browserAnnotations: liveAnnotationRecords,
+            },
+          };
+          if (deliveryPolicy === "after_safe_point" && steerCapable) {
+            const originTurn = getActiveTurnForSteer();
+            const decision = decideSteerSettings(originTurn, settings);
+            if (decision.kind === "interrupt_restart") {
+              setPendingConflict({
+                content: sendContent,
+                contentText: liveContentText,
+                attachments,
+                restore: {
+                  content: liveContent,
+                  browserAnnotations: liveAnnotationRecords,
+                },
+                settings: decision.newSettings,
+                changed: decision.changed,
+                originTurnId: originTurn?.turnId ?? null,
+              });
+              return;
+            }
+          }
+          finalizeSend(sendInput);
         };
-        if (deliveryPolicy === "after_safe_point" && steerCapable) {
-          const originTurn = getActiveTurnForSteer();
-          const decision = decideSteerSettings(originTurn, settings);
-          if (decision.kind === "interrupt_restart") {
-            setPendingConflict({
-              content: submittedContent,
-              contentText: liveContentText,
-              attachments,
-              restore: {
-                content: liveContent,
-                browserAnnotations: liveAnnotationRecords,
-              },
-              settings: decision.newSettings,
-              changed: decision.changed,
-              originTurnId: originTurn?.turnId ?? null,
-            });
+
+        // Captured BEFORE either await. `revision` bumps on document edits AND
+        // on browser-annotation add/remove, which is exactly the pair
+        // `clearAcceptedDraft` wipes; it deliberately ignores selection.
+        const generation = captureComposerSubmitGeneration(
+          () => readComposerDraftSnapshot(taskId).revision,
+        );
+
+        // How BOTH async arms settle - the sameness is the point, so an arm
+        // added later cannot grow a differently shaped guard.
+        //
+        // The latch is released FIRST, because the re-entry below has to get
+        // past the guard at the top of this function.
+        const settleResolvedSend = (sendContent: JsonContent): void => {
+          imageResolutionInFlight.current = false;
+          setImageResolutionPending(false);
+          if (generation.stillCurrent()) {
+            dispatchSubmittedContent(sendContent);
             return;
           }
+          // The user typed, or attached an annotation, while the bytes were
+          // being resolved. Dispatching now would send the document captured
+          // before that and then clear the one containing it - destroying work
+          // the user can still see, with no way back.
+          //
+          // So re-run the submit instead - from the ANNOTATION STAGE, not from
+          // here. `annotationImages` holds the crops resolved for the sidecar
+          // as it stood at the first submit, and the sidecar is one of the
+          // things the user can have changed during the read: re-entering with
+          // those atoms appends a crop for an annotation that has since been
+          // REMOVED (it arrives as an ordinary image the user never sent) and
+          // has no crop for one attached since. Restarting the stage resolves
+          // the sidecar that is actually on screen.
+          if (resolutionAttempt === 0) {
+            runSubmitFromAnnotationStage(resolutionAttempt + 1);
+            return;
+          }
+          // Changed again during the retry. Send nothing and clear nothing: the
+          // composer still holds everything the user has typed, and the send
+          // button is live again. Bounded rather than looping, because the
+          // re-entry is driven by keystrokes and this arm must terminate.
+        };
+
+        const beginResolution = (): void => {
+          imageResolutionInFlight.current = true;
+          setImageResolutionPending(true);
+        };
+
+        // THE WIRE TAKES HASHES on `chat.subscribe@1.11`: the host materializes
+        // a hash-only node from this account's draft blob tier immediately
+        // before the dangling-hash guard that would otherwise refuse it. So the
+        // first question is whether this host's stream negotiates that, and
+        // only if it does not do the bytes have to be put back inline.
+        //
+        // Best effort on both sides of the gate, and for the same reason: this
+        // composer's document routinely holds hashes whose bytes were never
+        // local (an image copied out of a rendered message, a restored failed
+        // send), and those address the epic's own attachment store, which the
+        // host resolves first. A genuinely lost hash fails visibly either way.
+        const plan = planAttachmentsByHash(submittedContent);
+        if (
+          hostId !== null &&
+          hostClient !== null &&
+          plan.eligible.length > 0 &&
+          sendAttachmentsByHashSupported(hostId)
+        ) {
+          // Always async - "does the host already hold these bytes" is not a
+          // question this window can answer from memory - so it takes the same
+          // re-entry guard and the same pending flag as the cold-read path.
+          // (The guard itself now sits at the top of this function, ahead of
+          // the synchronous path too.)
+          beginResolution();
+          // Two-argument `then`, not `.then(...).catch(...)`: a `catch` chained
+          // after the success arm also catches a throw from the dispatch itself
+          // and would send the message a second time.
+          void resolveSendContentByHash({
+            hostId,
+            client: hostClient,
+            content: submittedContent,
+            plan,
+          }).then(settleResolvedSend, () => {
+            // The upload or the byte read failed outright. Send the document
+            // as it stands: on a `@1.11` host a hash-only node is a shape the
+            // host understands, and one it cannot resolve comes back as the
+            // existing rejection, which restores the prompt.
+            settleResolvedSend(submittedContent);
+          });
+          return;
         }
-        finalizeSend(sendInput);
+        // Below the minor: the composer is hash-first and this wire is not, so
+        // hashes this window holds bytes for go back to inline base64. Fast
+        // path: every hash is in the session cache (the ordinary "you just
+        // pasted it" case) → stay in this stack frame, so the document is read
+        // and cleared with nothing able to run in between.
+        const inlined = inlineImageHashesFromSession(submittedContent);
+        if (inlined !== null) {
+          dispatchSubmittedContent(inlined);
+          return;
+        }
+        // Something is not session-cached: a draft restored in a later session,
+        // or — the ordinary case on this surface — a hash that was never local
+        // at all, addressing the epic attachment store on the host. Read what
+        // this window has and leave the rest hash-only for the host to resolve,
+        // exactly as it does today. Guarded at the top of this function,
+        // because the editor is NOT cleared until the send is accepted, so a
+        // second Enter during the read would otherwise start a second send of
+        // the same message.
+        beginResolution();
+        // Two-argument `then`, not `.then(...).catch(...)`: a `catch` CHAINED
+        // after the success arm also catches a throw from the dispatch itself
+        // and would send the message a second time.
+        void inlineLocalImageHashes(submittedContent).then(
+          settleResolvedSend,
+          () => {
+            // An IndexedDB open/transaction failure (private browsing, quota, a
+            // corrupt DB). Send the document as it stands rather than losing
+            // the message: hash-only nodes the host cannot resolve come back as
+            // the existing rejection, which restores the prompt.
+            settleResolvedSend(submittedContent);
+          },
+        );
       };
 
-      if (annotationRecords.length === 0) {
-        submitPreparedDraft([]);
-        return;
+      /**
+       * THE WHOLE SUBMIT FROM THE ANNOTATION-RESOLUTION STAGE DOWN, so that the
+       * first attempt and the stale-generation retry take the identical path.
+       *
+       * A function declaration rather than a `const` arrow because
+       * `settleResolvedSend`, defined above inside `submitPreparedDraft`, calls
+       * it: hoisting is what lets the two reference each other without a ref.
+       *
+       * The empty-submit guard lives HERE rather than at the top of
+       * `submitDraft` for the same reason the stage is re-entered at all - the
+       * retry is driven by the draft having changed, and one of the things it
+       * can have changed into is empty (the user deleted the text and removed
+       * the annotation while the bytes were read). Nothing further out re-asks.
+       */
+      function runSubmitFromAnnotationStage(resolutionAttempt: number): void {
+        const { annotationRecords } = readDraftSidecars(taskId);
+        const editorContent = readyEditor.getJSON();
+        const contentText =
+          extractPlainTextFromComposerJSONContent(editorContent);
+        if (
+          isEmptyComposerSubmit({
+            contentText,
+            editorContent,
+            annotationRecords,
+          })
+        ) {
+          return;
+        }
+
+        if (annotationRecords.length === 0) {
+          submitPreparedDraft([], resolutionAttempt);
+          return;
+        }
+
+        annotationPrepFlight.current = true;
+        setAnnotationPreparationPending(true);
+        void (async () => {
+          try {
+            const annotationImages =
+              await resolveAnnotationImageAtoms(annotationRecords);
+            if (annotationImages === null) {
+              reportableErrorToast(
+                "Couldn't attach the annotation image.",
+                {
+                  description: "The crop is missing. Try attaching again.",
+                },
+                {
+                  title: "Annotation image missing",
+                  message: null,
+                  code: null,
+                  source: "Chat composer",
+                },
+              );
+              return;
+            }
+            submitPreparedDraft(annotationImages, resolutionAttempt);
+          } finally {
+            annotationPrepFlight.current = false;
+            setAnnotationPreparationPending(false);
+          }
+        })();
       }
 
-      annotationPrepFlight.current = true;
-      setAnnotationPreparationPending(true);
-      void (async () => {
-        try {
-          const annotationImages =
-            await resolveAnnotationImageAtoms(annotationRecords);
-          if (annotationImages === null) {
-            reportableErrorToast(
-              "Couldn't attach the annotation image.",
-              {
-                description: "The crop is missing. Try attaching again.",
-              },
-              {
-                title: "Annotation image missing",
-                message: null,
-                code: null,
-                source: "Chat composer",
-              },
-            );
-            return;
-          }
-          submitPreparedDraft(annotationImages);
-        } finally {
-          annotationPrepFlight.current = false;
-          setAnnotationPreparationPending(false);
-        }
-      })();
+      runSubmitFromAnnotationStage(0);
     },
     [
       activeTurnStatus,
       clearAcceptedDraft,
       editorRef,
       finalizeSend,
+      hostClient,
+      hostId,
       onSideChat,
       pickerStore,
       getActiveTurnForSteer,
@@ -474,6 +691,7 @@ export function useChatComposerSubmit(
   return {
     submitDraft,
     annotationPreparationPending,
+    imageResolutionPending,
     steerConflict: {
       open: pendingConflict !== null,
       changed: pendingConflict?.changed ?? [],
@@ -485,6 +703,17 @@ export function useChatComposerSubmit(
 
 interface ComposerDraftSidecars {
   readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
+}
+
+/**
+ * Crops are prepared at attach time (`attachBrowserAnnotation`), so the stored
+ * bytes are already within the universal policy and pass through this path
+ * untouched. What preparation can change is the ENCODING — the record carries
+ * only a hash and a file name, so the atom's MIME type is read back off the
+ * bytes rather than assumed to be the PNG the tile captured.
+ */
+function annotationImageMimeType(bytes: Uint8Array): string {
+  return sniffImageMimeType(bytes) ?? "image/png";
 }
 
 /**
@@ -542,7 +771,7 @@ async function resolveAnnotationImageAtoms(
     atoms.push({
       id: uuidv4(),
       fileName: record.imageFileName,
-      mimeType: "image/png",
+      mimeType: annotationImageMimeType(bytes),
       size: bytes.byteLength,
       b64content: bytesToBase64(bytes),
       hash: record.imageHash,

@@ -133,6 +133,7 @@ function inlineEditState(dirty: boolean): InlineEditState {
     originalMessage: MESSAGE,
     initialContent: CONTENT,
     currentContent: CONTENT,
+    revision: 0,
     dirty,
     pendingClientActionId: null,
     pendingMessageId: null,

@@ -6,16 +6,21 @@ import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/ext
 import type { PastedComposerImage } from "@/components/chat/composer/editor/extensions/chat-paste-handler";
 import {
   collectImages,
+  prepareComposerImageFile,
   useComposerPasteEvents,
   IMAGE_MIME_PREFIX,
-  MAX_IMAGE_BYTES,
+  MAX_IMAGE_SOURCE_BYTES,
   type ComposerImageConversionResult,
   type ComposerImageIngest,
   type ComposerPasteEditorHandle,
   type PathInsertionCommit,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
-import { putImage } from "@/lib/composer/landing-image-store";
+import type {
+  ImagePreparationSession,
+  PreparedComposerImage,
+} from "@/lib/composer/composer-image-preparation";
+import { putImage } from "@/lib/composer/composer-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { reserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
 import { base64ToBytes } from "@/lib/composer/image-base64";
@@ -27,16 +32,34 @@ import {
 } from "@/lib/analytics";
 
 /**
- * Landing-composer paste/drop ingest. Unlike the shared base64 adapter
- * (`useComposerPasteAdapter`), accepted files are stored content-addressed and
- * inserted as HASH-ONLY nodes, so the persisted landing draft `content` never
- * carries image base64. Bytes go to the per-runtime image store (which also
- * seeds a synchronous session object-URL for flash-free render); the node
- * carries only `{ id, fileName, hash, mimeType, size }`.
+ * Landing-composer paste/drop ingest. Accepted files are stored
+ * content-addressed and inserted as HASH-ONLY nodes, so the persisted landing
+ * draft `content` never carries image base64. Bytes go to the per-runtime image
+ * store (which also seeds a synchronous session object-URL for flash-free
+ * render); the node carries only
+ * `{ id, fileName, hash, mimeType, size, byHashEligible }`.
  *
- * Drag/drop/paste event handling and the `image/*` + 5MB cap are reused from the
- * shared core (`useComposerPasteEvents` + `collectImages`); only the ingest
- * differs. Chat / new-conversation keep using `useComposerPaste` (base64).
+ * Drag/drop/paste event handling, the `image/*` filter, the source ceiling and
+ * preparation itself are reused from the shared base (`useComposerPasteEvents`
+ * + `collectImages` + `prepareComposerImageFile`); only the ingest differs.
+ *
+ * The chat composer, the edit composer and the new-conversation modal are
+ * hash-first too now, through `useComposerHashFirstPaste` — the same model over
+ * the same base, differing in whose budget an image charges against and in when
+ * a pending node is re-entered (landing re-enters at mount; the chat family
+ * sweeps every document change, because a node can arrive there long after the
+ * editor mounted). The base64 adapter those surfaces used to share is gone.
+ * Inline base64 now exists only at submit, in
+ * `lib/composer/composer-image-inlining.ts`, which is what the host still
+ * ingests.
+ *
+ * Images are prepared SERIALLY before anything is reserved or stored, so a
+ * multi-image paste holds one decoded bitmap at a time, and the reservation
+ * and the node both carry the PREPARED size - the bytes that actually land in
+ * the store - rather than the source file's. The session is the composer
+ * MOUNT's, not this call's, so the loop below also serializes against the
+ * structured-paste jobs the same mount runs (`startPendingImageIngest`) -
+ * awaiting in this loop alone would not, since those jobs do not await it.
  *
  * The returned reservation (when present) is deliberately NOT released here:
  * `runImageIngest` releases it only after `insertAttrs` has run, so a
@@ -51,27 +74,40 @@ async function landingImageAttrsFromFiles(
   draftId: string | null,
   files: ReadonlyArray<File>,
   signal: AbortSignal,
+  session: ImagePreparationSession,
 ): Promise<ComposerImageConversionResult> {
-  const accepted = collectImages(files, () => {
+  const trackRejected = (): void => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
       surface: "draft",
       blocker: "invalid_input",
     });
-  });
+  };
+  const accepted = collectImages(files, trackRejected);
   if (accepted.length === 0) return { attrs: [] };
+  const prepared: PreparedComposerImage[] = [];
+  for (const file of accepted) {
+    signal.throwIfAborted();
+    const image = await prepareComposerImageFile(
+      session,
+      file,
+      signal,
+      trackRejected,
+    );
+    if (image !== null) prepared.push(image);
+  }
+  if (prepared.length === 0) return { attrs: [] };
   // Reserve against this draft's roots (plus every other outstanding
   // reservation, landing paste or stash import) before storing bytes. A
   // capacity miss rejects only this attachment; GC never discards another
   // draft to make room. The hash isn't known until `putImage` hashes the
   // bytes below, so each candidate reserves anonymously (see
-  // `landing-image-budget.ts`).
+  // `landing-image-budget.ts`). The charge is the PREPARED length, which is
+  // what `putImage` is about to store and what the node's `size` will report
+  // back to the budget's steady-state accounting.
   const reservation = reserveLandingImageBudget(
     draftId,
-    accepted.map((file) => ({
-      hash: null,
-      bytes: file.size > 0 ? file.size : 0,
-    })),
+    prepared.map((image) => ({ hash: null, bytes: image.byteLength })),
   );
   if (reservation === null) {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
@@ -84,18 +120,17 @@ async function landingImageAttrsFromFiles(
   }
 
   const settled = await Promise.allSettled(
-    accepted.map(async (file) => {
+    prepared.map(async (image) => {
       signal.throwIfAborted();
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      signal.throwIfAborted();
-      const hash = await putImage(bytes);
+      const hash = await putImage(image.bytes);
       signal.throwIfAborted();
       return {
         id: uuidv4(),
-        fileName: file.name || "image",
+        fileName: image.fileName,
         hash,
-        mimeType: file.type || "image/png",
-        size: file.size > 0 ? file.size : null,
+        mimeType: image.mimeType,
+        size: image.byteLength > 0 ? image.byteLength : null,
+        byHashEligible: image.byHashEligible,
       } satisfies ImageAttachmentAttrs;
     }),
   );
@@ -125,8 +160,21 @@ export function useLandingComposerPaste(params: {
   readonly disabled: boolean;
   readonly fileDrops: IFileDropHost;
   readonly mentionRoots: ReadonlyArray<string>;
+  /**
+   * The composer MOUNT's preparation session, shared with that mount's
+   * structured-paste jobs so every image this surface prepares queues behind
+   * the same one in-flight preparation.
+   */
+  readonly preparationSession: ImagePreparationSession;
 }): UseComposerPasteResult {
-  const { editorRef, draftId, disabled, fileDrops, mentionRoots } = params;
+  const {
+    editorRef,
+    draftId,
+    disabled,
+    fileDrops,
+    mentionRoots,
+    preparationSession,
+  } = params;
   const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
     const handle = editorRef.current;
     if (handle === null || !handle.isReady()) return null;
@@ -152,7 +200,12 @@ export function useLandingComposerPaste(params: {
         // Disabled (e.g. mid-submit) skips ingest entirely - no hashing,
         // storing, or budget reservation - the same as a no-op paste.
         if (disabled) return Promise.resolve({ attrs: [] });
-        return landingImageAttrsFromFiles(draftId, files, signal);
+        return landingImageAttrsFromFiles(
+          draftId,
+          files,
+          signal,
+          preparationSession,
+        );
       },
       onSettled: (accepted) => {
         if (accepted.length === 0) {
@@ -193,25 +246,28 @@ export function useLandingComposerPaste(params: {
         scheduleLandingImageReconcile();
       },
     }),
-    [disabled, draftId],
+    [disabled, draftId, preparationSession],
   );
   return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
 }
 
-// A base64 clipboard image whose decoded size would exceed the per-image cap is
-// dropped WITHOUT decoding, so a malformed/oversized structured payload can't
-// allocate far beyond the cap. base64 encodes 3 bytes per 4 chars, so
-// `length * 3 / 4` is the decoded size (padding makes this a slight
+// A base64 clipboard image whose decoded size would exceed the source ceiling
+// is dropped WITHOUT decoding, so a malformed/oversized structured payload
+// can't allocate far beyond the ceiling. base64 encodes 3 bytes per 4 chars,
+// so `length * 3 / 4` is the decoded size (padding makes this a slight
 // over-estimate, which only ever drops sooner).
-const MAX_PASTED_IMAGE_B64_LENGTH = Math.ceil((MAX_IMAGE_BYTES * 4) / 3) + 4;
+const MAX_PASTED_IMAGE_B64_LENGTH =
+  Math.ceil((MAX_IMAGE_SOURCE_BYTES * 4) / 3) + 4;
 
 /**
  * Synchronously validate one structured-paste inline-base64 image and return its
  * bytes, or `null` if it must be rejected. Applies the exact same contract the
- * file pipeline does — encoded-length cap, `image/*` MIME, decode, 5 MB — but
- * WITHOUT building a `File` or inserting, because the in-place paste keeps the
- * node in the document and only needs the raw bytes for the background
- * hash + `putImage` job.
+ * file pipeline does — encoded-length cap, `image/*` MIME, decode, the source
+ * ceiling — but WITHOUT building a `File` or inserting, because the in-place
+ * paste keeps the node in the document and only needs the raw bytes for the
+ * background prepare + hash + `putImage` job. Preparation runs inside that job
+ * (`startPendingImageIngest`), not here: this call is on the synchronous paste
+ * path, which has to return a verdict per image before it can yield.
  */
 export function decodeValidatedPastedImage(
   image: PastedComposerImage,
@@ -220,6 +276,6 @@ export function decodeValidatedPastedImage(
   if (!image.mimeType.startsWith(IMAGE_MIME_PREFIX)) return null;
   const bytes = base64ToBytes(image.b64content);
   if (bytes === null) return null;
-  if (bytes.byteLength > MAX_IMAGE_BYTES) return null;
+  if (bytes.byteLength > MAX_IMAGE_SOURCE_BYTES) return null;
   return bytes;
 }

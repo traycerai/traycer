@@ -99,10 +99,9 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import {
-  isAttachmentIngestPending,
-  useComposerPaste,
-} from "@/hooks/composer/use-composer-paste";
+import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
+import { useComposerHashFirstPaste } from "@/hooks/composer/use-composer-hash-first-paste";
+import { hasComposerImageBytes } from "@/lib/composer/composer-image-store";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
@@ -680,7 +679,19 @@ function InlineUserMessageEditor({
     tabHostId,
   );
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const epicImagePresence = useEpicAttachmentBytesPresence();
+  // A freshly pasted image lives in THIS window's composer store, not the epic
+  // store, so the epic predicate alone would call it absent and a copy→paste of
+  // it inside this editor would be stripped as a phantom. Same union the chat
+  // composer uses: local bytes OR the epic's.
+  const hasPastedImageBytes = useCallback(
+    (hash: string) => {
+      if (hasComposerImageBytes(hash)) return true;
+      if (epicImagePresence === null) return true;
+      return epicImagePresence(hash);
+    },
+    [epicImagePresence],
+  );
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const focusFrameRef = useRef<number | null>(null);
@@ -693,7 +704,15 @@ function InlineUserMessageEditor({
     attachImageFiles,
     isIngestingImages,
     isResolvingFilePaths,
-  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+    ingestPastedComposerImages,
+    notePossiblePendingImages,
+  } = useComposerHashFirstPaste({
+    editorRef,
+    budgetOwnerId: editing.currentEpicId,
+    disabled: editing.pending,
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots: resolvedMentionRoots,
+  });
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
@@ -757,9 +776,14 @@ function InlineUserMessageEditor({
   const onDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       editing.onSnapshot(content, selection);
+      // Catch-all for a pending b64 node this editor gained without going
+      // through the paste hook - today the cross-host browser-tab preview,
+      // which the mention extension appends asynchronously. Cheap and
+      // short-circuiting when there is nothing pending.
+      notePossiblePendingImages(content);
       scheduleVisibilityCheck();
     },
-    [editing, scheduleVisibilityCheck],
+    [editing, notePossiblePendingImages, scheduleVisibilityCheck],
   );
 
   // Inline message editing tracks no persisted selection of its own (unlike
@@ -814,7 +838,7 @@ function InlineUserMessageEditor({
         initialSelection={null}
         slashProviderId={editing.slashProviderId}
         hasPastedImageBytes={hasPastedImageBytes}
-        ingestPastedComposerImages={null}
+        ingestPastedComposerImages={ingestPastedComposerImages}
         isActive
         disabled={editing.pending}
         placeholder="Edit message"
@@ -842,6 +866,7 @@ function InlineUserMessageEditor({
       onSelectionChange,
       pickerStore,
       hasPastedImageBytes,
+      ingestPastedComposerImages,
       submit,
     ],
   );

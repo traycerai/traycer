@@ -7,6 +7,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
@@ -15,10 +16,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 
-import {
-  AttachmentStrip,
-  NO_SESSION_OBJECT_URL,
-} from "@/components/chat/composer/attachments/attachment-strip";
+import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import {
   useEpicAttachmentBytesPresence,
   useEpicImageFetcher,
@@ -46,10 +44,8 @@ import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
-import {
-  isAttachmentIngestPending,
-  useComposerPaste,
-} from "@/hooks/composer/use-composer-paste";
+import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
+import { useComposerHashFirstPaste } from "@/hooks/composer/use-composer-hash-first-paste";
 import {
   mentionRootsFromWorktreeIntent,
   useWorkspaceMentionRoots,
@@ -92,12 +88,34 @@ import {
 } from "@/lib/disabled-presentation";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
+import {
+  getImageBytes,
+  hasComposerImageBytes,
+  sessionObjectUrl,
+} from "@/lib/composer/composer-image-store";
+import {
+  imageHashesFromContent,
+  inlineImageHashesFromSession,
+  inlineLocalImageHashes,
+} from "@/lib/composer/composer-image-inlining";
+import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
+import {
+  createAttachmentsByHashSupported,
+  exceedsCreateAttachmentHashCap,
+  planAttachmentsByHash,
+  reportCreateAttachmentHashCapExceeded,
+  resolveSendContentByHash,
+  type AttachmentsByHashPlan,
+} from "@/lib/composer/attachments-by-hash";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import {
   deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
 import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
+import { shouldDeferWorktreeProvisioning } from "@/lib/worktree/defer-worktree-provisioning";
+import { markEpicCreateSeedPending } from "@/lib/worktree/pending-epic-create-seeds";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
@@ -153,6 +171,113 @@ import {
 } from "./use-new-conversation-prompt-stash-adapters";
 
 /**
+ * The submit's two documents, carried across the one await this composer can
+ * need. `content` is what the user's editor holds - hash-only image nodes - and
+ * is what the initial-chat handoff registers. `sendContent` is the same document
+ * with this window's image bytes inlined as base64, which is what the host
+ * ingests today.
+ *
+ * They are passed together, rather than re-deriving `content` on re-entry,
+ * because the two MUST describe the same message: re-reading the editor after
+ * the await could pick up a keystroke that landed while the bytes were being
+ * read, and the handoff would then hold a document the send never used.
+ */
+interface ResolvedSubmitContent {
+  readonly content: JsonContent;
+  readonly sendContent: JsonContent;
+  /**
+   * The host this content was prepared FOR, or `null` when it was not prepared
+   * against any host's staging tier - every arm that ends in
+   * `attachmentsByHash: false`, whose document either carries its bytes or
+   * carries hashes the host was never asked to resolve out of staging. Those
+   * are destination-independent and re-preparing them would buy nothing.
+   *
+   * A by-hash preparation is a statement about one host's staging tier, and the
+   * host picker is deliberately live while the upload runs. Sending these
+   * hashes anywhere else means sending a reference the destination never
+   * received, which is why the re-entry below compares this against the
+   * destination it is about to dispatch on rather than assuming they match.
+   *
+   * The CLIENT is deliberately not part of the identity: `confirmedBlobsByHost`
+   * and the host's staging tier are both keyed by host, so a fresh client
+   * object addressing the same host resolves the same hashes. What must not
+   * change is the machine.
+   */
+  readonly hostId: string | null;
+  /**
+   * Whether `sendContent` still carries hash-only image nodes for the host to
+   * resolve out of this account's draft blob tier - `epic.createChat@1.2`'s
+   * `attachmentsByHash`. Decided with the content and carried with it, because
+   * the flag and the document are one answer: a flag that disagreed with what
+   * the document holds is either a resolution pass over nothing or a dangling
+   * reference the host was never asked to resolve.
+   */
+  readonly attachmentsByHash: boolean;
+}
+
+/** Placeholder until the first commit publishes the real submit. */
+const NOOP_SUBMIT = (): void => undefined;
+
+/**
+ * The by-hash half of this modal's submit, which is ALWAYS async: whether the
+ * host already holds an image's bytes is not a question this window can answer
+ * from memory, and `confirmAttachmentsByHash` may have to upload.
+ *
+ * BEST EFFORT on the inline remainder, which is this surface's rule and not the
+ * landing composer's. A chat document routinely holds hashes whose bytes were
+ * never in the LOCAL store at all - an image copied out of a rendered message,
+ * a quote seed - and those address the epic's own attachment store, which the
+ * host resolves first, before it ever looks at the staging tier. Refusing them
+ * would break creates that work today.
+ *
+ * `null` means REFUSED and already narrated: the message references more
+ * distinct hashes than the host will accept, and the caller must not submit.
+ */
+async function resolveModalSubmitContentByHash(input: {
+  readonly content: JsonContent;
+  readonly hostId: string;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly plan: AttachmentsByHashPlan;
+}): Promise<ResolvedSubmitContent | null> {
+  // BEFORE the upload: an eligible set that is already over the cap can never
+  // come back under it, so refusing here saves uploading blobs for a create
+  // that cannot succeed. This is the fast path and NOT the decision - it sees
+  // only the eligible half of what the host will count.
+  if (exceedsCreateAttachmentHashCap(input.plan.eligible)) {
+    reportCreateAttachmentHashCapExceeded();
+    return null;
+  }
+  const sendContent = await resolveSendContentByHash(input);
+  // AFTER inlining, on what the request will actually carry - which on this
+  // best-effort surface is not the eligible set. The hashes this window could
+  // not produce bytes for stay hash-only by design (they usually live in the
+  // epic's own attachment store), and the host counts them exactly like the
+  // uploaded ones. Without this, one eligible image beside thirty-two
+  // epic-copied ones clears the check above and is refused by the host with an
+  // `InvalidArgumentError` no surface renders - after the modal has closed and
+  // cleared the draft.
+  const wireHashes = imageHashesFromContent(sendContent);
+  if (exceedsCreateAttachmentHashCap(wireHashes)) {
+    reportCreateAttachmentHashCapExceeded();
+    return null;
+  }
+  return {
+    content: input.content,
+    sendContent,
+    // The host this was resolved against. The picker stays live through the
+    // upload, and a create that reused these hashes on a host that never
+    // received the bytes is the failure this identity exists to prevent.
+    hostId: input.hostId,
+    // Read off the DOCUMENT rather than off the confirmed set: an ineligible
+    // node whose bytes this window could not produce is still hash-only on the
+    // wire, and the host resolving it (from the epic store, where it very
+    // likely lives) is strictly better than leaving it for the dangling-hash
+    // guard to refuse at the first turn.
+    attachmentsByHash: wireHashes.length > 0,
+  };
+}
+
+/**
  * Isolated subscriber for the live draft content. The editor rewrites content
  * on every keystroke; keeping that subscription here (rather than in
  * `NewConversationModalBody`) means only the attachment strip re-renders while
@@ -173,7 +298,14 @@ function NewConversationModalAttachmentStrip(props: {
       content={content}
       onRemoveImage={props.onRemoveImage}
       fetcher={fetcher}
-      sessionObjectUrl={NO_SESSION_OBJECT_URL}
+      // This composer is hash-first now, so a just-pasted chip has no epic
+      // attachment to fetch - its bytes are in this window's composer store,
+      // and the session object-URL is what paints it without a placeholder
+      // frame. It also covers a restored draft, because pulling the blobs back
+      // off the host (`readDraftBlobsIntoLocalStore`) seeds the same session
+      // entry. The epic fetcher still answers for hashes that came from a quote
+      // seed, which address the epic store and were never local.
+      sessionObjectUrl={sessionObjectUrl}
     />
   );
 }
@@ -683,6 +815,11 @@ export function NewConversationModalBody(props: {
   // derivation move between two awaits in the terminal chain cannot re-point
   // later RPCs. Reads above stay on the mutable read client on purpose.
   const createChat = useEpicCreateChatForHostClient(submitTarget.client);
+  // Only for the deferred create's seed-hold release closure - this surface has
+  // no query of its own. Captured here rather than inside the submit so the
+  // closure the marker holds outlives this modal, which closes synchronously on
+  // submit while the create is still in flight.
+  const queryClient = useQueryClient();
   const terminalAgentCreate = useCreateTuiAgentForClient(
     submitTarget.client,
     resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER,
@@ -709,7 +846,17 @@ export function NewConversationModalBody(props: {
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
-  const paste = useComposerPaste(editorRef, runnerHost.fileDrops, mentionRoots);
+  const paste = useComposerHashFirstPaste({
+    editorRef,
+    // The epic this modal creates into. Purely the budget's OWNER key (a
+    // per-surface reservation bucket), not a claim about where the bytes live -
+    // they go to this window's composer store like every other surface's.
+    budgetOwnerId: epicId,
+    disabled: isSubmitting,
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots,
+  });
+  const { ingestPastedComposerImages, notePossiblePendingImages } = paste;
   const attachmentPending = isAttachmentIngestPending(paste);
   const canSubmit =
     canMutate &&
@@ -720,11 +867,29 @@ export function NewConversationModalBody(props: {
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
-  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const epicImagePresence = useEpicAttachmentBytesPresence();
+  // A hash in this composer now has TWO possible homes, and the chip must paint
+  // for either: this window's composer store (anything pasted here, which is
+  // every image this surface produces now that it is hash-first) or the epic's
+  // attachment map (a quote seed, whose hashes were never local). The union is
+  // what the attachment strip asks before it decides an image is unavailable.
+  const hasPastedImageBytes = useCallback(
+    (hash: string) => {
+      if (hasComposerImageBytes(hash)) return true;
+      if (epicImagePresence === null) return true;
+      return epicImagePresence(hash);
+    },
+    [epicImagePresence],
+  );
   const fetchEpicImage = useEpicImageFetcher();
   const readPromptStashImage = useCallback(
     async (hash: string) => {
-      if (hasPastedImageBytes?.(hash) !== true) return null;
+      // Local tier first. A stash saved right after a paste is the common case
+      // now, and those bytes exist only in this window's store - the epic has
+      // no attachment for them until the create's message is actually sent.
+      const local = await getImageBytes(hash);
+      if (local !== undefined) return local;
+      if (epicImagePresence?.(hash) !== true) return null;
       // Capture deliberately survives composer unmount, so this read is not
       // coupled to component-lifecycle cancellation. `.fetch` directly: this
       // one-shot read bypasses `imageBlobCache`, so it wants the byte source
@@ -735,7 +900,7 @@ export function NewConversationModalBody(props: {
       );
       return new Uint8Array(read.bytes);
     },
-    [fetchEpicImage, hasPastedImageBytes],
+    [epicImagePresence, fetchEpicImage],
   );
   const promptStashSource = useNewConversationPromptStashSource({
     epicId,
@@ -853,175 +1018,442 @@ export function NewConversationModalBody(props: {
       }),
     [draftWorkspace, latestWorkspaceSeed, stagingKey],
   );
-  const handleSubmit = useCallback(() => {
-    if (!canSubmit) return;
-    const editor = editorRef.current;
-    if (editor === null) return;
-    const toolbar = toolbarStore.getState();
-    if (toolbar.selection.modelSlug.length === 0) return;
-    const settings = buildChatRunSettings({
-      selection: toolbar.selection,
-      permission: toolbar.permission,
-      reasoning: toolbar.reasoning,
-      serviceTier: toolbar.serviceTier,
-    });
-    if (settings.model.length === 0) return;
-    // Global, single-selection billing context captured at create time; it
-    // rides as a sibling of the per-chat settings on the initial message.
-    const accountContext = useAccountContextStore.getState().accountContext;
-    // Selection model §54, and the ORDERING is the point: re-validate the
-    // placement BEFORE any persistent write, because `cleanupAfterSubmit`
-    // below clears the draft and closes the modal synchronously, well before
-    // the create can fail. An existence check (`getActiveHostId() !== null`)
-    // was not enough - it passes for a pinned host that has gone offline, and
-    // for a following client that has moved off the host the chip is
-    // rendering. A refusal here leaves the draft, its staged workspace and the
-    // modal exactly as the user left them, with the reason inline.
-    const placementVerdict = resolveLandingPlacement(submitTarget);
-    if (placementVerdict.kind === "refused") {
-      raiseHostNotice({ kind: "refused", message: placementVerdict.message });
-      return;
-    }
-    // No render-vs-live drift check needed here (main's #1231 added one for
-    // the reactive-active-host shape): the staged key and this create both
-    // derive from the SAME captured submitTarget, and the verdict REFUSES
-    // rather than migrates when its frozen client no longer addresses it.
-    const activeHostId = placementVerdict.hostId;
-    recordPlacement(activeHostId);
-    const content = buildSubmittedChatJSONContent(
-      editor.getJSON(),
-      pickerStore.getState().knownSlashCommands,
-    );
-    const chatId = uuidv4();
-    const messageId = uuidv4();
-    const clientActionId = uuidv4();
-    const now = Date.now();
-    // Remember these settings as the epic's (and global) last-run so the next
-    // new-chat carries them forward, mirroring the chat-tile composer's
-    // on-send write. Keyed by the host the chat is actually created on
-    // (`activeHostId`: the pinned host, else the active one resolved above).
-    setGlobalRunSettings(activeHostId, settings, now);
-    setEpicRunSettings(epicId, activeHostId, settings, now);
-    const profile = useAuthStore.getState().profile;
-    const userId = profile?.userId ?? null;
-    const worktreeIntent = worktreeIntentForSubmit();
-    const workspaceMode = deriveWorkspaceMode(
-      draftWorkspaceFolderCount,
-      worktreeIntent,
-    );
-    if (worktreeIntent !== null) {
-      rememberEpicIntent(epicId, activeHostId, worktreeIntent, now);
-    }
-    useInitialChatHandoffStore.getState().register({
-      hostId: activeHostId,
-      userId,
-      epicId,
-      chatId,
-      content,
-      settings,
-      worktreeIntent,
-      placement,
-      messageId,
-      clientActionId,
-      createdAt: now,
-    });
-    const initialMessage =
-      userId === null
-        ? null
-        : {
-            messageId,
-            clientActionId,
-            content,
-            sender: { type: "user" as const, userId },
-            settings,
-            accountContext,
-          };
-    if (initialMessage !== null) {
-      useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
-    }
-    // `mutateAsync` + a promise chain, NOT `mutate`'s per-call callbacks, for
-    // the reason `use-epic-route-synchronization.ts` records for the sidebar's
-    // delete: TanStack Query v5 gates `mutateOptions` on the observer still
-    // having listeners, and `cleanupAfterSubmit()` below closes this modal
-    // SYNCHRONOUSLY - the dialog renders its body behind `props.open`, so the
-    // component holding this mutation is gone before any answer arrives. Both
-    // callbacks were therefore dead code, and the failure one is what took the
-    // eager-opened tab back down: without `markFailed` the handoff stayed
-    // non-terminal, `pendingCreateArtifactIds` kept the tile exempt from the
-    // record sweep, and a create the host had DEFINITIVELY rejected left an
-    // "Untitled agent" tab that spun for 15s and then told the user "that host
-    // hasn't answered" - about a host that had answered, with a refusal. Only
-    // `useInitialChatHandoff`'s 60s orphan deadline eventually cleared it, a
-    // backstop written for a host that says NOTHING.
-    //
-    // The landing composer already submits this way (`use-landing-composer-
-    // actions.ts`), and for the same reason: a surface that closes itself on
-    // submit cannot own its own completion through the observer.
-    void createChat
-      .mutateAsync({
-        epicId,
-        // The host the modal resolved its own client for, checked non-null
-        // just above - the machine the user picked, not the app-wide active
-        // one (they diverge for a row-scoped child create).
+  // Re-entry for the submit below when its images had to be read back out of
+  // IndexedDB. A `useCallback` cannot name itself, and the async arm has to
+  // re-run the WHOLE submit (every other fact it reads is read fresh), so the
+  // latest callback is reached through a ref rather than closed over.
+  const submitRef =
+    useRef<
+      (
+        resolved: ResolvedSubmitContent | null,
+        resolutionAttempt: number,
+      ) => void
+    >(NOOP_SUBMIT);
+  // One read at a time. The submit button is not disabled during it (the read is
+  // an IndexedDB hit, not a round-trip), so a second click while it is in flight
+  // must not start a second create.
+  const imageResolutionInFlight = useRef(false);
+  const submitWithResolvedContent = useCallback(
+    (resolved: ResolvedSubmitContent | null, resolutionAttempt: number) => {
+      if (!canSubmit) return;
+      const editor = editorRef.current;
+      if (editor === null) return;
+      // AHEAD OF EVERY DISPATCH PATH, the synchronous one included. A read is
+      // in flight for a document already captured; letting a second click run
+      // the synchronous create would put two chats on the wire for one prompt,
+      // and the first one to finish would clear the draft out from under the
+      // other. The async arms below release this latch through
+      // `settleResolvedSubmit` BEFORE re-entering, which is why the re-entry
+      // gets past this line.
+      if (imageResolutionInFlight.current) return;
+      // THE DESTINATION MAY HAVE MOVED WHILE THE UPLOAD RAN. The picker is
+      // live through the wait (it is rendered `disabled={false}` on purpose),
+      // and switching hosts does not touch the draft's `revision` - so the
+      // generation guard below, which only asks whether the DOCUMENT changed,
+      // waves this through. What arrives here is content whose hashes were
+      // confirmed on the host that was selected when send was pressed, about to
+      // be dispatched on whichever host is selected now.
+      //
+      // Re-resolve rather than reuse: re-entering with `null` re-plans against
+      // the new destination, re-asks its negotiated minor, and uploads to it or
+      // inlines for it. Reusing would hand the new host a reference it has
+      // never seen, which it answers with a refusal the user reads as a failed
+      // create.
+      if (
+        resolved !== null &&
+        resolved.hostId !== null &&
+        resolved.hostId !== submitTarget.resolvedHostId
+      ) {
+        // Same budget as the edited-during-the-read arm, and for the same
+        // reason: one re-resolution is a correction, an unbounded chain is a
+        // user holding the picker hostage to a create that never leaves.
+        if (resolutionAttempt === 0) {
+          submitRef.current(null, resolutionAttempt + 1);
+        }
+        return;
+      }
+      // THE HASH-FIRST SEAM, and it is resolved FIRST - before this function
+      // writes anything - so that the async re-entry below repeats no side
+      // effect. What the user's document holds is hash-only image nodes; the
+      // host still ingests inline base64, so `sendContent` is the same document
+      // with this window's bytes put back. The handoff keeps `content`
+      // (hash-only): that is what keeps base64 out of `localStorage` under the
+      // handoff key, and what lets the handoff ROOT those bytes against the
+      // image GC until the resend inlines them itself.
+      //
+      // `null` from the fast path means at least one hash is session-cold - a
+      // draft this window restored off the host mirror rather than pasted - so
+      // the bytes are read back and this submit is re-entered with them.
+      const content =
+        resolved?.content ??
+        buildSubmittedChatJSONContent(
+          editor.getJSON(),
+          pickerStore.getState().knownSlashCommands,
+        );
+      // The draft this submit is for. `content` above was captured off the
+      // editor, but the editor stays EDITABLE across the reads below, and the
+      // create ends in `cleanupAfterSubmit` - which clears the draft store and
+      // the editor. Without this the sentence typed during the read was wiped
+      // by a create that sent the document from before it. The modal's draft
+      // `revision` bumps on `setContent` alone (document mutations), which is
+      // the whole of the work here: there is no annotation sidecar, and a
+      // caret move is not work worth cancelling a send over.
+      const generation = captureComposerSubmitGeneration(
+        () =>
+          useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+            ?.revision ?? 0,
+      );
+      /**
+       * The single exit for both async arms below. It owns the latch release
+       * (so the re-entry clears the hoisted guard at the top) and the decision
+       * about whether the captured document may still be sent.
+       *
+       * `null` means the read produced nothing to send - today that is the
+       * by-hash count-cap refusal, which has already toasted. Nothing is sent
+       * and, just as importantly, nothing is cleared.
+       */
+      const settleResolvedSubmit = (
+        prepared: ResolvedSubmitContent | null,
+      ): void => {
+        imageResolutionInFlight.current = false;
+        if (prepared === null) return;
+        if (generation.stillCurrent()) {
+          submitRef.current(prepared, resolutionAttempt);
+          return;
+        }
+        // The user edited the prompt during the read, so `prepared` describes a
+        // document that is no longer on screen. Re-enter from scratch and
+        // resolve the CURRENT one rather than sending the stale capture.
+        if (resolutionAttempt === 0) {
+          submitRef.current(null, resolutionAttempt + 1);
+          return;
+        }
+        // Edited again during the retry. Send nothing and clear nothing - the
+        // draft is intact and the user can press send again.
+      };
+      // THE BY-HASH GATE, asked before the inline one because it decides
+      // whether inlining is needed at all. Four conditions, and any failure
+      // falls through to the inline paths that have always worked: a client to
+      // upload on, no node carrying both base64 and a hash (the host would try
+      // to resolve that hash too - see `hasInlineHashedNode`), something the
+      // preparer marked eligible, and the negotiated minor of the method this
+      // create actually dispatches on.
+      const plan = resolved === null ? planAttachmentsByHash(content) : null;
+      const byHashClient = submitTarget.client;
+      const byHashHostId = submitTarget.resolvedHostId;
+      if (
+        plan !== null &&
+        byHashClient !== null &&
+        byHashHostId !== null &&
+        !plan.hasInlineHashedNode &&
+        plan.eligible.length > 0 &&
+        createAttachmentsByHashSupported(byHashHostId, "epic.createChat")
+      ) {
+        imageResolutionInFlight.current = true;
+        void resolveModalSubmitContentByHash({
+          content,
+          hostId: byHashHostId,
+          client: byHashClient,
+          plan,
+        }).then(
+          // `null` is the count-cap refusal, already toasted. Submitting anyway
+          // would put a request on the wire the host will certainly reject with
+          // an error no surface renders.
+          settleResolvedSubmit,
+          // The upload or the byte read failed outright. Fall back to the
+          // document as it stands rather than swallowing the create: an
+          // unresolvable hash comes back as the existing missing-bytes
+          // failure, which is visible, and `attachmentsByHash` stays off so
+          // this host is not asked to resolve what it was never given.
+          () =>
+            settleResolvedSubmit({
+              content,
+              sendContent: content,
+              hostId: null,
+              attachmentsByHash: false,
+            }),
+        );
+        return;
+      }
+      const sendContent =
+        resolved?.sendContent ?? inlineImageHashesFromSession(content);
+      if (sendContent === null) {
+        imageResolutionInFlight.current = true;
+        void inlineLocalImageHashes(content).then(
+          (inlined) =>
+            settleResolvedSubmit({
+              content,
+              sendContent: inlined,
+              hostId: null,
+              attachmentsByHash: false,
+            }),
+          // The store could not be read at all. Submit the hash-only document
+          // rather than swallowing the create: a hash the host cannot resolve
+          // comes back as the existing missing-bytes rejection, which fails
+          // the send visibly and restores the prompt.
+          () =>
+            settleResolvedSubmit({
+              content,
+              sendContent: content,
+              hostId: null,
+              attachmentsByHash: false,
+            }),
+        );
+        return;
+      }
+      const attachmentsByHash = resolved?.attachmentsByHash ?? false;
+      const toolbar = toolbarStore.getState();
+      if (toolbar.selection.modelSlug.length === 0) return;
+      const settings = buildChatRunSettings({
+        selection: toolbar.selection,
+        permission: toolbar.permission,
+        reasoning: toolbar.reasoning,
+        serviceTier: toolbar.serviceTier,
+      });
+      if (settings.model.length === 0) return;
+      // Global, single-selection billing context captured at create time; it
+      // rides as a sibling of the per-chat settings on the initial message.
+      const accountContext = useAccountContextStore.getState().accountContext;
+      // Selection model §54, and the ORDERING is the point: re-validate the
+      // placement BEFORE any persistent write, because `cleanupAfterSubmit`
+      // below clears the draft and closes the modal synchronously, well before
+      // the create can fail. An existence check (`getActiveHostId() !== null`)
+      // was not enough - it passes for a pinned host that has gone offline, and
+      // for a following client that has moved off the host the chip is
+      // rendering. A refusal here leaves the draft, its staged workspace and the
+      // modal exactly as the user left them, with the reason inline.
+      const placementVerdict = resolveLandingPlacement(submitTarget);
+      if (placementVerdict.kind === "refused") {
+        raiseHostNotice({ kind: "refused", message: placementVerdict.message });
+        return;
+      }
+      // No render-vs-live drift check needed here (main's #1231 added one for
+      // the reactive-active-host shape): the staged key and this create both
+      // derive from the SAME captured submitTarget, and the verdict REFUSES
+      // rather than migrates when its frozen client no longer addresses it.
+      const activeHostId = placementVerdict.hostId;
+      recordPlacement(activeHostId);
+      const chatId = uuidv4();
+      const messageId = uuidv4();
+      const clientActionId = uuidv4();
+      const now = Date.now();
+      // Remember these settings as the epic's (and global) last-run so the next
+      // new-chat carries them forward, mirroring the chat-tile composer's
+      // on-send write. Keyed by the host the chat is actually created on
+      // (`activeHostId`: the pinned host, else the active one resolved above).
+      setGlobalRunSettings(activeHostId, settings, now);
+      setEpicRunSettings(epicId, activeHostId, settings, now);
+      const profile = useAuthStore.getState().profile;
+      const userId = profile?.userId ?? null;
+      const worktreeIntent = worktreeIntentForSubmit();
+      const workspaceMode = deriveWorkspaceMode(
+        draftWorkspaceFolderCount,
+        worktreeIntent,
+      );
+      if (worktreeIntent !== null) {
+        rememberEpicIntent(epicId, activeHostId, worktreeIntent, now);
+      }
+      useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
-        parentId,
-        title: "",
+        userId,
+        epicId,
         chatId,
+        content,
         settings,
+        worktreeIntent,
+        placement,
+        messageId,
+        clientActionId,
+        createdAt: now,
+      });
+      const initialMessage =
+        userId === null
+          ? null
+          : {
+              messageId,
+              clientActionId,
+              // What goes ON THE WIRE, unlike the handoff's hash-only copy
+              // above: inline base64 for every image this host cannot take by
+              // hash, and hash-only nodes for the ones it can.
+              content: sendContent,
+              sender: { type: "user" as const, userId },
+              settings,
+              accountContext,
+              // Spread rather than a `false` literal, like the opt-in below:
+              // absent and `false` read identically on the host, and a request
+              // that names the key only when it is asking for something keeps
+              // the wire honest about which creates carry hashes.
+              ...(attachmentsByHash
+                ? { attachmentsByHash: true as const }
+                : {}),
+            };
+      if (initialMessage !== null) {
+        useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
+      }
+      // The opt-in, on the same four facts as the landing composer (shared
+      // predicate, so the two surfaces cannot drift).
+      const deferWorktreeProvisioning = shouldDeferWorktreeProvisioning({
+        hostId: activeHostId,
+        method: "epic.createChat",
+        hasInitialMessage: initialMessage !== null,
         workspaceMode,
         worktreeIntent,
-        initialMessage,
-      })
-      .then((response) => {
-        if (response.initialTurnStarted === true) {
+      });
+      // THE MODAL SEEDS NOTHING AND HOLDS NOTHING - it registers a RELEASE entry.
+      //
+      // It cannot seed the one row this window lacks (the new chat's worktree
+      // row): the host mints both the possibly-suffixed branch and the path, a
+      // selector row carries no owner, and rows dedupe on (hostId, runningDir),
+      // so an appended row would only duplicate. What it can do is give the
+      // epic's binding listing something to refetch on, because no publisher
+      // fires on a managed create - `writeBinding` publishes nothing and the
+      // freshness watcher is best-effort - so without this entry the worktree row
+      // would appear only at the next unrelated invalidation.
+      //
+      // ONLY when it deferred: a synchronous create has its row on the host at
+      // the response and the ordinary `onSuccess` refetch already lands it.
+      // Registered here, after the four facts exist and before `mutateAsync` (and
+      // before the handoff's eager tab open), in this same synchronous block, so
+      // the entry always precedes the tile that drives it.
+      if (deferWorktreeProvisioning) {
+        markEpicCreateSeedPending(epicId, chatId, {
+          hostId: activeHostId,
+          seededMessageId: messageId,
+          seedRows: false,
+          heldForDeferredCreate: false,
+          release: () => {
+            void queryClient.invalidateQueries({
+              queryKey: hostQueryKeys.method<
+                HostRpcRegistry,
+                "worktree.listBindingsForEpic"
+              >(activeHostId, "worktree.listBindingsForEpic", { epicId }),
+            });
+          },
+        });
+      }
+      // `mutateAsync` + a promise chain, NOT `mutate`'s per-call callbacks, for
+      // the reason `use-epic-route-synchronization.ts` records for the sidebar's
+      // delete: TanStack Query v5 gates `mutateOptions` on the observer still
+      // having listeners, and `cleanupAfterSubmit()` below closes this modal
+      // SYNCHRONOUSLY - the dialog renders its body behind `props.open`, so the
+      // component holding this mutation is gone before any answer arrives. Both
+      // callbacks were therefore dead code, and the failure one is what took the
+      // eager-opened tab back down: without `markFailed` the handoff stayed
+      // non-terminal, `pendingCreateArtifactIds` kept the tile exempt from the
+      // record sweep, and a create the host had DEFINITIVELY rejected left an
+      // "Untitled agent" tab that spun for 15s and then told the user "that host
+      // hasn't answered" - about a host that had answered, with a refusal. Only
+      // `useInitialChatHandoff`'s 60s orphan deadline eventually cleared it, a
+      // backstop written for a host that says NOTHING.
+      //
+      // The landing composer already submits this way (`use-landing-composer-
+      // actions.ts`), and for the same reason: a surface that closes itself on
+      // submit cannot own its own completion through the observer.
+      void createChat
+        .mutateAsync({
+          epicId,
+          // The host the modal resolved its own client for, checked non-null
+          // just above - the machine the user picked, not the app-wide active
+          // one (they diverge for a row-scoped child create).
+          hostId: activeHostId,
+          parentId,
+          title: "",
+          chatId,
+          settings,
+          workspaceMode,
+          worktreeIntent,
+          initialMessage,
+          // Spread rather than a `false` literal - see the landing composer's
+          // copy: absent and `false` read identically on the host, and a request
+          // that names the key only when it is asking for something keeps the
+          // wire honest about which creates opted in.
+          ...(deferWorktreeProvisioning
+            ? { deferWorktreeProvisioning: true }
+            : {}),
+        })
+        .then((response) => {
+          // A REFUSAL RESOLVES. `epic.createChat@1.2` answers it as an optional
+          // key on the ordinary response, so this arm runs for a create that
+          // did not happen - and its `chatId` names a chat the host never made.
+          // The teardown is the rejection arm's, and for the same reason: this
+          // modal opened a tab eagerly off the handoff and closed itself
+          // synchronously, so without it the tile spins on a chat that will
+          // never project and only the handoff's 60s orphan deadline - written
+          // for a host that says NOTHING - would clear it. The toast is the
+          // mutation's, which reads the host's own two sentences.
+          if (response.refusal !== undefined) {
+            useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+            useInitialChatHandoffStore
+              .getState()
+              .markFailedByAction(
+                { hostId: activeHostId, userId, epicId },
+                chatId,
+                clientActionId,
+                "Couldn't create the agent.",
+              );
+            return;
+          }
+          if (response.initialTurnStarted === true) {
+            useInitialChatHandoffStore
+              .getState()
+              .markInitialTurnStarted(
+                { hostId: activeHostId, userId, epicId },
+                chatId,
+              );
+          }
+        })
+        .catch(() => {
+          useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+          // `markFailedByAction`, not `markFailed`: the handoff key is
+          // {user, epic} only, so a SECOND create in this epic replaces the
+          // entry while the first is still in flight - and now that this arm
+          // actually runs, an unguarded `markFailed` would close the second
+          // agent's tab when the first one's rejection landed. The by-action
+          // variant fails only the handoff still carrying these exact ids.
           useInitialChatHandoffStore
             .getState()
-            .markInitialTurnStarted(
+            .markFailedByAction(
               { hostId: activeHostId, userId, epicId },
               chatId,
+              clientActionId,
+              "Couldn't create the agent.",
             );
-        }
-      })
-      .catch(() => {
-        useEpicCanvasStore.getState().clearChatTitlePending(chatId);
-        // `markFailedByAction`, not `markFailed`: the handoff key is
-        // {user, epic} only, so a SECOND create in this epic replaces the
-        // entry while the first is still in flight - and now that this arm
-        // actually runs, an unguarded `markFailed` would close the second
-        // agent's tab when the first one's rejection landed. The by-action
-        // variant fails only the handoff still carrying these exact ids.
-        useInitialChatHandoffStore
-          .getState()
-          .markFailedByAction(
-            { hostId: activeHostId, userId, epicId },
-            chatId,
-            clientActionId,
-            "Couldn't create the agent.",
-          );
-      });
-    // The toast (with the host's reason) is the shared create hook's, which
-    // is mutation-level and so survives this close.
-    cleanupAfterSubmit();
-  }, [
-    canSubmit,
-    cleanupAfterSubmit,
-    createChat,
-    // The placement this submit re-validates MUST be the current one: a stale
-    // closure would check a host the chip stopped showing renders ago.
-    submitTarget,
-    pickerStore,
-    draftWorkspaceFolderCount,
-    epicId,
-    parentId,
-    placement,
-    raiseHostNotice,
-    recordPlacement,
-    rememberEpicIntent,
-    setEpicRunSettings,
-    setGlobalRunSettings,
-    toolbarStore,
-    worktreeIntentForSubmit,
-  ]);
+        });
+      // The toast (with the host's reason) is the shared create hook's, which
+      // is mutation-level and so survives this close.
+      cleanupAfterSubmit();
+    },
+    [
+      canSubmit,
+      cleanupAfterSubmit,
+      createChat,
+      // The placement this submit re-validates MUST be the current one: a stale
+      // closure would check a host the chip stopped showing renders ago.
+      submitTarget,
+      pickerStore,
+      draftWorkspaceFolderCount,
+      epicId,
+      parentId,
+      placement,
+      queryClient,
+      raiseHostNotice,
+      recordPlacement,
+      rememberEpicIntent,
+      setEpicRunSettings,
+      setGlobalRunSettings,
+      toolbarStore,
+      worktreeIntentForSubmit,
+    ],
+  );
+  // Published for the async re-entry above. In an effect, not in render, so the
+  // ref is written on commit like any other external sync.
+  useEffect(() => {
+    submitRef.current = submitWithResolvedContent;
+  }, [submitWithResolvedContent]);
+  const handleSubmit = useCallback(
+    () => submitWithResolvedContent(null, 0),
+    [submitWithResolvedContent],
+  );
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
@@ -1092,8 +1524,12 @@ export function NewConversationModalBody(props: {
       // Persist the caret alongside the bytes so a focus round-trip that
       // unmounts + remounts the editor restores it (see `initialSelection`).
       setSelection(epicId, selection);
+      // Catch-all for an inline-b64 node this hook did not insert itself - a
+      // cross-host browser-tab preview screenshot, a restored draft that still
+      // carries one. Cheap and short-circuiting when there is nothing pending.
+      notePossiblePendingImages(content);
     },
-    [epicId, setContent, setSelection],
+    [epicId, notePossiblePendingImages, setContent, setSelection],
   );
 
   const handleSelectionChange = useCallback(
@@ -1148,8 +1584,11 @@ export function NewConversationModalBody(props: {
       dictationPreparing={dictationPreparing}
       paste={paste}
       hasPastedImageBytes={hasPastedImageBytes}
-      ingestPastedComposerImages={null}
-      onEditorReady={null}
+      ingestPastedComposerImages={ingestPastedComposerImages}
+      // A draft restored into this modal can already carry a pending b64 node
+      // (the editor is created with `initialContent` and fires no document
+      // change for it), so the sweep runs once the handle exists as well.
+      onEditorReady={paste.reingestPendingImages}
       // No terminal surface: a sign-in terminal tile is bound to the TAB's
       // host, while this composer creates on a placement-resolved host that
       // may be another machine, and this modal sits above the canvas the tile

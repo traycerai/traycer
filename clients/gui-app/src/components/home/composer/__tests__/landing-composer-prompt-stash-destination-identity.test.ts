@@ -6,7 +6,7 @@ import { createStore } from "zustand/vanilla";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { landingStashIdentity } from "@/components/home/composer/use-landing-prompt-stash-adapters";
-import { getImageBytes } from "@/lib/composer/landing-image-store";
+import { getImageBytes } from "@/lib/composer/composer-image-store";
 import { importPromptStashContentToLanding } from "@/lib/composer/landing-stash-import";
 import {
   reserveLandingImageBudget,
@@ -439,7 +439,7 @@ describe("landing composer prompt-stash destination identity/acceptance", () => 
   it("opens a distinct landing-image DB name per windowId during import", async () => {
     const { createStore: idbCreateStore } = await import("idb-keyval");
     const { landingImagePartition } =
-      await import("@/lib/composer/landing-image-store");
+      await import("@/lib/composer/composer-image-store");
 
     const bytesA = bytesOf([1, 0, 0]);
     const bytesB = bytesOf([0, 1, 0]);

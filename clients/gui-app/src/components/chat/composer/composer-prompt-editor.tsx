@@ -54,7 +54,10 @@ import {
   insertImageAttachmentsCommand,
   type PathInsertionCommit,
 } from "@/hooks/composer/use-composer-paste";
-import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
+import type {
+  ImageAttachmentAttrs,
+  ImageAttachmentRewrite,
+} from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 import { bumpComposerDraftGeneration } from "@/lib/composer/composer-draft-generation";
 
@@ -131,14 +134,16 @@ export interface ComposerPromptEditorHandle {
    * Flip a pending base64 image node (located by `id`) to its stored content
    * hash IN PLACE, preserving its document position. A landing paste inserts
    * image nodes in order carrying `b64content`; each node's background
-   * hash+store job calls this to convert it to `{hash}` once bytes are durable.
+   * prepare+hash+store job calls this to convert it to `{hash}` once bytes are
+   * durable. The rewrite carries the prepared metadata alongside the hash,
+   * because preparation may have re-encoded the bytes the hash addresses.
    * Returns the command's result: `false` when no node with that id exists (the
    * user removed the pending node before the write settled, or the editor is
    * gone) so the caller can reclaim the now-unrooted bytes.
    */
   readonly rewriteImageAttachmentHashById: (
     id: string,
-    hash: string,
+    rewrite: ImageAttachmentRewrite,
   ) => boolean;
   /**
    * Insert a finalized dictation segment at the caret (with a trailing space
@@ -660,9 +665,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   );
 
   const rewriteImageAttachmentHashById = useCallback(
-    (id: string, hash: string): boolean => {
+    (id: string, rewrite: ImageAttachmentRewrite): boolean => {
       if (editor === null || editor.isDestroyed) return false;
-      return editor.commands.rewriteImageAttachmentHashById(id, hash);
+      return editor.commands.rewriteImageAttachmentHashById(id, rewrite);
     },
     [editor],
   );

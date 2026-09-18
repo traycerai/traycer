@@ -119,6 +119,7 @@ import {
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
+import { useImageContentRoot } from "@/hooks/composer/use-image-content-root";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -192,6 +193,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
@@ -202,6 +204,7 @@ import {
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
+import { useEpicCreateSeedHoldDriver } from "@/hooks/chats/use-epic-create-seed-hold-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
@@ -2066,6 +2069,10 @@ function useChatTileSessionViewModel(
     handle,
     nodeId: node.id,
   });
+  // Ends the create-time binding-seed hold once THIS chat's worktree
+  // provisioning has an outcome. A no-op for every tile whose (epic, chat) pair
+  // did not register one, which is every chat but a just-created one.
+  useEpicCreateSeedHoldDriver({ handle });
   // Surface the server-spawned setup terminal in the Terminals sidebar while it
   // runs - its PTY isn't created via the renderer, so nothing else refetches
   // `terminal.list`.
@@ -2095,6 +2102,23 @@ function useChatTileSessionViewModel(
   const turnStopBusy = stopPending || composerActiveTurnStatus === "stopping";
   const stopDisabled = !canAct || turnStopBusy;
   const chatActions = useChatActions(handle);
+  // The queued-drain missing-hash arm. Mounted here because this is where the
+  // three things it needs already meet: the chat's durable `events`, its
+  // `queue`, and `resumeQueue`. Scoped to the TAB's host - the chat is bound to
+  // it for life, and the blob tier the re-upload has to land in is that host's.
+  const repairHostId = useTabHostId();
+  const repairHostClient = useTabHostClient();
+  useQueuedPromptBlobRepair({
+    hostId: repairHostId,
+    client: repairHostClient,
+    events: state.events,
+    queue: state.queue,
+    // The tile's own eligibility. Repairing is an OWNER action - it uploads
+    // into the author's staging tier and resumes the queue - so a read-only
+    // collaborator viewing this chat must not start one.
+    canAct,
+    resumeQueue: chatActions.resumeQueue,
+  });
   const restoreActionPending = useMemo(
     () =>
       Object.values(state.pendingActions).some(
@@ -2277,6 +2301,15 @@ function useChatTileSessionViewModel(
   // `currentContent` from the saved message, so a pristine edit loses nothing
   // and must not hold the epic resident.
   useEpicDraftGuard(currentEpicId, activeInlineEdit?.dirty ?? false);
+  // GC root, for the same reason and over the same window as the park veto
+  // above. An image pasted into the inline editor is stored by hash and
+  // referenced from `currentContent` alone until Submit, so an unrelated draft
+  // clear - any other composer sending - schedules the reconcile that releases
+  // and then deletes bytes nothing claims. Unlike the park veto this is NOT
+  // gated on `dirty`: a pristine edit re-seeded from a saved message still
+  // names hashes, and rooting a hash whose bytes were never local costs
+  // nothing while failing to root one deletes what the user is looking at.
+  useImageContentRoot(activeInlineEdit?.currentContent ?? null);
 
   const displayedMessages = useMemo(() => {
     if (activeInlineEdit === null) return renderedMessages;

@@ -190,13 +190,24 @@ describe("drafts unary contracts", () => {
       RELEASED_FLOOR_METHOD_NAMES,
       SERVES_EVERY_INSTALLED_MAJOR,
     );
+    // `drafts.putBlob` and `drafts.readBlob` are canonical at `@1.1` now (the
+    // wire-cap minor); `versions[0]` above still pins the `@1.0` contract
+    // instance, so this is only the manifest's ADVERTISED minor moving.
+    const CANONICAL_MINOR: Record<(typeof UNARY_METHODS)[number], number> = {
+      "drafts.upsert": 0,
+      "drafts.delete": 0,
+      "drafts.list": 0,
+      "drafts.claim": 0,
+      "drafts.putBlob": 1,
+      "drafts.readBlob": 1,
+    };
     for (const method of UNARY_METHODS) {
       expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
       expect(split.manifest[method]).toBeUndefined();
       expect(split.optionalManifest[method]).toEqual({
         major: 1,
-        minor: 0,
+        minor: CANONICAL_MINOR[method],
         supportedMajors: [1],
       });
     }

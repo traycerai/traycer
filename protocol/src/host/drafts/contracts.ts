@@ -1,4 +1,7 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   draftsClaimRequestSchema,
@@ -8,9 +11,11 @@ import {
   draftsListRequestSchema,
   draftsListResponseSchema,
   draftsPutBlobRequestSchema,
+  draftsPutBlobRequestSchemaV11,
   draftsPutBlobResponseSchema,
   draftsReadBlobRequestSchema,
   draftsReadBlobResponseSchema,
+  draftsReadBlobResponseSchemaV11,
   draftsSubscribeClientFrameSchemaV10,
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
@@ -76,6 +81,47 @@ export const draftsPutBlobV10 = defineRpcContract({
 });
 
 /**
+ * `@1.1` declares the wire ceiling for one blob
+ * (`DRAFT_BLOB_MAX_BASE64_LENGTH`) on its own request instance. The response is
+ * unchanged and shared by reference.
+ *
+ * NARROWING, so it takes a minor rather than an edit: the `@1.0` request is
+ * pinned above and stays byte-identical, and a peer that negotiates `@1.0`
+ * keeps sending and accepting exactly what it does today. The cap therefore
+ * takes effect only where BOTH sides are `>= 1.1`, and the real enforcement
+ * stays the host store's version-independent decoded cap - see the schema's
+ * own note.
+ */
+export const draftsPutBlobV11 = defineRpcContract({
+  method: "drafts.putBlob",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: draftsPutBlobRequestSchemaV11,
+  responseSchema: draftsPutBlobResponseSchema,
+});
+
+/**
+ * Identity in both directions: the two lines carry the same KEYS, and `@1.1`
+ * differs only by a length bound on one of them.
+ *
+ * The upgrade deliberately does not re-check that bound. Upgrading is how a
+ * `@1.0` caller's request reaches the canonical resolver, and this path never
+ * re-parses (`upgradeRequestToVersion` applies pure functions), so an over-cap
+ * `@1.0` body arrives exactly as it does today and is refused by the host
+ * store's own decoded cap. Enforcing the wire cap here instead would convert a
+ * released client's oversized put from a store-level refusal it understands
+ * into a protocol-layer failure it has never seen.
+ */
+export const draftsPutBlobUpgradeV10ToV11 = defineUpgradePath<
+  typeof draftsPutBlobV10,
+  typeof draftsPutBlobV11
+>({
+  from: draftsPutBlobV10.schemaVersion,
+  to: draftsPutBlobV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
  * Host-wide draft image read. The second-device / non-author path.
  * Missing and corrupt answer `{ ok: false, reason: "missing" }`.
  */
@@ -84,6 +130,29 @@ export const draftsReadBlobV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: draftsReadBlobRequestSchema,
   responseSchema: draftsReadBlobResponseSchema,
+});
+
+/**
+ * `@1.1` carries the same ceiling on the way OUT. The request has no body to
+ * cap - it is a digest - so this line shares `draftsReadBlobRequestSchema` and
+ * takes its own response instance; `@1.0`'s stays pinned above and uncapped.
+ */
+export const draftsReadBlobV11 = defineRpcContract({
+  method: "drafts.readBlob",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: draftsReadBlobRequestSchema,
+  responseSchema: draftsReadBlobResponseSchemaV11,
+});
+
+/** Identity both ways - same arms, same keys, one length bound added. */
+export const draftsReadBlobUpgradeV10ToV11 = defineUpgradePath<
+  typeof draftsReadBlobV10,
+  typeof draftsReadBlobV11
+>({
+  from: draftsReadBlobV10.schemaVersion,
+  to: draftsReadBlobV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /**

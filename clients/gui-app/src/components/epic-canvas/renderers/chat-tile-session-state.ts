@@ -46,6 +46,17 @@ export interface InlineEditState {
   readonly originalMessage: ChatMessageModel;
   readonly initialContent: JsonContent;
   readonly currentContent: JsonContent;
+  /**
+   * Bumped on every content edit, and on nothing else.
+   *
+   * The generation an async edit submit captures (see
+   * `captureComposerSubmitGeneration`). An edit submit can now await an image
+   * read or a blob upload, and the editor stays EDITABLE across that await, so
+   * the document at dispatch need not be the one that was submitted. The epoch
+   * beside it answers a different question - which edit SESSION is live - and
+   * typing deliberately does not bump that, so it cannot stand in for this.
+   */
+  readonly revision: number;
   readonly dirty: boolean;
   readonly pendingClientActionId: string | null;
   readonly pendingMessageId: string | null;
@@ -123,6 +134,7 @@ export function chatTileUiReducer(
           originalMessage: action.originalMessage,
           initialContent: action.initialContent,
           currentContent: action.initialContent,
+          revision: 0,
           dirty: false,
           pendingClientActionId: null,
           pendingMessageId: null,
@@ -137,6 +149,7 @@ export function chatTileUiReducer(
         inlineEdit: {
           ...state.inlineEdit,
           currentContent: action.content,
+          revision: state.inlineEdit.revision + 1,
           dirty: true,
           pendingClientActionId: null,
           pendingMessageId: null,

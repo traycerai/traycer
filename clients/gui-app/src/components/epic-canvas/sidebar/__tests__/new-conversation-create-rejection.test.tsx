@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -17,6 +18,7 @@ import {
 } from "@/stores/epics/initial-chat-handoff-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { createAppQueryClient } from "@/lib/query-client";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
@@ -218,13 +220,13 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
-vi.mock("@/hooks/composer/use-composer-paste", async () => {
+vi.mock("@/hooks/composer/use-composer-hash-first-paste", async () => {
   const actual = await vi.importActual<
-    typeof import("@/hooks/composer/use-composer-paste")
-  >("@/hooks/composer/use-composer-paste");
+    typeof import("@/hooks/composer/use-composer-hash-first-paste")
+  >("@/hooks/composer/use-composer-hash-first-paste");
   return {
     ...actual,
-    useComposerPaste: () => ({
+    useComposerHashFirstPaste: () => ({
       onPaste: vi.fn(),
       onDrop: vi.fn(),
       onDragOver: vi.fn(),
@@ -235,6 +237,9 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
       dragOverlayVariant: null,
       isIngestingImages: false,
       isResolvingFilePaths: false,
+      ingestPastedComposerImages: vi.fn(() => []),
+      notePossiblePendingImages: vi.fn(),
+      reingestPendingImages: vi.fn(),
     }),
   };
 });
@@ -293,27 +298,34 @@ function Harness() {
   const [transient] = useState(() => ({
     pickerStore: createComposerPickerStore(),
   }));
+  // The modal reads a `QueryClient` for the deferred create's binding-seed
+  // release closure, so it needs a provider even though this suite asserts
+  // only on handoff state. One client per mount, so nothing leaks between
+  // cases.
+  const [queryClient] = useState(() => createAppQueryClient());
   const dismissPickerRef = useRef<(() => boolean) | null>(null);
   return (
-    <SurfacePresentationBoundary visible focused>
-      <Dialog open>
-        <DialogContent>
-          {open ? (
-            <NewConversationTransientContext.Provider value={transient}>
-              <NewConversationModalBody
-                epicId={EPIC_ID}
-                tabId="tab-1"
-                placement={null}
-                parentId={null}
-                hostId={null}
-                dismissPickerRef={dismissPickerRef}
-                onSubmitted={() => setOpen(false)}
-              />
-            </NewConversationTransientContext.Provider>
-          ) : null}
-        </DialogContent>
-      </Dialog>
-    </SurfacePresentationBoundary>
+    <QueryClientProvider client={queryClient}>
+      <SurfacePresentationBoundary visible focused>
+        <Dialog open>
+          <DialogContent>
+            {open ? (
+              <NewConversationTransientContext.Provider value={transient}>
+                <NewConversationModalBody
+                  epicId={EPIC_ID}
+                  tabId="tab-1"
+                  placement={null}
+                  parentId={null}
+                  hostId={null}
+                  dismissPickerRef={dismissPickerRef}
+                  onSubmitted={() => setOpen(false)}
+                />
+              </NewConversationTransientContext.Provider>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+      </SurfacePresentationBoundary>
+    </QueryClientProvider>
   );
 }
 

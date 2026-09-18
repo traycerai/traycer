@@ -1,7 +1,36 @@
+/**
+ * THE SHARED BASE every composer surface's paste/drop ingest is built on — not
+ * an ingest of its own.
+ *
+ * What lives here is the part that is the same everywhere: the DOM event
+ * plumbing (`useComposerPasteEvents`), the drag-state machine and its overlay
+ * variants, the abortable job bookkeeping behind `isIngestingImages` /
+ * `isResolvingFilePaths`, the `image/*` filter and source ceiling
+ * (`collectImages`), preparation itself (`prepareComposerImageFile` /
+ * `prepareComposerImageBytes`), and the non-image file/URL path resolution.
+ *
+ * What does NOT live here is the decision every surface makes differently:
+ * what an accepted image BECOMES. Both surfaces that make that decision are
+ * hash-first and neither is here:
+ *
+ * - `useComposerHashFirstPaste` — the chat composer, the edit composer and the
+ *   new-conversation modal. Files are stored content-addressed before a node
+ *   exists; inline base64 arriving in a paste becomes a pending node a
+ *   background job flips to a hash in place.
+ * - `useLandingComposerPaste` — the landing composer, same model with its own
+ *   draft-scoped budget owner and mount-time re-entry.
+ *
+ * There used to be a third, `useComposerPasteAdapter` (and its `useComposerPaste`
+ * convenience wrapper), which inserted inline `b64content` nodes for chat and
+ * the new-conversation modal. Those surfaces went hash-first, it lost its last
+ * caller, and it was deleted — its base64 node shape is the thing this change
+ * set out to remove from drafts and `localStorage`. Do not reintroduce a base64
+ * ingest here; the inline form now exists only at submit, in
+ * `lib/composer/composer-image-inlining.ts`.
+ */
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
@@ -9,16 +38,18 @@ import {
 } from "react";
 import type { Editor } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
-import { v4 as uuidv4 } from "uuid";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { PREPARED_IMAGE_SOURCE_CEILING } from "@/lib/composer/prompt-stash-image-preparation";
 import {
-  Analytics,
-  AnalyticsEvent,
-  analyticsBlockerFromError,
-} from "@/lib/analytics";
+  prepareComposerImageBytesOrRefuse,
+  showImageTooLargeToast,
+  type ImagePreparationSession,
+  type PreparedComposerImage,
+} from "@/lib/composer/composer-image-preparation";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import {
   classifyFileTransferDrag,
   collectFileTransferEntries,
@@ -32,7 +63,12 @@ import {
 } from "@/lib/path/cross-platform-path";
 
 export const IMAGE_MIME_PREFIX = "image/";
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/**
+ * The only size a paste refuses outright. The old 5 MiB refusal moved from the
+ * source to the OUTPUT (`PREPARED_IMAGE_MAX_BYTES`): anything under this
+ * ceiling is now resized and re-encoded to fit rather than turned away.
+ */
+export const MAX_IMAGE_SOURCE_BYTES = PREPARED_IMAGE_SOURCE_CEILING;
 export const IMAGE_READ_TIMEOUT_MS = 15_000;
 /**
  * Bound on a single file/URL's `fileDrops` round trip. Without this, a
@@ -76,16 +112,18 @@ function withResolutionTimeout<T>(
   });
 }
 
-function readFileAsDataUrl(file: File, signal: AbortSignal): Promise<string> {
+/**
+ * Reads a file's raw bytes under the same stall bound the FileReader path
+ * carried: a host/OS read that never settles must not gate submit forever.
+ * Raw bytes rather than a data URL because preparation works on bytes, and a
+ * base64 round trip before it would be one more full copy of the image.
+ */
+function readFileBytes(file: File, signal: AbortSignal): Promise<ImageBytes> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
     let settled = false;
     const cleanup = (): void => {
       window.clearTimeout(timeout);
       signal.removeEventListener("abort", abort);
-      reader.onerror = null;
-      reader.onload = null;
-      reader.onabort = null;
     };
     const fail = (error: Error): void => {
       if (settled) return;
@@ -94,43 +132,42 @@ function readFileAsDataUrl(file: File, signal: AbortSignal): Promise<string> {
       reject(error);
     };
     const abort = (): void => {
-      reader.abort();
       fail(new Error("Image read was cancelled"));
     };
     const timeout = window.setTimeout(() => {
-      reader.abort();
       fail(new Error("Timed out while reading image"));
     }, IMAGE_READ_TIMEOUT_MS);
-    reader.onerror = () => {
-      fail(reader.error ?? new Error("Failed to read image"));
-    };
-    reader.onabort = () => {
-      fail(new Error("Image read was cancelled"));
-    };
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        fail(new Error("Image reader returned non-string result"));
-        return;
-      }
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(result);
-    };
     if (signal.aborted) {
       abort();
       return;
     }
     signal.addEventListener("abort", abort, { once: true });
-    reader.readAsDataURL(file);
+    file.arrayBuffer().then(
+      (buffer) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(new Uint8Array(buffer));
+      },
+      (error: unknown) => {
+        fail(
+          error instanceof Error ? error : new Error("Failed to read image"),
+        );
+      },
+    );
   });
 }
 
 /**
- * `onOversized` lets each surface observe the 5MB rejection (which is
- * user-visible via the toast here) without the shared filter knowing surface
- * names; it receives no file details so nothing sensitive can leak into it.
+ * `onOversized` lets each surface observe the source-ceiling rejection (which
+ * is user-visible via the toast here) without the shared filter knowing
+ * surface names; it receives no file details so nothing sensitive can leak
+ * into it.
+ *
+ * The only size this refuses is the 50 MiB SOURCE ceiling, checked against
+ * `File.size` so a 60 MB paste never reaches a decoder. Everything under it is
+ * preparation's problem: resized to 2000 px and re-encoded under the output
+ * ceiling, or refused there with the same copy.
  */
 export function collectImages(
   files: ReadonlyArray<File>,
@@ -139,19 +176,8 @@ export function collectImages(
   const accepted: File[] = [];
   for (const file of files) {
     if (!file.type.startsWith(IMAGE_MIME_PREFIX)) continue;
-    if (file.size > MAX_IMAGE_BYTES) {
-      reportableErrorToast(
-        "Image too large",
-        {
-          description: `${file.name || "Image"} exceeds the 5MB limit.`,
-        },
-        {
-          title: "Image exceeded the size limit",
-          message: null,
-          code: null,
-          source: "Chat composer",
-        },
-      );
+    if (file.size > MAX_IMAGE_SOURCE_BYTES) {
+      showImageTooLargeToast(file.name);
       onOversized();
       continue;
     }
@@ -160,39 +186,52 @@ export function collectImages(
   return accepted;
 }
 
-async function filesToImageAttrs(
-  files: ReadonlyArray<File>,
+/**
+ * Reads and prepares ONE file under the universal policy, or returns `null`
+ * after toasting when it cannot be made to fit.
+ *
+ * Aborts propagate: the read rejects and `runImageIngest`'s `onRejected` sees
+ * `signal.aborted`, which is what suppresses the toast for a torn-down surface.
+ */
+export async function prepareComposerImageFile(
+  session: ImagePreparationSession,
+  file: File,
   signal: AbortSignal,
-): Promise<ComposerImageConversionResult> {
-  // This base64 ingest serves only chat / new-conversation surfaces.
-  const accepted = collectImages(files, () => {
-    Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
-      kind: "image",
-      surface: "chat",
-      blocker: "invalid_input",
-    });
-  });
-  if (accepted.length === 0) return { attrs: [] };
-  const results = await Promise.all(
-    accepted.map(async (file) => {
-      const dataUrl = await readFileAsDataUrl(file, signal);
-      return {
-        id: uuidv4(),
-        fileName: file.name || "image",
-        b64content: base64PayloadFromDataUrl(dataUrl),
-        mimeType: file.type || "image/png",
-        size: file.size > 0 ? file.size : null,
-      } satisfies ImageAttachmentAttrs;
-    }),
+  onRefused: () => void,
+): Promise<PreparedComposerImage | null> {
+  const bytes = await readFileBytes(file, signal);
+  signal.throwIfAborted();
+  return prepareComposerImageBytes(
+    session,
+    bytes,
+    file.name.length > 0 ? file.name : "image",
+    file.type.length > 0 ? file.type : "image/png",
+    onRefused,
   );
-  // No reserved capacity to hand off - this surface has no landing-style
-  // budget, so there is nothing for `runImageIngest` to release.
-  return { attrs: results };
 }
 
-function base64PayloadFromDataUrl(dataUrl: string): string {
-  const commaIndex = dataUrl.indexOf(",");
-  return commaIndex < 0 ? dataUrl : dataUrl.slice(commaIndex + 1);
+/**
+ * `prepareComposerImageFile` without the read, for a surface that already
+ * holds the bytes (a structured clipboard paste's inline base64). Same policy,
+ * same fallback, and this is where the refusal becomes a toast.
+ */
+export async function prepareComposerImageBytes(
+  session: ImagePreparationSession,
+  bytes: ImageBytes,
+  fileName: string,
+  mimeType: string,
+  onRefused: () => void,
+): Promise<PreparedComposerImage | null> {
+  const prepared = await prepareComposerImageBytesOrRefuse(
+    session,
+    bytes,
+    fileName,
+    mimeType,
+  );
+  if (prepared.kind === "prepared") return prepared.image;
+  showImageTooLargeToast(fileName);
+  onRefused();
+  return null;
 }
 
 /**
@@ -509,13 +548,15 @@ async function resolveAndInsertNativeClipboardFilePaths(
 }
 
 /**
- * Drag/drop/paste plumbing shared by every composer surface. The image ingest
- * (base64 vs hash-only) is delegated to `imageIngest`/`insertAttrs`; image
- * filtering + the 5MB cap belong to the ingest via `collectImages`. Surfaces
- * wrap this with their own ingest: `useComposerPasteAdapter` (base64) for
- * chat / new-conversation, `useLandingComposerPaste` (hash-only) for landing.
- * Non-image file/URL entries resolve through `filePaths`, while images keep
- * their existing independent ingest behavior.
+ * Drag/drop/paste plumbing shared by every composer surface. What an accepted
+ * image BECOMES is delegated to `imageIngest`/`insertAttrs`; image filtering +
+ * the source ceiling belong to the ingest via `collectImages`, and every ingest
+ * prepares (≤ 2000 px, ≤ 3.75 MiB) before it builds. Both surfaces that wrap
+ * this are hash-only — `useComposerHashFirstPaste` for the chat composer, the
+ * edit composer and the new-conversation modal, `useLandingComposerPaste` for
+ * landing — and they differ only in whose budget an image charges against and
+ * how a pending node is re-entered. Non-image file/URL entries resolve through
+ * `filePaths`, while images keep their existing independent ingest behavior.
  */
 export function useComposerPasteEvents<Attrs>(
   imageIngest: ComposerImageIngest<Attrs>,
@@ -701,52 +742,6 @@ export function useComposerPasteEvents<Attrs>(
   };
 }
 
-/**
- * Base64 paste adapter for chat / new-conversation: accepted files are read as
- * base64 (`filesToImageAttrs`) and inserted as inline `b64content` nodes. This
- * is the behavior every non-landing surface relies on — do NOT change it.
- */
-export function useComposerPasteAdapter(
-  insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
-  filePaths: ComposerFilePathIngestArgs,
-): UseComposerPasteResult {
-  const imageIngest = useMemo(
-    (): ComposerImageIngest => ({
-      convert: filesToImageAttrs,
-      onSettled: (accepted) => {
-        accepted.forEach(() => {
-          Analytics.getInstance().track(AnalyticsEvent.AttachmentAdded, {
-            kind: "image",
-            surface: "chat",
-          });
-        });
-      },
-      onRejected: (error, aborted) => {
-        Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
-          kind: "image",
-          surface: "chat",
-          blocker: analyticsBlockerFromError(error),
-        });
-        if (aborted) return;
-        reportableErrorToast(
-          "Couldn't attach the image.",
-          {
-            description: "Please try adding it again.",
-          },
-          {
-            title: "Could not attach image",
-            message: null,
-            code: null,
-            source: "Chat composer",
-          },
-        );
-      },
-    }),
-    [],
-  );
-  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
-}
-
 export interface ComposerPasteEditorHandle {
   readonly isReady: () => boolean;
   readonly insertImageAttachments: (
@@ -754,35 +749,6 @@ export interface ComposerPasteEditorHandle {
   ) => void;
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly focus: () => void;
-}
-
-export function useComposerPaste(
-  editorRef: {
-    readonly current: ComposerPasteEditorHandle | null;
-  },
-  fileDrops: IFileDropHost,
-  mentionRoots: ReadonlyArray<string>,
-): UseComposerPasteResult {
-  const insertAttrs = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
-      const handle = editorRef.current;
-      if (handle === null || !handle.isReady()) return 0;
-      handle.insertImageAttachments(attrs);
-      handle.focus();
-      return attrs.length;
-    },
-    [editorRef],
-  );
-  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
-    const handle = editorRef.current;
-    if (handle === null || !handle.isReady()) return null;
-    return handle.beginPathInsertion();
-  }, [editorRef]);
-  const filePaths = useMemo(
-    () => ({ fileDrops, mentionRoots, beginPathInsertion }),
-    [fileDrops, mentionRoots, beginPathInsertion],
-  );
-  return useComposerPasteAdapter(insertAttrs, filePaths);
 }
 
 export function insertImageAttachmentsCommand(

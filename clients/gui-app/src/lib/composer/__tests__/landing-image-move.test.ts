@@ -13,7 +13,7 @@ import {
   getImageBytes,
   putImage,
   releaseSession,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { installFreshIndexedDb } from "./prompt-stash-fake-idb";
 

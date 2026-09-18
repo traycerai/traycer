@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -35,6 +35,17 @@ import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
+import {
+  inlineImageHashesFromSession,
+  inlineLocalImageHashes,
+} from "@/lib/composer/composer-image-inlining";
+import {
+  planAttachmentsByHash,
+  resolveSendContentByHash,
+  sendAttachmentsByHashSupported,
+} from "@/lib/composer/attachments-by-hash";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   chatMessageEditingForInlineEdit,
@@ -151,6 +162,10 @@ export function useChatMessageActions(
   // The chat is bound to this tab's host for life, so both its own staged
   // slot and the fork scratch slot it seeds belong to that host.
   const tabHostId = useTabHostId();
+  // The tab's own client, for the edit-and-resend by-hash gate below. The chat
+  // is bound to this host for life, so this is the host the edit is dispatched
+  // at and the one whose draft blob tier its uploads have to land in.
+  const tabHostClient = useTabHostClient();
   const {
     dispatchUi,
     activeInlineEdit,
@@ -177,6 +192,48 @@ export function useChatMessageActions(
     setForkTarget,
     worktreeBinding,
   } = input;
+  // Held across the session-cold image read in `performEditSubmit`: nothing
+  // clears the inline editor until the edit is accepted, so a second Enter
+  // during that read would submit the same edit twice.
+  //
+  // It holds the EPOCH the read was started under rather than a bare boolean,
+  // so the latch belongs to ONE edit session. A boolean outlived its session in
+  // both directions once the epoch below made sessions distinguishable: cancel
+  // and reopen during a read left it stuck true and silently swallowed the next
+  // submit, and the abandoned read's clear then released the latch out from
+  // under the session that had replaced it. `null` is "no read in flight".
+  const editImageResolutionEpoch = useRef<number | null>(null);
+  /**
+   * The LIVE inline edit, for the document generation an async submit reads
+   * back after its await. The `activeInlineEdit` the submit callback closed
+   * over is the one that existed when the callback was built, which is exactly
+   * the stale value the guard exists to detect.
+   */
+  const activeInlineEditRef = useRef<InlineEditState | null>(activeInlineEdit);
+  useEffect(() => {
+    activeInlineEditRef.current = activeInlineEdit;
+  }, [activeInlineEdit]);
+  /**
+   * WHICH EDIT SESSION IS LIVE, read at dispatch time rather than through the
+   * closure `performEditSubmit` captured at submit time.
+   *
+   * An edit submit can now await an image read, and an edit is CANCELLABLE
+   * across that await — Escape and the Cancel button both just dispatch
+   * `clearInlineEdit`. Without this the settled read still called
+   * `chatActions.editUserMessage` with the captured target and the captured
+   * revert flags, so a cancelled edit rewrote message history and reverted
+   * files on disk. `inlineEditIsPending` is no defence: it is set INSIDE the
+   * dispatch, so during the read there is nothing for Cancel to refuse and
+   * nothing for the dispatch to notice.
+   *
+   * A monotonic epoch, not the target id: cancelling and reopening the SAME
+   * message would otherwise read as the same session and let the abandoned
+   * dispatch through. Bumped on both halves of the effect so every transition
+   * — begin, cancel, retarget, unmount — invalidates whatever was in flight.
+   * Typing does NOT bump it (`inlineEditTargetMessageId` ignores content), so
+   * an edit the user is still working on is not cancelled by its own author.
+   */
+  const editSessionEpoch = useRef(0);
 
   /**
    * What a revert from the message being edited would touch.
@@ -190,6 +247,12 @@ export function useChatMessageActions(
   // while the scope depends only on which message is being edited. Widening it
   // back would re-run three transcript passes for each character typed.
   const inlineEditTargetMessageId = activeInlineEdit?.targetMessageId ?? null;
+  useEffect(() => {
+    editSessionEpoch.current += 1;
+    return () => {
+      editSessionEpoch.current += 1;
+    };
+  }, [inlineEditTargetMessageId]);
   const revertScope = useMemo<RevertScope | null>(
     () =>
       inlineEditTargetMessageId === null
@@ -244,28 +307,154 @@ export function useChatMessageActions(
       if (!canModifyMessages) return;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return;
-      const sent = chatActions.editUserMessage({
-        targetMessageId: activeInlineEdit.targetMessageId,
-        content: buildSubmittedChatJSONContent(
-          activeInlineEdit.currentContent,
-          slashCatalog,
-        ),
-        sender,
-        settings: editSettings,
-        revertFileChanges,
-        revertArtifacts,
-      });
-      if (sent === null) return;
-      dispatchUi({
-        type: "markInlineEditPending",
-        targetMessageId: activeInlineEdit.targetMessageId,
-        clientActionId: sent.clientActionId,
-        messageId: sent.messageId,
-      });
-      dispatchUi({
-        type: "setConfirmingDeleteMessageId",
-        confirmingDeleteMessageId: null,
-      });
+      const targetMessageId = activeInlineEdit.targetMessageId;
+      // The session this submit belongs to. Revalidated inside `dispatchEdit`,
+      // which is the only place that writes.
+      const submittedUnderEpoch = editSessionEpoch.current;
+      // THE DOCUMENT generation, which the epoch above deliberately is not.
+      //
+      // The epoch answers "is this still the same edit SESSION" and typing does
+      // not bump it - by design, so an edit the user is still working on is not
+      // cancelled by its own author. But the submit can now await a blob upload
+      // or an IndexedDB read, `editing.pending` stays false until
+      // `markInlineEditPending` runs INSIDE the dispatch, and the editor is
+      // enabled the whole time. So: submit an image edit A, type B during the
+      // upload, and the settled read dispatched A and
+      // `normalizeInlineEditForSession` then cleared the live editor on
+      // acceptance - destroying B, unsent and unrecoverable. Same failure the
+      // composer has `captureComposerSubmitGeneration` for, and the same
+      // mechanism rather than a second one shaped differently.
+      const editGeneration = captureComposerSubmitGeneration(
+        () => activeInlineEditRef.current?.revision ?? -1,
+      );
+      // AHEAD OF EVERY DISPATCH PATH, the synchronous one below included. It
+      // used to sit between them, which left this hole: a first submit goes
+      // async on a session-cold image, the cache then warms (or the cold image
+      // is removed), a second Enter takes the SYNCHRONOUS path and dispatches
+      // at once - and then the first read settles and dispatches the same edit
+      // again. `markInlineEditPending` is no defence: it changes neither the
+      // target id nor the epoch, so the settling read still recognises its own
+      // session. A resolution in flight owns this edit session.
+      if (editImageResolutionEpoch.current === submittedUnderEpoch) return;
+      const dispatchEdit = (content: JsonContent): void => {
+        // The edit was cancelled, retargeted, or unmounted while its images
+        // were being read. Rewriting history and reverting files for an edit
+        // the user took back is not something a later undo can put right, so
+        // this returns before the FIRST write rather than trying to unwind.
+        if (editSessionEpoch.current !== submittedUnderEpoch) return;
+        // Same session, but a DIFFERENT document: the user typed during the
+        // read. Dispatching the capture would send the older text and then
+        // `normalizeInlineEditForSession` would clear the editor holding the
+        // newer, destroying work still on screen. Leaving the edit open is the
+        // recoverable answer - the text is all still there and Enter re-sends
+        // it.
+        //
+        // WHY THIS DOES NOT RE-ENTER THE WAY THE COMPOSER DOES, since the two
+        // guards otherwise match: not because the composer has cleared
+        // anything by this point - it has not, `clearAcceptedDraft` runs only
+        // inside an ACCEPTED dispatch, so both editors still hold their
+        // document here. The difference is what the gesture owes the user. The
+        // composer's Enter is a SEND: it either completes or puts the prompt
+        // back, so a stale capture has to be re-resolved rather than dropped,
+        // or the send silently never happens. An edit that is still open owes
+        // nothing - the editor is on screen with the newer text in it, and the
+        // next Enter is the retry.
+        if (!editGeneration.stillCurrent()) return;
+        const sent = chatActions.editUserMessage({
+          targetMessageId,
+          content,
+          sender,
+          settings: editSettings,
+          revertFileChanges,
+          revertArtifacts,
+        });
+        if (sent === null) return;
+        dispatchUi({
+          type: "markInlineEditPending",
+          targetMessageId,
+          clientActionId: sent.clientActionId,
+          messageId: sent.messageId,
+        });
+        dispatchUi({
+          type: "setConfirmingDeleteMessageId",
+          confirmingDeleteMessageId: null,
+        });
+      };
+      const built = buildSubmittedChatJSONContent(
+        activeInlineEdit.currentContent,
+        slashCatalog,
+      );
+      // Only the session that took the latch releases it. A read abandoned by a
+      // cancel settles late, and by then the latch may belong to the session
+      // that replaced it.
+      const releaseResolutionLatch = (): void => {
+        if (editImageResolutionEpoch.current !== submittedUnderEpoch) return;
+        editImageResolutionEpoch.current = null;
+      };
+      // THE WIRE TAKES HASHES on `chat.subscribe@1.11`, and an edit-and-resend
+      // is a send: it goes out on the same stream, through the same host-side
+      // materializer, and it is the one send path that was still inlining
+      // unconditionally. Same gate as `use-chat-composer-submit.ts`, and
+      // deliberately AHEAD of the inline arms below - a host that takes hashes
+      // should never be handed base64 this window had to re-read from disk.
+      //
+      // Best effort on both sides of the gate, as on the composer: an edited
+      // message's document routinely holds hashes whose bytes were never local
+      // (the message was sent from another window, or its images address the
+      // epic's own attachment store), and `resolveSendContentByHash` leaves
+      // those hash-only rather than refusing. A hash genuinely lost on both
+      // sides comes back as the existing `MISSING_ATTACHMENT_BYTES` rejection.
+      const plan = planAttachmentsByHash(built);
+      if (
+        tabHostClient !== null &&
+        plan.eligible.length > 0 &&
+        sendAttachmentsByHashSupported(tabHostId)
+      ) {
+        // Always async - whether the host already holds these bytes is not a
+        // question this window can answer from memory - so it takes the same
+        // latch the cold-read arm does. The guard that reads the latch sits at
+        // the top of this callback, ahead of the synchronous dispatch too.
+        editImageResolutionEpoch.current = submittedUnderEpoch;
+        // Two-argument `then`: a `catch` chained after the success arm would
+        // also catch a throw from `dispatchEdit` and submit the edit twice.
+        void resolveSendContentByHash({
+          hostId: tabHostId,
+          client: tabHostClient,
+          content: built,
+          plan,
+        })
+          .then(dispatchEdit, () => {
+            // The upload or the byte read failed outright. Dispatch the
+            // document as it stands: on a `@1.11` host a hash-only node is a
+            // shape the host understands, and one it cannot resolve comes back
+            // as the existing rejection, which restores the prompt.
+            dispatchEdit(built);
+          })
+          .finally(releaseResolutionLatch);
+        return;
+      }
+      // Below the minor (or nothing eligible): the edit composer pastes
+      // hash-first like every other composer now, so a newly attached image is
+      // a hash into THIS window's store and has to go back inline for the host.
+      // Images the message already carried are also hash-only, but theirs
+      // address the host's EPIC store: those resolve to no local bytes and are
+      // deliberately left alone, which is exactly what this path did before -
+      // `inlineLocalImageHashes` never refuses.
+      const inlined = inlineImageHashesFromSession(built);
+      if (inlined !== null) {
+        dispatchEdit(inlined);
+        return;
+      }
+      // Taken only once the submit is committed to the async path; the check
+      // itself is hoisted above, ahead of the synchronous dispatch.
+      editImageResolutionEpoch.current = submittedUnderEpoch;
+      // Two-argument `then`: a `catch` chained after the success arm would also
+      // catch a throw from `dispatchEdit` and submit the edit twice.
+      void inlineLocalImageHashes(built)
+        .then(dispatchEdit, () => {
+          dispatchEdit(built);
+        })
+        .finally(releaseResolutionLatch);
     },
     [
       activeInlineEdit,
@@ -275,6 +464,8 @@ export function useChatMessageActions(
       editSettings,
       profile,
       slashCatalog,
+      tabHostClient,
+      tabHostId,
     ],
   );
 

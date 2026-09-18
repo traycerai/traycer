@@ -9,7 +9,12 @@
  *
  * - `1.9` is mainline's windowed line as the `v1.3.x` staging builds shipped
  *   it (delivery placement, Antigravity anchors), frozen;
- * - `1.10` is provider fallback, minted above it.
+ * - `1.10` is provider fallback, minted above it;
+ * - `1.11` changes NO frame shape - it binds the SAME three schema instances
+ *   as `1.10`, by reference, so it carries the fallback surface too. The
+ *   fallback floor is therefore a `>=` check against `FALLBACK_MINOR`, not an
+ *   equality against the line ceiling: the ceiling moves with every new
+ *   minor, but a minor that reuses `1.10`'s schemas is not a new surface line.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -27,7 +32,11 @@ import {
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
-const LIVE_MINOR = 10;
+const LATEST_MINOR = 11;
+// The fallback surface first ships at `1.10` and `1.11` reuses `1.10`'s
+// schemas unchanged, so "carries fallback" is a floor, not an equality
+// against the ceiling - see the module doc.
+const FALLBACK_MINOR = 10;
 const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
@@ -100,9 +109,9 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.10 (a line added later cannot drop out)", () => {
-    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
+  it("covers chat.subscribe@1.0 through @1.11 (a line added later cannot drop out)", () => {
+    expect(MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(chatSubscribeLine.latestMinor).toBe(LATEST_MINOR);
   });
 
   it("derives the fallback vocabulary it searches for (5 notice kinds, 2 actions, 1 background kind)", () => {
@@ -117,7 +126,7 @@ describe("chat.subscribe line surfaces", () => {
   for (const minor of MINORS) {
     describe(`chat.subscribe@1.${minor}`, () => {
       const { contract } = chatSubscribeLine.versions[minor];
-      const carriesFallback = minor === LIVE_MINOR;
+      const carriesFallback = minor >= FALLBACK_MINOR;
       const carriesPlacement = minor >= 9;
 
       it(`server frames ${carriesFallback ? "carry" : "hold back"} every provider-fallback surface`, () => {

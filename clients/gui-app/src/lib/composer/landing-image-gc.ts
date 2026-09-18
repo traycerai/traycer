@@ -1,6 +1,6 @@
 /**
  * Garbage collection for the landing / new-epic composer's content-addressed
- * image bytes (`landing-image-store`). Reclaims IndexedDB bytes + session
+ * image bytes (`composer-image-store`). Reclaims IndexedDB bytes + session
  * entries that no draft references and runs the ready-gated startup orphan
  * sweep. Byte-budget ownership (the 64 MB cap, live-root/referenced-byte
  * accounting, and in-flight reservations) lives in `landing-image-budget.ts`;
@@ -30,7 +30,7 @@ import {
   imageHashKeys,
   releaseSession,
   sessionHashKeys,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { appLogger, describeLogError } from "@/lib/logger";
 

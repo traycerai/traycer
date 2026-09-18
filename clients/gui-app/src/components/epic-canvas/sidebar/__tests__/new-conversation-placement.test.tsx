@@ -1,4 +1,5 @@
-import { isValidElement, useRef, useState } from "react";
+import { isValidElement, useRef, useState, type ReactNode } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -24,6 +25,7 @@ import { notifyEffectiveHostChanged } from "@/stores/host/surface-host-selection
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { createAppQueryClient } from "@/lib/query-client";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
@@ -288,13 +290,13 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
-vi.mock("@/hooks/composer/use-composer-paste", async () => {
+vi.mock("@/hooks/composer/use-composer-hash-first-paste", async () => {
   const actual = await vi.importActual<
-    typeof import("@/hooks/composer/use-composer-paste")
-  >("@/hooks/composer/use-composer-paste");
+    typeof import("@/hooks/composer/use-composer-hash-first-paste")
+  >("@/hooks/composer/use-composer-hash-first-paste");
   return {
     ...actual,
-    useComposerPaste: () => ({
+    useComposerHashFirstPaste: () => ({
       onPaste: vi.fn(),
       onDrop: vi.fn(),
       onDragOver: vi.fn(),
@@ -305,6 +307,9 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
       dragOverlayVariant: null,
       isIngestingImages: false,
       isResolvingFilePaths: false,
+      ingestPastedComposerImages: vi.fn(() => []),
+      notePossiblePendingImages: vi.fn(),
+      reingestPendingImages: vi.fn(),
     }),
   };
 });
@@ -398,8 +403,18 @@ function workspaceControlsHostScope(element: unknown): unknown {
   return element.props.hostScope;
 }
 
+/**
+ * `NewConversationModalBody` reads a `QueryClient` (the deferred create's
+ * binding-seed release closure), and in the app it always renders under the
+ * app-wide provider. One client per render so nothing leaks between cases.
+ */
+function QueryWrapper({ children }: { readonly children: ReactNode }) {
+  const [client] = useState(() => createAppQueryClient());
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
 function renderModal(): RenderResult {
-  const view = render(<Harness />);
+  const view = render(<Harness />, { wrapper: QueryWrapper });
   act(() => {
     testState.installEditor?.();
   });

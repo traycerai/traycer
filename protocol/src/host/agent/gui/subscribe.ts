@@ -4040,3 +4040,34 @@ export const chatSubscribeV110 = defineStreamRpcContract({
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
+
+// ─── The live `chat.subscribe@1.11` contract ───────────────────────────────
+//
+// NO FRAME SHAPE CHANGES. All three schemas are `@1.10`'s, by reference. This
+// minor exists so that the NUMBER can be read as a capability, which is the
+// only signal a stream has: a `send` frame's `imageAttachment` nodes may be
+// HASH-ONLY, with the bytes living solely in the sender's draft blob tier
+// (`drafts.putBlob`), and a `@1.11` host materializes them into the epic's
+// attachment store before the dangling-hash guard runs.
+//
+// Why a minor and not a flag on the send frame. The node's `attrs` are untyped
+// on this wire, so hash-only content already PARSES on every released line -
+// a `@1.10` host accepts the frame and then refuses the prompt with
+// `MISSING_ATTACHMENT_BYTES`, because nothing taught it to look in the
+// sender's tier. There is no frame field a client could send that an older
+// host would not silently ignore, so the negotiated minor is the only honest
+// gate, and it is read on the CLIENT side: below `1.11` the composer inlines
+// base64 exactly as it does today.
+//
+// Nothing is withheld from a lower peer in the other direction: this line
+// adds no server-frame surface, so `chat-frame-projection.ts` needs no arm for
+// it, and the `@1.10` freeze above stays byte-identical (pinned by
+// `chat-subscribe-line-surfaces.test.ts`, which reads the contracts' JSON
+// Schema rather than this comment).
+export const chatSubscribeV111 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 11 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});

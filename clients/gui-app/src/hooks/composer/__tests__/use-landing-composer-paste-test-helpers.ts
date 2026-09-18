@@ -5,6 +5,10 @@
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";
+import {
+  createComposerImagePreparationSession,
+  type ImagePreparationSession,
+} from "@/lib/composer/composer-image-preparation";
 
 // Default fixture for tests that don't care about file-path resolution at
 // all (pure image-ingest coverage): every resolve/copy call comes back
@@ -16,6 +20,17 @@ export const NOOP_FILE_DROPS: IFileDropHost = {
 };
 
 export const NO_MENTION_ROOTS: ReadonlyArray<string> = [];
+
+/**
+ * `useLandingComposerPaste` now requires the composer mount's preparation
+ * session (queue-serialization fix). Callers must create ONE per test - or
+ * once per file in a `beforeEach` - and pass the SAME instance across a
+ * `renderHook`/`rerender`, never a fresh one inside the render callback,
+ * which would re-create the `imageIngest` memo every render.
+ */
+export function makeTestPreparationSession(): ImagePreparationSession {
+  return createComposerImagePreparationSession();
+}
 
 export function makeHandle(
   inserted: ImageAttachmentAttrs[][],

@@ -75,6 +75,103 @@ export function registerExtraImageRootSource(
   extraRootSources.push(source);
 }
 
+/**
+ * A holder that keeps whole DOCUMENTS, contributing to both halves of the
+ * accounting: its images are GC roots AND their bytes count against the
+ * budget.
+ *
+ * The split from {@link ExtraImageRootSource} is exactly the split between
+ * what a holder knows. A bare hash - an annotation crop, a stash row, a
+ * hash set held across one upload - carries no size, so it can root bytes
+ * but cannot price them. A document carries `size` on the node, so it can do
+ * both, and a holder that could do both while only rooting was the W-6 hole:
+ * the composer admitted image after image against a usage figure that only
+ * ever counted landing drafts, so eighteen sequential 3.75 MiB pastes into a
+ * chat composer each saw zero prior usage and sailed past a 64 MiB cap.
+ *
+ * Register a document holder HERE, never as a root source, or its bytes go
+ * uncounted again.
+ */
+export interface ExtraImageContentSource {
+  contents(): ReadonlyArray<JsonContent>;
+}
+
+const extraContentSources: ExtraImageContentSource[] = [];
+
+export function registerExtraImageContentSource(
+  source: ExtraImageContentSource,
+): void {
+  extraContentSources.push(source);
+}
+
+/**
+ * The same registration for a document holder whose lifetime is SHORTER than
+ * the module's - a mounted component's state.
+ *
+ * {@link registerExtraImageContentSource} is push-only because every caller is
+ * a module singleton reading a store that outlives everything. A holder that
+ * can go away needs the other half, or its root outlives the bytes' last
+ * reader and the store never reclaims them - and its bytes stay charged
+ * against a budget nothing is using. Call the returned function when the
+ * holder releases; it is idempotent.
+ *
+ * Releasing is the UNMOUNT, not the emptying: a holder that is still mounted
+ * with nothing to contribute returns `[]` from `contents()` and stays
+ * registered. That is what an inline edit does on Escape - the tile does not
+ * unmount, its `currentContent` goes to null - so both halves have to work.
+ */
+export function registerReleasableImageContentSource(
+  source: ExtraImageContentSource,
+): () => void {
+  extraContentSources.push(source);
+  return () => {
+    const at = extraContentSources.indexOf(source);
+    if (at === -1) return;
+    extraContentSources.splice(at, 1);
+  };
+}
+
+function extraSourceContents(): ReadonlyArray<JsonContent> {
+  const contents: JsonContent[] = [];
+  for (const source of extraContentSources) contents.push(...source.contents());
+  return contents;
+}
+
+/**
+ * Roots a fixed set of hashes for the duration of one asynchronous pass - the
+ * shape a holder takes when it is neither a store field nor component state,
+ * but a promise in flight.
+ *
+ * Refcounted, because two passes can legitimately hold the same hash: the
+ * release only drops THIS call's share, exactly like a budget reservation, so
+ * an early finisher cannot unroot bytes a slower overlapping pass still needs.
+ */
+const heldHashCounts = new Map<string, number>();
+
+registerExtraImageRootSource({ hashes: () => [...heldHashCounts.keys()] });
+
+export function holdImageHashes(hashes: ReadonlyArray<string>): () => void {
+  // Snapshot and dedupe: the release must decrement exactly what it
+  // incremented, whatever the caller does to its array afterwards.
+  const held = [...new Set(hashes)];
+  for (const hash of held) {
+    heldHashCounts.set(hash, (heldHashCounts.get(hash) ?? 0) + 1);
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const hash of held) {
+      const count = heldHashCounts.get(hash) ?? 0;
+      if (count <= 1) {
+        heldHashCounts.delete(hash);
+        continue;
+      }
+      heldHashCounts.set(hash, count - 1);
+    }
+  };
+}
+
 function currentDrafts(): ReadonlyArray<LandingDraftTab> {
   return draftRootSource?.drafts() ?? [];
 }
@@ -129,6 +226,9 @@ export function landingLiveImageRootHashes(): Set<string> {
   for (const source of extraRootSources) {
     for (const hash of source.hashes()) roots.add(hash);
   }
+  for (const content of extraSourceContents()) {
+    for (const hash of imageHashesOf(content)) roots.add(hash);
+  }
   return roots;
 }
 
@@ -152,6 +252,17 @@ function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
       if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
     }
   }
+  // Every non-landing holder of a document: the chat/modal composer drafts, an
+  // open inline edit, a pending or refused send, a queued prompt, a pending
+  // handoff. Same dedupe by hash as the two loops above, and for the same
+  // reason - these holders overlap each other constantly (a send's restore and
+  // its pending row are the same document twice over).
+  for (const content of extraSourceContents()) {
+    for (const atom of collectImageAtoms(content)) {
+      if (atom.hash === null) continue;
+      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
+    }
+  }
   let total = 0;
   for (const size of sizeByHash.values()) total += size;
   return total;
@@ -169,7 +280,7 @@ interface LedgerEntry {
 /**
  * In-flight reservation ledger, keyed by content hash for hash-aware
  * candidates or a fresh synthetic key per call for unhashed ones. Module-level
- * singleton state, mirroring `landing-image-store.ts`'s session cache: this is
+ * singleton state, mirroring `composer-image-store.ts`'s session cache: this is
  * process-local contention hygiene, not a durability boundary. It never
  * persists and is rebuilt as empty on reload.
  */

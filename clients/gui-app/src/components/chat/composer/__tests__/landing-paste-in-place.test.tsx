@@ -23,7 +23,7 @@ import {
   imageHashKeys,
   putImage,
   releaseSession,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 import { decodeValidatedPastedImage } from "@/hooks/composer/use-landing-composer-paste";
 import type {
   PastedComposerImage,
@@ -457,7 +457,13 @@ function makeLandingIngest(
             mocks.scheduleLandingImageReconcile();
             return;
           }
-          editor.commands.rewriteImageAttachmentHashById(id, hash);
+          editor.commands.rewriteImageAttachmentHashById(id, {
+            hash,
+            fileName: image.fileName,
+            mimeType: image.mimeType,
+            size: bytes.byteLength,
+            byHashEligible: true,
+          });
         } catch {
           if (!editor.isDestroyed) {
             editor.commands.removeImageAttachmentById(id);

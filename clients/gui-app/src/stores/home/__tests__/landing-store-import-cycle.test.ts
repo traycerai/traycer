@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 // In-memory idb-keyval stub so importing the landing stores (which pull in
-// landing-image-gc → landing-image-store) doesn't touch a real IndexedDB.
+// landing-image-gc → composer-image-store) doesn't touch a real IndexedDB.
 vi.mock("idb-keyval", () => {
   const data = new Map<string, unknown>();
   const dummyStore = () => Promise.reject(new Error("unused"));

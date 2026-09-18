@@ -267,6 +267,7 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
   chatSubscribeV110,
+  chatSubscribeV111,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -418,8 +419,12 @@ import {
   draftsClaimV10,
   draftsDeleteV10,
   draftsListV10,
+  draftsPutBlobUpgradeV10ToV11,
   draftsPutBlobV10,
+  draftsPutBlobV11,
+  draftsReadBlobUpgradeV10ToV11,
   draftsReadBlobV10,
+  draftsReadBlobV11,
   draftsSubscribeV10,
   draftsUpsertV10,
 } from "@traycer/protocol/host/drafts/contracts";
@@ -466,14 +471,18 @@ import {
   epicBatchUpdateRolesV10,
   epicCreateArtifactV10,
   epicCreateChatUpgradeV10ToV11,
+  epicCreateChatUpgradeV11ToV12,
   epicCreateChatV10,
   epicCreateChatV11,
+  epicCreateChatV12,
   epicCreateCommentThreadV10,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
   epicCreateV10,
   epicCreateV11,
+  epicCreateV12,
   epicCreateUpgradeV10ToV11,
+  epicCreateUpgradeV11ToV12,
   epicDeleteArtifactV10,
   epicDeleteChatV10,
   epicDeleteCommentThreadV10,
@@ -6559,9 +6568,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // response schema strips it - and because a stripped refusal would read as
   // a successful create with a null room, the host gates EMISSION on the
   // negotiated minor and still throws below `@1.1`.
+  // `@1.2` carries images BY REFERENCE and the worktree off the response path:
+  // two optional request fields on new instances forked down to the
+  // initial-message leaf (`attachmentsByHash`, `deferWorktreeProvisioning`),
+  // and a refusal enum widened by `missing-attachment-bytes` on this minor's
+  // own response instance. A `@1.1` peer's frozen request schema STRIPS both
+  // fields - which is why the host resolves hashes only on
+  // `(negotiated minor >= 2 AND the flag)`, never on the content alone - and
+  // its frozen response enum is the reason the new kind could not be added in
+  // place: an unknown `kind` fails that peer's whole response parse.
   "epic.create": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicCreateV10,
@@ -6570,6 +6588,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: epicCreateV11,
           upgradeFromPreviousVersion: epicCreateUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicCreateV12,
+          upgradeFromPreviousVersion: epicCreateUpgradeV11ToV12,
+          // The refusal enum GROWS on the response (`missing-attachment-bytes`),
+          // which the validator rejects by default because a `@1.1` peer's
+          // frozen enum refuses the value and fails the whole response parse.
+          // The claim this flag makes is about the EMITTER and it is the same
+          // one `@1.1`'s own refusal already lives under: the resolver emits a
+          // refusal only when `ctx.schemaVersion.minor` can carry it
+          // (`CREATE_ATTACHMENT_REFUSAL_MINOR = 2` for this kind) and throws
+          // for every older peer.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -6947,7 +6978,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.createChat": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicCreateChatV10,
@@ -6962,6 +6993,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: epicCreateChatV11,
           upgradeFromPreviousVersion: epicCreateChatUpgradeV10ToV11,
+        },
+        // v1.2: the `epic.create@1.2` pair of request fields
+        // (`initialMessage.attachmentsByHash`, `deferWorktreeProvisioning`) and
+        // the first `refusal` this method has carried, over the same `@1.2`
+        // refusal instance. `@1.0`/`@1.1` have NO refusal key, so a stripped
+        // one would read as a created chat - the host emits it only at a
+        // negotiated minor that can carry it.
+        2: {
+          contract: epicCreateChatV12,
+          upgradeFromPreviousVersion: epicCreateChatUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -10300,14 +10341,26 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // `@1.1` declares the 5 MiB decoded ceiling as a wire cap on `bytesBase64` -
+  // on the request here, on the response for `readBlob` below. NARROWING, so
+  // each takes its own instance and the `@1.0` pair stays byte-identical: a
+  // released peer keeps sending and accepting exactly what it does today, and
+  // the cap only binds where both sides negotiate `>= 1.1`. It is a
+  // declaration, not the enforcement - the upgrade path does not re-parse, so
+  // an over-cap `@1.0` body still reaches the resolver and is refused by the
+  // host store's own version-independent decoded cap.
   "drafts.putBlob": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: draftsPutBlobV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: draftsPutBlobV11,
+          upgradeFromPreviousVersion: draftsPutBlobUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10316,11 +10369,15 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
   "drafts.readBlob": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: draftsReadBlobV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: draftsReadBlobV11,
+          upgradeFromPreviousVersion: draftsReadBlobUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11356,7 +11413,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 10,
+      latestMinor: 11,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -11399,6 +11456,18 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         10: {
           contract: chatSubscribeV110,
+        },
+        // @1.11 changes NO frame shape - all three schemas are @1.10's, by
+        // reference. THE MINOR IS THE CAPABILITY SIGNAL: a `send` frame's
+        // `imageAttachment` nodes may be hash-only, with the bytes living only
+        // in the sender's draft blob tier, and a @1.11 host materializes them
+        // from that tier before the dangling-hash guard. The node's `attrs`
+        // are untyped on this wire, so hash-only content already parses on
+        // every released line and no frame field could tell a @1.10 host to
+        // look - which is why the gate is the negotiated minor, read on the
+        // CLIENT (below 1.11 the composer inlines base64, as today).
+        11: {
+          contract: chatSubscribeV111,
         },
       },
     },

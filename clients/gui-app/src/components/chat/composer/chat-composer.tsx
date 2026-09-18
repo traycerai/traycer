@@ -18,10 +18,8 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-import {
-  isAttachmentIngestPending,
-  useComposerPaste,
-} from "@/hooks/composer/use-composer-paste";
+import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
+import { useComposerHashFirstPaste } from "@/hooks/composer/use-composer-hash-first-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -57,7 +55,7 @@ import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
+import { hasComposerImageBytes } from "@/lib/composer/composer-image-store";
 import { ChatComposerDraftAuthorityBanner } from "./chat-composer-draft-authority";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
@@ -246,8 +244,9 @@ function composerUtilityNeedsClearance(args: {
 function composerAttachmentPending(
   pastePending: boolean,
   annotationPreparationPending: boolean,
+  imageResolutionPending: boolean,
 ): boolean {
-  return pastePending || annotationPreparationPending;
+  return pastePending || annotationPreparationPending || imageResolutionPending;
 }
 
 function ComposerUtilityClearanceFill(props: {
@@ -334,7 +333,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const epicImagePresence = useEpicAttachmentBytesPresence();
   const hasPastedImageBytes = useCallback(
     (hash: string) => {
-      if (hasLandingImageBytes(hash)) return true;
+      if (hasComposerImageBytes(hash)) return true;
       if (epicImagePresence === null) return true;
       return epicImagePresence(hash);
     },
@@ -524,11 +523,41 @@ function ChatComposerImpl(props: ChatComposerProps) {
     dragOverlayVariant,
     isIngestingImages,
     isResolvingFilePaths,
-  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+    ingestPastedComposerImages,
+    notePossiblePendingImages,
+  } = useComposerHashFirstPaste({
+    editorRef,
+    // The chat's own id: the byte budget is per-window, so this only picks the
+    // refusal copy.
+    budgetOwnerId: taskId,
+    // Never gated here, matching the base64 ingest this replaces: a read-only
+    // replica draft disables the EDITOR, which is what stops a paste from
+    // reaching this hook at all, and `insertAttrs` re-checks readiness anyway.
+    // (The landing composer gates on `isSubmitting` because its submit is a
+    // create it cannot take back; a chat send restores its draft on refusal.)
+    disabled: false,
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots: resolvedMentionRoots,
+  });
   const pastePending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
   });
+  // The catch-all half of the pending-image model. `draftContent` is the
+  // canonical draft document, so this one effect covers every way a b64 node
+  // can appear: a structured/HTML paste, the cross-host browser-tab preview
+  // (inserted asynchronously by the mention extension, which has no paste hook
+  // to route through), a restored failed send, and a mount whose draft already
+  // held one. No-op — a short-circuiting walk — unless something is pending,
+  // and the hook refuses to start a second job for a node already in flight.
+  //
+  // Gated on `editorReadyTick` for the mount race: the first pass can land
+  // before Tiptap exists, where the sweep has no document to read and no node
+  // to rewrite, and `draftContent` alone would never fire it again.
+  useEffect(() => {
+    if (editorReadyTick === 0) return;
+    notePossiblePendingImages(draftContent);
+  }, [draftContent, editorReadyTick, notePossiblePendingImages]);
 
   // Chat-plane read with the reader's own bound, which replaces the old
   // `hasAttachmentBytes` pre-check: the bytes may live on this host's disk or
@@ -561,29 +590,39 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
-  const { submitDraft, steerConflict, annotationPreparationPending } =
-    useChatComposerSubmit({
-      taskId,
-      editorRef,
-      pickerStore,
-      toolbarStore,
-      activeTurnStatus,
-      steerCapable,
-      steerEnabled,
-      steerProtocolSupported,
-      getActiveTurnForSteer,
-      hasPendingApprovals,
-      sendDisabled: sendBlocked,
-      workspaceBlocked,
-      imagesUnsupported,
-      attachmentPreparationPending: pastePending,
-      draftReadOnly: authority.readOnly,
-      onSubmitMessage,
-      onSideChat,
-    });
+  const {
+    submitDraft,
+    steerConflict,
+    annotationPreparationPending,
+    imageResolutionPending,
+  } = useChatComposerSubmit({
+    taskId,
+    // The TAB's host, like every other read in this composer - a tab bound to
+    // another machine sends there, and the image seam's version gate and blob
+    // upload both have to address that same machine.
+    hostId: tabHostId,
+    hostClient,
+    editorRef,
+    pickerStore,
+    toolbarStore,
+    activeTurnStatus,
+    steerCapable,
+    steerEnabled,
+    steerProtocolSupported,
+    getActiveTurnForSteer,
+    hasPendingApprovals,
+    sendDisabled: sendBlocked,
+    workspaceBlocked,
+    imagesUnsupported,
+    attachmentPreparationPending: pastePending,
+    draftReadOnly: authority.readOnly,
+    onSubmitMessage,
+    onSideChat,
+  });
   const attachmentPending = composerAttachmentPending(
     pastePending,
     annotationPreparationPending,
+    imageResolutionPending,
   );
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
@@ -768,7 +807,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     initialSelection={initialSelection}
                     slashProviderId={harnessId}
                     hasPastedImageBytes={hasPastedImageBytes}
-                    ingestPastedComposerImages={null}
+                    ingestPastedComposerImages={ingestPastedComposerImages}
                     isActive={focused}
                     disabled={authority.readOnly}
                     onDocumentChange={handleDocumentChange}

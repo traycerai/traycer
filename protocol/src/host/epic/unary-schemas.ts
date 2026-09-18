@@ -524,6 +524,12 @@ export type CreateEpicResponsePre11 = z.infer<
  * If that becomes the wrong trade, the deliberate fix is to parse `kind` as a
  * bounded string and expose a `isKnownEpicCreateRefusalKind` guard so an
  * unrecognised kind degrades to text - a shape change, not a comment change.
+ *
+ * THAT MINOR HAS BEEN SPENT ONCE, and this instance did not move: `@1.2` has
+ * its own `epicCreateRefusalKindSchemaV12` with a second kind. This one stays a
+ * one-value enum forever, which is what keeps `@1.0`/`@1.1` peers - and the
+ * cloud line that pins `createEpicResponseSchema` by name - reading exactly
+ * what they were released against. The identity test pins the count.
  */
 export const epicCreateRefusalKindSchema = z.enum(["local-store-unavailable"]);
 export type EpicCreateRefusalKind = z.infer<typeof epicCreateRefusalKindSchema>;
@@ -573,6 +579,142 @@ export const createEpicResponseSchema = createEpicResponseSchemaPre11.extend({
   refusal: epicCreateRefusalSchema.optional(),
 });
 export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
+
+// ─── Epic create / create-chat `@1.2` (images by reference, deferred
+//     worktree provisioning) ───────────────────────────────────────────────
+//
+// THE `@1.2` LINE IS A FORK DOWN TO THE LEAF, and every instance above keeps
+// its name AND its definition. That is not tidiness, it is the only shape that
+// leaves the released lines frozen:
+//
+//   - `createChatInitialMessageSchema` is embedded by `createEpicChatSeedSchema`
+//     -> `createEpicRequestSchema` (pinned to `epic.create` @1.0 AND @1.1) and
+//     by `createChatRequestSchema` / `createChatRequestSchemaV11`
+//     (`epic.createChat` @1.0 and @1.1). FOUR released request lines share that
+//     one object, so adding a key to it in place widens all four at versions
+//     released peers already speak - and it also makes the older-minor STRIP a
+//     no-op, because `prepareRequestPayload` strips by parsing against the older
+//     minor's own request schema (`ws-rpc-client.ts`). A field that survives the
+//     strip reaches a peer that never negotiated it.
+//   - `createEpicResponseSchema` is additionally pinned BY NAME as the cloud
+//     `epic.create@1.0` response in the internal repo's cloud-data registry, so
+//     re-pointing that name at a widened schema would move a cloud line with
+//     every test still green.
+//
+// So `@1.2` takes new `…V12` instances at every level it touches, and the
+// identity test pins the leaf by SHAPE (no `attachmentsByHash` key on the
+// released initial message, no `deferWorktreeProvisioning` on the released
+// seed, a one-value released refusal enum) rather than only by reference.
+
+/**
+ * `@1.2`'s initial message: the released leaf plus `attachmentsByHash`.
+ *
+ * WHO MAY SET IT: a client that has already uploaded every image in `content`
+ * to its own draft blob tier (`drafts.putBlob`) and is sending hash-only
+ * `imageAttachment` nodes. The host then resolves those hashes from the
+ * REQUESTER's staging tier and installs them into the epic's attachment store
+ * before anything references them.
+ *
+ * ABSENT MEANS `false`, and `false` means today's behaviour exactly: the host
+ * does no resolution and hash-only nodes reach the dangling-hash guard, which
+ * refuses them. `.optional()` rather than `.default(false)` deliberately -
+ * a default would make the key REQUIRED in the inferred request type (zod
+ * infers the OUTPUT type), i.e. every existing caller of the latest contract
+ * would have to name a field it does not care about.
+ *
+ * THE FLAG AND THE MINOR TRAVEL TOGETHER, and only their conjunction licenses
+ * resolution. A client on a `@1.1` host has this key stripped on the request
+ * leg while the hash-only nodes survive (the message content is untyped
+ * `attrs` on the wire), so the host must never infer the intent from the
+ * content: without `(minor >= 1.2 AND flag)` a hash-only message keeps today's
+ * loud failure instead of silently persisting a dangling reference.
+ */
+export const createChatInitialMessageSchemaV12 =
+  createChatInitialMessageSchema.extend({
+    attachmentsByHash: z.boolean().optional(),
+  });
+export type CreateChatInitialMessageV12 = z.infer<
+  typeof createChatInitialMessageSchemaV12
+>;
+
+/**
+ * `@1.2`'s folded chat seed: the released seed over the `@1.2` initial message,
+ * plus `deferWorktreeProvisioning`.
+ *
+ * WHO MAY SET IT: a client that owns a RESEND and renders a setup card for the
+ * chat it is creating - i.e. one that can carry the user through a worktree
+ * that is created after the response instead of inside it. Everything else
+ * (fork/clone with no initial message, a host-agent caller, a `@1.1` GUI)
+ * leaves it absent and is provisioned synchronously, byte-identically to today.
+ *
+ * ABSENT MEANS `false`, same reading and same `.optional()` reasoning as the
+ * sibling above. The host additionally requires an initial message, a
+ * worktree-kind intent and a normalised hash-only message before it takes the
+ * deferred path at all, so this field is an OPT-IN, never an instruction.
+ */
+export const createEpicChatSeedSchemaV12 = createEpicChatSeedSchema.extend({
+  initialMessage: createChatInitialMessageSchemaV12.nullable(),
+  deferWorktreeProvisioning: z.boolean().optional(),
+});
+export type CreateEpicChatSeedV12 = z.infer<typeof createEpicChatSeedSchemaV12>;
+
+export const createEpicRequestSchemaV12 = createEpicRequestSchema.extend({
+  chat: createEpicChatSeedSchemaV12.nullable().optional(),
+});
+export type CreateEpicRequestV12 = z.infer<typeof createEpicRequestSchemaV12>;
+
+/**
+ * `@1.2`'s refusal kinds - a NEW enum instance, never a value added to
+ * `epicCreateRefusalKindSchema`.
+ *
+ * The released enum's own doc spells out why: a `z.enum` REFUSES a value it
+ * does not know, that failure propagates out of the enclosing `refusal` object,
+ * and a present-but-invalid `refusal` fails the whole response parse. So every
+ * client already on `@1.1` would turn a `missing-attachment-bytes` refusal into
+ * a parse error rather than a message it could render. Adding the kind costs
+ * its own minor, and the minor costs its own instance - the released one stays
+ * a one-value enum, which the instance-identity test pins.
+ *
+ * `missing-attachment-bytes`: the host could not find bytes for a hash the
+ * request's content referenced, in the epic store or in the requester's
+ * staging tier. Refused BEFORE the commit point, so nothing was seeded; the
+ * hashes this call installed are unlinked. The remedy is a re-upload and a
+ * retry under the same idempotency key, which the client owns - so unlike
+ * `local-store-unavailable` there is no repair action for a person to take.
+ *
+ * EMITTED ONLY AT NEGOTIATED MINOR >= 2 (`CREATE_ATTACHMENT_REFUSAL_MINOR` on
+ * the host). Below it the resolver throws, exactly as the released refusal gate
+ * does, because a stripped `refusal` key reads to an older peer as a SUCCESSFUL
+ * create with no room.
+ */
+export const epicCreateRefusalKindSchemaV12 = z.enum([
+  "local-store-unavailable",
+  "missing-attachment-bytes",
+]);
+export type EpicCreateRefusalKindV12 = z.infer<
+  typeof epicCreateRefusalKindSchemaV12
+>;
+
+/** `epicCreateRefusalSchema` over the `@1.2` kind enum. Same three fields. */
+export const epicCreateRefusalSchemaV12 = z.object({
+  kind: epicCreateRefusalKindSchemaV12,
+  /** Human-readable statement of what happened. Safe to show verbatim. */
+  message: z.string().min(1),
+  /** What the user can DO about it, e.g. stop the other host and rebind. */
+  remedy: z.string().min(1),
+});
+export type EpicCreateRefusalV12 = z.infer<typeof epicCreateRefusalSchemaV12>;
+
+/**
+ * `epic.create@1.2`'s response - the `@1.1` body with the refusal re-typed onto
+ * the `@1.2` kind enum. No other key moves.
+ */
+export const createEpicResponseSchemaV12 = createEpicResponseSchemaPre11.extend(
+  {
+    refusal: epicCreateRefusalSchemaV12.optional(),
+  },
+);
+export type CreateEpicResponseV12 = z.infer<typeof createEpicResponseSchemaV12>;
 
 // ─── Local workspace folders ────────────────────────────────────────────────
 
@@ -1636,6 +1778,23 @@ export const createChatRequestSchemaV11 = createChatRequestSchema.extend({
 });
 export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
 
+/**
+ * v1.2 request: `initialMessage` re-typed onto the `@1.2` leaf
+ * (`attachmentsByHash`) and `deferWorktreeProvisioning` beside it - the same
+ * two fields `epic.create@1.2` grows, with the same meanings and the same
+ * "absent means false" reading. See `createChatInitialMessageSchemaV12`.
+ *
+ * DERIVED FROM `createChatRequestSchemaV11`, NOT from the `@1.0` base: `@1.1`'s
+ * whole content is the widened `forkSource` union, and extending the base would
+ * silently drop it - re-narrowing `epic.createChat@1.2` to the precise-boundary
+ * fork shape that `@1.1` exists to widen.
+ */
+export const createChatRequestSchemaV12 = createChatRequestSchemaV11.extend({
+  initialMessage: createChatInitialMessageSchemaV12.nullable().optional(),
+  deferWorktreeProvisioning: z.boolean().optional(),
+});
+export type CreateChatRequestV12 = z.infer<typeof createChatRequestSchemaV12>;
+
 export const createChatResponseSchema = z.object({
   chatId: z.string(),
   // True when the host kicked the provider turn from `initialMessage`. The
@@ -1644,6 +1803,26 @@ export const createChatResponseSchema = z.object({
   initialTurnStarted: z.boolean().optional(),
 });
 export type CreateChatResponse = z.infer<typeof createChatResponseSchema>;
+
+/**
+ * `epic.createChat@1.2`'s response - the released body plus a `refusal` key it
+ * has never had, over the SAME `@1.2` refusal instance `epic.create@1.2` uses.
+ *
+ * The two methods now share a failure mode (a hash whose bytes the host cannot
+ * find), so they share its vocabulary; a second enum would let the same
+ * condition be spelled two ways.
+ *
+ * The emission rule the released `epic.create` refusal already carries applies
+ * here with more force, because `@1.0`/`@1.1` have no `refusal` key AT ALL: a
+ * stripped refusal leaves `{ chatId }`, which reads as a chat that was created.
+ * So the host emits `refusal` only at negotiated minor >= 2 and throws below
+ * it, and a `@1.2` client must read `refusal` BEFORE treating the body as a
+ * created chat.
+ */
+export const createChatResponseSchemaV12 = createChatResponseSchema.extend({
+  refusal: epicCreateRefusalSchemaV12.optional(),
+});
+export type CreateChatResponseV12 = z.infer<typeof createChatResponseSchemaV12>;
 
 export const renameChatRequestSchema = z.object({
   epicId: z.string(),

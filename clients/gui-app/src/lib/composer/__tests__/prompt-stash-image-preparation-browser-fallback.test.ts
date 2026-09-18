@@ -116,7 +116,11 @@ describe("prompt-stash-image-preparation fallback/error cleanup", () => {
         installBrowserCodecDoubles({
           width: 3000,
           height: 2000,
-          encodeBlobs: [new Blob([output], { type: "image/webp" })],
+          // 3000×2000 is over the edge, so a scale happens and the single
+          // source-family attempt (PNG in, PNG out) goes first; `null` is this
+          // codec declining it, which is what puts the ladder - and this
+          // test's WebP expectation - back in play.
+          encodeBlobs: [null, new Blob([output], { type: "image/webp" })],
           webpSupported: undefined,
         });
 

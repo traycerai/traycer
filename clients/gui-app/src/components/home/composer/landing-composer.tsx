@@ -17,10 +17,9 @@ import { AttachmentStrip } from "@/components/chat/composer/attachments/attachme
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import {
   getImageBytes,
-  hasLandingImageBytes,
-  putImage,
+  hasComposerImageBytes,
   sessionObjectUrl,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 import {
   markLandingEditorMounted,
   scheduleLandingImageReconcile,
@@ -59,6 +58,14 @@ import {
   useLandingComposerPaste,
 } from "@/hooks/composer/use-landing-composer-paste";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
+import {
+  createComposerImagePreparationSession,
+  showImageTooLargeToast,
+} from "@/lib/composer/composer-image-preparation";
+import {
+  runPendingImageIngest,
+  type PendingImageIngestOptions,
+} from "@/lib/composer/composer-pending-image-ingest";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -123,11 +130,6 @@ interface LandingComposerProps {
   readonly pendingCreateId: string | null;
   readonly initialSettings: ChatRunSettings | null;
   readonly workspaceControls: (disabled: boolean) => ReactNode;
-}
-
-interface PendingImageIngestOptions {
-  readonly onSettled: (() => void) | undefined;
-  readonly reserveAfterStore: boolean;
 }
 
 function useLandingDraftComposerMode(
@@ -409,93 +411,70 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const runnerHost = useRunnerHost();
+  // One session per mount, shared by BOTH of this composer's ingest paths -
+  // the file paste/drop ingest inside the hook below and the structured-paste
+  // jobs further down. The session serializes preparation, so this mount only
+  // ever holds one decoded bitmap however many images arrive at once; sharing
+  // it is what extends that from one paste to the whole surface. (Its other
+  // state, the WebP-support probe, is likewise run once per mount.)
+  const imagePreparationSession = useMemo(
+    () => createComposerImagePreparationSession(),
+    [],
+  );
   const paste = useLandingComposerPaste({
     editorRef,
     draftId,
     disabled: isSubmitting,
     fileDrops: runnerHost.fileDrops,
     mentionRoots,
+    preparationSession: imagePreparationSession,
   });
   const runPendingImageJob = paste.runPendingImageJob;
-  // Background job for ONE pending image node (already in the document, carrying
-  // b64 + `id`): hash + store the bytes, then flip that node's payload to the
-  // hash IN PLACE. Runs under the shared pending accounting so submit stays gated
-  // until it settles. Editor-gone / store-failure paths drop the node (if still
-  // present) and reclaim the bytes. `onSettled` (when the caller holds a batch
-  // budget reservation covering this image) fires exactly once, after every
-  // other branch below, regardless of which one is taken. A remount reserves
-  // the now-known hash after `putImage` settles and before rewriting the node;
-  // this avoids double-charging the original anonymous reservation while its
-  // aborted job is still awaiting the same single-flight write.
+  // Background job for ONE pending image node (already in the document,
+  // carrying b64 + `id`): prepare the bytes, hash + store THOSE, then flip that
+  // node's payload — hash and the prepared metadata together — IN PLACE.
+  //
+  // The job itself is `runPendingImageIngest`, shared with the chat family's
+  // `useComposerHashFirstPaste`. It used to be written out here and copied
+  // there; the two were the same sequence with the same reservation contract,
+  // the same abort-release, the same orphan sweep on every non-rewrite branch,
+  // and the same reasons recorded twice. What stays local is the wiring: this
+  // surface's preparation session, its DRAFT as the budget owner, and its
+  // editor ref. Read that module for why each branch does what it does.
   const startPendingImageIngest = useCallback(
     (
       id: string,
       bytes: Uint8Array<ArrayBuffer>,
       options: PendingImageIngestOptions,
     ) => {
-      runPendingImageJob(async (signal) => {
-        let postStoreReservation: LandingImageBudgetReservation | null = null;
-        try {
-          const hash = await putImage(bytes);
-          const handle = editorRef.current;
-          if (signal.aborted || handle === null || !handle.isReady()) {
-            // Editor unmounted mid-ingest: the pending node is gone from THIS
-            // mount, so reclaim the just-stored bytes on the next sweep. (If a
-            // remount kept the b64 node, its own mount-time re-entry re-ingests
-            // and re-roots this hash before the debounced sweep runs.)
-            scheduleLandingImageReconcile();
-            return;
-          }
-          if (options.reserveAfterStore) {
-            postStoreReservation = reserveLandingImageBudget(draftId, [
-              { hash, bytes: bytes.byteLength },
-            ]);
-            if (postStoreReservation === null) {
-              handle.removeImageAttachmentById(id);
-              scheduleLandingImageReconcile();
-              return;
-            }
-          }
-          if (!handle.rewriteImageAttachmentHashById(id, hash)) {
-            // The pending node was removed (the user deleted it before the write
-            // settled), so the just-stored bytes are unrooted — reclaim them.
-            scheduleLandingImageReconcile();
-          }
-        } catch {
-          if (signal.aborted) {
-            // The editor unmounted mid-ingest; a successor mount (if any)
-            // re-ingests this node via mount-time re-entry. Don't toast for a
-            // surface the user already left (matching the shared file-paste
-            // path's abort handling) — just reclaim the bytes.
-            scheduleLandingImageReconcile();
-            return;
-          }
-          // Hashing / IndexedDB write failed: drop the pending node and reclaim.
-          editorRef.current?.removeImageAttachmentById(id);
-          reportableErrorToast(
-            "Couldn't attach the image.",
-            { description: "Please try adding it again." },
-            {
-              title: "Could not attach image",
-              message: null,
-              code: null,
-              source: "Chat composer",
-            },
-          );
-          scheduleLandingImageReconcile();
-        } finally {
-          postStoreReservation?.release();
-          options.onSettled?.();
-        }
-      });
+      runPendingImageJob((signal) =>
+        runPendingImageIngest({
+          id,
+          bytes,
+          signal,
+          session: imagePreparationSession,
+          budgetOwnerId: draftId,
+          editor: () => editorRef.current,
+          showRefusal: showImageTooLargeToast,
+          options,
+        }),
+      );
     },
-    [draftId, runPendingImageJob],
+    [draftId, imagePreparationSession, runPendingImageJob],
   );
   // Synchronously validate a landing paste's inline-base64 images (decode,
-  // MIME/5MB, budget), mint a fresh id + start the background job for each
-  // accepted one, and report a verdict per image. The paste handler keeps the
-  // accepted nodes IN document order (stamped with these ids) and drops rejected
-  // ones — no positions are ever discarded.
+  // MIME/source ceiling, budget), mint a fresh id + start the background job for
+  // each accepted one, and report a verdict per image. The paste handler keeps
+  // the accepted nodes IN document order (stamped with these ids) and drops
+  // rejected ones — no positions are ever discarded.
+  //
+  // The budget is reserved here, synchronously, on the SOURCE length: this path
+  // owes the paste handler a verdict per image before it can yield, so it
+  // cannot wait for preparation to report the prepared length. Preparation only
+  // ever shrinks an image that was over the ceiling, and the node written at
+  // the end of the job carries the prepared `size`, which is what the budget's
+  // steady-state accounting reads — so the anonymous charge here is a
+  // transient upper bound, not the number the budget settles on.
   const ingestPastedComposerImages = useCallback(
     (
       images: ReadonlyArray<PastedComposerImage>,
@@ -530,21 +509,26 @@ export function LandingComposer(props: LandingComposerProps) {
       // shared file-paste path, which returns after the budget toast.
       let corruptedCount = 0;
       let acceptedIndex = 0;
-      const outcomes = decoded.map((bytes): PastedComposerImageOutcome => {
-        if (bytes === null) {
-          corruptedCount += 1;
-          return { kind: "rejected" };
-        }
-        if (!budgetOk) return { kind: "rejected" };
-        const reservation = reservations[acceptedIndex];
-        acceptedIndex += 1;
-        const id = uuidv4();
-        startPendingImageIngest(id, bytes, {
-          onSettled: () => reservation.release(),
-          reserveAfterStore: false,
-        });
-        return { kind: "accepted", id };
-      });
+      const outcomes = decoded.map(
+        (bytes, index): PastedComposerImageOutcome => {
+          if (bytes === null) {
+            corruptedCount += 1;
+            return { kind: "rejected" };
+          }
+          if (!budgetOk) return { kind: "rejected" };
+          const reservation = reservations[acceptedIndex];
+          acceptedIndex += 1;
+          const id = uuidv4();
+          const source = images[index];
+          startPendingImageIngest(id, bytes, {
+            onSettled: () => reservation.release(),
+            reserveAfterStore: false,
+            fileName: source.fileName,
+            mimeType: source.mimeType,
+          });
+          return { kind: "accepted", id };
+        },
+      );
       if (corruptedCount > 0) {
         reportableErrorToast(
           corruptedCount === 1
@@ -600,6 +584,8 @@ export function LandingComposer(props: LandingComposerProps) {
       startPendingImageIngest(atom.id, bytes, {
         onSettled: undefined,
         reserveAfterStore: true,
+        fileName: atom.fileName,
+        mimeType: atom.mimeType,
       });
     }
     if (corruptedCount > 0) {
@@ -986,7 +972,7 @@ export function LandingComposer(props: LandingComposerProps) {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
-      hasPastedImageBytes={hasLandingImageBytes}
+      hasPastedImageBytes={hasComposerImageBytes}
       ingestPastedComposerImages={ingestPastedComposerImages}
       onEditorReady={reingestPendingImages}
       // No tab yet, but a placement all the same: the composer creates on its

@@ -7,7 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -88,6 +88,48 @@ const openEpicHandleMocks = vi.hoisted(() => {
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: reportableErrorToastMock,
 }));
+
+// The inline edit composer is hash-first now: a paste's background ingest job
+// calls `putImage`, which reaches real `indexedDB` and this suite's jsdom
+// environment doesn't have one. Doubling the store keeps every pasted/dropped
+// image on the same synchronous-ish path these pins already drive, and a
+// counter-derived hash (rather than one constant) keeps a multi-image pin
+// from passing for the wrong reason (two nodes sharing a hash).
+const putImageMocks = vi.hoisted(() => ({
+  callCount: 0,
+  gate: null as Promise<void> | null,
+  release: null as (() => void) | null,
+}));
+
+vi.mock("@/lib/composer/composer-image-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/composer/composer-image-store")
+    >();
+  return {
+    ...actual,
+    putImage: vi.fn(async (_bytes: Uint8Array) => {
+      putImageMocks.callCount += 1;
+      const hash = `fake-hash-${putImageMocks.callCount}`;
+      const gate = putImageMocks.gate;
+      if (gate !== null) await gate;
+      return hash;
+    }),
+  };
+});
+
+/** Delays every `putImage` call issued while the gate is open. */
+function gatePutImage(): void {
+  putImageMocks.gate = new Promise<void>((resolve) => {
+    putImageMocks.release = resolve;
+  });
+}
+
+function releasePutImage(): void {
+  putImageMocks.release?.();
+  putImageMocks.gate = null;
+  putImageMocks.release = null;
+}
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
@@ -305,6 +347,12 @@ const STRUCTURED_SKILL_TRIGGER_USER_CONTENT: JsonContent = {
 };
 
 describe("<UserMessageBody /> agent messages", () => {
+  beforeEach(() => {
+    putImageMocks.callCount = 0;
+    putImageMocks.gate = null;
+    putImageMocks.release = null;
+  });
+
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
@@ -709,7 +757,7 @@ describe("<UserMessageBody /> agent messages", () => {
     });
   });
 
-  it("adds multiple pasted images to the edit strip and submits base64 nodes", async () => {
+  it("adds multiple pasted images to the edit strip and submits hash-only nodes", async () => {
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
@@ -750,12 +798,16 @@ describe("<UserMessageBody /> agent messages", () => {
     const submitted = onSubmit.mock.calls[0][0];
     const images = collectImageAtoms(submitted);
     expect(images.map((image) => image.fileName)).toEqual(["first-paste.png"]);
-    expect(images.every((image) => image.b64content !== null)).toBe(true);
-    expect(images.every((image) => image.hash === null)).toBe(true);
+    // This harness submits the composer's own snapshot directly and does not
+    // route through `use-chat-message-actions.ts`, so the submitted document
+    // is legitimately hash-only here - inline-at-submit is a separate seam
+    // covered by `use-chat-composer-submit-hash-first-images.test.tsx`.
+    expect(images.every((image) => image.hash !== null)).toBe(true);
+    expect(images.every((image) => image.b64content === null)).toBe(true);
   });
 
-  it("blocks edit submission until a pasted image finishes reading", async () => {
-    const delayedReader = installDelayedFileReader();
+  it("blocks edit submission until a pasted image's ingest settles", async () => {
+    gatePutImage();
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
@@ -771,7 +823,7 @@ describe("<UserMessageBody /> agent messages", () => {
     fireEvent.click(send);
     expect(onSubmit).not.toHaveBeenCalled();
 
-    delayedReader.resolveNext("data:image/png;base64,EBES");
+    releasePutImage();
     await screen.findByRole("button", {
       name: "Open Image#1: delayed.png",
     });
@@ -780,11 +832,14 @@ describe("<UserMessageBody /> agent messages", () => {
     fireEvent.click(readySend);
 
     const submitted = onSubmit.mock.calls[0][0];
+    // Hash-only, same reasoning as the previous pin: this harness submits
+    // the composer's own snapshot and doesn't route through the
+    // inline-at-submit seam.
     expect(collectImageAtoms(submitted)).toEqual([
       expect.objectContaining({
         fileName: "delayed.png",
-        b64content: "EBES",
-        hash: null,
+        b64content: null,
+        hash: expect.any(String),
       }),
     ]);
   });
@@ -865,8 +920,8 @@ describe("<UserMessageBody /> agent messages", () => {
     ).not.toBeNull();
   });
 
-  it("discards an image read that resolves after edit cancellation", async () => {
-    const delayedReader = installDelayedFileReader();
+  it("discards an image ingest that settles after edit cancellation", async () => {
+    gatePutImage();
     render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
 
@@ -879,7 +934,7 @@ describe("<UserMessageBody /> agent messages", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reopen edit" }));
     await screen.findByRole("textbox", { name: "Edit message" });
 
-    delayedReader.resolveNext("data:image/png;base64,DQ4P");
+    releasePutImage();
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
@@ -1505,31 +1560,6 @@ function dataTransferWithFiles(files: ReadonlyArray<File>) {
     types: ["Files"],
     dropEffect: "none",
     getData: () => "",
-  };
-}
-
-interface DelayedFileReaderControl {
-  readonly resolveNext: (dataUrl: string) => void;
-}
-
-function installDelayedFileReader(): DelayedFileReaderControl {
-  const pending: FileReader[] = [];
-  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
-    this: FileReader,
-    _blob: Blob,
-  ) {
-    pending.push(this);
-  });
-  return {
-    resolveNext: (dataUrl) => {
-      const reader = pending.shift();
-      if (reader === undefined) throw new Error("expected pending file read");
-      Object.defineProperty(reader, "result", {
-        configurable: true,
-        value: dataUrl,
-      });
-      reader.dispatchEvent(new ProgressEvent("load"));
-    },
   };
 }
 

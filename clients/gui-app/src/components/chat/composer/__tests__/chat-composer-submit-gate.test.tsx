@@ -89,6 +89,11 @@ describe("chat-composer submit gate (path resolution)", () => {
       (pending: boolean) =>
         useChatComposerSubmit({
           taskId: "task-1",
+          // Explicit `null`: these cases drive the INLINE submit arm, and a null
+          // host/client is what keeps the by-hash gate shut. The args type takes
+          // no optional params or defaults (lint rule), so every site states it.
+          hostId: null,
+          hostClient: null,
           editorRef,
           pickerStore,
           toolbarStore,
@@ -375,6 +380,8 @@ function mountSubmitHook(args: {
   return renderHook(() =>
     useChatComposerSubmit({
       taskId: args.taskId,
+      hostId: null,
+      hostClient: null,
       editorRef: args.editorRef,
       pickerStore,
       toolbarStore,

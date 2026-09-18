@@ -2,7 +2,7 @@
  * Cross-window image-byte handoff for a landing draft MOVE.
  *
  * A draft's persisted content is hash-only, and each window keeps its image
- * bytes in its OWN IndexedDB partition (`landing-image-store`). Moving a draft
+ * bytes in its OWN IndexedDB partition (`composer-image-store`). Moving a draft
  * to a new window therefore has to move bytes too, but the destination's
  * partition is keyed by a windowId that does not exist until the move IPC has
  * created the window - by which point its renderer is already loading. The
@@ -35,7 +35,7 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
-import { getImageBytes, putImage } from "@/lib/composer/landing-image-store";
+import { getImageBytes, putImage } from "@/lib/composer/composer-image-store";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
 
 const HANDOFF_OBJECT_STORE = "bytes";

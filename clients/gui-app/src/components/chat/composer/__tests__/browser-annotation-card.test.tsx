@@ -28,7 +28,7 @@ import {
   getImageBytes,
   putImage,
   sessionObjectUrl,
-} from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());

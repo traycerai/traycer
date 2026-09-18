@@ -53,6 +53,7 @@ import type {
   ChatRangeResponse,
   ChatTranscriptDerived,
   InterviewAnswerability,
+  SetupCardWindowIdentity,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   createImageWitnessStore,
@@ -119,12 +120,20 @@ import {
   stagedDispatchDisplacement,
   stagedWorktreeIntentAwaitsDispatchFrom,
   stagedWorktreeIntentAwaitsDispatchOutcome,
+  stagedWorktreeIntentDiffersFrom,
   partitionSweptIntent,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
+// Runtime import, and cycle-free: `setup-card-rows` reaches
+// `setup-card-segment` only through `import type`, which is erased, and nothing
+// in its graph imports this store back.
+import {
+  buildSetupCardRows,
+  type SetupCardRow,
+} from "@/stores/chats/setup-card-rows";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { appLogger } from "@/lib/logger";
 import type {
@@ -142,10 +151,15 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import { imageHashesFromContent } from "@/lib/composer/composer-image-inlining";
+import { forgetConfirmedBlobs } from "@/lib/drafts/draft-blob-transport";
 import type { Attachment } from "@/lib/composer/types";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
-import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import {
+  registerExtraImageContentSource,
+  registerExtraImageRootSource,
+} from "@/lib/composer/landing-image-budget";
 import { addWithFifoEviction } from "@/lib/bounded-set";
 import type {
   RuntimeApprovalDecision,
@@ -446,6 +460,20 @@ export interface ChatSendRestore {
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
 }
 
+/**
+ * One queued row's prompt, held across its cancel's round trip. See
+ * {@link ChatSessionState.pendingCancelRestorations}.
+ */
+export interface PendingCancelRestoration {
+  /**
+   * The row this cancel targets. The reconnect arm has no ack to read, so the
+   * snapshot's queue is its evidence: row gone means the host honoured the
+   * cancel, row present means it did not.
+   */
+  readonly queueItemId: string;
+  readonly restore: ChatSendRestore;
+}
+
 export interface PendingUserMessage {
   readonly clientActionId: string;
   readonly messageId: string;
@@ -526,6 +554,22 @@ export interface PendingChatAction {
   readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
   readonly restore: ChatSendRestore | null;
+  /**
+   * The attachment hashes this action put ON THE WIRE, for the ack memo
+   * retraction - and carried SEPARATELY from {@link restore} on purpose.
+   *
+   * `restore` means "the prompt to hand back to the composer", which is a
+   * send-only notion and is deliberately `null` for an edit: an edit re-opens
+   * its own editor rather than restoring a draft. But the memo retraction is
+   * not about restoring anything - it is about the renderer's belief that this
+   * host holds these bytes, which a `MISSING_ATTACHMENT_BYTES` refusal falsifies
+   * for whatever action carried them. Keying the retraction off `restore` tied
+   * the two together and left every edit-and-resend refusal with a stale memo,
+   * so the next Edit skipped the upload and was refused again, forever.
+   *
+   * `null` for actions that carry no content.
+   */
+  readonly sentContentHashes: ReadonlyArray<string> | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
   /** See {@link PendingUserMessage.accountContext}. */
@@ -1401,6 +1445,41 @@ export interface ChatSessionState {
    * genuinely new card.
    */
   readonly openedSubagentCardBlockIds: ReadonlySet<string>;
+  /**
+   * Content a `queueCancel` will hand back to the composer IF the host accepts
+   * it, keyed by the cancel's `clientActionId`.
+   *
+   * Only rows whose worktree provisioning FAILED get an entry: cancelling one
+   * of those is the user abandoning a prompt that never ran, and the prompt is
+   * theirs to keep. A row that ran, or is queued behind a healthy setup, is
+   * cancelled the way it always was.
+   *
+   * WHY A SEPARATE SLOT AND NOT `PendingChatAction.restore`. That field is not
+   * free storage - {@link acceptedActionHoldsUnrecoveredSend} reads it as the
+   * FACT "this record holds the only copy of an unconfirmed send", explicitly
+   * "not the action kind, because `restore` already IS this fact: it is `null`
+   * on every non-`send` action". A cancel carrying one would read as an
+   * unrecovered send that can never be confirmed, and pin its accepted record
+   * open against the settlement pass. Same reason it is not on the queue row.
+   *
+   * WHY CAPTURED AT DISPATCH. The cancelled row leaves `queue.items`, so by ack
+   * time its content is gone; and it cannot be handed over at dispatch either,
+   * because the host may refuse the cancel and keep the row - see the
+   * `WORKTREE_CREATE_FAILED` arm in `onActionAck`. So it is held here across
+   * exactly that round trip and consumed by whichever arm answers.
+   *
+   * TWO ARMS ANSWER, NOT ONE. The ack is the ordinary one; the other is the
+   * reconnect snapshot. A cancel the host accepted and acted on can lose its
+   * ack to a dying connection, and the snapshot fold then sweeps its pending as
+   * an older-epoch non-send - so an ack-only consumer would leave the promised
+   * prompt unreturned and this entry orphaned for the life of the store, with
+   * its image bytes rooted behind it. {@link PendingCancelRestoration.queueItemId}
+   * is carried for exactly that arm: the snapshot's own queue is the evidence
+   * of whether the cancel landed.
+   */
+  readonly pendingCancelRestorations: Readonly<
+    Record<string, PendingCancelRestoration | undefined>
+  >;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly currentComposerSettings: ChatRunSettings | null;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
@@ -1524,6 +1603,16 @@ export interface ChatSessionState {
     readonly content: JsonContent;
     readonly sender: UserMessageSender;
     readonly settings: ChatRunSettings;
+    /**
+     * The handoff's own worktree intent - the one the create carried. Rides
+     * this frame because the resend can be the first thing that reaches a host
+     * which provisioned SYNCHRONOUSLY (a `@1.1` host, a create with no opt-in,
+     * a create the host's post-condition sent down its synchronous fallback):
+     * there `handleSend` materializes it against the worktree `resolveIntent`
+     * already made and adopts it. On the deferred path the resend is a
+     * duplicate and this frame is never read.
+     */
+    readonly worktreeIntent: WorktreeIntent | null;
   }) => SentChatMessageAction | null;
   deleteMessageSuffix: (fromMessageId: string) => string | null;
   editUserMessage: (
@@ -2412,27 +2501,90 @@ const liveChatSessionStores = new Set<{
   getState: () => ChatSessionState;
 }>();
 
-function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
+/**
+ * EVERY HASH THIS STORE IS STILL THE ONLY HOLDER OF.
+ *
+ * A send clears the composer draft the moment it is dispatched, and the draft
+ * is what rooted its images; from then until the send settles, this store's
+ * own copy is the only thing standing between those bytes and the reconcile
+ * sweep - which runs on that very clear, releases unrooted session bytes on
+ * the first pass and deletes them from IndexedDB on the next. So a send the
+ * host refuses AFTER both sweeps restored a prompt whose images were already
+ * gone: hash-only nodes, nothing local left to inline, and the user watching a
+ * picture they can still see in the composer fail to send.
+ *
+ * This used to collect annotation crops ONLY, which rooted the sidecar and not
+ * the document beside it - the two halves of the same restore, with only one
+ * of them safe. Both are collected here now, from every holder in this store
+ * that can outlive the draft clear:
+ *
+ *  - `pendingActions[].restore` - a dispatched send awaiting its ack.
+ *  - `pendingUserMessages[]` - the optimistic row AND its restore.
+ *  - `failedSendRestoration` - a refusal waiting for the composer to take it.
+ *  - `pendingCancelRestorations` - held across a cancel the host may refuse.
+ *  - `queue.items[]` - a queued prompt is re-derived from this payload at
+ *    drain time, so its bytes have to outlive everything above. This is also
+ *    what covers the queued-blob repair: the repair only runs for an item
+ *    still IN the queue, so the item's own root already spans the window
+ *    between `send.failed` and the re-upload.
+ *
+ * Rooting is per-HASH and the store is content-addressed, so a hash held by
+ * two of these at once costs nothing extra, and a hash whose bytes were never
+ * local (an image addressing the host's epic store) roots nothing.
+ */
+function collectLiveChatSessionHolders(): {
+  readonly records: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly contents: ReadonlyArray<JsonContent>;
+} {
   const records: BrowserAnnotationRecord[] = [];
+  const contents: JsonContent[] = [];
   for (const sessionStore of liveChatSessionStores) {
     const state = sessionStore.getState();
     for (const pending of Object.values(state.pendingActions)) {
       if (pending.restore !== null) {
         records.push(...pending.restore.browserAnnotations);
+        contents.push(pending.restore.content);
       }
     }
     for (const message of state.pendingUserMessages) {
       records.push(...message.restore.browserAnnotations);
+      contents.push(message.restore.content, message.content);
     }
     if (state.failedSendRestoration !== null) {
       records.push(...state.failedSendRestoration.browserAnnotations);
+      contents.push(state.failedSendRestoration.content);
+    }
+    for (const entry of Object.values(state.pendingCancelRestorations)) {
+      if (entry === undefined) continue;
+      records.push(...entry.restore.browserAnnotations);
+      contents.push(entry.restore.content);
+    }
+    for (const item of state.queue.items) {
+      // A managed-command item carries no message at all; an AGENT-authored
+      // prompt carries content but no annotation sidecar. Content is taken
+      // from both prompt variants - an agent's images are ordinarily the
+      // host's to resolve, but rooting a hash whose bytes were never local
+      // costs nothing, and guessing wrong the other way deletes them.
+      if (item.kind !== "prompt") continue;
+      contents.push(item.message.content);
+      if (item.message.kind !== "user") continue;
+      records.push(...item.message.browserAnnotations);
     }
   }
-  return collectAnnotationImageHashes(records);
+  return { records, contents };
 }
 
+// The crops: a hash and a filename on the record, with no document and no size
+// to price, so they root bytes without contributing to the budget sum.
 registerExtraImageRootSource({
-  hashes: collectPendingAnnotationImageHashes,
+  hashes: () =>
+    collectAnnotationImageHashes([...collectLiveChatSessionHolders().records]),
+});
+
+// The documents: rooted AND priced, so a chat composer's sequential pastes are
+// charged against each other instead of each seeing an empty store.
+registerExtraImageContentSource({
+  contents: () => collectLiveChatSessionHolders().contents,
 });
 
 export function createChatSessionStore(
@@ -3075,6 +3227,20 @@ export function createChatSessionStoreWithNotificationDependencies(
       );
       let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
         null;
+      // A cancel whose ack died with the old connection: the sweep above has
+      // just declared it unanswerable, so this snapshot's queue decides it
+      // instead. Computed (and its memo retracted) here rather than in the
+      // updater, for the same reason the rejection arm reads its evidence
+      // early - `forgetRefusedContentBlobAcks` is a side effect and the
+      // updater must stay pure.
+      const cancelSettlement = settleCancelRestorations(
+        get().pendingCancelRestorations,
+        sweep.sweptActionIds,
+        frame.snapshot.queue,
+      );
+      for (const honoured of cancelSettlement.honoured) {
+        forgetRefusedContentBlobAcks(options.hostId, honoured.restore.content);
+      }
       // Filled by the updater, sent after it: the frames go out only once the
       // records are re-stamped, so a re-entrant snapshot cannot send them twice.
       let retransmitRestoreActions: ReadonlyArray<AcceptedChatAction> = [];
@@ -3159,6 +3325,28 @@ export function createChatSessionStoreWithNotificationDependencies(
         );
         restoredWorktreeIntentForSnapshot =
           settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
+        // The honoured cancels join the SAME single-slot contest the two
+        // reconcile passes above just ran, folded after them so a send whose
+        // restoration has been waiting since before the reconnect keeps the
+        // slot. Whoever loses is stated rather than dropped.
+        const cancelRestorationsForSnapshot = cancelSettlement.honoured.reduce<{
+          slot: FailedSendRestorationState | null;
+          readonly notices: ChatErrorNotice[];
+        }>(
+          (carried, honoured) => {
+            const awarded = awardCancelRestorationSlot(
+              carried.slot,
+              honoured.clientActionId,
+              honoured.restore,
+            );
+            if (awarded.notice !== null) carried.notices.push(awarded.notice);
+            return {
+              slot: awarded.failedSendRestoration,
+              notices: carried.notices,
+            };
+          },
+          { slot: settled.failedSendRestoration, notices: [] },
+        );
         const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
           pending.pendingActions,
           messages,
@@ -3334,15 +3522,26 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingActions,
           acceptedActions,
           pendingUserMessages: settled.pendingUserMessages,
-          failedSendRestoration: settled.failedSendRestoration,
+          // Every swept cancel is settled here whichever way it went, so none
+          // can outlive the connection that stranded it.
+          pendingCancelRestorations: withoutCancelRestorations(
+            state.pendingCancelRestorations,
+            cancelSettlement.settledActionIds,
+          ),
+          failedSendRestoration: cancelRestorationsForSnapshot.slot,
           // Statements both reconcile passes owe the user: a send whose
           // restoration lost the single-slot race on reconnect, and a
           // stranded send the settled pass dropped without the slot.
           // Appended through the same ring/cap as the rejection path's
-          // notice.
+          // notice - the honoured cancels' displaced statements included,
+          // since they lose the same single slot to the same winner.
           errorNotices: appendErrorNoticeDelta(
             state.errorNotices,
-            [...pending.appendedErrorNotices, ...settled.appendedErrorNotices],
+            [
+              ...pending.appendedErrorNotices,
+              ...settled.appendedErrorNotices,
+              ...cancelRestorationsForSnapshot.notices,
+            ],
             state.deliveredNoticeActionIds,
           ),
           restore: restoreSettlement.restore,
@@ -5896,6 +6095,46 @@ export function createChatSessionStoreWithNotificationDependencies(
           worktreeSupersededForRejection,
           get().currentComposerSettings,
         );
+        // THE arm a `MISSING_ATTACHMENT_BYTES` refusal actually reaches, and
+        // therefore where the ack memo has to be retracted. See
+        // {@link forgetRefusedContentBlobAcks}; read before the `set` below,
+        // because the restore this describes clears the record it reads.
+        if (rejectedPending !== null && rejectedPending.restore !== null) {
+          forgetRefusedContentBlobAcks(
+            options.hostId,
+            rejectedPending.restore.content,
+          );
+        }
+        // The same retraction for an action that carried content but hands back
+        // no prompt - today, edit-and-resend. `restore` is null there by design
+        // (an edit re-opens its own editor), so the branch above cannot see it,
+        // and gating the memo on `restore` is what left every refused edit
+        // believing this host still held its bytes: the next Edit skipped the
+        // upload at `confirmAttachmentsByHash` and was refused identically,
+        // with no way out but reloading the window.
+        if (
+          rejectedPending !== null &&
+          rejectedPending.sentContentHashes !== null
+        ) {
+          forgetConfirmedBlobs(
+            options.hostId,
+            rejectedPending.sentContentHashes,
+          );
+        }
+        // Arm 4 of the same class: an ACCEPTED cancel of a setup-failed row
+        // hands its prompt back, so the resend must re-upload its bytes for the
+        // same reason a refused send must. Read (and forgotten) before the
+        // `set` below, which is what clears the entry.
+        const cancelRestoration =
+          frame.status === "accepted"
+            ? (get().pendingCancelRestorations[frame.clientActionId] ?? null)
+            : null;
+        if (cancelRestoration !== null) {
+          forgetRefusedContentBlobAcks(
+            options.hostId,
+            cancelRestoration.restore.content,
+          );
+        }
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,
@@ -5921,6 +6160,36 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame,
             state.turnInProgress ?? state.activeTurn !== null,
           );
+          // Consumed on BOTH arms and on both accepted shapes: an entry whose
+          // ack has been answered is spent, and one left behind would be handed
+          // to the composer by a later cancel that reused the id.
+          const nextCancelRestorations = withoutCancelRestoration(
+            state.pendingCancelRestorations,
+            frame.clientActionId,
+          );
+          // First-writer-wins on the single slot - and the LOSER IS STATED, not
+          // dropped. The first version of this reasoned that a displaced
+          // cancel's prompt was still safe in the dock; it is not, because the
+          // very cancellation being acked is what removes that row, so the
+          // discarded copy was the last one.
+          const cancelSlot =
+            cancelRestoration === null
+              ? null
+              : awardCancelRestorationSlot(
+                  state.failedSendRestoration,
+                  frame.clientActionId,
+                  cancelRestoration.restore,
+                );
+          const nextFailedSendRestoration =
+            cancelSlot?.failedSendRestoration ?? state.failedSendRestoration;
+          const nextErrorNotices =
+            cancelSlot?.notice === undefined || cancelSlot.notice === null
+              ? state.errorNotices
+              : appendErrorNotice(
+                  state.errorNotices,
+                  cancelSlot.notice,
+                  state.deliveredNoticeActionIds,
+                );
           if (frame.status === "accepted") {
             if (pending === null) {
               return {
@@ -5930,9 +6199,15 @@ export function createChatSessionStoreWithNotificationDependencies(
                 pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
                 pendingBackgroundSessionStop: nextSessionStop,
                 fallbackChoiceLease: choiceLease,
+                pendingCancelRestorations: nextCancelRestorations,
+                failedSendRestoration: nextFailedSendRestoration,
+                errorNotices: nextErrorNotices,
               };
             }
             return {
+              pendingCancelRestorations: nextCancelRestorations,
+              failedSendRestoration: nextFailedSendRestoration,
+              errorNotices: nextErrorNotices,
               pendingActions: nextPending,
               acceptedActions: addAcceptedAction(
                 state.acceptedActions,
@@ -5974,6 +6249,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             };
           }
           return {
+            // The rejected arm drops the entry WITHOUT restoring: the host
+            // materializes before it honours a cancel and refuses with
+            // `WORKTREE_CREATE_FAILED` when that fails, leaving the row in the
+            // queue. The prompt is still in the dock, so handing a copy to the
+            // composer would fork it - the same reason the queued guard
+            // declines. `failedSendRestoration` below stays the rejection
+            // path's own.
+            pendingCancelRestorations: nextCancelRestorations,
             pendingActions: nextPending,
             pendingUserMessages: nextPendingUsers,
             pendingBackgroundStops: backgroundStopAck.pendingStops,
@@ -7172,6 +7455,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       deliveredNoticeActionIds: new Set<string>(),
       deliveredLastCopyActionIds: new Set<string>(),
       openedSubagentCardBlockIds: new Set<string>(),
+      pendingCancelRestorations: {},
       failedSendRestoration: null,
       currentComposerSettings: null,
       liveAssistantMessage: null,
@@ -7350,6 +7634,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             accountContext: frame.accountContext,
+            sentContentHashes: null,
             restoreWorktreeIntent: worktreeIntent,
             displayWorktreeIntent: worktreeIntent,
             messageConfirmedByHost: false,
@@ -7442,6 +7727,88 @@ export function createChatSessionStoreWithNotificationDependencies(
         // with the optimistic seed and the host's turn-overlap idempotency
         // gate), so the seed reconciles cleanly and the host never double-runs
         // the turn. Used by the driver's fallback `send` path.
+        const seededStagingKey: WorktreeStagingKey = {
+          surface: "owner",
+          hostId: options.hostId,
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
+        };
+        // CLAIM THE SLOT, but only when this send carries an intent AND the
+        // slot is not holding a competing one.
+        //
+        // Why claim at all: `restoreWorktreeIntent` on the pending action below
+        // is inert on its own. The rejection path hands a pick back only to the
+        // dispatch that OWNS the slot's consumption mark
+        // (`stagedWorktreeIntentAwaitsDispatchFrom`), and without a consume
+        // there is no mark, so a `WORKTREE_CREATE_FAILED` rejection would
+        // restore the prompt UNBOUND - the silent-local-run the restore exists
+        // to prevent. The mark is what makes the hand-back this send's to make.
+        //
+        // Why not unconditionally, the way `sendMessage` does it: THIS send's
+        // intent comes from the HANDOFF, not from the slot. `sendMessage` is
+        // the slot's own dispatch and consuming is how it takes its pick; here
+        // the slot is someone else's, and the handoff can sit for a long time -
+        // waiting on image recovery or on the connection - with the chat's
+        // workspace selector live the whole while (`chat-tile.tsx`,
+        // `disabled={false}`). So two things are gated:
+        //
+        //  - a null intent claims nothing: the intent-free resend, the
+        //    overwhelmingly common one, has nothing to hand back and leaves the
+        //    slot exactly as it found it.
+        //  - a slot holding a DIFFERENT pick claims nothing either. That pick
+        //    is a newer choice the user made during the wait, and consuming it
+        //    would both discard it on success and - through the mark - let this
+        //    send's older intent be restored over it on a rejection. This send
+        //    still goes out with its OWN intent on the frame (the handoff's is
+        //    what this message was written against); the newer pick simply
+        //    stays staged and applies to the user's next send, which is what
+        //    staging it meant. The cost is that a rejection then hands this
+        //    prompt back unbound - correctly, because the slot the composer
+        //    would show it against is already showing the user's own newer
+        //    choice, and overwriting that is the worse failure.
+        //  - a slot ALREADY CONSUMED by another dispatch claims nothing either,
+        //    and this is not the same condition as the one above. An empty slot
+        //    is not the same thing as an unowned one: if the user picked Y and
+        //    SENT it while this handoff was still waiting, Y's own dispatch took
+        //    the pick and left its consumption mark behind, so the slot reads
+        //    empty with nothing visible to protect. Consuming there writes OUR
+        //    `clientActionId` over Y's mark, and `consumeForDispatch` keeps one
+        //    mark per slot - so if Y is then rejected while this send is still
+        //    pending, `rejectionOwnsSlot` is false for Y and Y cannot hand its
+        //    own worktree back. Y's rejection is the case that most needs the
+        //    slot, and stealing the mark is what silently denies it.
+        const seededSlotHoldsNewerPick =
+          input.worktreeIntent !== null &&
+          stagedWorktreeIntentDiffersFrom(
+            seededStagingKey,
+            input.worktreeIntent,
+          );
+        // "Awaits an outcome" IS "empty because a dispatch took it" - the store
+        // separates that from an empty-because-cleared slot precisely so this
+        // question is answerable. Narrowed to OTHER dispatches so a re-entry
+        // that already owns the mark is not refused by its own claim.
+        const seededSlotAwaitsOtherDispatch =
+          stagedWorktreeIntentAwaitsDispatchOutcome(seededStagingKey) &&
+          !stagedWorktreeIntentAwaitsDispatchFrom(
+            seededStagingKey,
+            input.clientActionId,
+          );
+        const seededClaimsSlot =
+          input.worktreeIntent !== null &&
+          !seededSlotHoldsNewerPick &&
+          !seededSlotAwaitsOtherDispatch;
+        const seededDisplacement = seededClaimsSlot
+          ? stagedDispatchDisplacement(seededStagingKey)
+          : null;
+        const seededSlotPick = seededClaimsSlot
+          ? readStagedWorktreeIntent(seededStagingKey)
+          : null;
+        if (seededClaimsSlot) {
+          useWorktreeIntentStagingStore
+            .getState()
+            .consumeForDispatch(seededStagingKey, input.clientActionId);
+        }
         const frame: ChatOwnerActionFrame = {
           kind: "send",
           hasBinaryPayload: false,
@@ -7456,9 +7823,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           // dispatch as a sibling of the per-chat `settings`.
           accountContext: useAccountContextStore.getState().accountContext,
           deliveryPolicy: "auto",
-          // The landing handoff carries its worktree intent via `epic.create`,
-          // not the send frame.
-          worktreeIntent: null,
+          // The handoff's intent rides the frame as well as `epic.create`. On
+          // the deferred path this resend is a duplicate of the seeded message
+          // and the frame is never read; on every SYNCHRONOUS path it can win
+          // the race with the host's own initial turn, and `handleSend` then
+          // materializes this intent against the worktree the pre-commit
+          // `resolveIntent` already created - adopted, so one worktree and one
+          // turn. Sending `null` there would run the turn in the source
+          // checkout if the resend won.
+          worktreeIntent: input.worktreeIntent,
           browserAnnotations: [],
         };
         const sentClientActionId = sendAction({
@@ -7477,8 +7850,21 @@ export function createChatSessionStoreWithNotificationDependencies(
             restore: { content: input.content, browserAnnotations: [] },
             sender: input.sender,
             settings: input.settings,
-            restoreWorktreeIntent: null,
-            displayWorktreeIntent: null,
+            // Both copies, so a `WORKTREE_CREATE_FAILED` rejection of this
+            // resend on a synchronous host restores the composer WITH the
+            // intent rather than without it - a prompt handed back without its
+            // worktree is the silent-local-run these fields exist to prevent.
+            //
+            // Carried even when this send did NOT claim the slot, and that is
+            // safe rather than sloppy: the hand-back is gated on the mark this
+            // send then never wrote, so `restoreStagedWorktreeIntent` refuses
+            // and the user's newer pick stands. What the field still buys there
+            // is the SWEEP account - `worktreeSweepFor` reads it to say "your
+            // worktree is gone", which is true of this send's intent however
+            // the slot ended up.
+            sentContentHashes: null,
+            restoreWorktreeIntent: input.worktreeIntent,
+            displayWorktreeIntent: input.worktreeIntent,
             messageConfirmedByHost: false,
             // The DISPATCHED context, not a default. A Team-billed first
             // message that strands would otherwise report that it was going
@@ -7499,12 +7885,32 @@ export function createChatSessionStoreWithNotificationDependencies(
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
             restore: { content: input.content, browserAnnotations: [] },
-            // The landing handoff's worktree rides `epic.create`, not this
-            // send, so there is no staged slot for it to give back.
+            // DELIBERATELY null while the pending ACTION above carries it. This
+            // copy outlives the ack (it is what the accepted record restores
+            // from on a dropped connection), and by then the intent has either
+            // been materialized by the host or is riding the seeded queue item
+            // - so handing it back to the staging slot would stage a SECOND
+            // worktree create for the user's next send. The pending action's
+            // copy dies with the ack, which is exactly the rejection window the
+            // restore is for.
             restoreWorktreeIntent: null,
           },
         });
-        if (sentClientActionId === null) return null;
+        if (sentClientActionId === null) {
+          // Never reached the wire, so the slot goes back exactly as it was
+          // found - the pick AND everything the consume displaced. Unconditional
+          // rollback for a conditional consume: `seededDisplacement` is `null`
+          // only where no consume ran.
+          if (seededDisplacement !== null) {
+            useWorktreeIntentStagingStore
+              .getState()
+              .rollBackDispatch(seededStagingKey, {
+                intent: seededSlotPick,
+                displaced: seededDisplacement,
+              });
+          }
+          return null;
+        }
         return {
           clientActionId: sentClientActionId,
           messageId: input.messageId,
@@ -7587,6 +7993,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             restore: null,
             sender: null,
             settings: null,
+            // The hashes this edit put on the wire. Kept here rather than read off
+            // `restore` (null for an edit) so a refused edit still retracts its acks.
+            sentContentHashes: imageHashesFromContent(input.content),
             restoreWorktreeIntent: worktreeIntent,
             displayWorktreeIntent: worktreeIntent,
             messageConfirmedByHost: false,
@@ -7664,6 +8073,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             restore: null,
             sender: null,
             settings: null,
+            sentContentHashes: null,
             restoreWorktreeIntent: null,
             displayWorktreeIntent: null,
             messageConfirmedByHost: false,
@@ -7962,7 +8372,29 @@ export function createChatSessionStoreWithNotificationDependencies(
           clientActionId,
           queueItemId,
         };
-        return sendAction({
+        // RETURN-TO-COMPOSER FOR A ROW WHOSE PROVISIONING FAILED.
+        //
+        // `takeSetupFailedRestoration` deliberately declines while the row is
+        // still queued - the prompt is visible and editable in the dock, so
+        // handing a second copy to the composer would fork it. But the driver's
+        // `eventId` dedupe consumes the `setup.failed` either way, so once the
+        // user cancels the row, that copy was the last one and it goes with it.
+        // Cancel is therefore where the prompt has to come back, and the only
+        // place it still exists to be read.
+        //
+        // Captured here, released at the ack. Deliberately NOT written into
+        // `failedSendRestoration` yet: the host materializes the worktree
+        // before it honours a cancel and REJECTS with `WORKTREE_CREATE_FAILED`
+        // when that fails, leaving the row exactly where it was. Restoring
+        // optimistically would flash the prompt into a composer that still has
+        // its row in the dock, then have to take it back.
+        const cancelRestore = setupFailedQueueRowRestore(
+          get(),
+          options.epicId,
+          options.chatId,
+          queueItemId,
+        );
+        const sent = sendAction({
           set,
           get,
           frame,
@@ -7972,6 +8404,18 @@ export function createChatSessionStoreWithNotificationDependencies(
           },
           pendingUserMessage: null,
         });
+        // Only for a cancel that actually reached the wire: a frame that never
+        // left has no ack coming, so an entry recorded here would never be
+        // consumed by either arm.
+        if (sent !== null && cancelRestore !== null) {
+          set((state) => ({
+            pendingCancelRestorations: {
+              ...state.pendingCancelRestorations,
+              [clientActionId]: { queueItemId, restore: cancelRestore },
+            },
+          }));
+        }
+        return sent;
       },
       queueReorder: (queueItemId, beforeQueueItemId) => {
         const clientActionId = uuidv4();
@@ -8405,6 +8849,21 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       takeSetupFailedRestoration: (messageId) => {
         const state = get();
+        // STILL QUEUED means there is nothing to restore. Restoring pulls the
+        // prompt into the composer and drops its optimistic echo, which is
+        // right when the send was REJECTED - the message then exists nowhere
+        // else - and wrong for a row the host is holding for Retry + resume:
+        // the user would be looking at the prompt in the composer AND in the
+        // queue, and could run it twice.
+        //
+        // The guard is on the predicate "the message is still queued" rather
+        // than on the async-create path, so it also covers today's queued
+        // per-message intent that fails at dequeue and stays paused. A rejected
+        // send never entered the queue, so its `setup.failed` still restores.
+        const stillQueued = state.queue.items.some(
+          (item) => item.kind === "prompt" && item.messageId === messageId,
+        );
+        if (stillQueued) return null;
         const pendingUserMatch = state.pendingUserMessages.find(
           (message) => message.messageId === messageId,
         );
@@ -8455,6 +8914,12 @@ export function createChatSessionStoreWithNotificationDependencies(
                   },
                 },
         });
+        // Arm 2 of the class in {@link forgetRefusedContentBlobAcks}: this door
+        // hands hash-carrying content back to the composer, so a resend of it
+        // would meet the same ack memo. Defensive rather than the reached path
+        // - this door is driven only by `setup.failed` / `setup.cancelled`, and
+        // neither missing-bytes site emits those.
+        forgetRefusedContentBlobAcks(options.hostId, restored);
         return restored;
       },
       dispose: () => {
@@ -8562,6 +9027,191 @@ function isUnauthorizedClose(
   );
 }
 
+/**
+ * What `ackFailedSendRestoration` says when this prompt lands in the composer.
+ *
+ * States the CAUSE, not the gesture: the user knows they pressed Cancel, and
+ * what they need told is why the prompt came back to them rather than being
+ * discarded like every other cancelled row.
+ */
+const CANCELLED_AFTER_SETUP_FAILED_REASON =
+  "Workspace setup failed, so this message was never sent. It's back in the composer.";
+
+/**
+ * The same cause, for a prompt that did NOT reach the composer.
+ *
+ * Stops at the loss, because {@link displacedRestorationNotice} appends "It was
+ * not put back in the composer, because you have started another message
+ * there." and quotes the draft. Sharing one string would have the notice claim
+ * the prompt is back in the composer and then, one clause later, that it is
+ * not - which is the `reason` / `displacedReason` split on
+ * {@link FailedSendRestorationState} existing for a reason.
+ */
+const CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON =
+  "Workspace setup failed, so this message was never sent.";
+
+/**
+ * Award the single restoration slot to a cancelled row's prompt, or state it.
+ *
+ * The invariant the rejection paths and `reconcileTurnSettled` already keep:
+ * there is ONE slot, first writer wins, and a prompt that loses it is SAID
+ * rather than dropped. Dropping was the defect here - the comment reasoned that
+ * the row was still in the dock, which is true right up until the accepted
+ * cancellation removes it, and then the only remaining copy was the one this
+ * function discarded.
+ */
+function awardCancelRestorationSlot(
+  current: FailedSendRestorationState | null,
+  clientActionId: string,
+  restore: ChatSendRestore,
+): {
+  readonly failedSendRestoration: FailedSendRestorationState | null;
+  readonly notice: ChatErrorNotice | null;
+} {
+  if (current !== null) {
+    return {
+      failedSendRestoration: current,
+      notice: displacedRestorationNotice(
+        clientActionId,
+        restore.content,
+        CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON,
+      ),
+    };
+  }
+  return {
+    failedSendRestoration: {
+      clientActionId,
+      content: restore.content,
+      browserAnnotations: restore.browserAnnotations,
+      reason: CANCELLED_AFTER_SETUP_FAILED_REASON,
+      displacedReason: CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON,
+      // No notice of its own - this path is a direct answer to the user's own
+      // Cancel, so `ackFailedSendRestoration` speaks once when the draft lands
+      // rather than narrating a failure they just acted on.
+      stated: false,
+    },
+    notice: null,
+  };
+}
+
+/**
+ * Settle the cancel restorations whose acks died with an old connection.
+ *
+ * Scoped to SWEPT ids only. An entry whose cancel is still pending on the
+ * current epoch has an ack that can still arrive, and settling it here would
+ * race the arm that actually knows the answer; the sweep is precisely the set
+ * the fold has just declared unanswerable.
+ *
+ * The snapshot's queue is the verdict. Row gone - the host honoured the cancel
+ * before the connection died, and the prompt is owed to the composer. Row still
+ * there - the cancel never landed, the row is the user's to see and cancel
+ * again, and handing a copy to the composer would fork it.
+ */
+function settleCancelRestorations(
+  restorations: Readonly<Record<string, PendingCancelRestoration | undefined>>,
+  sweptActionIds: ReadonlySet<string>,
+  queue: ChatQueueState,
+): {
+  readonly settledActionIds: ReadonlySet<string>;
+  readonly honoured: ReadonlyArray<{
+    readonly clientActionId: string;
+    readonly restore: ChatSendRestore;
+  }>;
+} {
+  const settledActionIds = new Set<string>();
+  const honoured: {
+    readonly clientActionId: string;
+    readonly restore: ChatSendRestore;
+  }[] = [];
+  for (const [clientActionId, entry] of Object.entries(restorations)) {
+    if (entry === undefined || !sweptActionIds.has(clientActionId)) continue;
+    settledActionIds.add(clientActionId);
+    const rowStillQueued = queue.items.some(
+      (item) => item.queueItemId === entry.queueItemId,
+    );
+    if (!rowStillQueued) {
+      honoured.push({ clientActionId, restore: entry.restore });
+    }
+  }
+  return { settledActionIds, honoured };
+}
+
+/** The map minus a settled set; unchanged when it held none of them. */
+function withoutCancelRestorations(
+  restorations: Readonly<Record<string, PendingCancelRestoration | undefined>>,
+  settledActionIds: ReadonlySet<string>,
+): Readonly<Record<string, PendingCancelRestoration | undefined>> {
+  if (settledActionIds.size === 0) return restorations;
+  return Object.fromEntries(
+    Object.entries(restorations).filter(([id]) => !settledActionIds.has(id)),
+  );
+}
+
+/** The map minus one spent entry; unchanged when it never held that id. */
+function withoutCancelRestoration(
+  restorations: Readonly<Record<string, PendingCancelRestoration | undefined>>,
+  clientActionId: string,
+): Readonly<Record<string, PendingCancelRestoration | undefined>> {
+  if (restorations[clientActionId] === undefined) return restorations;
+  return Object.fromEntries(
+    Object.entries(restorations).filter(([id]) => id !== clientActionId),
+  );
+}
+
+/**
+ * The content a `queueCancel` owes the composer, or `null` when it owes
+ * nothing.
+ *
+ * Non-null only when the row is a PROMPT still in the queue AND the setup card
+ * window its message triggered has rolled up to `failed`. Both halves matter:
+ *
+ *  - a row whose setup is `creating` or `ready` is being cancelled for ordinary
+ *    reasons, and today's silent removal is what the user is asking for;
+ *  - a row with no window at all (the overwhelmingly common cancel) is not a
+ *    provisioning casualty either.
+ *
+ * The LAST window for that message id, matching
+ * `use-epic-create-seed-hold-driver`'s rule: a Retry opens a fresh window under
+ * the same triggering id, and the live one is the answer - a row whose retry
+ * succeeded must not read as failed off its first window.
+ */
+function setupFailedQueueRowRestore(
+  state: ChatSessionState,
+  epicId: string,
+  chatId: string,
+  queueItemId: string,
+): ChatSendRestore | null {
+  const row = state.queue.items.find(
+    (item) => item.queueItemId === queueItemId,
+  );
+  if (row === undefined || row.kind !== "prompt") return null;
+  // USER-AUTHORED ONLY. A queued prompt's payload is a union, and the agent
+  // member is a message another agent sent into this chat over A2A - nobody
+  // typed it here, so there is no composer draft it came from and none it can
+  // go back to. Handing one to the composer would put words in the user's
+  // mouth. (It also has no `browserAnnotations`: the restore contract needs
+  // that field, which is itself the union telling us these are different
+  // things.)
+  if (row.message.kind !== "user") return null;
+  const rows = buildSetupCardRows(
+    state.events,
+    { epicId, ownerId: chatId, ownerKind: "chat" },
+    state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
+  );
+  let window: SetupCardRow | null = null;
+  for (const candidate of rows) {
+    if (candidate.triggeringMessageId === row.messageId) window = candidate;
+  }
+  if (window === null || window.model.aggregate.state !== "failed") return null;
+  return {
+    content: row.message.content,
+    browserAnnotations: row.message.browserAnnotations,
+  };
+}
+
+/** See the identically-named constant in the seed-hold driver. */
+const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
+
 function basicPending(
   clientActionId: string,
   action: ChatOwnerActionFrame["kind"],
@@ -8578,6 +9228,7 @@ function basicPending(
     restore: null,
     sender: null,
     settings: null,
+    sentContentHashes: null,
     restoreWorktreeIntent: null,
     displayWorktreeIntent: null,
     messageConfirmedByHost: false,
@@ -9050,6 +9701,72 @@ function reconcileBackgroundStopAll(
     clientActionId: pendingBackgroundStopAll.clientActionId,
     taskIds: new Set(covered),
   };
+}
+
+/**
+ * Retract this host's blob acks for content a host refusal has just handed
+ * back, so the resend re-uploads instead of shipping the same dead hashes.
+ *
+ * WHY THIS EXISTS. `confirmedBlobsByHost` records that a host acked a digest,
+ * and the submit path skips the upload for anything it holds. The host's
+ * staging tier sweeps on quota and idle age, so an entry can outlive the bytes.
+ * That is not one lost message but a cycle with no exit: the refusal hands the
+ * prompt back, the prompt carries the same hashes, the memo still says
+ * confirmed, and the resend uploads nothing and is refused again. This call is
+ * the exit.
+ *
+ * WHERE IT BELONGS - the class, enumerated by "returns refused content to the
+ * composer" rather than by any one function name, because the first version of
+ * this fix sat on the wrong door and its test passed by calling that door
+ * directly:
+ *
+ *  1. THE LIVE SEND, and the only arm a `MISSING_ATTACHMENT_BYTES` refusal
+ *     actually reaches. The host rejects the send FRAME
+ *     (`chat-session-manager.ts:~24774`, `eventType: "send.failed"`); the
+ *     renderer sees it in `onActionAck`, `rejectionRestoration` puts the
+ *     content in `failedSendRestoration`, and the handoff driver hands it to
+ *     the composer. Called from that rejection branch.
+ *  2. THE SETUP-GATING RESTORE (`takeSetupFailedRestoration`), driven ONLY by
+ *     `setup.failed` / `setup.cancelled`
+ *     (`RESTORABLE_SETUP_INTERRUPTION_EVENT_TYPES`). No missing-bytes refusal
+ *     emits either - both host sites emit `send.failed` - so this one is
+ *     defensive: it restores hash-carrying content, and a resend of it would
+ *     meet the same memo.
+ *  3. THE QUEUED DRAIN is still not in this class, but it is no longer an open
+ *     gap - it is answered somewhere else, and the reason is that it is not a
+ *     RESTORE at all. `failQueuedPromptPreparation`
+ *     (`chat-session-manager.ts:~25041`) writes a `send.failed` row and PAUSES
+ *     the queue with the item retained: nothing is handed back to the composer,
+ *     so there is no restore arm here to hang a retraction on. What closes it is
+ *     `use-queued-prompt-blob-repair.ts`, which reads that durable row's typed
+ *     metadata, retracts these same acks through {@link forgetConfirmedBlobs},
+ *     re-uploads the named hashes and resumes the queue. It calls
+ *     {@link forgetConfirmedBlobs} directly rather than this helper because it
+ *     is handed the missing HASHES by the host and has no restored document to
+ *     walk.
+ *  4. CANCELLING A SETUP-FAILED QUEUED ROW, which IS a restore and so belongs
+ *     in this class (see {@link ChatSessionState.pendingCancelRestorations}).
+ *     The accepted `queueCancel` hands the row's prompt to the composer, so its
+ *     hashes are retracted exactly as a refused send's are. Arms 3 and 4 are
+ *     the two answers a queued row can get, and they divide by what each hands
+ *     back: arm 3 REPAIRS a row the user is keeping - it stays queued, the
+ *     bytes are re-uploaded under it and the drain resumes - while this arm
+ *     answers the user ABANDONING one, so the row goes and its content returns
+ *     to the composer as the only copy left.
+ *
+ * EVERY refusal reaching arm 1, not only the missing-bytes code: nothing in the
+ * renderer parses that code, and the two errors are not symmetric - an
+ * over-forget costs one re-upload of bytes this window still holds, an
+ * under-forget costs the loop above. Deliberately NOT called from the
+ * connection-death restore paths in `chat-queue-reconciler.ts`: a dropped
+ * socket is not the host retracting anything, and forgetting there would make
+ * every reconnect-restored send re-upload.
+ */
+function forgetRefusedContentBlobAcks(
+  hostId: string,
+  content: JsonContent,
+): void {
+  forgetConfirmedBlobs(hostId, imageHashesFromContent(content));
 }
 
 /**

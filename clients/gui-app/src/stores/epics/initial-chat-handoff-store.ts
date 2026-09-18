@@ -6,6 +6,8 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import type { EdgeDropPosition } from "@/stores/epics/canvas/tile-tree";
+import { registerExtraImageContentSource } from "@/lib/composer/landing-image-budget";
+import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 
 export type InitialChatHandoffStatus =
   | "pending"
@@ -210,6 +212,12 @@ function isEdgeDropPosition(value: unknown): value is EdgeDropPosition {
  * to one, last-writer-wins. That pair cannot arise from this store's own
  * writes - one epic is created on one host - and if it somehow did, the epic
  * only has one canvas to hand off to.
+ *
+ * v3 -> v4: nothing to rewrite. v4 is the persist `partialize`'s base64 strip,
+ * and a v3 record's inlined `content` is carried through here VERBATIM on
+ * purpose - it is a message the user already sent, whose chat the host already
+ * created, so it must still re-send in this session. The strip applies to the
+ * next write, not to what hydration hands back.
  */
 export function migrateInitialChatHandoffState(
   persisted: unknown,
@@ -347,14 +355,53 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
       ...basePersistOptions(persistKey(STORE_KEYS.initialChatHandoff)),
       // v2 dropped the `hostId` segment from every persisted map key (see
       // `initialChatHandoffKey` for why); v3 re-reads `placement`, whose shape
-      // the tile-opening refactor changed. `migrateInitialChatHandoffState`
-      // handles both, and is idempotent for a blob already at either.
-      version: 3,
+      // the tile-opening refactor changed; v4 is the base64 strip below.
+      // `migrateInitialChatHandoffState` handles all three, and is idempotent
+      // for a blob already at any of them.
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted) => migrateInitialChatHandoffState(persisted),
+      // Serialization boundary: a persisted handoff NEVER carries base64. A
+      // handoff registered by this build is hash-only already — the composers
+      // register the hash-only document and the resend inlines from the
+      // composer image store — so this strip normally changes nothing.
+      //
+      // What it is FOR is the v3 blob: every handoff written before this change
+      // carried the fully-inlined message, which is what put a multi-megabyte
+      // image in `localStorage` under this key. Such an entry keeps its base64
+      // IN MEMORY across the migration and still re-sends (the resend's inline
+      // step passes a b64 node through untouched); only its next persisted copy
+      // loses the image, and by then the entry has almost always been consumed.
+      // That one-relaunch window is the accepted cost of not running an async
+      // byte conversion inside a synchronous localStorage hydration.
+      partialize: (state) => ({
+        handoffs: Object.fromEntries(
+          Object.entries(state.handoffs).map(([key, handoff]) => [
+            key,
+            { ...handoff, content: stripBase64ImageNodes(handoff.content) },
+          ]),
+        ),
+      }),
     },
   ),
 );
+
+// Pending handoffs are GC ROOTS for the bytes they name.
+//
+// Without this, the post-create reconcile reaps them: submit clears the
+// composer draft, so the draft that rooted those hashes is gone within the same
+// tick, while the handoff still has to re-send the message. The bytes would be
+// deleted out from under a send that has not happened yet — and on the failure
+// path, out from under the draft the handoff re-creates.
+//
+// Registered as a CONTENT source so the same documents are also PRICED into the
+// byte budget - a handoff in flight occupies the store exactly as a draft does.
+registerExtraImageContentSource({
+  contents: () =>
+    Object.values(useInitialChatHandoffStore.getState().handoffs).map(
+      (handoff) => handoff.content,
+    ),
+});
 
 /**
  * The handoff's IDENTITY: the user and the epic it seeds - deliberately NOT

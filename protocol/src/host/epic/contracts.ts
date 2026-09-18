@@ -13,12 +13,16 @@ import {
   createArtifactResponseSchema,
   createChatRequestSchema,
   createChatRequestSchemaV11,
+  createChatRequestSchemaV12,
   createChatResponseSchema,
+  createChatResponseSchemaV12,
   createCommentThreadRequestSchema,
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
+  createEpicRequestSchemaV12,
   createEpicResponseSchema,
   createEpicResponseSchemaPre11,
+  createEpicResponseSchemaV12,
   createTuiAgentRequestSchema,
   createTuiAgentRequestSchemaV10,
   createTuiAgentResponseSchema,
@@ -566,6 +570,50 @@ export const epicCreateUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+/**
+ * `epic.create@1.2` - images by reference, and the worktree off the response
+ * path.
+ *
+ * Two optional REQUEST fields, both on new instances forked down to the
+ * initial-message leaf (`createEpicRequestSchemaV12`, and the freeze argument
+ * in `unary-schemas.ts`): `chat.initialMessage.attachmentsByHash`, which asks
+ * the host to resolve hash-only `imageAttachment` nodes from the requester's
+ * draft blob tier before the commit point, and
+ * `chat.deferWorktreeProvisioning`, by which a caller that owns a resend and a
+ * setup card opts out of a synchronous `git worktree add` inside the response.
+ *
+ * One RESPONSE change: `refusal` is re-typed onto `epicCreateRefusalKindSchemaV12`,
+ * which adds `missing-attachment-bytes`. A value added to the released enum
+ * would be a BLOCKING same-version change on a host→client slot - every `@1.1`
+ * client fails the whole response parse on a kind it does not know - so the
+ * kind arrives with this minor, on this minor's own instances, and the host
+ * emits it only at a negotiated minor that can carry it.
+ */
+export const epicCreateV12 = defineRpcContract({
+  method: "epic.create",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: createEpicRequestSchemaV12,
+  responseSchema: createEpicResponseSchemaV12,
+});
+
+// Both `@1.2` request fields are ADDITIVE OPTIONALS, so a `@1.1` request
+// already satisfies the `@1.2` schema and the request upgrade is the identity -
+// absence reads as `false`, which is exactly what a `@1.1` caller meant: it
+// uploaded nothing by hash and it expects a worktree the response waited for.
+//
+// The response upgrade is the identity too, and deliberately so: the only
+// difference is the WIDER refusal enum, and every `@1.1` refusal kind is a
+// `@1.2` refusal kind. Nothing to synthesize in either direction.
+export const epicCreateUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicCreateV11,
+  typeof epicCreateV12
+>({
+  from: epicCreateV11.schemaVersion,
+  to: epicCreateV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 // `epic.batchDelete@1.0` - host-side entry point for the CloudData
 // task batch-delete mutation (POST /api/tasks/batch-delete). Accepts a
 // mixed list of epic and phase ids; returns per-id success/error details.
@@ -754,6 +802,42 @@ export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
             sourceOwnerUserId: null,
           },
   }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `epic.createChat@1.2` - the `epic.create@1.2` pair of request fields, and the
+ * first `refusal` this method has ever carried.
+ *
+ * The request is `createChatRequestSchemaV11` extended (never the `@1.0` base,
+ * or `@1.1`'s widened `forkSource` would be silently re-narrowed); the response
+ * grows an optional `refusal` over the same `@1.2` refusal instance
+ * `epic.create@1.2` uses, because the two methods now share the failure mode
+ * that produces it.
+ *
+ * A `refusal` on THIS method needs the emission gate even more than
+ * `epic.create`'s did: `@1.0` and `@1.1` have no such key, so a stripped
+ * refusal leaves `{ chatId }` - a body that reads as a chat that exists. The
+ * host emits it only at a negotiated minor >= 2 and throws below that.
+ */
+export const epicCreateChatV12 = defineRpcContract({
+  method: "epic.createChat",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: createChatRequestSchemaV12,
+  responseSchema: createChatResponseSchemaV12,
+});
+
+// Identity in both directions, for the same reasons as
+// `epicCreateUpgradeV11ToV12`: the two new request fields are additive
+// optionals whose absence already means `false`, and the response only GAINS an
+// optional key a `@1.1` host never set.
+export const epicCreateChatUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicCreateChatV11,
+  typeof epicCreateChatV12
+>({
+  from: epicCreateChatV11.schemaVersion,
+  to: epicCreateChatV12.schemaVersion,
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 

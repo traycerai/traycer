@@ -5,12 +5,14 @@ import { vi, type Mock } from "vitest";
 
 import type {
   CanonicalImageMimeType,
+  EncodableImageMimeType,
   PromptStashDecodedImage,
   PromptStashImageCodec,
 } from "@/lib/composer/prompt-stash-image-preparation";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import {
   encodedJpegBytesOfSize,
+  encodedPngBytesOfSize,
   encodedWebpBytesOfSize,
 } from "./prompt-stash-image-fixtures";
 
@@ -18,7 +20,7 @@ export type EncodeArgs = {
   readonly image: PromptStashDecodedImage;
   readonly width: number;
   readonly height: number;
-  readonly mimeType: "image/webp" | "image/jpeg";
+  readonly mimeType: EncodableImageMimeType;
   readonly quality: number;
   readonly whiteMatte: boolean;
 };
@@ -31,7 +33,7 @@ export type DecodeArgs = {
 export interface EncodeCall {
   readonly width: number;
   readonly height: number;
-  readonly mimeType: "image/webp" | "image/jpeg";
+  readonly mimeType: EncodableImageMimeType;
   readonly quality: number;
   readonly whiteMatte: boolean;
 }
@@ -150,6 +152,9 @@ export function makeMockCodec(options: MockCodecOptions): MockCodecBundle {
   const defaultEncode = (args: EncodeArgs): Promise<ImageBytes | null> => {
     if (args.mimeType === "image/webp") {
       return Promise.resolve(encodedWebpBytesOfSize(64));
+    }
+    if (args.mimeType === "image/png") {
+      return Promise.resolve(encodedPngBytesOfSize(64));
     }
     return Promise.resolve(encodedJpegBytesOfSize(64));
   };

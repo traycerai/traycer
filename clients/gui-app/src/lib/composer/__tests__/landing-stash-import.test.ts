@@ -17,8 +17,8 @@ import {
   imageHashKeys,
   putImage,
   releaseSession,
-} from "@/lib/composer/landing-image-store";
-import * as landingImageStore from "@/lib/composer/landing-image-store";
+} from "@/lib/composer/composer-image-store";
+import * as landingImageStore from "@/lib/composer/composer-image-store";
 import { importPromptStashContentToLanding } from "@/lib/composer/landing-stash-import";
 import { PromptStashCorruptBlobError } from "@/lib/composer/prompt-stash-repository";
 import type {

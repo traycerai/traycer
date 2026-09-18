@@ -16,7 +16,7 @@ import type {
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
 
-import { landingImagePartition } from "@/lib/composer/landing-image-store";
+import { landingImagePartition } from "@/lib/composer/composer-image-store";
 import { tabRecoveryKey, persistKey } from "@/lib/persist/keys";
 import { appLogger, describeLogError } from "@/lib/logger";
 
