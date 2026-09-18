@@ -57,7 +57,8 @@ const OWNER_ID = "owner-blob-memo";
 const HOST_ID = "host-a";
 
 /** A real-looking digest: the upload keys its idempotency on the hash itself. */
-const SHA256 = "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788";
+const SHA256 =
+  "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
 
 const IMAGE_BYTES = new Uint8Array([1, 2, 3, 4]);
 
@@ -99,6 +100,14 @@ vi.mock("@/lib/composer/landing-image-store", () => ({
   getImageBytes: (hash: string) =>
     Promise.resolve(hash === SHA256 ? IMAGE_BYTES : undefined),
   putImageBytesAtHash: () => Promise.resolve(true),
+  // Not used by anything this file drives, and still required: this factory is
+  // built from scratch rather than spread over `importOriginal`, so every
+  // export the module has must appear here or the importer gets `undefined`.
+  // `landing-image-gc.reconcile` awaits this one on its startup sweep and threw
+  // "No ... export is defined on the mock" in every suite that mocks the module
+  // this way - a warn rather than a failure, because the sweep is `void`ed with
+  // a `.catch`, which is exactly why it survived unnoticed.
+  ensureMeasuredImageSizes: () => Promise.resolve(),
 }));
 
 vi.mock("@/lib/composer/prompt-stash-repository", () => ({
@@ -300,6 +309,46 @@ function rejectEditForMissingBytes(harness: Harness, frame: SentFrame): void {
   });
 }
 
+/**
+ * A refused SEND carrying `chat.subscribe@1.12`'s typed cause.
+ *
+ * The cause is load-bearing for every case that wants the LOUD path, and the
+ * reason is `hashOnlyRetryForRejection`. A `not-on-host` refusal (and an absent
+ * cause, which falls back to it) is one this client can quietly fix, so `@1.12`
+ * TAKES THE ACK OVER: it re-inlines and re-dispatches, and nothing is handed
+ * back to the composer at all. The prompt only returns once that single retry
+ * has been spent, or when the cause is one no retry can fix.
+ *
+ * `too-large` is the cause these cases want. It surfaces on the FIRST refusal
+ * with an empty `unbridgeable` set, so the restore arm runs without also
+ * marking digests undecodable - and, more importantly, the takeover's own
+ * `invalidateDraftBlobConfirmations` never runs. That is what keeps the
+ * retraction assertions honest: with `not-on-host` they would pass off the
+ * takeover's retraction whether or not the restore arm retracts anything, which
+ * is the one thing these cases exist to prove.
+ */
+function rejectSendWithCause(
+  harness: Harness,
+  frame: SentFrame,
+  cause: "not-on-host" | "unsupported-format" | "too-large",
+): void {
+  harness.callbacks().onActionAck({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    clientActionId: frame.clientActionId,
+    action: "send",
+    status: "rejected",
+    reason:
+      "One or more attached images are unavailable in this workspace. Remove them and re-attach, or re-paste the image directly.",
+    code: "MISSING_ATTACHMENT_BYTES",
+    cause,
+    backgroundStopTaskIds: [],
+    token: null,
+  });
+}
+
 /** The same refusal carrying `chat.subscribe@1.12`'s typed cause. */
 function rejectEditWithCause(
   harness: Harness,
@@ -356,8 +405,10 @@ describe("a refused prompt's restore retracts this host's blob acks", () => {
     emitOwnerSnapshot(harness.callbacks());
     const frame = sendHashOnlyMessage(harness);
 
-    // The refusal as the host sends it: a rejected send frame.
-    rejectSendForMissingBytes(harness, frame);
+    // The refusal as the host sends it, with the cause that REACHES the
+    // restore arm - see `rejectSendWithCause` for why an untyped refusal is
+    // claimed by `@1.12`'s silent retry instead.
+    rejectSendWithCause(harness, frame, "too-large");
 
     // The content really is on its way back to the composer - the existing
     // contract, unchanged. Asserted so a future change that stops restoring
@@ -882,7 +933,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     harness = createHarness();
     emitOwnerSnapshot(harness.callbacks());
     // Occupy the slot with a rejected send's restoration.
-    rejectSendForMissingBytes(harness, sendHashOnlyMessage(harness));
+    rejectSendWithCause(harness, sendHashOnlyMessage(harness), "too-large");
     const occupant = harness.handle.store.getState().failedSendRestoration;
     expect(occupant).not.toBeNull();
 

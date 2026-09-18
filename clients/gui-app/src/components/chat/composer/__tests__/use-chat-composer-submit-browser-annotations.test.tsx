@@ -595,12 +595,19 @@ describe("useChatComposerSubmit browser annotations", () => {
       .addBrowserAnnotation(taskId, annotationRecord(null));
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     let release: (() => void) | null = null;
-    imageStoreMocks.getImageBytes.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve(CROP_BYTES);
-        }),
-    );
+    imageStoreMocks.getImageBytes.mockImplementation(() => {
+      // Only the FIRST read is held open, the same shape
+      // `coldDocumentImageRead` above uses and for the same reason: typing
+      // during the read bumps the draft `revision`, which re-enters the submit
+      // and resolves the live sidecar from scratch. A mock that held EVERY read
+      // open would leave that second resolution pending forever and the case
+      // would read as a send that never goes out, which is a fact about the
+      // harness driving one handoff rather than about the send.
+      if (release !== null) return Promise.resolve(CROP_BYTES);
+      return new Promise<Uint8Array | undefined>((resolve) => {
+        release = () => resolve(CROP_BYTES);
+      });
+    });
     const editor = mutableFakeEditor(EMPTY_DOC);
     const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
     const { result } = mountSubmit({
@@ -635,7 +642,16 @@ describe("useChatComposerSubmit browser annotations", () => {
     expect(input.restore.content).toEqual(TYPED_DOC);
   });
 
-  it("holds back a send when an annotation is attached while crop bytes resolve", async () => {
+  // This case used to assert the send was HELD BACK here, on the premise that
+  // `commit` is synchronous by contract and so cannot grow an atom for a record
+  // that arrived during the read. The premise is right and the conclusion no
+  // longer follows: the preparation does not have to be the thing that grows
+  // it, because the submit RE-ENTERS and resolves the live sidecar from
+  // scratch. Holding back left a user who pressed Enter with an info toast and
+  // an unsent draft, which is the outcome the generation guard exists to
+  // remove - see the `the retry re-resolves the live sidecar` describe above,
+  // where the one-annotation form of this is pinned.
+  it("an annotation attached while crop bytes resolve joins the send with its crop", async () => {
     const taskId = "chat-ann-late-attach";
     const first = annotationRecord(null);
     const late = annotationRecord({
@@ -646,12 +662,13 @@ describe("useChatComposerSubmit browser annotations", () => {
     useComposerDraftStore.getState().addBrowserAnnotation(taskId, first);
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     let release: (() => void) | null = null;
-    imageStoreMocks.getImageBytes.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve(CROP_BYTES);
-        }),
-    );
+    imageStoreMocks.getImageBytes.mockImplementation(() => {
+      // Only the FIRST read is held open; the re-entered pass resolves at once.
+      if (release !== null) return Promise.resolve(CROP_BYTES);
+      return new Promise<Uint8Array | undefined>((resolve) => {
+        release = () => resolve(CROP_BYTES);
+      });
+    });
     const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
     const { result } = mountSubmit({
       taskId,
@@ -663,8 +680,8 @@ describe("useChatComposerSubmit browser annotations", () => {
     act(() => {
       result.current.submitDraft("enter");
     });
-    // Attached while the IndexedDB read is in flight, so it has a record and
-    // no resolved crop atom.
+    // Attached while the IndexedDB read is in flight, so the first pass has a
+    // record it resolved no crop atom for.
     act(() => {
       useComposerDraftStore.getState().addBrowserAnnotation(taskId, late);
     });
@@ -672,21 +689,22 @@ describe("useChatComposerSubmit browser annotations", () => {
       release?.();
       await Promise.resolve();
     });
-    await Promise.resolve();
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
 
-    // NOT sent. The three outcomes available here are: drop the record
-    // silently, send it without its crop, or send nothing. The second was what
-    // this test used to assert, and it is the worst of them - the protocol
-    // needs the crop to ride an `imageAttachment`, and the acceptance clears
-    // the sidecar, so the image is gone for good. `commit` is synchronous by
-    // contract (that is what makes the image set exact), so this preparation
-    // cannot grow an atom for the late record; the send is abandoned instead.
-    expect(submit).not.toHaveBeenCalled();
-    // Nothing was cleared: both annotations are still on the draft, and the
-    // next send resolves them in its own pre-flight capture.
+    // BOTH records, and both crops. The protocol needs the crop to ride an
+    // `imageAttachment` and acceptance clears the sidecar, so a record sent
+    // without one loses its image for good - which is why the re-entry has to
+    // resolve the whole live set rather than patch the late one in.
+    const input = submit.mock.calls[0][0];
+    expect(input.attachments).toContainEqual(first);
+    expect(input.attachments).toContainEqual(late);
     expect(
-      useComposerDraftStore.getState().drafts[taskId]?.browserAnnotations,
-    ).toEqual([first, late]);
+      collectImageAtoms(input.content).map((atom) => atom.fileName),
+    ).toEqual(
+      expect.arrayContaining([first.imageFileName, late.imageFileName]),
+    );
   });
 });
 

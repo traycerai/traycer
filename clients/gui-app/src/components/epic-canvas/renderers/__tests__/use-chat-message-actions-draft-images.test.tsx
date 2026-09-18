@@ -891,4 +891,54 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
 
     expect(editUserMessage).not.toHaveBeenCalled();
   });
+
+  it("starts no second preparation when a resubmit lands while the read is in flight", async () => {
+    // The window BETWEEN the two cells above. "freezes the document the moment
+    // a send goes out" covers a resubmit with no read in flight, and "abandons
+    // the send when a resend is already pending" covers a read in flight whose
+    // pending mark has COMMITTED. Here a read is in flight and no mark has
+    // committed, so neither `sentRevision` nor the projection can answer yet -
+    // the prep-flight latch is the only thing that can, and this is the only
+    // cell that observes it.
+    //
+    // The witness is the READ count, not the send count: one send is already
+    // guaranteed by the freeze even without the latch (the second commit finds
+    // `sentRevision` set), so counting sends would pass either way and pin
+    // nothing. What a missing latch actually costs is a duplicate preparation -
+    // a second set of byte reads and a second upload of the same hashes.
+    const releases: (() => void)[] = [];
+    resolveMocks.resolveDraftImageBytes.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve(IMAGE_BYTES));
+        }),
+    );
+    const { result } = renderHook(
+      () =>
+        useChatMessageActions(
+          baseInput({
+            activeInlineEdit: inlineEdit({
+              currentContent: docWithImageAndText(ADDED_IMAGE_HASH, "typing"),
+              initialContent: docWithText("typing"),
+            }),
+          }),
+        ),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+    act(() => {
+      result.current.revertOnEdit.onDontRevert();
+    });
+
+    await act(async () => {
+      for (const release of releases) release();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(resolveMocks.resolveDraftImageBytes).toHaveBeenCalledTimes(1);
+  });
 });

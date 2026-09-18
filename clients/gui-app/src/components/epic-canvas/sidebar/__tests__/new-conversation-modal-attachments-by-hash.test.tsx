@@ -84,7 +84,7 @@ const USER_ID = "user-byhash";
 // A real-looking sha256 hex digest - `putDraftBlobs` keys the upload's
 // idempotency on the hash itself.
 const BY_HASH_SHA256 =
-  "1122334455667788990011223344556677889900112233445566778899aabb";
+  "1122334455667788990011223344556677889900112233445566778899aabbcc";
 
 function byHashImageDoc(text: string): JsonContent {
   return {

@@ -1,5 +1,8 @@
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+// Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
+// module this file mocks.
+import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
 import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
@@ -194,8 +197,34 @@ const imageStoreMocks = vi.hoisted(() => ({
     Promise.resolve(),
   ),
   releaseSession: vi.fn(),
+  // The partition is EMPTY AND ALREADY ENUMERATED, which is one stand-in, not
+  // five: `imageHashKeys` answering `[]` is only coherent alongside a hydration
+  // that has finished and a presence set that agrees with it.
+  //
+  // `landingImageSizesHydrated` answers `true` for that reason and not because
+  // a case here depends on it - no assertion in this file moves when it is
+  // flipped, which was checked. A from-scratch factory never runs the startup
+  // pass, so `false` would not model "not yet measured"; it would model a
+  // partition whose contents are unknown while `imageHashKeys` beside it claims
+  // to know they are none, and `rootByteCost` prices those two answers very
+  // differently.
+  ensureMeasuredImageSizes: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  landingImageSizesHydrated: vi.fn<() => boolean>(() => true),
+  measuredLandingImageSize: vi.fn<(hash: string) => number | null>(() => null),
+  hasLandingImageBytes: vi.fn<(hash: string) => boolean>(() => false),
+  flushReclaimCustody: vi.fn<() => Promise<number>>(() => Promise.resolve(0)),
+  // Unreachable with an empty partition - the sweep only reclaims a hash it
+  // enumerated - so this answers the one outcome that matches that emptiness
+  // rather than pretending a delete happened.
+  reclaimImageBytes: vi.fn<
+    (hash: string, isRooted: () => boolean) => Promise<ImageReclaimOutcome>
+  >(() => Promise.resolve("absent")),
 }));
 
+// Every export the module graph under test actually reads, not only the ones
+// this file calls: `landing-image-gc` and `landing-image-budget` import from
+// here too, and a from-scratch factory that omits one makes vitest warn and the
+// importer read `undefined` at call time.
 vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionImageBytes: imageStoreMocks.sessionImageBytes,
   getImageBytes: imageStoreMocks.getImageBytes,
@@ -203,6 +232,12 @@ vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionHashKeys: imageStoreMocks.sessionHashKeys,
   deleteImageBytesUnchecked: imageStoreMocks.deleteImageBytesUnchecked,
   releaseSession: imageStoreMocks.releaseSession,
+  ensureMeasuredImageSizes: imageStoreMocks.ensureMeasuredImageSizes,
+  landingImageSizesHydrated: imageStoreMocks.landingImageSizesHydrated,
+  measuredLandingImageSize: imageStoreMocks.measuredLandingImageSize,
+  hasLandingImageBytes: imageStoreMocks.hasLandingImageBytes,
+  flushReclaimCustody: imageStoreMocks.flushReclaimCustody,
+  reclaimImageBytes: imageStoreMocks.reclaimImageBytes,
 }));
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
@@ -988,7 +1023,12 @@ describe("useLandingComposerActions", () => {
     // resolve. That is what "re-inlines a same-session image" claims.
     const sentAttrs = imageAttrsFromEpicCreate();
     expect(sentAttrs.b64content).toBe(HELLO_BASE64);
-    expect(sentAttrs.hash).toBeNull();
+    // `?? null` because `inlineHashOnlyImageBytes` DROPS the `hash` attr
+    // rather than nulling it - a re-inlined node is byte-for-byte the shape a
+    // fresh inline paste produces, which is what makes an old host's ingest
+    // work unchanged. Absent and explicit-null both mean the same thing here:
+    // nothing left for the host to resolve.
+    expect(sentAttrs.hash ?? null).toBeNull();
     // The handoff copy is the mirror image, and deliberately so: hash-only, so
     // nothing base64 is persisted under the handoff key, and the hash roots
     // those bytes against the image GC until the resend inlines them.
@@ -1101,7 +1141,8 @@ describe("useLandingComposerActions", () => {
     // The awaited bytes are what went out - the point of the await.
     const sentAttrs = imageAttrsFromEpicCreate();
     expect(sentAttrs.b64content).toBe(HELLO_BASE64);
-    expect(sentAttrs.hash).toBeNull();
+    // Absent OR explicit null: the rewrite drops the attr (see above).
+    expect(sentAttrs.hash ?? null).toBeNull();
     // And the persisted handoff still holds only the hash.
     const handoffNode = handoffImageNode();
     expect(handoffNode.attrs?.b64content ?? null).toBeNull();
@@ -3658,7 +3699,8 @@ describe("useLandingComposerActions", () => {
       expect(attachmentsByHashFromEpicCreate()).toBe(false);
       const sentAttrs = imageAttrsFromEpicCreate();
       expect(sentAttrs.b64content).toBe(HELLO_BASE64);
-      expect(sentAttrs.hash).toBeNull();
+      // Absent OR explicit null: the rewrite drops the attr (see above).
+      expect(sentAttrs.hash ?? null).toBeNull();
 
       queryClient.clear();
     });
@@ -3764,7 +3806,8 @@ describe("useLandingComposerActions", () => {
         throw new Error("expected one hash-only and one inlined node");
       }
       expect(confirmedAttrs.b64content ?? null).toBeNull();
-      expect(unconfirmedAttrs.hash).toBeNull();
+      // Absent OR explicit null: the rewrite drops the attr (see above).
+      expect(unconfirmedAttrs.hash ?? null).toBeNull();
 
       queryClient.clear();
     });

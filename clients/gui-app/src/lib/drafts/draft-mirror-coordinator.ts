@@ -10,7 +10,12 @@ import {
   releasePendingIngestImageHashes,
 } from "@/lib/composer/pending-ingest-image-roots";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  registerExtraImageRootSource,
+  registerExtraImageSizeSource,
+} from "@/lib/composer/landing-image-budget";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
 import {
@@ -1710,26 +1715,85 @@ export function flushAbsentOwnCloudDrafts(
   return flushed;
 }
 
+/**
+ * Every composer DOCUMENT this coordinator mirrors: chat-composer draft rows and
+ * new-conversation modal patches.
+ *
+ * ONE enumeration, two projections. The budget takes its usage sum over the root
+ * union, so the set that contributes digests and the set that contributes
+ * declared sizes have to be the same set - `landing-image-budget.ts` records a
+ * period when they were not and what it cost. Two loops over the same two stores
+ * would be that mismatch waiting to happen the first time one of them grows a
+ * third store; one function that both sides read cannot drift.
+ *
+ * The prompt stash is deliberately NOT here. It keeps blob hashes, not
+ * documents, so it has no `size` to declare and stays a root-only source below.
+ */
+function mirroredComposerContents(): ReadonlyArray<JsonContent> {
+  const contents: JsonContent[] = [];
+  for (const draft of Object.values(useComposerDraftStore.getState().drafts)) {
+    if (draft === undefined) continue;
+    contents.push(draft.content);
+  }
+  for (const patch of Object.values(
+    useNewConversationModalStore.getState().draftPatchesByEpicId,
+  )) {
+    if (patch === undefined || patch.content === null) continue;
+    contents.push(patch.content);
+  }
+  return contents;
+}
+
 registerExtraImageRootSource({
   hashes: () => {
     const hashes: string[] = [];
-    for (const draft of Object.values(
-      useComposerDraftStore.getState().drafts,
-    )) {
-      if (draft === undefined) continue;
-      hashes.push(...blobHashesFromContent(draft.content));
-    }
-    for (const patch of Object.values(
-      useNewConversationModalStore.getState().draftPatchesByEpicId,
-    )) {
-      if (patch === undefined || patch.content === null) continue;
-      hashes.push(...blobHashesFromContent(patch.content));
+    for (const content of mirroredComposerContents()) {
+      hashes.push(...blobHashesFromContent(content));
     }
     for (const row of usePromptStashStore.getState().rows) {
       if (row.kind !== "entry") continue;
       hashes.push(...row.entry.blobHashes);
     }
     return hashes;
+  },
+});
+
+/**
+ * What those same documents DECLARE their images weigh.
+ *
+ * The root source above says a digest is protected; it cannot say how much it
+ * weighs. `rootByteCost` answers that in three steps, and the STORE's
+ * measurement covers every root whose bytes this window has held - which is the
+ * whole of the paste case, and why sequential pastes into a chat composer are
+ * already charged for the images sitting in it.
+ *
+ * The step it does not cover is a root this partition has NEVER held: a draft
+ * mirrored from the host, or restored on a second machine, naming digests whose
+ * bytes the recovery legs have not fetched yet. Unmeasured, undeclared and
+ * absent from the partition, such a root prices at ZERO - and recovery then
+ * writes those bytes in through `cloud-draft-image-recovery` /
+ * `readDraftBlobsIntoLocalStore`, neither of which asks the budget for room.
+ * The landing surface never had this hole, because `declaredSizeByHash` walks
+ * landing drafts directly; this is the same reading for the two composer
+ * surfaces that reach the budget only through this registration.
+ *
+ * `collectImageAtoms` rather than `blobHashesFromContent`, because this needs
+ * the atom's `size` and not only its digest. A node declaring nothing
+ * contributes 0, which `rootByteCost` treats as absent - "declares nothing" is
+ * not "declares zero".
+ */
+registerExtraImageSizeSource({
+  declaredSizes: () => {
+    const sizeByHash = new Map<string, number>();
+    for (const content of mirroredComposerContents()) {
+      for (const atom of collectImageAtoms(content)) {
+        if (atom.hash === null) continue;
+        if (!sizeByHash.has(atom.hash)) {
+          sizeByHash.set(atom.hash, atom.size ?? 0);
+        }
+      }
+    }
+    return sizeByHash;
   },
 });
 

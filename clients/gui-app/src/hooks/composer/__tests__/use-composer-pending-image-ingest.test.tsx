@@ -752,6 +752,21 @@ describe("F5: the 15s deadline and abort responsiveness (use-composer-pending-im
   });
 });
 describe("noteContentImages: edge-triggered, safe to call on every change", () => {
+  // The F5 block above installs a never-resolving `putImage` with
+  // `mockImplementation`, and the shared `afterEach` only `mockClear()`s - so
+  // every case here inherits that stall, reaches the 15s deadline, and lands in
+  // the job's catch arm, which REMOVES the node instead of rewriting it. The
+  // symptom is "rewriteImageAttachmentHashById: expected 1, got 0", which reads
+  // like the job never started; it ran, stored nothing, and deleted the node.
+  // Restoring the passthrough is the convention the top-level `afterEach`
+  // names, and the reason these cases pass in isolation and fail in the file.
+  beforeEach(() => {
+    const passthrough = landingImageStoreMocks.actualPutImage;
+    if (passthrough !== null) {
+      landingImageStoreMocks.putImage.mockImplementation(passthrough);
+    }
+  });
+
   // The gap this closes: a browser-preview screenshot node is appended by the
   // mention extension long AFTER mount (`commitBrowserTabPreviewInsertion`),
   // so mount-time re-entry cannot see it - it does not exist yet. Without an
@@ -918,6 +933,17 @@ describe("preparation runs INSIDE the job, and its output is what lands", () => 
   // top-level `afterEach`), and a blanket restore here would strip them for
   // every describe that runs after this one.
   const installedSpies: Array<{ readonly mockRestore: () => void }> = [];
+
+  // Same inheritance as the describe above: F5's never-resolving `putImage`
+  // survives the shared `mockClear()`, and this block's whole point is that the
+  // bytes the store RECEIVES are the prepared ones - which it cannot observe
+  // through a store that never settles.
+  beforeEach(() => {
+    const passthrough = landingImageStoreMocks.actualPutImage;
+    if (passthrough !== null) {
+      landingImageStoreMocks.putImage.mockImplementation(passthrough);
+    }
+  });
 
   afterEach(() => {
     Object.defineProperty(globalThis, "createImageBitmap", {

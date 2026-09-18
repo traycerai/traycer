@@ -34,6 +34,7 @@ import {
   hashOnlyImageHashes,
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
+import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import { NO_HOST_HELD_HASHES } from "@/lib/composer/host-held-image-hashes";
 import { withHeldComposerContentImageRoots } from "@/lib/composer/composer-content-image-roots";
 import { appLogger } from "@/lib/logger";
@@ -224,13 +225,6 @@ async function confirmCreateAttachmentHashes(input: {
    */
   readonly ownerUserId: string | null;
 }): Promise<ReadonlySet<string>> {
-  // An eligible set already over the cap can never come back under it, so
-  // uploading its blobs would be work for a create that cannot succeed. NOT the
-  // decision - that is made on the dispatched document, which on this
-  // best-effort surface also counts hashes this window never owned bytes for.
-  if (exceedsCreateAttachmentHashCap(input.plan.eligible)) {
-    return NO_CONFIRMED_HASHES;
-  }
   const confirmed = await confirmAttachmentsByHash(input);
   return confirmed.byHash;
 }
@@ -577,6 +571,56 @@ export function NewConversationModalBody(props: {
   // for a wait that no document produces today, and the guard only has to stop
   // a second Enter from starting a second create for the same draft.
   const draftImagePrepFlight = useRef(false);
+  /**
+   * The re-entry half of the submit generation guard.
+   *
+   * `requested` is set by the commit below when the draft moved under an
+   * in-flight preparation; `attempt` bounds the re-entry to ONE, so a user
+   * typing through both passes sends nothing and clears nothing rather than
+   * looping. Both are read and reset by the latch owner, which is the single
+   * exit for every async arm here - the same shape the pre-merge modal had, on
+   * upstream's structure.
+   */
+  const submitReentryRequested = useRef(false);
+  const submitReentryAttempt = useRef(0);
+  /**
+   * Whether the invocation about to run IS the re-entry, rather than a fresh
+   * press of Send. Only that distinction can reset `attempt` correctly, because
+   * a re-entry must inherit the count and a new submit must not.
+   */
+  const submitReentryInProgress = useRef(false);
+  /**
+   * The re-entry's trigger, as STATE rather than a ref holding `handleSubmit`.
+   *
+   * The latch owner cannot call `handleSubmit` directly - it lives inside it -
+   * and the obvious way round, a ref refreshed to the latest `handleSubmit`, is
+   * refused by `react-hooks/immutability`: `handleSubmit` captures that ref, so
+   * the write can never precede the capture, and hoisting the write above the
+   * `useCallback` only trades the error for a forward reference the compiler
+   * also refuses. Both were tried.
+   *
+   * So the latch owner raises this flag and the layout effect below performs
+   * the call. That keeps exactly what the ref was for - the re-entry runs the
+   * CURRENT `handleSubmit`, with the host the chip is showing now, not the one
+   * that started the flight - which is the same staleness rule
+   * `submitPreparedDraftRef` exists for. LAYOUT-timed, so the re-entry still
+   * lands before paint and no press of Send can interleave with it.
+   *
+   * A COUNTER consumed by a ref rather than a boolean cleared in the effect:
+   * clearing it there would be a `setState` inside an effect body, which is its
+   * own rule. The ref records the tick already acted on, so the effect writes
+   * no state and a `handleSubmit` identity change on a later render re-runs it
+   * to a no-op.
+   */
+  const [submitReentryTick, setSubmitReentryTick] = useState(0);
+  const handledSubmitReentryTick = useRef(0);
+  /**
+   * Whether a re-entry is queued but has not run - raised with the tick and
+   * lowered by the effect before it calls. The composer's equivalent is
+   * `submitReentrySource !== null`, which carries a payload; this surface's
+   * re-entry takes no argument, so the marker is the whole of it.
+   */
+  const submitReentryQueued = useRef(false);
   // The picker store is lifted onto the always-mounted dialog so it survives
   // this body's focus-driven unmount (see the transient context); the hook falls
   // back to a local store when rendered outside the dialog.
@@ -841,15 +885,23 @@ export function NewConversationModalBody(props: {
   const epicImagePresence = useEpicAttachmentBytesPresence();
   // Local partition OR epic replica, for the PASTE filter. On its own the epic
   // map strips a pasted hash-only node whose bytes are in this window's image
-  // store, because it only ever answers for a SENT image. `null` before the
-  // snapshot loads is preserved - that is the paste handler's "do not filter"
-  // signal, and this surface has always passed it.
-  const hasPastedImageBytes = useMemo(
-    () =>
-      epicImagePresence === null
-        ? null
-        : (hash: string) =>
-            hasLandingImageBytes(hash) || epicImagePresence(hash),
+  // store, because it only ever answers for a SENT image.
+  //
+  // THIS SURFACE HAS NO "no predicate" STATE. The prop stays nullable because
+  // `chat-paste-handler` reads `null` as "do not filter" and other surfaces
+  // still send it, but answering `true` while the snapshot loads says the same
+  // thing as a predicate rather than as an absence - and a predicate is the
+  // thing every consumer can use. Pre-readiness is the only moment the two
+  // spellings could differ; once the snapshot lands both are this same union.
+  const hasPastedImageBytes = useCallback(
+    (hash: string) => {
+      if (hasLandingImageBytes(hash)) return true;
+      // Not loaded yet. Withholding judgement means admitting the hash: this
+      // filter exists to drop nodes whose bytes are nowhere, and "I cannot tell
+      // yet" is not that.
+      if (epicImagePresence === null) return true;
+      return epicImagePresence(hash);
+    },
     [epicImagePresence],
   );
   const fetchEpicImage = useEpicImageFetcher();
@@ -1306,18 +1358,48 @@ export function NewConversationModalBody(props: {
   /**
    * Submit, with the byte-resolution step in front of it.
    *
-   * The initial-create prompt ALWAYS travels inline. `epic.createChat` is unary
-   * and precedes any chat stream, so there is no negotiated session whose minor
-   * could say the host is able to resolve a bare hash - and a sibling tab's
-   * negotiation proves nothing about this call. One send per chat bounds the
-   * cost.
+   * THE CREATE LINE NEGOTIATES ITS OWN MINOR, and that is the distinction this
+   * comment exists to keep. `epic.createChat` is UNARY and precedes any chat
+   * stream, so there is no negotiated SESSION here and `chat.subscribe`'s
+   * `draftBlobBridgeSupported()` is not a question this surface may ask - a
+   * sibling tab's stream proves nothing about this call. What the absence of a
+   * stream rules out is the STREAM's gate; it never ruled out a gate. The unary
+   * method carries its own `{major, minor}`, so `epic.createChat@1.2` answers
+   * for exactly this call, and `createAttachmentsByHashSupported` is the only
+   * capability read on this path.
    *
-   * A document with nothing to resolve - every document this surface produces
-   * today - takes the synchronous path verbatim. The await below exists only
-   * for a hash-only node, and everything it changes about ordering is confined
-   * to the branch that has one.
+   * So the prompt does NOT always travel inline any more. At `@1.2` the block
+   * below uploads this window's eligible bytes to the target host's draft-blob
+   * tier first; whatever that host CONFIRMS holding is subtracted from the set
+   * still owed bytes, stays hash-only, and `attachmentsByHash` is read off the
+   * document actually dispatched. Below `@1.2`, and for anything the host does
+   * not confirm, the inline path is unchanged - a failed upload is not a
+   * refusal, it is simply not host-held.
+   *
+   * A document with nothing to resolve still takes the synchronous path
+   * verbatim. The await below exists only for a hash-only node, and everything
+   * it changes about ordering is confined to the branch that has one.
    */
   const handleSubmit = useCallback((): void => {
+    // THE ATTEMPT COUNT BELONGS TO ONE PRESS OF SEND, so it is reset here
+    // rather than on the way out.
+    //
+    // `attempt` is decremented by nothing and cleared only by the latch owner,
+    // which runs exclusively when the async arm ran. Every other way out of
+    // this function - `canSubmit` false, no editor, and the synchronous fast
+    // path below - leaves it standing. A re-entry that lands on any of those
+    // therefore left `attempt` at 1 for the life of this component, and the
+    // NEXT submit that genuinely needed a re-entry was refused one and
+    // abandoned: no create, no toast, nothing to see.
+    //
+    // Reset at the single ENTRY instead of at each of those three exits: the
+    // exits are a set that grows, and a guard placed on today's members is one
+    // the next early return is added beside rather than into. ("The modal
+    // unmounts between uses" would also bound it, but that is a fact about a
+    // Dialog someone can make persistent without ever reading this file.)
+    const isReentry = submitReentryInProgress.current;
+    submitReentryInProgress.current = false;
+    if (!isReentry) submitReentryAttempt.current = 0;
     // The ENTRY gate, restored. `submitPreparedDraft` re-checks `canSubmit`
     // live at the end, which is the check that matters for a condition that
     // arrives DURING the read - but without one here, a Cmd/Ctrl+Enter pressed
@@ -1330,6 +1412,17 @@ export function NewConversationModalBody(props: {
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
+    // The draft this submit is FOR. The editor stays editable across the reads
+    // below and the create ends in `cleanupAfterSubmit`, which clears the draft
+    // store and the editor - so without this, a sentence typed during the read
+    // is wiped by a create that sent the document from before it. The modal's
+    // `revision` bumps on `setContent` alone: there is no annotation sidecar
+    // here, and a caret move is not work worth cancelling a send over.
+    const generation = captureComposerSubmitGeneration(
+      () =>
+        useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+          ?.revision ?? 0,
+    );
     // Nothing this surface INHERITS from the host, so the host-held set starts
     // empty: a new chat has no sent message and no queued prompt to re-open.
     // `epic.createChat@1.2` is what can WIDEN it - see the upload below - and
@@ -1400,15 +1493,47 @@ export function NewConversationModalBody(props: {
         // confirmations under one id while validating them under another is the
         // one way this arm could hand the host a digest it never received.
         const byHashHostId = flightHostId;
+        const plan = planAttachmentsByHash(captured);
+        // THE SAME FOUR CONDITIONS THE LANDING COMPOSER GATES ON, and they are
+        // spelled out here rather than inherited because the two create
+        // surfaces must not drift: any failure lands on the inline path below,
+        // the one that has always worked.
+        //  - a client to upload on, and a host to upload to;
+        //  - no node carrying BOTH base64 and a hash. A crop atom is the case:
+        //    the host's `collectAttachmentHashes` would probe that hash while
+        //    the bytes ride inline beside it, and refuse the whole create with
+        //    `missing-attachment-bytes` - after the modal has closed and
+        //    cleared the draft, so the user loses the prompt. No create surface
+        //    mints crops today, which is what makes this inert rather than a
+        //    live bug; it is kept because "inert" is a fact about the SURFACES
+        //    that feed this one, not about this code, and the surface that
+        //    changes it will not be this file.
+        //  - at least one node the preparer marked eligible, so there is
+        //    something to gain from a round trip at all;
+        //  - the negotiated minor of the method this create actually
+        //    dispatches on, read at dispatch and failing closed.
         if (
           byHashClient !== null &&
           byHashHostId !== null &&
+          !plan.hasInlineHashedNode &&
+          plan.eligible.length > 0 &&
           createAttachmentsByHashSupported(byHashHostId, "epic.createChat")
         ) {
+          // BEFORE the upload: an eligible set already over the cap can never
+          // come back under it, so uploading its blobs would be work for a
+          // create that cannot succeed. A REFUSAL and not a silent empty set -
+          // narrating it here is the only chance the user gets, because the
+          // post-inlining check below counts a different population (it also
+          // counts hashes this window never owned bytes for) and an eligible
+          // set of 33 that all inline cleanly would reach it as zero.
+          if (exceedsCreateAttachmentHashCap(plan.eligible)) {
+            reportCreateAttachmentHashCapExceeded();
+            return;
+          }
           hostHeldRef.current = await confirmCreateAttachmentHashes({
             hostId: byHashHostId,
             client: byHashClient,
-            plan: planAttachmentsByHash(captured),
+            plan,
             // Read at the upload, not captured when the flight started: the
             // identity can change in between, and a confirmation recorded under
             // one account is invisible to a gate asking under another.
@@ -1428,10 +1553,34 @@ export function NewConversationModalBody(props: {
           // arrive between that check and this send.
           commit: (base64ByHash) => {
             const live = editorRef.current;
-            // A different editor is a different document. Sending the captured
-            // one would send something the user can no longer see, and
-            // `cleanupAfterSubmit` would clear a surface that never asked.
-            if (live === null || live.getEditorIncarnation() !== incarnation) {
+            // No editor at all: there is nothing to send and nothing to
+            // re-enter for. The only plain abort here.
+            if (live === null) return;
+            // THE DRAFT MOVED UNDER THIS FLIGHT, by either of its two carriers.
+            //
+            // A different editor incarnation is a different document, and so is
+            // a bumped draft revision; both mean the same thing for this
+            // decision, so they are asked together rather than as two guards
+            // that could disagree. Sending the captured document would send
+            // something the user can no longer see, and `cleanupAfterSubmit`
+            // would then clear a surface that never asked.
+            //
+            // The answer is to RE-ENTER, not to abort. Re-reading the live
+            // editor below keeps the user's newer text, but it does not re-plan
+            // - which digests are eligible, whether the cap is blown, and which
+            // host they were confirmed against were all decided from the
+            // pre-await capture. Aborting instead would leave a user who
+            // pressed Enter with nothing sent and no notice; re-entry derives
+            // the whole plan from the document actually on screen.
+            if (
+              live.getEditorIncarnation() !== incarnation ||
+              !generation.stillCurrent()
+            ) {
+              // Bounded to ONE: typing through both passes sends nothing and
+              // clears nothing, leaving the draft intact to send again.
+              if (submitReentryAttempt.current === 0) {
+                submitReentryRequested.current = true;
+              }
               return;
             }
             // Re-read, exactly as the chat composer's annotation read does: the
@@ -1442,35 +1591,30 @@ export function NewConversationModalBody(props: {
               live.getJSON(),
               base64ByHash,
             );
-            // A leg that missed leaves its node hash-only with nothing able to
-            // resolve it, and this path has no recovery for that. Even at
-            // `@1.2` the create is unary: a refusal RESOLVES rather than
-            // arriving as a `MISSING_ATTACHMENT_BYTES` acknowledgement to retry
-            // from, and there is no restoration slot, while `cleanupAfterSubmit`
-            // clears the draft synchronously - so dispatching would delete the
-            // user's text and then fail. The chat composer can afford to send
-            // optimistically because its refusal path exists; here the honest
-            // move is to keep the draft and say why.
+            // NO refusal for a node this window could not resolve, and that is
+            // a deliberate difference from the landing composer rather than an
+            // omission.
             //
-            // Measured against the HOST-HELD set, not the empty one: a node the
-            // host confirmed is resolvable, by the host, out of the draft-blob
-            // tier - it is dispatched deliberately, not unresolved.
-            const unresolved = draftImageInliningNeeded(
-              inlined,
-              liveHostHeld(),
-            );
-            if (unresolved.length > 0) {
-              raiseHostNotice({
-                kind: "refused",
-                message:
-                  unresolved.length === 1
-                    ? "An image in this prompt could not be loaded. The draft has been kept - try removing and re-attaching it."
-                    : `${unresolved.length} images in this prompt could not be loaded. The draft has been kept - try removing and re-attaching them.`,
-              });
-              return;
-            }
-            // What the request will actually carry as bare hashes. Everything
-            // still hash-only here is host-held, since `unresolved` is empty.
+            // The pre-merge upstream arm refused here, on the premise that "a
+            // leg that missed leaves its node hash-only with nothing able to
+            // resolve it". That premise does not hold on THIS surface: the epic
+            // already exists, and a chat document routinely carries hashes whose
+            // bytes were never in this window's store at all - an image copied
+            // out of a rendered message, a quote seed - which address the epic's
+            // own attachment store and are resolved there first, before the host
+            // looks at the staging tier. Refusing them breaks creates that work
+            // today, and the client cannot tell that population apart from a
+            // genuinely lost byte. `epic.create` (landing) is the surface where
+            // refusing IS right, because no epic exists yet to resolve against.
+            //
+            // It is also the rule `draft-image-inlining.ts` states for every
+            // caller: a node whose bytes resolve nowhere is left hash-only and
+            // the host's dangling-hash guard decides. The client never refuses a
+            // send because its own replica came up empty.
+            //
+            // What the request will actually carry as bare hashes - host-held,
+            // epic-store and unresolved alike, because the host's cap counts
+            // them all the same way.
             const wireHashes = hashOnlyImageHashes(inlined);
             // The cap is the HOST's, counted over the whole request, so it is
             // decided here rather than on the eligible set: a single uploaded
@@ -1491,7 +1635,43 @@ export function NewConversationModalBody(props: {
         });
       },
       () => {
+        // The single exit. The latch is released FIRST so the re-entry below is
+        // not turned away by its own predecessor's flight, and the re-entry runs
+        // from here rather than from `commit` for exactly that reason: `commit`
+        // is still inside the preparation, and the helper's own release would
+        // land after a nested flight had claimed the latch.
         draftImagePrepFlight.current = false;
+        if (!submitReentryRequested.current) {
+          // Only when nothing is QUEUED. The tick below is delivered on a
+          // macrotask, so between it and the layout effect a second chain can
+          // start and settle here - and resetting the count then would wipe the
+          // bound belonging to a re-entry that has not run yet. Unreachable
+          // today (a second chain with images cannot settle first, and one
+          // without sends and empties the draft, so the queued re-entry dies on
+          // the empty-draft guard), which is exactly why it is written down: it
+          // holds by ARGUMENT about today's control flow, not by construction,
+          // and the argument dies the day someone adds an await to the fast
+          // path.
+          if (!submitReentryQueued.current) submitReentryAttempt.current = 0;
+          return;
+        }
+        submitReentryRequested.current = false;
+        submitReentryAttempt.current += 1;
+        submitReentryInProgress.current = true;
+        // THE GAP IS A MACROTASK, NOT A COMMIT. This runs in a promise
+        // continuation, so React schedules the render through the Scheduler's
+        // MessageChannel instead of flushing inline, and the browser can
+        // dispatch queued input before the layout effect runs. The latch was
+        // released four lines up, so a keystroke landing in that window starts
+        // its OWN flight and the queued re-entry is then turned away by
+        // `draftImagePrepFlight` and silently dropped.
+        //
+        // That costs nothing: the user's own submit re-reads the live document
+        // and sends it, which is the same outcome the re-entry existed to
+        // produce - one send, current text. Recorded because the direct call
+        // this replaced could not be dropped, so the property is new.
+        submitReentryQueued.current = true;
+        setSubmitReentryTick((tick) => tick + 1);
       },
     ).catch((error: unknown) => {
       // The third call site of this helper, and the same rule as the other
@@ -1526,6 +1706,28 @@ export function NewConversationModalBody(props: {
     submitTarget,
     submitPreparedDraft,
   ]);
+  // The re-entry itself. Declared AFTER `handleSubmit` so it can name it
+  // directly - that is the whole point of routing through state instead of a
+  // ref.
+  //
+  // RECORDING THE TICK BEFORE CALLING IS WHAT MAKES THIS STRICTMODE-SAFE, and
+  // it is not a stylistic ordering. Dev double-invokes effects on the same
+  // component instance, and refs survive that simulated remount - so the second
+  // invoke reads its own write and early-returns. The naive
+  // `useLayoutEffect(() => handleSubmit(), [tick])` would submit TWICE in dev
+  // and once in prod, which is the worst shape that bug can take.
+  //
+  // LAYOUT-timed so the re-entry lands before paint, ahead of any input the
+  // macrotask window queued. Unlike the composer's copy there is no
+  // intermediate visible frame to suppress here: this surface's flight flag is
+  // a ref (`draftImagePrepFlight`), so clearing it commits nothing, and
+  // `isSubmitting` tracks the create mutation rather than the preparation.
+  useLayoutEffect(() => {
+    if (submitReentryTick === handledSubmitReentryTick.current) return;
+    handledSubmitReentryTick.current = submitReentryTick;
+    submitReentryQueued.current = false;
+    handleSubmit();
+  }, [submitReentryTick, handleSubmit]);
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;

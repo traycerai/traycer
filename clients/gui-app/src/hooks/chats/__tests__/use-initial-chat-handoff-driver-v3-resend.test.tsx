@@ -234,17 +234,31 @@ function registerWaitingChatHandoff(content: JsonContent): void {
 }
 
 function mountDriver(handle: ChatSessionStoreHandle): void {
+  // Constructed ONCE per mount, outside the render callback, and that placement
+  // is load-bearing rather than tidiness. `useSeededSendContent` lists this
+  // getter in an effect dependency array and that effect calls `setResolved` on
+  // both arms, so an identity that changes per render is an unbounded
+  // render -> effect -> setState -> render loop: it allocated past 4.5 GB and
+  // killed the vitest worker, which EXITS 0, so this file reported nothing at
+  // all for several passes rather than failing.
+  //
+  // The mounter's is `useCallback(() => …, [handle.store])`
+  // (`chat-tile.tsx`'s `getDraftBlobBridgeSupported`), i.e. one identity for the
+  // life of the mount. Matching it means matching BOTH halves: reading from the
+  // store at resend time, and being stable across renders. The previous comment
+  // here claimed to be "exactly the getter the mounter passes" while matching
+  // only the first half, which is why the line read as correct.
+  const getDraftBlobBridgeSupported = (): boolean =>
+    handle.store.getState().draftBlobBridgeSupported;
   renderHook(() =>
     useInitialChatHandoffDriver({
       handle,
       nodeId: CHAT_ID,
       scope: SCOPE,
       profileUserId: USER_ID,
-      // Exactly the getter the mounter passes
-      // (`chat-tile.tsx`'s `getDraftBlobBridgeSupported`): read from the store
-      // at the moment of the resend, never a boolean captured at mount.
-      getDraftBlobBridgeSupported: () =>
-        handle.store.getState().draftBlobBridgeSupported,
+      // Read from the store at the moment of the resend, never a boolean
+      // captured at mount.
+      getDraftBlobBridgeSupported,
     }),
   );
 }

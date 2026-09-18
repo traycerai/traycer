@@ -214,12 +214,33 @@ afterEach(() => {
 });
 
 describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
-  // NOT `async`, and that is the claim rather than a lint concession: this
-  // path dispatches in the same stack frame as `submitDraft`, so there is
-  // nothing to await and a signature saying otherwise weakens the assertion
-  // below.
-  it("(a) synchronous session-cache fast path - submitted payload carries b64content", () => {
-    imageStoreMocks.sessionImageBytes.mockReturnValue(IMAGE_BYTES);
+  // This case used to assert a SYNCHRONOUS session-cache fast path: a direct
+  // `sessionImageBytes` read at the submit, the document inlined and dispatched
+  // in the same stack frame, `getImageBytes` never called. That path is gone,
+  // and it is gone because it was wrong rather than because a merge happened to
+  // drop it:
+  //
+  //  - `resolve-draft-image-bytes.ts` is "the ONE byte source for a draft image
+  //    that travels as a bare content hash", and its leg 1 already consults the
+  //    session cache inside `getImageBytes`. So the fast path bought no round
+  //    trip - only a second reader of the same cache, outside the resolver that
+  //    documents itself as the only one.
+  //  - It made the submit's SHAPE depend on cache state. The just-pasted case is
+  //    the one anybody exercises by hand, and it took a path no reload can take,
+  //    so a defect in the async arm stayed invisible until someone reloaded.
+  //  - What it was documented to protect - a re-entrant submit slipping through
+  //    the window a yield opens - is held by `annotationPrepFlight` and the
+  //    submit generation guard instead, which is what "a second submit during
+  //    the await is a no-op" below pins.
+  //
+  // So this case now pins the invariant that replaced it, which is the one a
+  // future fast path would break: one byte source, and no synchronous reader
+  // beside it.
+  it("(a) a session-warm hash resolves through the ONE byte source, not a reader beside it", async () => {
+    // Warm means `getImageBytes` answers without an IndexedDB trip - a fact
+    // about the store, not about the composer, which is exactly why the
+    // composer cannot see it and must not branch on it.
+    imageStoreMocks.getImageBytes.mockResolvedValue(IMAGE_BYTES);
 
     const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
     const { result } = mountSubmit({
@@ -232,10 +253,14 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       result.current.submitDraft("enter");
     });
 
-    // The fast path never awaits: the send is dispatched synchronously in the
-    // same stack frame, before any microtask can run.
-    expect(submit).toHaveBeenCalledTimes(1);
-    expect(imageStoreMocks.getImageBytes).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+    expect(imageStoreMocks.getImageBytes).toHaveBeenCalledWith(HASH);
+    // The draft has no browser annotations, and the annotation crop read is the
+    // only sanctioned `sessionImageBytes` caller on this path. A fast path
+    // re-added for draft images would land here.
+    expect(imageStoreMocks.sessionImageBytes).not.toHaveBeenCalled();
 
     const atoms = collectImageAtoms(submit.mock.calls[0][0].content);
     expect(atoms).toHaveLength(1);

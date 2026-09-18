@@ -33,8 +33,150 @@ import { describe, expect, it } from "vitest";
 
 const GUI_APP_ROOT = join(import.meta.dirname, "..", "..");
 
+/**
+ * The comment stripper `readSource` runs before any assertion sees a file.
+ * `withoutComments` at the bottom is the entry point; the `stepIn*` arms above
+ * it are one rule each.
+ *
+ * WHY THIS FILE STRIPS BEFORE IT SCANS. Every assertion below is a lexical
+ * proxy for a semantic claim - "this surface never consults the STREAM's
+ * gate" - and the proxy diverges from the claim in exactly one place: when
+ * someone writes ABOUT the symbol instead of calling it. A comment explaining
+ * why the modal must not ask `draftBlobBridgeSupported()` is evidence FOR the
+ * claim, and matching it reds the pin for saying the right thing. That is not
+ * a hypothetical - it is what happened, and rewording the prose would only
+ * move the trap one edit further out.
+ *
+ * Strings are deliberately KEPT: a symbol reached through a string is still
+ * a use (`import()`, a lookup by name), and one assertion below is about a
+ * user-facing message that lives in one.
+ *
+ * LIMITS, stated because a stripper that ate too much would silently weaken
+ * every absence assertion here rather than fail. It tracks line comments,
+ * block comments and the three string forms; it does NOT track regex
+ * literals, so a regex containing `//` would read as a line comment and
+ * swallow the rest of that line. None of the three scanned files contains a
+ * regex literal today, and the presence assertions below are the guard: they
+ * run against this same stripped text, so over-stripping reds them.
+ */
+type StringMode = "single" | "double" | "template";
+type ScanMode = "code" | "line" | "block" | StringMode;
+
+/**
+ * Where the scan is after one character: the mode it is now in, the index to
+ * read next, and the text to keep. One arm per mode, so each stays small
+ * enough to read as a rule rather than as control flow.
+ */
+interface ScanStep {
+  readonly mode: ScanMode;
+  readonly index: number;
+  readonly emit: string;
+}
+
+const OPENING_QUOTES = new Map<string, StringMode>([
+  ["'", "single"],
+  ['"', "double"],
+  ["`", "template"],
+]);
+
+const CLOSING_QUOTE: Record<StringMode, string> = {
+  single: "'",
+  double: '"',
+  template: "`",
+};
+
+function stepInCode(ch: string, next: string, index: number): ScanStep {
+  if (ch === "/" && next === "/") {
+    return { mode: "line", index: index + 2, emit: "" };
+  }
+  if (ch === "/" && next === "*") {
+    return { mode: "block", index: index + 2, emit: "" };
+  }
+  return {
+    mode: OPENING_QUOTES.get(ch) ?? "code",
+    index: index + 1,
+    emit: ch,
+  };
+}
+
+function stepInLineComment(ch: string, index: number): ScanStep {
+  // The newline is kept so line numbers still line up with the file a failure
+  // message points at.
+  if (ch === "\n") return { mode: "code", index: index + 1, emit: ch };
+  return { mode: "line", index: index + 1, emit: "" };
+}
+
+function stepInBlockComment(ch: string, next: string, index: number): ScanStep {
+  if (ch === "*" && next === "/") {
+    return { mode: "code", index: index + 2, emit: "" };
+  }
+  // Newlines only, for the same line-number reason.
+  return { mode: "block", index: index + 1, emit: ch === "\n" ? ch : "" };
+}
+
+function stepInString(
+  mode: StringMode,
+  ch: string,
+  next: string,
+  index: number,
+): ScanStep {
+  // An escape consumes its next character, so a `\"` cannot be mistaken for
+  // the closing quote.
+  if (ch === "\\") return { mode, index: index + 2, emit: ch + next };
+  if (ch === CLOSING_QUOTE[mode]) {
+    return { mode: "code", index: index + 1, emit: ch };
+  }
+  return { mode, index: index + 1, emit: ch };
+}
+
+/**
+ * The mode dispatch, in its own function rather than inline in the loop, and
+ * for two reasons that are both load-bearing.
+ *
+ * Its DECLARED return type is what keeps the caller's `step` out of a type
+ * cycle: resolving the last arm needs `mode` narrowed to `StringMode`,
+ * narrowing is control-flow analysis, the caller's control flow includes
+ * `mode = step.mode`, and typing that assignment needs `step`. Inferred
+ * inline, `step` therefore depends on itself and TypeScript answers `any`
+ * (TS7022), which the linter then reports five more times over. Annotating
+ * the caller's `mode` does not help - it is already `let mode: ScanMode`, and
+ * it is the narrowed type that is circular, not the declared one.
+ *
+ * And early returns rather than a ternary chain, because a four-way chain is
+ * a nested ternary however it is formatted.
+ */
+function stepFor(
+  mode: ScanMode,
+  ch: string,
+  next: string,
+  index: number,
+): ScanStep {
+  if (mode === "code") return stepInCode(ch, next, index);
+  if (mode === "line") return stepInLineComment(ch, index);
+  if (mode === "block") return stepInBlockComment(ch, next, index);
+  return stepInString(mode, ch, next, index);
+}
+
+/** `source` with its comments removed, string and template literals intact. */
+function withoutComments(source: string): string {
+  let mode: ScanMode = "code";
+  let out = "";
+  let index = 0;
+  while (index < source.length) {
+    const ch = source[index] ?? "";
+    const next = source[index + 1] ?? "";
+    const step = stepFor(mode, ch, next, index);
+    out += step.emit;
+    index = step.index;
+    mode = step.mode;
+  }
+  return out;
+}
+
 function readSource(relativePath: string): string {
-  return readFileSync(join(GUI_APP_ROOT, relativePath), "utf8");
+  return withoutComments(
+    readFileSync(join(GUI_APP_ROOT, relativePath), "utf8"),
+  );
 }
 
 const CREATE_PATH_FILES = [

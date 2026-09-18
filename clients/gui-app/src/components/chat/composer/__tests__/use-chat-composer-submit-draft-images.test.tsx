@@ -384,15 +384,25 @@ describe("useChatComposerSubmit draft images", () => {
     expect(editor.clearCount).toBe(1);
   });
 
-  it("abandons the send and does not clear the editor when the incarnation changes mid-flight", async () => {
+  // This case used to assert the send was ABANDONED here. It is the same
+  // question as "the user typed during the read", asked through the other
+  // carrier - the editor incarnation rather than the draft revision - and
+  // answering it differently is what left the two guards able to disagree.
+  // They are now asked together and both RE-ENTER: the submit re-runs against
+  // whatever the live editor holds, which is the only way a user who pressed
+  // Enter does not end up with nothing sent and no notice. The property the old
+  // assertion was protecting is unchanged and pinned below - the captured
+  // document is never what goes out, and nothing is cleared that was not sent.
+  it("re-enters against the live editor when the incarnation changes mid-flight", async () => {
     const taskId = "chat-incarnation-change";
     let release: (() => void) | null = null;
-    resolveMocks.resolveDraftImageBytes.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve(IMAGE_BYTES);
-        }),
-    );
+    resolveMocks.resolveDraftImageBytes.mockImplementation(() => {
+      // One handoff only; the re-entered pass resolves at once.
+      if (release !== null) return Promise.resolve(IMAGE_BYTES);
+      return new Promise<Uint8Array | null>((resolve) => {
+        release = () => resolve(IMAGE_BYTES);
+      });
+    });
     const firstIncarnation = createComposerEditorIncarnation();
     const editor = mutableFakeEditor(
       docWithHashOnlyImage(HASH_ONLY_IMAGE_HASH),
@@ -423,12 +433,19 @@ describe("useChatComposerSubmit draft images", () => {
       await Promise.resolve();
     });
 
-    expect(submit).not.toHaveBeenCalled();
-    expect(editor.clearCount).toBe(0);
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+    // What went out is what the NEW editor holds, not the captured document -
+    // which no longer exists anywhere the user can see.
+    expect(submit.mock.calls[0][0].contentText).toBe("still here");
+    expect(collectImageAtoms(submit.mock.calls[0][0].content)).toHaveLength(0);
+    // Cleared exactly once, and only the document that was sent. Clearing a
+    // document you did not send is the failure the guard exists for, and it is
+    // untouched by re-entering rather than abandoning.
+    expect(editor.clearCount).toBe(1);
     // The composer is not left stuck "preparing" - the `finally` ran.
     expect(result.current.annotationPreparationPending).toBe(false);
-    // And the user's text is still there to retry with, not silently dropped.
-    expect(editor.handle.getJSON()).toEqual(typedAfterRecreate);
   });
 });
 
