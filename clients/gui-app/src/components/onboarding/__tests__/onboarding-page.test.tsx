@@ -630,7 +630,7 @@ describe("OnboardingPage", () => {
     expect(screen.queryByTestId("session-import-wizard")).toBeNull();
     expect(
       screen.getByTestId("host-unavailable").getAttribute("data-refusal"),
-    ).toBe("host-b can't import tasks");
+    ).toBe("host-b can't import sessions");
   });
 
   it("uses arrows, Enter, and Escape for navigation while ignoring controls, editors, and overlays", async () => {

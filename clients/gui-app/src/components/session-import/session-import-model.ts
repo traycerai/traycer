@@ -621,7 +621,7 @@ export interface SessionImportWizardView {
   readonly visibleSelectedCount: number;
 }
 
-const UNTITLED_SESSION = "Untitled task";
+const UNTITLED_SESSION = "Untitled session";
 const FIRST_PROMPT_PREVIEW_LENGTH = 140;
 
 /** Native title first, then the opening prompt, then a neutral placeholder. */
@@ -641,6 +641,27 @@ export function candidateDisplayTitle(
 export function harnessDisplayName(harness: GuiHarnessId): string {
   const providerId = guiHarnessIdToProviderId(harness);
   return providerId === null ? harness : providerDisplayName(providerId);
+}
+
+/**
+ * The noun for a COUNT of the things being imported. ONE table, deliberately:
+ * every site that renders such a count calls this, so the word moves in one
+ * edit.
+ *
+ * It is "session" and not "task" because after one task per repository the
+ * two are no longer the same number. Thirty-one sessions out of one checkout
+ * land as thirty-one chats inside ONE task, so "Imported 31 tasks" is not a
+ * wording preference, it is false - and the picker's counts are counts of the
+ * same things, before they land.
+ *
+ * The flow's bare nouns follow the same rule as literal strings: whatever names
+ * the things being imported says "session" ("Back to sessions", "Search
+ * sessions or folders"), and whatever names the task they land IN keeps "task"
+ * ("Ready in your task list.", "Open task", "into Traycer as tasks"). The host's
+ * `session-import-copy-drift.test.ts` pins both halves.
+ */
+export function importedCountNoun(count: number): string {
+  return count === 1 ? "session" : "sessions";
 }
 
 /** Last path segment, on either separator; the full path stays on the row. */
@@ -714,7 +735,7 @@ export function sessionImportNotImportedLine(
     (total, group) => total + group.entries.length,
     0,
   );
-  const noun = count === 1 ? "task" : "tasks";
+  const noun = importedCountNoun(count);
   const only = groups.length === 1 ? groups[0] : undefined;
   if (only === undefined) return `Not imported: ${count} ${noun}`;
   return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;

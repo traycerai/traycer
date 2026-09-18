@@ -57,7 +57,7 @@ export function FirstTaskLandingGuide(props: {
             className="mt-2 flex items-center gap-2 text-ui-xs text-muted-foreground"
           >
             <MutedAgentSpinner />
-            Importing your tasks…
+            Importing your sessions…
           </p>
         ) : null}
         <FirstTaskCoachmark
@@ -73,7 +73,7 @@ export function FirstTaskLandingGuide(props: {
       <div className="mt-5 flex items-center justify-between gap-3 text-ui-sm text-muted-foreground">
         <p role="status" className="flex items-center gap-2">
           <MutedAgentSpinner />
-          Importing your tasks…
+          Importing your sessions…
         </p>
         <Button
           variant="ghost"

@@ -28,6 +28,7 @@ import {
   buildSessionImportSubmission,
   buildSessionImportView,
   harnessDisplayName,
+  importedCountNoun,
   selectionStateFor,
   sessionImportScanWindowLabel,
   sessionImportSelectionKey,
@@ -172,7 +173,7 @@ export function SessionImportWizard(props: {
     [view.groups],
   );
   // Rows the scan found but nobody can import: the footer names them so the
-  // gap between "34 tasks" on screen and "31 selected" has an explanation.
+  // gap between "34 sessions" on screen and "31 selected" has an explanation.
   // Already-imported rows are deliberately not counted - they carry their own
   // chip and their own way in.
   const unavailableCount = useMemo(
@@ -247,7 +248,7 @@ export function SessionImportWizard(props: {
           variant={undefined}
         />
         <p className={cn("text-ui-sm", tone.muted)}>
-          Looking for your recent tasks…
+          Looking for your recent sessions…
         </p>
       </div>
     ) : (
@@ -260,7 +261,7 @@ export function SessionImportWizard(props: {
           variant={undefined}
         />
         <span className={cn("text-ui-xs tabular-nums", tone.faint)}>
-          Finding tasks…
+          Finding sessions…
           {view.totalSessions > 0
             ? ` ${view.totalSessions.toLocaleString()} found`
             : ""}
@@ -318,7 +319,7 @@ export function SessionImportWizard(props: {
               tone.warningSurface,
             )}
           >
-            Couldn’t read {harnessDisplayName(failure.harness)} tasks.{" "}
+            Couldn’t read {harnessDisplayName(failure.harness)} sessions.{" "}
             {failure.detail}
           </p>
         ))}
@@ -497,7 +498,7 @@ function SessionImportFilters(props: {
             type="search"
             value={query}
             aria-label="Search work"
-            placeholder="Search tasks or folders"
+            placeholder="Search sessions or folders"
             data-testid="session-import-search"
             onChange={(event) => onQueryChange(event.target.value)}
             className="h-8 pl-8"
@@ -538,7 +539,7 @@ function importedVisibilityNotice(
 ): string | null {
   switch (support) {
     case "unsupported":
-      return "Update this host to view imported tasks";
+      return "Update this host to view imported sessions";
     case "unknown":
       return "Checking host support…";
     case "supported":
@@ -715,8 +716,7 @@ function SessionImportFooter(props: {
               variant={undefined}
             />
           ) : null}
-          Import {view.selectedCount}{" "}
-          {view.selectedCount === 1 ? "task" : "tasks"}
+          Import {view.selectedCount} {importedCountNoun(view.selectedCount)}
         </button>
       ) : (
         <Button
@@ -734,8 +734,7 @@ function SessionImportFooter(props: {
               variant={undefined}
             />
           ) : null}
-          Import {view.selectedCount}{" "}
-          {view.selectedCount === 1 ? "task" : "tasks"}
+          Import {view.selectedCount} {importedCountNoun(view.selectedCount)}
         </Button>
       )}
     </div>
@@ -817,19 +816,19 @@ function emptyMessage(
   state: SessionImportWizardState,
   view: SessionImportWizardView,
 ): string {
-  if (state.phase === "failed") return "Couldn’t read task folders.";
+  if (state.phase === "failed") return "Couldn’t read session folders.";
   if (view.hiddenImportedCount > 0 && state.importedSupport === "supported")
-    return "All matching tasks are already imported.";
+    return "All matching sessions are already imported.";
   if (view.totalSessions === 0) {
     // A bounded scan finding nothing is not "you have no work" - the window
     // picker above can look further back, and the copy points at it.
     return state.scanWindow === null
-      ? "No tasks found on this device."
-      : `No tasks in the ${sessionImportScanWindowLabel(state.scanWindow).toLowerCase()}. Choose a longer time range.`;
+      ? "No sessions found on this device."
+      : `No sessions in the ${sessionImportScanWindowLabel(state.scanWindow).toLowerCase()}. Choose a longer time range.`;
   }
   if (state.query.trim().length > 0)
-    return "No matching tasks. Try another search.";
-  return "No tasks from the selected providers. Choose another provider.";
+    return "No matching sessions. Try another search.";
+  return "No sessions from the selected providers. Choose another provider.";
 }
 
 /**
@@ -884,7 +883,7 @@ function SessionImportRunView(props: {
                 useSessionImportRunStore.getState().reset(hostId);
               }}
             >
-              {runStatus === "error" ? "Back to tasks" : "Import more"}
+              {runStatus === "error" ? "Back to sessions" : "Import more"}
             </Button>
           ) : null}
         </div>
@@ -897,7 +896,7 @@ function selectionCountLabel(
   selected: number,
   visibleSelected: number,
 ): string {
-  const label = `${selected.toLocaleString()} ${selected === 1 ? "task" : "tasks"} selected`;
+  const label = `${selected.toLocaleString()} ${importedCountNoun(selected)} selected`;
   return selected > visibleSelected
     ? `${label} · ${selected - visibleSelected} outside this view`
     : label;
@@ -928,7 +927,7 @@ function SessionImportSelectAll(props: {
         aria-checked={
           visibleSelection === "partial" ? "mixed" : visibleSelection === "all"
         }
-        aria-label="Select all available tasks shown"
+        aria-label="Select all available sessions shown"
         data-testid="session-import-visible-selection"
         disabled={view.visibleSelectionKeys.length === 0}
         onClick={() =>
@@ -1028,7 +1027,7 @@ function SessionImportOnboardingToolbar(props: {
             type="search"
             value={props.query}
             aria-label="Search work"
-            placeholder="Search tasks or folders"
+            placeholder="Search sessions or folders"
             data-testid="session-import-search"
             onChange={(event) => props.onQueryChange(event.target.value)}
             className="h-8 pl-10"
@@ -1075,7 +1074,7 @@ function SessionImportOnboardingToolbar(props: {
           className="onboarding-import-view-toggle flex shrink-0 gap-0.5 rounded-lg bg-foreground/5 p-0.5"
         >
           {[
-            { label: "Tasks", grouped: false },
+            { label: "Sessions", grouped: false },
             { label: "By project", grouped: true },
           ].map((option) => (
             <label key={option.label} className="cursor-pointer">

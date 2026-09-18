@@ -5,6 +5,7 @@ import { SessionImportOpenTaskButton } from "@/components/session-import/session
 import { cn } from "@/lib/utils";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { useCompactRelativeTime } from "@/lib/relative-time";
+import { importedCountNoun } from "@/components/session-import/session-import-model";
 import type {
   SessionImportGroupSelectionState,
   SessionImportGroupView,
@@ -63,7 +64,7 @@ function SessionRowTimestamp(props: {
 /** Selection detail is available without making the folder count change meaning. */
 function groupSelectionLabel(group: SessionImportGroupView): string {
   const count = group.selectableCount.toLocaleString();
-  const noun = group.selectableCount === 1 ? "task" : "tasks";
+  const noun = importedCountNoun(group.selectableCount);
   if (group.selectionState === "none")
     return `${count} ${noun} available to import`;
   if (group.selectionState === "all") return `All ${count} ${noun} selected`;
@@ -73,8 +74,8 @@ function groupSelectionLabel(group: SessionImportGroupView): string {
 /**
  * The count on the right edge of a tour group header. "All imported" is
  * derived from the rows rather than from `selectableCount === 0`, which a
- * folder of unreadable sessions also satisfies - and "n tasks" is the honest
- * answer there.
+ * folder of unreadable sessions also satisfies - and "n sessions" is the
+ * honest answer there.
  */
 function groupCountLabel(group: SessionImportGroupView): string {
   if (group.selectableCount > 0)
@@ -85,7 +86,7 @@ function groupCountLabel(group: SessionImportGroupView): string {
       (row) => row.candidate.state.kind === "already_in_traycer",
     );
   if (allImported) return "All imported";
-  return `${group.totalCount} ${group.totalCount === 1 ? "task" : "tasks"}`;
+  return `${group.totalCount} ${importedCountNoun(group.totalCount)}`;
 }
 
 /** A row whose task is already in Traycer: no checkbox, a way to open it. */
