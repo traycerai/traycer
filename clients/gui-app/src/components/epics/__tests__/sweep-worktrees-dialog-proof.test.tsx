@@ -59,6 +59,18 @@ const testState = vi.hoisted(() => ({
   ),
   mutate: vi.fn(),
   mutationPending: false,
+  navigate: vi.fn(),
+  activateTabIntent: vi.fn(() => true),
+  openEpicFromListIntent: vi.fn((input: { readonly epicId: string }) => input),
+}));
+
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => testState.navigate,
+}));
+
+vi.mock("@/lib/tab-navigation", () => ({
+  activateTabIntent: testState.activateTabIntent,
+  openEpicFromListIntent: testState.openEpicFromListIntent,
 }));
 
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
@@ -193,6 +205,13 @@ describe("SweepWorktreesDialog Remove-click proof", () => {
     testState.prove.mockReset();
     testState.prove.mockImplementation(() => Promise.resolve([]));
     testState.mutate.mockReset();
+    testState.navigate.mockReset();
+    testState.activateTabIntent.mockReset();
+    testState.activateTabIntent.mockReturnValue(true);
+    testState.openEpicFromListIntent.mockReset();
+    testState.openEpicFromListIntent.mockImplementation(
+      (input: { readonly epicId: string }) => input,
+    );
     vi.mocked(toast.info).mockReset();
   });
 
@@ -338,5 +357,58 @@ describe("SweepWorktreesDialog Remove-click proof", () => {
       );
     });
     expect(useSweepSessionStore.getState().parked.size).toBe(0);
+  });
+
+  it("toast action activates the first Task but parks the full original target on the proven host", async () => {
+    const epicIds = ["epic-1", "epic-2"] as const;
+    testState.hostId = "host-a";
+    testState.rows = [inUseUnknownRow("/wt/a", "feat-a")];
+    const view = renderDialog(epicIds);
+    fireEvent.click(screen.getByTestId("sweep-worktrees-checkbox"));
+    const deferred = deferredProve();
+    testState.prove.mockImplementation(() => deferred.promise);
+
+    fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
+    view.unmount();
+    deferred.resolve([inUseRow("/wt/a", "feat-a")]);
+
+    await waitFor(() => expect(toast.info).toHaveBeenCalledTimes(1));
+    testState.hostId = "host-b";
+    const options = vi.mocked(toast.info).mock.calls[0]?.[1];
+    if (
+      options === undefined ||
+      !("action" in options) ||
+      typeof options.action !== "object" ||
+      options.action === null ||
+      !("onClick" in options.action) ||
+      typeof options.action.onClick !== "function"
+    ) {
+      throw new Error("Sweep toast did not include a Review sweep action");
+    }
+    render(<button onClick={options.action.onClick}>Review sweep</button>);
+    expect(screen.getByRole("button", { name: "Review sweep" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review sweep" }));
+
+    expect(testState.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(testState.openEpicFromListIntent).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      focus: undefined,
+      name: "Task",
+      replaceEmptyDraftId: null,
+    });
+    expect(useSweepSessionStore.getState().reviewTarget).toEqual({
+      sessionKey: "host:host-a\nepic-1,epic-2",
+      hostId: "host-a",
+      epicIds,
+      taskTitle: "Task",
+    });
+
+    // Once the shell has opened and then closed the review, a stale second
+    // toast click must not revive it while the session is still marked open.
+    useSweepSessionStore.getState().closeReview();
+    useSweepSessionStore.getState().setOpen("host:host-a\nepic-1,epic-2", true);
+    fireEvent.click(screen.getByRole("button", { name: "Review sweep" }));
+    expect(testState.activateTabIntent).toHaveBeenCalledTimes(2);
+    expect(useSweepSessionStore.getState().reviewTarget).toBeNull();
   });
 });

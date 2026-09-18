@@ -56,6 +56,10 @@ import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import {
+  activateTabIntent,
+  openEpicFromListIntent,
+} from "@/lib/tab-navigation";
+import {
   bannersFromSessionOutcomes,
   captureReviewSnapshot,
   isBulkScopeRow,
@@ -167,6 +171,7 @@ const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
  */
 export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const { epicIds, taskTitle, onOpenChange } = props;
+  const navigate = useNavigate();
   // Read before the session key, because the key needs it: an OPEN dialog with
   // no host is a session in its own right, not the gap between two.
   //
@@ -381,6 +386,40 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       sessionKey: selectionKey,
       hostId,
       hostName,
+      onReview: () => {
+        const epicId = epicIds?.[0];
+        if (
+          epicId === undefined ||
+          epicIds === null ||
+          hostId === null ||
+          selectionKey === null
+        ) {
+          return;
+        }
+        const activated = activateTabIntent(
+          navigate,
+          openEpicFromListIntent({
+            epicId,
+            focus: undefined,
+            name: taskTitle ?? undefined,
+            replaceEmptyDraftId: null,
+          }),
+          undefined,
+        );
+        if (!activated) return;
+        const store = useSweepSessionStore.getState();
+        // A previous toast must not open a second dialog or revive a review
+        // that has already been consumed.
+        if (store.open.has(selectionKey) || !store.parked.has(selectionKey)) {
+          return;
+        }
+        store.openReview({
+          sessionKey: selectionKey,
+          hostId,
+          epicIds,
+          taskTitle,
+        });
+      },
       checkedRows,
       prove: proveCandidates,
       kickoff,
@@ -692,6 +731,7 @@ function startSweepPrimary(input: {
   readonly sessionKey: string | null;
   readonly hostId: string | null;
   readonly hostName: string | null;
+  readonly onReview: () => void;
   readonly checkedRows: ReadonlyArray<EpicSweepWorktreeRow>;
   readonly prove: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
   readonly kickoff: (targets: ReadonlyArray<EpicSweepWorktreeRow>) => void;
@@ -768,8 +808,9 @@ function startSweepPrimary(input: {
       if (!dialogOpen) {
         toast.info(
           input.hostName === null
-            ? "Sweep needs your confirmation — open Sweep on these tasks to review."
-            : `Sweep on ${input.hostName} needs your confirmation — open Sweep on these tasks to review.`,
+            ? "Sweep needs your confirmation."
+            : `Sweep on ${input.hostName} needs your confirmation.`,
+          { action: { label: "Review sweep", onClick: input.onReview } },
         );
       }
     })
