@@ -1,3 +1,4 @@
+import { CustomizeOverlay } from "@/components/customize/customize-overlay";
 import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
@@ -144,6 +145,7 @@ export function RootComponent() {
         {isStandalone ? null : (
           <>
             <SystemTabModalHost />
+            <CustomizeOverlay />
             <ChatSearchDialogHost />
             <SweepReviewDialogHost />
             {/* Mobile-only full-screen notifications surface (renders null on

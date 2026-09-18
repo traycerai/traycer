@@ -1,0 +1,39 @@
+/* Button feedback belongs to this editor, including its portalled controls. */
+[data-customize-editor] button:not([data-customize-proxy]) {
+  transition: transform 125ms ease-out;
+}
+[data-customize-editor] button:not([data-customize-proxy]):active {
+  transform: scale(0.97);
+}
+:root[data-reduce-panel-motion] [data-customize-editor] button {
+  transition: none;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-customize-editor] button {
+    transition: none;
+    transform: none;
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  [data-customize-proxy]:hover {
+    border-style: solid;
+  }
+}
+@media (forced-colors: active) {
+  [data-customize-proxy] {
+    outline: 1px dashed ButtonText;
+  }
+  [data-customize-proxy]:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
+:root[data-customize-keyboard] [data-customize-editor] button {
+  transition: none;
+  transform: none;
+}
+
+:root [data-customize-editor][data-customize-keyboard] {
+  animation-duration: 0ms;
+}

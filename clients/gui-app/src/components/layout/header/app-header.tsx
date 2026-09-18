@@ -106,8 +106,14 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
-      <DesktopMenuBar />
-      {showTabStrip ? <HistoryNavButtons /> : null}
+      <div data-customize-inert className="contents">
+        <DesktopMenuBar />
+      </div>
+      {showTabStrip ? (
+        <div data-customize-inert className="contents">
+          <HistoryNavButtons />
+        </div>
+      ) : null}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor
@@ -146,6 +152,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         style={spacerDragStyle}
       />
       <div
+        data-customize-inert
         className="relative z-10 flex shrink-0 items-center gap-2"
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
