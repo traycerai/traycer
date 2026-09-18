@@ -382,7 +382,6 @@ describe("useDraftInventoryActions", () => {
       id: draftId,
       chatId: "chat-undo-skip",
       epicId: "epic-undo-skip",
-      ownerHostId: null,
     });
     const trackSpy = vi
       .spyOn(Analytics.getInstance(), "track")
