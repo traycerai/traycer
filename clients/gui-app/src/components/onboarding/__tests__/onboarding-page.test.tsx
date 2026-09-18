@@ -314,10 +314,17 @@ interface PointerPosition {
   readonly clientY: number;
 }
 
+/**
+ * The tracked drag reads `timeStamp` to get a release speed, so every synthetic
+ * pointer carries one: without it three events constructed in the same tick
+ * look like an infinitely fast flick, and the distance arm - the one most of
+ * these cases are about - is never reached.
+ */
 function dispatchPointer(
   target: EventTarget,
   type: "pointerdown" | "pointermove" | "pointerup",
   position: PointerPosition,
+  atMs: number,
 ): void {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
@@ -325,19 +332,34 @@ function dispatchPointer(
     clientY: { value: position.clientY },
     pointerId: { value: 1 },
     isPrimary: { value: true },
+    timeStamp: { value: atMs },
   });
   target.dispatchEvent(event);
 }
 
+/** A deliberate drag: 300ms of travel, which is well under the flick speed. */
 function drag(
   target: EventTarget,
   from: PointerPosition,
   to: PointerPosition,
 ): void {
   act(() => {
-    dispatchPointer(target, "pointerdown", from);
-    dispatchPointer(window, "pointermove", to);
-    dispatchPointer(window, "pointerup", to);
+    dispatchPointer(target, "pointerdown", from, 0);
+    dispatchPointer(window, "pointermove", to, 300);
+    dispatchPointer(window, "pointerup", to, 300);
+  });
+}
+
+/** A flick: the same travel spent in 40ms, so the speed arm decides. */
+function flick(
+  target: EventTarget,
+  from: PointerPosition,
+  to: PointerPosition,
+): void {
+  act(() => {
+    dispatchPointer(target, "pointerdown", from, 0);
+    dispatchPointer(window, "pointermove", to, 40);
+    dispatchPointer(window, "pointerup", to, 40);
   });
 }
 
@@ -355,9 +377,26 @@ function swipeSurface(container: HTMLElement): HTMLElement {
   return surface;
 }
 
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+
+/**
+ * The phone layout is keyed to the VIEWPORT (`useIsMobileViewport`, 768px), not
+ * to the installed app, so a width is all these suites have to set. The global
+ * `matchMedia` stub never fires a change, which is exactly right here: the
+ * snapshot is read at render and the width is fixed for the test.
+ */
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+}
+
 describe("OnboardingPage", () => {
   beforeEach(() => {
     stubElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     resetFeatureAnnouncementsStore();
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSessionImportRunStore.setState({ runs: new Map() });
@@ -420,6 +459,31 @@ describe("OnboardingPage", () => {
     });
   });
 
+  // The desktop shell is not what the phone rework changed, and this is the
+  // guard that says so: the eyebrow, the wordmark and a footer Back are all
+  // things the phone branch removes, and all three still belong here.
+  it("keeps the desktop shell: the eyebrow, the wordmark, and Back in the footer", async () => {
+    const { container } = renderPage(false);
+
+    expect(container.querySelector(".onboarding-eyebrow")?.textContent).toBe(
+      "Workspace · 1 of 3",
+    );
+    expect(container.querySelector(".onboarding-wordmark")).not.toBeNull();
+    expect(screen.getByTestId("onboarding-skip").textContent).toBe(
+      "Skip intro",
+    );
+    expect(screen.getByTestId("onboarding-advance").className).not.toContain(
+      "onboarding-button--block",
+    );
+
+    await advanceToStep("providers");
+
+    const back = screen.getByTestId("onboarding-back");
+    expect(back.closest("footer")).not.toBeNull();
+    expect(back.closest("header")).toBeNull();
+    expect(back.textContent).toBe("Back");
+  });
+
   it("shows the welcome first, prefetches provider data, then reveals the tour after both transitions", () => {
     vi.useFakeTimers();
     try {
@@ -478,7 +542,13 @@ describe("OnboardingPage", () => {
   });
 
   it("uses the short welcome and leave timings when reduced motion is preferred", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    // Enough of a MediaQueryList for every reader on this screen: the welcome's
+    // own timings read `matches`, and `useIsMobileViewport` subscribes.
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
     vi.useFakeTimers();
     try {
       render(<OnboardingPage replay={false} />);
@@ -716,12 +786,16 @@ describe("OnboardingPage", () => {
   });
 });
 
-describe("OnboardingPage mobile swipe", () => {
+describe("OnboardingPage phone layout", () => {
   beforeEach(() => {
     stubElementScrollTo();
+    setViewportWidth(393);
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSessionImportRunStore.setState({ runs: new Map() });
-    setMobileApp(true);
+    // Deliberately NOT the installed app: the phone shell, the phone copy and
+    // the drag all come from the viewport, so a narrow desktop window gets
+    // exactly this layout.
+    setMobileApp(false);
     capabilityMock.available = true;
     hostsMock.ids = ["host-a"];
     hostReadinessMock.streamMismatchFor = null;
@@ -735,6 +809,7 @@ describe("OnboardingPage mobile swipe", () => {
   afterEach(() => {
     cleanup();
     restoreElementScrollTo();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSessionImportRunStore.setState({ runs: new Map() });
     setMobileApp(false);
@@ -742,7 +817,64 @@ describe("OnboardingPage mobile swipe", () => {
     safeAreaInsetsMock.right = 0;
   });
 
-  it("runs the whole step list on mobile, leaves vertical drags alone, and navigates on horizontal swipes", async () => {
+  it("puts Back in the header past act one, and renders no eyebrow or wordmark", async () => {
+    const { container } = renderPage(false);
+
+    // Act 1's leading slot is the brand mark, so there is nothing to go back to.
+    expect(screen.queryByTestId("onboarding-back")).toBeNull();
+    expect(container.querySelector(".onboarding-eyebrow")).toBeNull();
+    expect(container.querySelector(".onboarding-wordmark")).toBeNull();
+    expect(screen.getByTestId("onboarding-skip").textContent).toBe("Skip");
+
+    await advanceToStep("providers");
+
+    const back = screen.getByRole("button", { name: "Back" });
+    expect(back.getAttribute("data-testid")).toBe("onboarding-back");
+    // In the HEADER, not in the footer: the footer is one full-width primary on
+    // every act, and a phone's back affordance belongs at the top.
+    expect(back.closest("header")).not.toBeNull();
+    expect(back.closest("footer")).toBeNull();
+
+    fireEvent.click(back);
+    await waitFor(() => expect(currentStepId()).toBe("task-tabs"));
+  });
+
+  it("gives act one a subtitle and the later acts none", async () => {
+    const { container } = renderPage(false);
+
+    const subtitle = container.querySelector(".onboarding-subtitle");
+    expect(subtitle?.textContent).toBe(
+      "Tasks in the menu. Swipe for the rest.",
+    );
+
+    await advanceToStep("providers");
+    expect(container.querySelector(".onboarding-subtitle")).toBeNull();
+  });
+
+  it("shows one full-width primary, and hands act three's footer to the wizard", async () => {
+    const { container } = renderPage(false);
+
+    const advance = screen.getByTestId("onboarding-advance");
+    expect(advance.className).toContain("onboarding-button--block");
+    expect(advance.className).toContain("onboarding-button--primary");
+    expect(advance.textContent).toContain("Continue");
+    expect(container.querySelector("footer")?.dataset.quiet).toBe("false");
+
+    await advanceToStep("session-import");
+
+    // The wizard owns the primary on act 3, so the shell keeps only the quiet
+    // way past it - centred, and spelled the same as the header's.
+    const footerAction = screen.getByTestId("onboarding-advance");
+    expect(footerAction.className).toContain("onboarding-button--quiet");
+    expect(footerAction.className).not.toContain("onboarding-button--block");
+    // The Enter cap rides along in the DOM (it is CSS-hidden below `md`), so
+    // this asks what the label says rather than what the node contains.
+    expect(footerAction.textContent).toContain("Skip");
+    expect(footerAction.textContent).not.toContain("for now");
+    expect(container.querySelector("footer")?.dataset.quiet).toBe("true");
+  });
+
+  it("runs the whole step list, leaves vertical drags alone, and navigates on horizontal ones", async () => {
     const { container } = renderPage(false);
     const surface = swipeSurface(container);
 
@@ -753,31 +885,68 @@ describe("OnboardingPage mobile swipe", () => {
 
     drag(
       surface,
-      { clientX: 400, clientY: 300 },
-      { clientX: 400, clientY: 420 },
+      { clientX: 200, clientY: 300 },
+      { clientX: 200, clientY: 420 },
     );
     expect(currentStepId()).toBe("task-tabs");
 
     drag(
       surface,
-      { clientX: 400, clientY: 300 },
-      { clientX: 280, clientY: 306 },
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
     );
     await waitFor(() => expect(currentStepId()).toBe("providers"));
 
     drag(
       surface,
-      { clientX: 400, clientY: 300 },
-      { clientX: 280, clientY: 306 },
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
     );
     await waitFor(() => expect(currentStepId()).toBe("session-import"));
 
     drag(
       surface,
-      { clientX: 280, clientY: 300 },
-      { clientX: 400, clientY: 306 },
+      { clientX: 160, clientY: 300 },
+      { clientX: 280, clientY: 306 },
     );
     await waitFor(() => expect(currentStepId()).toBe("providers"));
+  });
+
+  it("springs a short drag home and commits a flick that barely travelled", async () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    // 60px of a 393px surface is under the quarter a slow release has to cover,
+    // and 200px/s is under the flick speed.
+    drag(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 220, clientY: 302 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+
+    // The same distance thrown in 40ms is 1500px/s, which commits on its own.
+    flick(
+      surface,
+      { clientX: 280, clientY: 300 },
+      { clientX: 220, clientY: 302 },
+    );
+    await waitFor(() => expect(currentStepId()).toBe("providers"));
+  });
+
+  it("resists at the ends instead of leaving the tour", () => {
+    const { container } = renderPage(false);
+    const surface = swipeSurface(container);
+
+    // Back from the first act: there is nothing behind it, so the act rubber
+    // bands and the tour stays where it is.
+    drag(
+      surface,
+      { clientX: 120, clientY: 300 },
+      { clientX: 320, clientY: 306 },
+    );
+    expect(currentStepId()).toBe("task-tabs");
+    expect(useOnboardingStore.getState().completedAt).toBeNull();
   });
 
   it("does not steal swipes from controls or the platform edge zones", async () => {
@@ -786,8 +955,8 @@ describe("OnboardingPage mobile swipe", () => {
 
     drag(
       screen.getByTestId("onboarding-advance"),
-      { clientX: 400, clientY: 300 },
-      { clientX: 280, clientY: 306 },
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
     );
     expect(currentStepId()).toBe("task-tabs");
 
@@ -801,8 +970,8 @@ describe("OnboardingPage mobile swipe", () => {
     await advanceToStep("providers");
     drag(
       screen.getByTestId("provider-editor"),
-      { clientX: 400, clientY: 300 },
-      { clientX: 280, clientY: 306 },
+      { clientX: 280, clientY: 300 },
+      { clientX: 160, clientY: 306 },
     );
     expect(currentStepId()).toBe("providers");
   });

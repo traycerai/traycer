@@ -96,6 +96,7 @@ function SharedCoachmarkHarness() {
           content="Choose how this workspace should work."
           progress={{ step: 2, total: 3 }}
           rootRef={rootRef}
+          cardAnchor={null}
           selector='[data-testid="dialog-target"]'
           onClose={() => useFirstTaskGuideStore.getState().dismiss()}
           onTarget={null}
@@ -122,6 +123,7 @@ function PopoverCoachmarkHarness() {
         content="Choose where this task runs."
         progress={null}
         rootRef={rootRef}
+        cardAnchor={null}
         selector='[data-testid="popover-target"]'
         onClose={() => undefined}
         onTarget={null}
@@ -148,6 +150,7 @@ function KeyboardCoachmarkHarness(props: {
         content="Use the arrow keys."
         progress={{ step: 2, total: 3 }}
         rootRef={rootRef}
+        cardAnchor={null}
         selector='[data-testid="keyboard-target"]'
         onClose={() => undefined}
         onTarget={null}

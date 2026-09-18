@@ -44,6 +44,7 @@ export function SettingsSetupGuide(props: {
         }}
         rootRef={props.rootRef}
         selector={step.selector}
+        cardAnchor={null}
         // Escape and the card's X are a skip, and a skipped card is done:
         // the person has been shown the guide and declined it, so leaving it
         // half-finished on the checklist would nag them for a decision they

@@ -290,54 +290,263 @@
   }
 }
 
-/* ----------------------------------------------------------------- mobile */
+/* ------------------------------------------------------------------ phone */
 
-/* Same breakpoint as `useIsMobileViewport` (767px), which the wizard uses
-   to reorder the selection row. */
+/* On a phone the act is three bands and nothing else: one 44pt bar, a 36pt
+   selection line, and the list, with the import button pinned under them. The
+   wizard renders a different toolbar below 767px (`SessionImportPhoneToolbar`)
+   rather than wrapping the pointer one into five rows - measured, those five
+   rows took 261pt of an 852pt screen and left the list 176pt, which is 2.7 of
+   38 tasks.
+
+   The bar's own class names exist only in that shape, so they need no media
+   query; what does is the handful the pointer toolbar shares. */
+
+.onboarding-import-bar {
+  position: relative;
+  min-height: 2.75rem;
+  padding-inline: 1rem;
+}
+/* Both bar controls are 44pt targets around a 16pt glyph - the floor a thumb
+   needs, and the size the scan-window pill and the provider pills were missing
+   at 24 and 32pt before they moved into the sheet. */
+.onboarding-import-bar-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.75rem;
+  color: var(--muted-foreground);
+  transition: background-color 150ms var(--onboarding-ease);
+}
+.onboarding-import-bar-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .onboarding-import-bar-button:hover {
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
+    color: var(--foreground);
+  }
+}
+/* A filtered list that looks like an unfiltered one is how a user concludes
+   their work is missing, so the dot is the shut sheet's only voice. Paired with
+   `data-filtered` on the button, which is the non-colour half of the cue. */
+.onboarding-import-filter-dot {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--primary);
+}
+.onboarding-import-bar-button[data-filtered="true"] {
+  color: var(--foreground);
+}
+
+/* The field grows out of the icon and covers the bar it came from. Inset by
+   the bar's own gutters so it lands on the same 16pt edges as everything else
+   in the act. */
+.onboarding-import-search-overlay {
+  position: absolute;
+  inset: 0 1rem;
+  display: flex;
+  align-items: center;
+}
+
+/* ------------------------------------------------------- phone: the sheet */
+
+.onboarding-import-filter-heading {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+/* Everything inside the sheet is a thumb target: the window picker and the
+   pills are the same controls the pointer toolbar draws at 24 and 32pt, and
+   here they get the 44pt they need. */
+.onboarding-import-filter-sheet
+  :is(
+    [data-testid="session-import-scan-window"],
+    [data-testid="session-import-provider-pill"]
+  ) {
+  min-height: 2.75rem;
+  height: auto;
+  padding-inline: 1rem;
+  border-radius: 0.75rem;
+  font-size: 0.8125rem;
+}
+.onboarding-import-filter-sheet [data-testid="session-import-scan-window"] {
+  width: 100%;
+}
+.onboarding-import-filter-sheet .onboarding-import-view-toggle {
+  height: auto;
+  width: 100%;
+}
+.onboarding-import-filter-sheet .onboarding-import-view-toggle label {
+  flex: 1 1 0;
+}
+.onboarding-import-filter-sheet .onboarding-import-view-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  font-size: 0.8125rem;
+}
+/* The switch row spans the sheet, label leading and switch trailing, so the
+   line reads as one setting rather than an 18pt control marooned at the edge
+   of it. Its `ml-auto` is for a toolbar and is cancelled here. */
+.onboarding-import-filter-sheet .session-import-imported-toggle {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  min-height: 2.75rem;
+  width: 100%;
+  margin: 0;
+  padding-inline: 0;
+  font-size: 0.8125rem;
+}
+.onboarding-import-filter-sheet .session-import-imported-toggle label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 @media (max-width: 767px) {
-  /* Row one stacks into three: the machine, then the search, then the two
-     scope controls side by side. A phone has no room for four controls in a
-     line, and the host picker is the one that names what the other three are
-     scoped to, so it takes the full width at the top. The scan window and
-     Show imported share the third line on their own: the toggle already
-     carries `ml-auto`, which splits the pair across it. */
-  .onboarding-import-toolbar-scope {
-    flex-wrap: wrap;
-  }
+  /* The host pill shares the bar with two 44pt controls, so it takes what is
+     left and truncates its LABEL - never the row. */
   .onboarding-import-host {
-    flex-basis: 100%;
-    width: 100%;
-    max-width: 100%;
-  }
-  .onboarding-import-search {
-    flex-basis: 100%;
-  }
-  /* Row two keeps its two ends - the count and the view toggle - on one line,
-     and the provider pills take the line under them as a single scrolling
-     run. Wrapping them instead would push the list off the screen on a phone
-     with five providers installed. The wizard renders the pills after the
-     toggle at this width (the same `useIsMobileViewport` breakpoint), so the
-     line order here is the DOM order and no `order` rule is needed. */
-  .onboarding-import-selection {
-    flex-wrap: wrap;
-    justify-content: space-between;
-  }
-  .onboarding-import-pills {
-    flex: 1 0 100%;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
-    padding-bottom: 0.125rem;
-  }
-  .onboarding-import-pills::-webkit-scrollbar {
-    display: none;
-  }
-  .onboarding-import-stage [data-testid="session-import-provider-pill"] {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    margin-inline-start: 0;
   }
 
+  /* Selection: one 36pt line, its own gutters, and the hairline the list
+     starts under. */
+  .onboarding-import-stage .session-import-selection {
+    min-height: 2.25rem;
+    align-items: center;
+    padding: 0 1rem;
+  }
+  /* The master checkbox draws at 28pt inside that 36pt line and still has to
+     take a thumb, so the hit area is a pseudo-element centred on it - the same
+     shape `settings-touch-targets.css` uses, and the reason the bar can stay
+     36pt instead of growing to 44 and eating a row of the list. */
+  .onboarding-import-stage [data-testid="session-import-visible-selection"] {
+    position: relative;
+  }
+  .onboarding-import-stage
+    [data-testid="session-import-visible-selection"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+
+  /* The list fills the rest, full width, rows padded instead of the scroller -
+     which is what lets a sticky section header span the screen. */
+  .session-import-groups[data-surface="onboarding"] {
+    padding: 0 0 0.5rem;
+    gap: 0;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .session-import-groups[data-surface="onboarding"] > :first-child {
+    margin-top: 0;
+  }
+  .onboarding-import-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  /* No card frame: the rows are one list separated by hairlines, the same
+     language act 2's provider list speaks. Selection and the imported state
+     keep their fills, which is what makes them read across a row that has no
+     border of its own. */
+  .onboarding-import-task {
+    min-height: 3.75rem;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  /* These two carry their own ring on the card board and have to lose it here
+     BEFORE the hairline rule below, not after: both selectors weigh the same,
+     so source order is what decides whether a selected row keeps the line
+     separating it from the row above. */
+  .onboarding-import-task[data-imported="true"],
+  .onboarding-import-task[aria-checked="true"] {
+    box-shadow: none;
+  }
+  .onboarding-import-task + .onboarding-import-task {
+    box-shadow: inset 0 1px 0
+      color-mix(in srgb, var(--foreground) 14%, transparent);
+  }
+  /* The checkbox and the harness glyph sit on the title's first line rather
+     than centred against a two-line row. */
+  .onboarding-import-task > :is(span, svg):first-child,
+  .onboarding-import-task > svg {
+    margin-top: 0.125rem;
+  }
+  .onboarding-import-task-title {
+    /* Two lines, then ellipsis. `-webkit-line-clamp` is the only clamp every
+       engine this app ships on honours, and it needs the box switch beside
+       it. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    font-size: 0.9375rem;
+    line-height: 1.34;
+    white-space: normal;
+  }
+  .onboarding-import-task-meta,
+  .onboarding-import-task-meta span {
+    font-size: 0.8125rem;
+  }
+
+  /* By project: the header stays solid and sticky - it is what tells the user
+     which folder the rows under their thumb belong to - and loses the card
+     around it. */
+  .onboarding-import-group {
+    border-radius: 0;
+    background: transparent;
+  }
+  .onboarding-import-group::after {
+    content: none;
+  }
+  .onboarding-import-group .onboarding-import-list {
+    padding: 0;
+  }
+  .onboarding-import-group-header {
+    min-height: 2.75rem;
+    padding-inline: 1rem;
+    box-shadow: none;
+  }
+
+  /* The action bar: one full-width 48pt button, nothing beside it. */
+  .onboarding-import-footer {
+    padding: 0.75rem 1rem;
+  }
+  .onboarding-import-footer [data-testid="session-import-submit"] {
+    width: 100%;
+    min-height: 3rem;
+  }
+
+  /* Scan, run, result, error and empty: full width inside the act's gutters,
+     still centred in the region (`margin-block: auto` is what centres it). */
   .onboarding-import-card {
+    max-width: none;
+    margin-block: auto;
+    margin-inline: 1rem;
     padding: 1.25rem 1rem;
   }
 }

@@ -22,6 +22,7 @@ import {
 } from "@/stores/onboarding/setup-guides";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useHostBinding } from "@/lib/host";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import { GETTING_STARTED } from "./getting-started-settings.definitions";
 import "./getting-started-settings.css";
@@ -50,6 +51,14 @@ const CARDS = [
 ] as const;
 
 type CardId = (typeof CARDS)[number]["id"];
+
+/**
+ * The one unavailability that is a fact about the BUILD rather than a state the
+ * user can leave. Named, because the phone branch below has to tell the two
+ * apart: a reason that can change keeps its card, this one collapses to a
+ * footnote.
+ */
+const UNAVAILABLE_ON_THIS_SHELL = "Available in the desktop app";
 
 /** Everything a card prints, derived once so the markup only reads it. */
 function cardPresentation(
@@ -88,7 +97,7 @@ function cardPresentation(
   const started = step >= 0;
   let unavailableReason: string | null = null;
   if (!isSetupGuideAvailable(id, input.shell))
-    unavailableReason = "Available in the desktop app";
+    unavailableReason = UNAVAILABLE_ON_THIS_SHELL;
   else if (id === "cookies" && !input.hostBound)
     unavailableReason = "Connect a host to continue";
   let status = "Not started";
@@ -112,17 +121,49 @@ function cardPresentation(
   };
 }
 
+/**
+ * A guide this shell cannot offer at all - browser sign-ins with no
+ * `browserView` - as opposed to one that is merely blocked right now.
+ *
+ * The distinction is what decides whether the card stays. "Connect a host to
+ * continue" is a state the user can leave, so it keeps a card they can come
+ * back to; the other is a fact about the build they are holding, and on a phone
+ * a full disabled card for it is the largest thing on the screen saying the
+ * least.
+ */
+function permanentlyUnavailable(reason: string | null): boolean {
+  return reason === UNAVAILABLE_ON_THIS_SHELL;
+}
+
 export function GettingStartedSettingsPanel() {
   const navigate = useNavigate();
   const completedAt = useOnboardingStore((state) => state.completedAt);
   const progress = useOnboardingStore((state) => state.setupProgress);
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
   const hostBinding = useHostBinding();
+  const phone = useIsMobileViewport();
   const shell = { browserView: browserView !== null };
   const complete = useOnboardingStore((state) =>
     onboardingCompletedCount(state, shell),
   );
   const guideCount = onboardingGuideCount(shell);
+  const cards = CARDS.map((card) => ({
+    card,
+    presentation: cardPresentation(card.id, {
+      completedAt,
+      progress,
+      shell,
+      hostBound: hostBinding !== null,
+    }),
+  }));
+  // Already excluded from the denominator above (`onboardingGuideCount`), so
+  // dropping the card changes nothing the panel counts - only what it draws.
+  const footnoted = phone
+    ? cards.filter(({ presentation }) =>
+        permanentlyUnavailable(presentation.unavailableReason),
+      )
+    : [];
+  const visible = cards.filter((entry) => !footnoted.includes(entry));
   return (
     <SettingsPanelShell
       title={GETTING_STARTED.page.label}
@@ -138,7 +179,7 @@ export function GettingStartedSettingsPanel() {
       }
     >
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-3">
-        {CARDS.map((card) => {
+        {visible.map(({ card, presentation }) => {
           const {
             done,
             started,
@@ -147,12 +188,7 @@ export function GettingStartedSettingsPanel() {
             status,
             action,
             unavailableReason,
-          } = cardPresentation(card.id, {
-            completedAt,
-            progress,
-            shell,
-            hostBound: hostBinding !== null,
-          });
+          } = presentation;
           const unavailable = unavailableReason !== null;
           return (
             <button
@@ -182,7 +218,7 @@ export function GettingStartedSettingsPanel() {
               }}
               aria-label={`${card.row.label}, ${status}${unavailableReason === null ? "" : `, ${unavailableReason}`}`}
               className={cn(
-                "group flex min-w-0 flex-col items-start overflow-hidden rounded-xl border border-border/60 bg-card/40 p-5 text-left transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-55 motion-reduce:transition-none",
+                "settings-setup-card group flex min-w-0 flex-col items-start overflow-hidden rounded-xl border border-border/60 bg-card/40 p-5 text-left transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-55 motion-reduce:transition-none",
                 done && "border-primary/20",
               )}
             >
@@ -234,6 +270,20 @@ export function GettingStartedSettingsPanel() {
           );
         })}
       </div>
+      {/* One line, not a card each: these guides cannot run on this shell at
+          all, and a phone has room for the guides it CAN offer. Named rather
+          than counted, so the user can tell which one they are missing, and
+          plain text rather than a disabled control, because there is nothing
+          here to press. */}
+      {footnoted.length > 0 ? (
+        <p
+          data-testid="getting-started-unavailable-note"
+          className="mt-4 text-ui-xs text-muted-foreground"
+        >
+          {footnoted.map(({ card }) => card.row.label).join(", ")}:{" "}
+          {UNAVAILABLE_ON_THIS_SHELL.toLowerCase()}.
+        </p>
+      ) : null}
     </SettingsPanelShell>
   );
 }

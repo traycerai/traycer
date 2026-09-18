@@ -47,6 +47,7 @@ function CoachmarkHarness() {
         content="Guide content"
         progress={null}
         rootRef={rootRef}
+        cardAnchor={null}
         selector='[data-testid="guide-target"]'
         onClose={() => undefined}
         onTarget={null}

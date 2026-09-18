@@ -37,13 +37,27 @@ export function OnboardingProviderPrefetch() {
       key={state.providerId}
       state={state}
       visible={false}
+      presentation="popover"
     />
   ));
 }
 
+/**
+ * How the discoveries are offered.
+ *
+ * `popover` is the card board's trailing control: a summary that opens the full
+ * list. `text` is the phone row's, where the summary joins the status on the
+ * row's one secondary line and there is nothing to open - a 28pt chevron is
+ * both under the touch floor and a second target inside a row that is already
+ * one control (see `ProviderList`'s phone shape). The lists are not lost; they
+ * are in Settings, where a phone can read them on a full-height surface.
+ */
+export type OnboardingDiscoveryPresentation = "popover" | "text";
+
 export function OnboardingProviderDiscovery(props: {
   readonly state: ProviderCliState;
   readonly visible: boolean;
+  readonly presentation: OnboardingDiscoveryPresentation;
 }) {
   const { state } = props;
   const available =
@@ -71,6 +85,14 @@ export function OnboardingProviderDiscovery(props: {
     enabled: canListPlugins,
   });
   if (!props.visible || (!canListSkills && !canListPlugins)) return null;
+  if (props.presentation === "text") {
+    return (
+      <DiscoveryCounts
+        skills={canListSkills ? skills : null}
+        plugins={canListPlugins ? plugins : null}
+      />
+    );
+  }
   return (
     <DiscoveryPopover
       providerId={state.providerId}
@@ -78,6 +100,66 @@ export function OnboardingProviderDiscovery(props: {
       plugins={canListPlugins ? plugins : null}
     />
   );
+}
+
+/**
+ * The counts as plain text, appended to a phone row's status line.
+ *
+ * Silent while either list is in flight and silent when both settle empty: the
+ * row's first job is its status, and " · 0 skills" is noise that pushes the
+ * line towards an ellipsis for no information. The popover shape says
+ * "Finding your setup…" instead because it IS the trailing control and has to
+ * be pressable before it has an answer.
+ */
+function DiscoveryCounts(props: {
+  readonly skills: SkillsQuery | null;
+  readonly plugins: PluginsQuery | null;
+}) {
+  const { skills, plugins } = props;
+  if (skills?.isPending === true || plugins?.isPending === true) return null;
+  const summary = discoverySummary({
+    skills: skills?.data?.skills.filter((skill) => !skill.conflict),
+    plugins: plugins?.data?.plugins.filter((plugin) => plugin.enabled),
+    compact: true,
+  });
+  if (summary === "") return null;
+  return (
+    <span data-testid="onboarding-provider-discovery-counts">
+      {` · ${summary}`}
+    </span>
+  );
+}
+
+/**
+ * Everything the popover shows, read off the two queries in one place.
+ *
+ * The lists it hands back are the ones each section renders: skills minus the
+ * conflicted ones, and ALL plugins, because that section names its own enabled
+ * count and still lists the disabled ones. Only the summary counts enabled.
+ */
+function discoveryViewModel(
+  skills: SkillsQuery | null,
+  plugins: PluginsQuery | null,
+): {
+  readonly readySkills: readonly ProviderSkill[] | undefined;
+  readonly allPlugins: readonly ProviderPlugin[] | undefined;
+  readonly pending: boolean;
+  readonly summary: string;
+} {
+  const readySkills = skills?.data?.skills.filter((skill) => !skill.conflict);
+  const allPlugins = plugins?.data?.plugins;
+  const failed = Boolean(skills?.isError || plugins?.isError);
+  return {
+    readySkills,
+    allPlugins,
+    pending: Boolean(skills?.isPending || plugins?.isPending),
+    summary:
+      discoverySummary({
+        skills: readySkills,
+        plugins: allPlugins?.filter((plugin) => plugin.enabled),
+        compact: false,
+      }) || (failed ? "Discovery unavailable" : "Finding your setup…"),
+  };
 }
 
 function DiscoveryPopover(props: {
@@ -91,12 +173,10 @@ function DiscoveryPopover(props: {
   const [pointerMotion, setPointerMotion] = useState(false);
   const insets = useSafeAreaCollisionPadding();
   const descriptionId = useId();
-  const readySkills = skills?.data?.skills.filter((skill) => !skill.conflict);
-  const allPlugins = plugins?.data?.plugins;
-  const enabledPlugins = allPlugins?.filter((plugin) => plugin.enabled);
-  const pending = Boolean(skills?.isPending || plugins?.isPending);
-  const failed = Boolean(skills?.isError || plugins?.isError);
-  const summary = discoverySummary(readySkills, enabledPlugins, failed);
+  const { readySkills, allPlugins, pending, summary } = discoveryViewModel(
+    skills,
+    plugins,
+  );
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -180,45 +260,72 @@ function DiscoveryPopover(props: {
           ) : null}
           <DiscoveredSkills skills={readySkills} />
           <DiscoveredPlugins plugins={allPlugins} />
-          {failed ? (
-            <div className="flex items-center justify-between gap-3 text-xs">
-              <p className="text-muted-foreground">
-                Some discoveries couldn’t be loaded.
-              </p>
-              <button
-                type="button"
-                className="shrink-0 rounded underline underline-offset-4 focus-visible:outline-2"
-                onClick={() => {
-                  if (skills?.isError) void skills.refetch();
-                  if (plugins?.isError) void plugins.refetch();
-                }}
-              >
-                Try again
-              </button>
-            </div>
-          ) : null}
+          <DiscoveryRetryNotice skills={skills} plugins={plugins} />
         </div>
       </PopoverContent>
     </Popover>
   );
 }
 
-function discoverySummary(
-  skills: readonly ProviderSkill[] | undefined,
-  plugins: readonly ProviderPlugin[] | undefined,
-  failed: boolean,
-): string {
-  const counts = [
+/**
+ * The popover's footer when a list failed, with a retry that refetches only
+ * the list that actually failed.
+ *
+ * Its own component so the popover does not carry this branch and the two
+ * error reads inside the handler; it renders nothing while both lists are fine.
+ */
+function DiscoveryRetryNotice(props: {
+  readonly skills: SkillsQuery | null;
+  readonly plugins: PluginsQuery | null;
+}) {
+  const { skills, plugins } = props;
+  if (skills?.isError !== true && plugins?.isError !== true) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <p className="text-muted-foreground">
+        Some discoveries couldn’t be loaded.
+      </p>
+      <button
+        type="button"
+        className="shrink-0 rounded underline underline-offset-4 focus-visible:outline-2"
+        onClick={() => {
+          if (skills?.isError === true) void skills.refetch();
+          if (plugins?.isError === true) void plugins.refetch();
+        }}
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
+/**
+ * "24 skills · 1 plugin enabled", or "" when neither list has answered.
+ *
+ * `compact` drops the word "enabled" for the phone row, which has one line for
+ * the whole provider and where the plugin count is the only number that could
+ * have meant anything else - the switch beside it already carries the
+ * provider's own on/off, so "enabled" reads as a second claim about that.
+ * The empty-string fallback is the CALLER's to name: the popover trigger has to
+ * say something because it is a control, and the row's text has the option of
+ * saying nothing at all.
+ */
+function discoverySummary(input: {
+  readonly skills: readonly ProviderSkill[] | undefined;
+  readonly plugins: readonly ProviderPlugin[] | undefined;
+  readonly compact: boolean;
+}): string {
+  const { skills, plugins, compact } = input;
+  return [
     skills === undefined
       ? null
       : `${skills.length} ${skills.length === 1 ? "skill" : "skills"}`,
     plugins === undefined
       ? null
-      : `${plugins.length} ${plugins.length === 1 ? "plugin" : "plugins"} enabled`,
+      : `${plugins.length} ${plugins.length === 1 ? "plugin" : "plugins"}${compact ? "" : " enabled"}`,
   ]
     .filter((label) => label !== null)
     .join(" · ");
-  return counts || (failed ? "Discovery unavailable" : "Finding your setup…");
 }
 
 function DiscoveredSkills(props: {

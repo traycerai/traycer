@@ -129,7 +129,11 @@ function plugin(overrides: Partial<ProviderPlugin>): ProviderPlugin {
 function renderDiscovery(visible: boolean, state: ProviderCliState) {
   const onSelect = vi.fn();
   const discovery = (
-    <OnboardingProviderDiscovery state={state} visible={visible} />
+    <OnboardingProviderDiscovery
+      state={state}
+      visible={visible}
+      presentation="popover"
+    />
   );
   const view = render(
     <ProviderList
@@ -143,12 +147,14 @@ function renderDiscovery(visible: boolean, state: ProviderCliState) {
           description: null,
           trailing: discovery,
           disabledReason: null,
+          phoneDescription: null,
           onSelect,
         },
       ]}
       variant="onboarding"
       ariaLabel="Providers"
       className=""
+      phone={false}
     />,
   );
   return { ...view, onSelect };
@@ -271,6 +277,7 @@ describe("OnboardingProviderDiscovery", () => {
       <OnboardingProviderDiscovery
         state={providerState(false, false)}
         visible
+        presentation="popover"
       />,
     );
 

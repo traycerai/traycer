@@ -105,4 +105,46 @@ describe("GettingStartedSettingsPanel", () => {
       step: 3,
     });
   });
+
+  // This suite's `useRunnerHostOrNull` stub returns null, so the browser
+  // sign-ins guide is one this shell cannot offer at all - which is exactly the
+  // case the phone collapses.
+  it("collapses a guide this shell cannot offer into one footnote on a phone", () => {
+    const desktopWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 393,
+    });
+    try {
+      render(<GettingStartedSettingsPanel />);
+
+      expect(
+        screen.queryByRole("button", { name: /Browser sign-ins/ }),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("getting-started-unavailable-note").textContent,
+      ).toBe("Browser sign-ins: available in the desktop app.");
+      // The denominator never counted it, so collapsing the card changes
+      // nothing the panel reports.
+      expect(screen.getByRole("status").textContent).toBe("0 of 3 complete");
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: desktopWidth,
+      });
+    }
+  });
+
+  it("keeps the disabled card on a pointer viewport", () => {
+    render(<GettingStartedSettingsPanel />);
+
+    expect(
+      screen.getByRole("button", {
+        name: /Browser sign-ins.*Available in the desktop app/,
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("getting-started-unavailable-note")).toBeNull();
+  });
 });

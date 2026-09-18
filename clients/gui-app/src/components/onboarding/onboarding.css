@@ -7,6 +7,10 @@
   --onboarding-ease: cubic-bezier(0.23, 1, 0.32, 1);
   --onboarding-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --onboarding-gutter: clamp(1.25rem, 4vw, 3rem);
+  /* The header's own inline padding. It is the gutter everywhere except at
+     phone width, where the row is made of 44pt targets that carry padding of
+     their own (see the phone block). */
+  --onboarding-header-gutter: var(--onboarding-gutter);
 }
 
 /* ---------------------------------------------------------------- atmosphere */
@@ -311,28 +315,157 @@
   transition: none;
 }
 
+/* ------------------------------------------------------------------- phone */
+
+/* ONE breakpoint for the phone layout, and it is the same 768px
+   `useIsMobileViewport()` answers - so the shell that renders a Back chevron in
+   its header is always the shell whose footer holds one full-width button.
+   Split the two and you get a header with no Back and a footer with no room
+   for one at some width nobody tested.
+
+   What this block is answering: the desktop stage squeezed onto a 393x852
+   screen spent 44.5% of it on chrome (status 67, header 46, copy 100, gaps 58,
+   footer 39, and 69pt of dead space under the footer) and nested every act in a
+   glass panel 26% of whose area was content. So: the panel dissolves, the
+   eyebrow and the wordmark go, the copy loses a line past act 1, and the footer
+   sits on the bottom inset instead of floating above it. */
 @media (max-width: 767px) {
   .onboarding-shell {
     --onboarding-gutter: 1rem;
   }
+
+  /* --- header: 44pt, three slots ------------------------------------- */
+
+  /* 4pt, not the 16pt gutter: a 44pt target with a 20pt glyph carries 12pt of
+     its own padding, so the BOX starts at 4pt for the glyph's own edge to land
+     on the gutter. Optical alignment, not geometric. Fed through the custom
+     property the header's utility already reads, rather than as a competing
+     `padding-inline` here: a declaration in this file and a Tailwind utility on
+     the same element is a cascade-layer argument nobody should have to have. */
+  .onboarding-shell[data-phone="true"] {
+    --onboarding-header-gutter: 0.25rem;
+  }
   .onboarding-header {
-    padding-block: 0.5rem;
+    min-height: 2.75rem;
+    padding-block: 0;
   }
-  .onboarding-progress-label {
-    display: none;
+  /* Both outer slots take an equal share of what the dashes leave, which is
+     what centres the dashes on the SCREEN rather than in the gap between two
+     labels of different lengths. */
+  .onboarding-header-slot--lead,
+  .onboarding-header-slot--trail {
+    flex: 1 1 0;
+    min-width: 0;
   }
+  .onboarding-header-slot--trail {
+    justify-content: flex-end;
+  }
+  /* The mark is not a control and carries no padding of its own, so it takes
+     the gutter itself. */
+  .onboarding-header-slot--lead:not(:has(.onboarding-button)) {
+    padding-inline-start: 0.75rem;
+  }
+
+  /* --- copy: title, and a subtitle only where act 1 needs one -------- */
+
   .onboarding-copy {
     text-align: left;
   }
   .onboarding-title {
-    font-size: clamp(1.75rem, 6vw, 2.25rem);
+    margin-top: 0;
+    font-size: 1.5rem;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
   }
   .onboarding-subtitle {
-    margin-inline: 0;
+    max-width: none;
+    margin: 0.25rem 0 0;
+    font-size: 0.9375rem;
+    font-weight: 400;
+    line-height: 1.45;
   }
-  .onboarding-panel {
-    padding: 0.75rem;
-    border-radius: 1rem;
+
+  /* --- the act owns the screen -------------------------------------- */
+
+  .onboarding-stage {
+    gap: 0.75rem;
+    padding: 0.5rem var(--onboarding-gutter) 0;
+  }
+  /* The act layer's own declaration of which axis is whose: the tracked drag
+     owns x, the scroller keeps y. Without it the browser is free to decide
+     mid-gesture, and the finger loses the act it had hold of. */
+  .onboarding-stage-scroll {
+    touch-action: pan-y;
+  }
+  /* The glass is dissolved, not restyled. There is no second surface on a
+     phone: the act IS the screen, so the panel keeps only its job as the flex
+     child that fills the space between the title and the footer, and bleeds
+     back out over the stage's gutters for the acts that want the full width.
+     Each act owns its own 16pt gutters from here on.
+     The `[data-step]` selector is repeated because it outranks the bare class
+     on specificity, so its 12pt of padding survives a rule that only names
+     `.onboarding-panel`. */
+  .onboarding-panel,
+  .onboarding-panel[data-step="task-tabs"] {
+    width: auto;
+    margin-inline: calc(-1 * var(--onboarding-gutter));
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  /* --- footer: one button, same place on every act ------------------- */
+
+  .onboarding-actions {
+    /* The tour layer already carries the device's bottom inset
+       (`pb-safe-bottom` on `.onboarding-tour-layer`), so all this adds is the
+       remainder that brings the total to 16pt on a phone that has no inset -
+       `max(16pt, inset)` in two places that cannot double-count. The 69pt of
+       dead space under the old footer was this sum taken twice. */
+    padding: 0.5rem 0 max(calc(1rem - var(--safe-area-inset-bottom)), 0rem);
+    gap: 0.5rem;
+  }
+  /* --- controls ----------------------------------------------------- */
+
+  /* 44pt is the BASE at phone width, not an upgrade layered on by
+     `@media (pointer: coarse)`. The review measured 40pt on a device, which
+     means that query did not resolve the way it does in a desktop browser -
+     and a touch target is not a thing to leave resting on a query whose answer
+     we cannot see. The coarse rule below stays for touch at desktop widths. */
+  .onboarding-button {
+    min-height: 2.75rem;
+  }
+  /* The primary: full width inside the stage's 16pt gutters, 48pt tall. Its
+     label is the scale's heading size - the only other size on this screen that
+     is bigger than body - rather than a sixth size invented for one button. */
+  .onboarding-button--block {
+    width: 100%;
+    min-height: 3rem;
+    border-radius: 0.875rem;
+    font-size: 1.0625rem;
+    font-weight: 600;
+  }
+  /* A square target for a glyph-only control (the header's Back). */
+  .onboarding-button--icon {
+    min-width: 2.75rem;
+    padding: 0;
+  }
+  /* No glass anywhere on this layout, so every control sits on the dithered
+     field directly. `--muted-foreground` has no contrast guarantee over it;
+     `--foreground` does (`onboarding-field-contrast.test.ts` pins it against
+     the field's brightest dot, at the welcome screen's full opacity, which is
+     twice what the tour runs at). Quiet is carried by size and weight here,
+     the way vibrancy asks for.
+
+     Scoped to the tour layer, because `.onboarding-button` is also worn by the
+     welcome screen and by the first-task coachmark - two surfaces that set
+     their own type and are not this rework's to restyle. */
+  .onboarding-tour-layer .onboarding-button--quiet {
+    color: var(--foreground);
+    font-size: 0.8125rem;
+    font-weight: 500;
   }
 }
 

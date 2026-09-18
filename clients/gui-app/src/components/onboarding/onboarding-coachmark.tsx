@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { cn } from "@/lib/utils";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { focusGuideTarget, interactWithGuideTarget } from "./guide-target";
 import {
@@ -40,6 +41,12 @@ interface CoachmarkProgress {
   readonly total: number;
 }
 
+/** See `CoachmarkProps.cardAnchor`. */
+export interface CoachmarkCardAnchor {
+  readonly selector: string;
+  readonly placement: "top-start" | "bottom-start";
+}
+
 interface CoachmarkProps {
   readonly id: string;
   readonly title: string;
@@ -47,6 +54,19 @@ interface CoachmarkProps {
   readonly progress: CoachmarkProgress | null;
   readonly rootRef: RefObject<HTMLElement | null>;
   readonly selector: string;
+  /**
+   * Where the CARD goes, when that is not "beside the thing it points at".
+   *
+   * The halo always lands on `selector`; this moves only the floater. One step
+   * needs it: on a phone the drawer's task list fills the drawer, so a card
+   * anchored under the first row covers the rows the step is telling the user
+   * to tap. It anchors above the drawer's Settings row instead, and the halo
+   * stays where the instruction is.
+   *
+   * Resolved inside the card's own portal (the drawer, for that step), so a
+   * selector here names an element on the same surface as the target.
+   */
+  readonly cardAnchor: CoachmarkCardAnchor | null;
   readonly onClose: () => void;
   readonly onTarget: ((target: HTMLElement, keyboard: boolean) => void) | null;
   readonly back: (() => void) | null;
@@ -78,6 +98,17 @@ const GLIDE_MS = 320;
 const PICKER_SETTLE_MS = 120;
 /** The spotlight's bleed around the target, in px on every side. */
 const HALO_INSET = 4;
+/**
+ * The card's clearance from every edge of the surface it floats in.
+ *
+ * 16, which is the page's own gutter, not the 12 this used to use: inside the
+ * mobile navigation drawer the card is on a 295pt surface, and a card that
+ * clears a phone's edges by less than the content beside it reads as having
+ * missed its mark. It pairs with the card's width clamp (see
+ * `--coachmark-available` below): the clamp leaves exactly this much on each
+ * side, so `shift` never has to choose which edge to honour.
+ */
+const CARD_EDGE_PADDING = 16;
 
 export function OnboardingCoachmark(props: CoachmarkProps) {
   const { onClose, onTarget } = props;
@@ -86,6 +117,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
   const held = useHeldTarget(target);
   const copy = useCrossfadedCopy(props);
   const safeArea = useSafeAreaCollisionPadding();
+  const coarsePointer = useCoarsePointer();
   const cardRef = useRef<HTMLDivElement>(null);
   const floaterRef = useRef<HTMLDivElement>(null);
   const haloRef = useRef<HTMLDivElement>(null);
@@ -172,10 +204,10 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
     const halo = haloRef.current;
     if (target === null || floater === null) return;
     const padding = {
-      top: Math.max(12, safeArea.top),
-      right: Math.max(12, safeArea.right),
-      bottom: Math.max(12, safeArea.bottom),
-      left: Math.max(12, safeArea.left),
+      top: Math.max(CARD_EDGE_PADDING, safeArea.top),
+      right: Math.max(CARD_EDGE_PADDING, safeArea.right),
+      bottom: Math.max(CARD_EDGE_PADDING, safeArea.bottom),
+      left: Math.max(CARD_EDGE_PADDING, safeArea.left),
     };
     const boundary = portal === document.body ? "clippingAncestors" : portal;
     // A step change moves the card between two live anchors, and only then
@@ -194,9 +226,26 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
     let positionRequest = 0;
     const reposition = (): void => {
       const request = ++positionRequest;
-      void computePosition(target, floater, {
+      // The card can never be wider than the surface it floats in: on the body
+      // that is the viewport, inside a portalled overlay it is that overlay.
+      // Written as a custom property because the floater is `width: max-content`
+      // and a percentage on it would resolve against nothing useful; the card
+      // one level in reads it (`first-task-guide.css`).
+      const available =
+        portal === document.body ? window.innerWidth : portal.clientWidth;
+      floater.style.setProperty("--coachmark-available", `${available}px`);
+      // The card's anchor, which is the step's target unless the step moved it
+      // off the thing it points at (see `cardAnchor`). Resolved per tick rather
+      // than once: it belongs to the same surface as the target, so it appears
+      // and leaves with it.
+      const anchorSpec = props.cardAnchor;
+      const anchor =
+        anchorSpec === null
+          ? target
+          : (portal.querySelector<HTMLElement>(anchorSpec.selector) ?? target);
+      void computePosition(anchor, floater, {
         strategy: "fixed",
-        placement: "bottom-start",
+        placement: anchorSpec?.placement ?? "bottom-start",
         // No arrow: the halo on the target is the connection, and 10px is
         // close enough to read as one gesture with it.
         middleware: [
@@ -217,7 +266,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
       stop();
       if (settle !== null) window.clearTimeout(settle);
     };
-  }, [target, portal, safeArea]);
+  }, [target, portal, safeArea, props.cardAnchor]);
 
   if (held === null) return null;
   const exiting = target === null;
@@ -288,7 +337,14 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
             aria-modal={false}
             aria-labelledby={headingId}
             aria-describedby={descriptionId}
-            aria-keyshortcuts="ArrowLeft ArrowRight Enter Escape"
+            // Withheld on a touch device, along with the keycap below: there is
+            // no Enter to press, and promising four keys that do not exist is
+            // worse than saying nothing. The listener stays armed either way -
+            // a Bluetooth keyboard on a phone still works, it is just not
+            // advertised.
+            aria-keyshortcuts={
+              coarsePointer ? undefined : "ArrowLeft ArrowRight Enter Escape"
+            }
             data-keyboard-navigation={keyboardNavigation || undefined}
             data-text-state={copy.swapping ? "out" : "in"}
             // The surface is `PopoverContent`'s, class for class: a coachmark
@@ -353,12 +409,15 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
                 </span>
                 {/* The cap rides the button's own foreground: these are plain
                     `.onboarding-button` elements, so `Kbd`'s in-Button rules
-                    never fire here. */}
-                <ShortcutHint>
-                  <Kbd aria-hidden="true" variant="inherit">
-                    ↵
-                  </Kbd>
-                </ShortcutHint>
+                    never fire here. Absent on touch, where there is no key to
+                    draw. */}
+                {coarsePointer ? null : (
+                  <ShortcutHint>
+                    <Kbd aria-hidden="true" variant="inherit">
+                      ↵
+                    </Kbd>
+                  </ShortcutHint>
+                )}
               </button>
             </div>
           </div>

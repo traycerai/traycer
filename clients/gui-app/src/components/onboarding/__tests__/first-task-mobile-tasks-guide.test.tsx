@@ -121,15 +121,30 @@ const OPEN_SHEET: Readonly<Record<string, string>> = {
   "data-state": "open",
 };
 
-function mountDrawer(markup: Readonly<Record<string, string>>): HTMLElement {
+const DRAWER_WIDTH_PX = 295;
+
+function mountDrawer(markup: Readonly<Record<string, string>>): {
+  readonly row: HTMLElement;
+  /** The drawer's own bottom strip, which is what the CARD anchors above. */
+  readonly settings: HTMLElement;
+} {
   const surface = document.createElement("div");
   for (const [name, value] of Object.entries(markup))
     surface.setAttribute(name, value);
+  // The measured width of the real drawer on an iPhone 15 (three quarters of a
+  // 393pt screen). jsdom measures nothing, so the card's width clamp has an
+  // input only if this says so.
+  Object.defineProperty(surface, "clientWidth", {
+    configurable: true,
+    value: DRAWER_WIDTH_PX,
+  });
   const row = document.createElement("button");
   row.setAttribute("data-testid", "mobile-nav-task-row");
-  surface.append(makeVisible(row));
+  const settings = document.createElement("button");
+  settings.setAttribute("data-testid", "mobile-nav-settings");
+  surface.append(makeVisible(row), makeVisible(settings));
   document.body.append(surface);
-  return row;
+  return { row, settings };
 }
 
 function Harness() {
@@ -191,12 +206,17 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     fireEvent(window, new Event("resize"));
     await screen.findByTestId("guide-coachmark");
 
-    const row = mountDrawer(OPEN_SHEET);
+    const { row, settings } = mountDrawer(OPEN_SHEET);
     useMobileNavStore.setState({ open: true });
     fireEvent(window, new Event("resize"));
 
-    await waitFor(() => expect(lastAnchor()).toBe(row));
-    await expectCardTitle("Pick up where you left off");
+    // The CARD sits above the drawer's Settings row; the halo it draws is
+    // still on the first task, which is what the step points at. Measured, a
+    // card anchored under that row covered the rows it was telling the user to
+    // tap.
+    await waitFor(() => expect(lastAnchor()).toBe(settings));
+    expect(screen.getByTestId("guide-coachmark-halo")).toBeTruthy();
+    await expectCardTitle("Resume any task");
     // Inside the drawer, not beside it: a modal surface seals every body-level
     // sibling off, so a card left at the body would be on screen and dead.
     expect(
@@ -229,15 +249,40 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     fireEvent(window, new Event("resize"));
     await screen.findByTestId("guide-coachmark");
 
-    const row = mountDrawer({ "data-overlay-surface": "open" });
+    const { row, settings } = mountDrawer({ "data-overlay-surface": "open" });
     useMobileNavStore.setState({ open: true });
     fireEvent(window, new Event("resize"));
 
-    await waitFor(() => expect(lastAnchor()).toBe(row));
+    await waitFor(() => expect(lastAnchor()).toBe(settings));
     expect(
       screen.getByTestId("guide-coachmark").closest("[data-overlay-surface]"),
     ).toBe(row.parentElement);
     expect(screen.queryByTestId("guide-coachmark-dim")).toBeNull();
+  });
+
+  // jsdom resolves no `min()`, so what is asserted is the INPUT the clamp is
+  // written against: the surface the card was portalled into, not the viewport.
+  // Measured, a 22rem card against `100vw` overhung the 295pt drawer by 145pt.
+  it("clamps its width to the surface it is portalled into", async () => {
+    mountTrigger();
+    render(<Harness />);
+    fireEvent(window, new Event("resize"));
+    await screen.findByTestId("guide-coachmark");
+
+    mountDrawer(OPEN_SHEET);
+    useMobileNavStore.setState({ open: true });
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      const floater = screen
+        .getByTestId("guide-coachmark")
+        .closest(".first-task-coachmark-floater");
+      expect(
+        floater instanceof HTMLElement
+          ? floater.style.getPropertyValue("--coachmark-available")
+          : null,
+      ).toBe(`${DRAWER_WIDTH_PX}px`);
+    });
   });
 
   it("draws nothing while the task query is still outstanding", () => {

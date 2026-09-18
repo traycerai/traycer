@@ -89,7 +89,13 @@ function GettingStartedToast() {
     const id = "traycer-getting-started";
     toast("You're all set", {
       id,
-      description: "Optional setup lives in Settings › Getting started.",
+      // `text-pretty` rather than the default: on a phone this line wraps, and
+      // the old sentence left "Getting started." alone on a second line with a
+      // ›-separated path the user cannot tap. Shorter copy, and the wrap is
+      // balanced where it does happen.
+      description: (
+        <span className="text-pretty">More setup is in Settings.</span>
+      ),
       duration: Infinity,
       closeButton: true,
       onDismiss: () => {

@@ -61,9 +61,21 @@
   width: max-content;
   max-width: 100%;
 }
-@media (max-width: 640px) {
+/* Phone: the bar is one 44pt row shared with the act's counts, and the panel
+   around it is full-bleed, so the pill carries the act's 16pt leading gutter
+   itself instead of the 2px nudge that kept its ring inside a padded scroll
+   box. `max-width` has to account for that inset or the pill overflows the
+   grid track by exactly the margin. */
+@media (max-width: 767px) {
+  .onboarding-host-control {
+    min-height: 2.75rem;
+  }
+  .onboarding-host-control [data-testid="settings-host-switcher"] {
+    min-height: 2.75rem;
+  }
   .onboarding-provider-panel > .onboarding-device-picker {
-    max-width: 100%;
+    margin-inline-start: 1rem;
+    max-width: calc(100% - 1rem);
   }
 }
 
