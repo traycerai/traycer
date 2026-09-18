@@ -403,12 +403,21 @@ describe("SweepWorktreesDialog Remove-click proof", () => {
       taskTitle: "Task",
     });
 
-    // Once the shell has opened and then closed the review, a stale second
-    // toast click must not revive it while the session is still marked open.
+    // A duplicate click while the first review is active must leave its
+    // target intact and must not activate or navigate to another Task.
+    const activeTarget = useSweepSessionStore.getState().reviewTarget;
+    fireEvent.click(screen.getByRole("button", { name: "Review sweep" }));
+    expect(testState.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(testState.openEpicFromListIntent).toHaveBeenCalledTimes(1);
+    expect(testState.navigate).not.toHaveBeenCalled();
+    expect(useSweepSessionStore.getState().reviewTarget).toBe(activeTarget);
+
+    // Once the shell has opened and then closed the review, a stale toast
+    // click must not revive it while the session is still marked open.
     useSweepSessionStore.getState().closeReview();
     useSweepSessionStore.getState().setOpen("host:host-a\nepic-1,epic-2", true);
     fireEvent.click(screen.getByRole("button", { name: "Review sweep" }));
-    expect(testState.activateTabIntent).toHaveBeenCalledTimes(2);
+    expect(testState.activateTabIntent).toHaveBeenCalledTimes(1);
     expect(useSweepSessionStore.getState().reviewTarget).toBeNull();
   });
 });

@@ -396,6 +396,16 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         ) {
           return;
         }
+        const store = useSweepSessionStore.getState();
+        // Keep an active review intact, and ignore consumed or already-open
+        // sessions before changing the current task.
+        if (
+          store.reviewTarget !== null ||
+          store.open.has(selectionKey) ||
+          !store.parked.has(selectionKey)
+        ) {
+          return;
+        }
         const activated = activateTabIntent(
           navigate,
           openEpicFromListIntent({
@@ -407,12 +417,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
           undefined,
         );
         if (!activated) return;
-        const store = useSweepSessionStore.getState();
-        // A previous toast must not open a second dialog or revive a review
-        // that has already been consumed.
-        if (store.open.has(selectionKey) || !store.parked.has(selectionKey)) {
-          return;
-        }
         store.openReview({
           sessionKey: selectionKey,
           hostId,
