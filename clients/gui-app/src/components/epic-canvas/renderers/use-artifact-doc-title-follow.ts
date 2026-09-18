@@ -198,7 +198,7 @@ export function useArtifactDocTitleFollow(params: {
       // surfaces acquired the defect this helper exists for.
       settleDetachedEpicMutation(
         persistRename({ epicId, artifactId, title }).then(
-          () => renameArtifactInTab(viewTabId, artifactId, title),
+          () => renameArtifactInTab(viewTabId, artifactId, title, null),
           () => {
             // The authority never took this title, so the tracker must not claim
             // it did: the artifact still reads the PREVIOUS title, which the
