@@ -14,34 +14,13 @@ import {
   type QueryCacheNotifyEvent,
   type QueryClient,
 } from "@tanstack/react-query";
-import {
-  spawnEpicRuntimeWorker,
-  type EpicRuntimeBodyReturnTarget,
-} from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
-import { createProcessBackedAccountingPort } from "@/stores/epics/open-epic/runtime/process-backed-accounting-port";
-import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
-import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
-import { dispatchEpicLaneUnary } from "@/stores/epics/open-epic/runtime/epic-lane-unary-dispatch";
-import {
-  classifyEpicWriteCommandFailure,
-  readWriteCommandIntent,
-} from "@/stores/epics/open-epic/runtime/epic-write-command";
-import { getEpicRuntimeWorkerFactory } from "@/lib/registries/epic-session-registry";
-import { createLateBoundProjectionTarget } from "@/stores/epics/open-epic/runtime/worker/late-bound-projection-target";
-import type { EpicRuntimeProjection } from "@/stores/epics/open-epic/runtime/epic-runtime-projection";
 import { appLogger } from "@/lib/logger";
-import {
-  createOpenEpicStore,
-  isProjectionPatch,
-  type OpenEpicState,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useAuthService, type HostRpcRegistry } from "@/lib/host";
+import { useAuthService } from "@/lib/host";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
@@ -71,16 +50,16 @@ import {
   handleStreamClients,
   isEpicSessionHandleDead,
   releaseOpenEpicSessionIfUnused,
-  trackEpicSessionHandleLiveness,
-  trackEpicSessionTransportCloseAttribution,
-  type EpicSessionTransportCloseTrigger,
 } from "@/lib/registries/epic-session-registry";
+import {
+  createEpicSessionHandle,
+  type EpicSessionRequesterTarget,
+} from "@/lib/registries/epic-session-handle-factory";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { reportEpicParkRefused, useEpicParked } from "@/lib/epics/epic-parking";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { armCarriesRootWrites } from "@/stores/epics/open-epic/runtime/epic-adapter-selection";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
-import { attachPlanRestrictedReprobe } from "@/lib/host/owned-durable-stream-client";
 import { createPlanRestrictedSessionRebuildBackoff } from "@/lib/host/plan-restricted-session-rebuild-backoff";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
@@ -111,9 +90,6 @@ type OwnerIdentityVerdict =
   | { readonly kind: "rotated" };
 
 const OWNER_IDENTITY_STABLE: OwnerIdentityVerdict = { kind: "stable" };
-
-/** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
-const EPIC_SESSION_WAKE_REASON = "user-retry";
 
 /**
  * The failure card's Retry forcing a re-dial on a transport that reports
@@ -222,9 +198,10 @@ function epicOwnershipKeyFor(
  * The handle's construction host stamp, or a throw.
  *
  * ONE copy for the two readers - the acquire arm and `adoptWinner` - which
- * used to carry the same six lines each. The stamp is written once, inside
- * `createHandle`, and it is what routes RPCs and capability answers to the
- * host that owns the stream; substituting the caller's target instead would
+ * used to carry the same six lines each. The stamp is written once, inside the
+ * session factory (`lib/registries/epic-session-handle-factory.ts`), and it is
+ * what routes RPCs and capability answers to the host that owns the stream;
+ * substituting the caller's target instead would
  * silently re-create F1, so absence is a thrown invariant rather than a
  * fallback. Reachable only if the write-once invariant broke - this map and
  * the registry that hands back warm handles live in ONE module, so no module
@@ -489,6 +466,12 @@ export function EpicSessionProvider(
   // the outgoing host then, so that read answers for it and nothing else in
   // the render path resolves the incoming one at all.
   const resolvedTargetHostClient = useHostClientForHostId(targetHostId);
+  // This provider's current pointing, handed to the session factory as the
+  // CELL it reads at call time. The resolution rule - a requester for the
+  // handle's OWN construction host, or a refusal - lives with the factory
+  // (`epicSessionRequesterForHostId`), because it is the factory's dispatchers
+  // that consume it; what stays here is the reading.
+  //
   // Read through an effect event so it is not a dependency of the session
   // effect: a handle's requester is consulted per call, and these clients
   // legitimately rotate (reconnect, identity re-point) without that being a
@@ -509,19 +492,13 @@ export function EpicSessionProvider(
   // mounted and still issuing writes on behalf of the rows it projected, and
   // re-aiming it at the incoming host is the same cross-host send pointed the
   // other way.
-  const getRequesterForHostId = useEffectEvent(
-    (hostId: string): HostClient<HostRpcRegistry> | null => {
-      if (hostId === targetHostId) return resolvedTargetHostClient;
-      if (session !== null && hostId === session.hostId) {
-        return resolvedSessionHostClient;
-      }
-      // A handle whose construction host is neither the host this provider is
-      // pointing at nor the one it is currently serving has been superseded.
-      // REFUSING is the point rather than a gap: both dispatchers answer a
-      // `null` requester with a refusal the caller can see, where falling back
-      // to "whatever is live" would BE the cross-host send.
-      return null;
-    },
+  const readRequesterTarget = useEffectEvent(
+    (): EpicSessionRequesterTarget => ({
+      targetHostId,
+      targetHostClient: resolvedTargetHostClient,
+      sessionHostId: session?.hostId ?? null,
+      sessionHostClient: resolvedSessionHostClient,
+    }),
   );
   // Owner-identity discriminator (R-1), read off THE SESSION'S host - the same
   // client the stream runs on, not the app-wide one.
@@ -768,488 +745,55 @@ export function EpicSessionProvider(
     const handleSessionAuthError = (): void => {
       onAuthError();
     };
-    const createHandle = (): OpenEpicStoreHandle => {
-      // The host THIS handle is constructed against: an alias for the run's
-      // `targetHostId`, which is already the value the transport below is
-      // opened with, the accounting port is built with, and the construction
-      // stamp is written from. Named separately because the requester it feeds
-      // has to keep meaning THE HANDLE'S host after the provider has re-pointed
-      // away from it - a bare `targetHostId` there reads as the provider's
-      // current target and is the same defect one re-point later.
-      const handleHostId = targetHostId;
-      // Before the store exists, because `persist` reads its key at creation:
-      // the bucket used to be named by the email, and re-keying without this
-      // would silently reset every install's focus state on upgrade.
-      if (sessionUserId !== null) adoptLegacyOpenEpicKey(sessionUserId);
-      // ── The session's ONE transport ──────────────────────────────────────
-      //
-      // The session OWNS its transport, and now literally rather than by there
-      // happening to be a single client. Every stream client this session
-      // builds - the `@1` arm, the records lane, the control lane, and the
-      // per-artifact body lanes - rides THIS transport's `wsStreamClient`,
-      // because `WsStreamClient` multiplexes methods over one socket and
-      // `openTransport` is not pooled. Opening one transport per client would
-      // give an epic two sockets on the lane arm and one more per open tile,
-      // which is worse than the `@1` monolith on exactly the axis the lane
-      // cutover exists to improve.
-      //
-      // It is opened HERE, before any client, because adapter selection reads
-      // this connection's negotiated method support off it and has to do so
-      // before deciding what to open. The registry only closes the handle when
-      // it DISPOSES the session, so the socket survives the MRU warm window;
-      // the durable transport's live endpoint + wake re-dial heal a host
-      // restart under a stable `hostId` on their own, and one reconnect now
-      // resumes every client riding it rather than one client each. A revived
-      // session is a NEW handle and therefore a new transport - this one is
-      // never handed on.
-      //
-      // ALWAYS opened. There used to be a branch here that skipped the
-      // transport when a test had installed a stream-factory override, on the
-      // reasoning that "the override IS a test supplying this session's
-      // stream". That branch produced a null `wsStreamClient` and the guard
-      // below then threw unconditionally, so installing the override could not
-      // do anything except fail - two comments in this one function stating
-      // opposite contracts, with the code implementing both.
-      //
-      // The seam that survives the relocation is the WORKER factory, not the
-      // stream factory: the worker builds its own typed clients over a proxied
-      // `IStreamClient`, and a factory constructed on MAIN cannot cross
-      // `postMessage` to reach it. A suite that wants to drive this session's
-      // stream supplies a fake TRANSPORT at this opener instead, and gets the
-      // real proxy path underneath it.
-      const transport = openTransport(targetHostId);
-      const wsStreamClient = transport.wsStreamClient;
-      let transportClosed = false;
-      let pendingTransportCloseTrigger: EpicSessionTransportCloseTrigger | null =
-        null;
-      let detachSessionHealthy: (() => void) | null = null;
-      // Filled once the handle exists, because the recovery IS the handle's
-      // `retryTransport`. Held in a slot rather than passed in because the
-      // subscription has to be live before then: the negative-cache adoption
-      // path can hand back an ALREADY-closed client, and `onClosed` does not
-      // retro-fire, so a deadline that landed during construction would be
-      // lost if this attached afterwards.
-      let reprobeHandle: OpenEpicStoreHandle | null = null;
-      // The handle this run stamped into `handleStreamClients`, so the close
-      // below can un-stamp it. A slot for the same reason `reprobeHandle` is
-      // one: the close is composed before the handle exists, and a
-      // construction that throws must leave no entry behind.
-      let streamStampedHandle: OpenEpicStoreHandle | null = null;
-      const detachReprobe = attachPlanRestrictedReprobe(wsStreamClient, () => {
-        const deniedHandle = reprobeHandle;
-        if (deniedHandle === null) return;
-        planRestrictedSessionRebuildBackoff.request(deniedHandle, () => {
-          // Capture this exact owner. If its replacement is denied before a
-          // delayed rung fires, the backoff replaces this callback with the
-          // newer handle's rather than calling through a mutable slot.
-          deniedHandle.retryTransport();
-        });
-      });
-      const closeSessionTransport = (
-        fallbackTrigger: EpicSessionTransportCloseTrigger,
-      ): void => {
-        if (transportClosed) return;
-        transportClosed = true;
-        // Only if it is still OURS: a repoint closes the old handle's
-        // transport after the new one has already published itself, and
-        // clearing unconditionally there would blind the silence gate to a
-        // live socket. Keyed by handle, so the two sessions cannot collide in
-        // the first place - the value check is what keeps that true if a
-        // handle is ever re-stamped.
-        if (
-          streamStampedHandle !== null &&
-          handleStreamClients.get(streamStampedHandle) === wsStreamClient
-        ) {
-          handleStreamClients.delete(streamStampedHandle);
-        }
-        // Before `transport.close()`, so the timer cannot outlive the socket
-        // it exists to rebuild.
-        detachReprobe();
-        detachSessionHealthy?.();
-        detachSessionHealthy = null;
-        // The transport owns ordering: it tears down wake/endpoint wiring
-        // before closing the socket with this attributed reason. Keeping the
-        // `durable-transport-closed` prefix preserves existing log searches.
-        const trigger = pendingTransportCloseTrigger ?? fallbackTrigger;
-        transport.closeWithReason(`durable-transport-closed:${trigger}`);
-      };
-      // EVERY construction between opening the transport and returning a
-      // handle that owns its close. A synchronous throw anywhere in here -
-      // `new Worker` refused by the runtime or CSP, an emitted worker URL
-      // that will not load, an accounting port that cannot be built -
-      // propagated with the transport already open and NO handle in
-      // existence, so neither `dispose` nor `detachTransport` could ever
-      // reach `closeSessionTransport` and the socket stayed dialling for
-      // the life of the window. The epic also failed outside the `failed`
-      // presentation, which is the state carrying the Retry affordance.
-      //
-      // Scoped to the whole span rather than to the worker spawn the
-      // symptom pointed at: the leak is a property of the WINDOW between
-      // acquiring the socket and handing back its owner, not of any one
-      // call inside it.
-      try {
-        // The four typed stream clients are NOT built here any more. They are
-        // the method-typed zod decode this relocation exists to move, so the
-        // worker builds them itself over its proxied `IStreamClient`
-        // (`buildProxiedStreamFactories`). What crosses is this session's real
-        // `wsStreamClient`, whose socket never leaves this thread.
-        //
-        // There is deliberately no "no transport" guard left. One stood here and
-        // threw, which was the right posture while a branch above could produce a
-        // null client; with that branch gone, `DurableStreamTransport` declares
-        // `wsStreamClient` non-nullable and the check became unreachable - and a
-        // dead `=== null` is what `no-unnecessary-condition` exists to reject.
-        // The property is carried by the TYPE now, which is the stronger form of
-        // the same guarantee: a runtime throw catches a null that reaches it,
-        // whereas this one cannot be constructed.
-
-        /**
-         * The books, on MAIN, and the one set for this session.
-         *
-         * Built here rather than in the store because the worker reports into
-         * them too, over the bridge - so the composition that spawns the worker
-         * is the composition that owns them.
-         */
-        const accounting = createProcessBackedAccountingPort({
-          hostId: targetHostId,
-          epicId,
-          environment: createRendererRuntimeEnvironment(),
-        });
-
-        /**
-         * The projection handlers, filled once the store exists.
-         *
-         * A slot because the two constructions are mutually dependent: the
-         * spawner reduces into handlers only the store can supply, and the store
-         * needs the port only the spawner can hand back. The worker cannot
-         * publish before its bootstrap is answered, and that happens after both
-         * lines below - so the window where this is `null` carries no traffic.
-         * It is still checked rather than asserted, because "cannot happen" is
-         * not a thing this file gets to claim about another thread.
-         */
-        // Buffers publications made before the store exists, and answers
-        // `accept` from a pure parser so a `null` there means "foreign payload"
-        // and never "no target yet". The worker composes and starts INSIDE the
-        // spawn below, so that window carries real traffic.
-        const projection = createLateBoundProjectionTarget<
-          Partial<EpicRuntimeProjection>
-        >(
-          (value) => (isProjectionPatch(value) ? value : null),
-          (reason, revision) => {
-            appLogger.warn(
-              "[open-epic] dropped a projection publication before attach",
-              { epicId, reason, revision },
-            );
-          },
-        );
-        /**
-         * The body plane's return leg, filled on the same line as the one above
-         * and `null` for the same window. The store owns the live body docs, so
-         * this is mutually dependent with the spawn in exactly the way the
-         * projection slot is.
-         */
-        // NOT buffered, and derived rather than assumed. The body return leg
-        // publishes only from observers attached inside the `body/materialize`
-        // handler (`epic-runtime-core-ports.ts` - both call sites, the cold arm
-        // and the forward-only one). A materialize is a CALL issued by the lease
-        // bridge, and the lease bridge is built by the store - so no body
-        // publication can precede the store, and this slot has no gap to lose
-        // traffic in. Contrast the projection slot above, whose producer runs
-        // during composition.
-        let bodyTarget: EpicRuntimeBodyReturnTarget | null = null;
-
-        // Created BEFORE the spawn and mapped to the handle after it, because a
-        // protocol-mismatch fatal arrives synchronously from inside
-        // `spawnEpicRuntimeWorker` - before `handle` exists. See
-        // `handleWorkerLiveness` for why this is a cell rather than a set entry.
-        const liveness = { dead: false };
-
-        const runtimeWorker = spawnEpicRuntimeWorker<
-          Partial<EpicRuntimeProjection>
-        >({
-          createWorker: getEpicRuntimeWorkerFactory(),
-          relay: {
-            log: (entry) => {
-              // The worker's own level, mapped onto the four this logger has.
-              // `debug` is the floor: a relocated module's chatter must not
-              // arrive as an error just because it crossed a thread.
-              if (entry.level === "error") {
-                appLogger.error(entry.message, entry.fields, entry.error);
-                return;
-              }
-              if (entry.level === "warn") {
-                appLogger.warn(entry.message, entry.fields);
-                return;
-              }
-              appLogger.debug(entry.message, entry.fields);
-            },
-            fatal: (message, stack) => {
-              // NOT just a log line. The runtime behind the bridge is gone, so a
-              // UI waiting on projections would wait forever - the epic reads as
-              // permanently loading. Surfaced as `failed`, which is the state
-              // that carries a retry affordance.
-              appLogger.error(
-                "[epic-session] runtime worker fatal",
-                { epicId },
-                { message, stack },
-              );
-              // RECORDED, not acted on. `failed` is the presentation that carries
-              // the Retry affordance, and Retry alone could not recover: it bumps
-              // `retryGeneration`, the acquire effect sees
-              // `current.hostId === targetHostId`, and presents this same dead
-              // handle as `ready` - the affordance unable to recover from the one
-              // failure it is shown for. Marking the handle is what lets that
-              // pass retire it instead.
-              //
-              // Marked rather than disposed HERE because this runs on a bridge
-              // callback that can be inside the registry's own acquire
-              // transaction; the acquire effect owns registry mutation and reads
-              // this on its next pass.
-              liveness.dead = true;
-              presentSession({
-                kind: "failed",
-                targetHostId,
-                originalHostId: originalHostIdRef.current,
-              });
-            },
-          },
-          // Classified HERE, on main: an `Error` does not survive structured
-          // clone, so the worker receives the classifier's own union.
-          writeCommand: async (commandId, intent) => {
-            const narrowed = readWriteCommandIntent(intent);
-            if (narrowed === null) {
-              return {
-                ok: false,
-                failure: {
-                  kind: "rejected",
-                  resolution: {
-                    kind: "rejected",
-                    code: "RPC_ERROR",
-                    reason: "unrecognised write command intent",
-                    retryable: false,
-                  },
-                },
-              };
-            }
-            try {
-              const sent = await dispatchEpicWriteCommand(
-                {
-                  epicId,
-                  requester: () => getRequesterForHostId(handleHostId),
-                },
-                commandId,
-                narrowed,
-              );
-              return { ok: true, hostId: sent.hostId };
-            } catch (cause: unknown) {
-              return {
-                ok: false,
-                failure: classifyEpicWriteCommandFailure(cause),
-              };
-            }
-          },
-          // Reduced HERE, on main, for the same reason `writeCommand` is: an
-          // `Error` does not survive structured clone.
-          laneUnary: (request) =>
-            dispatchEpicLaneUnary(
-              { epicId, requester: () => getRequesterForHostId(handleHostId) },
-              request,
-            ),
-          streams: wsStreamClient,
-          // The SAME object as `streams`, narrowed to the two members the
-          // manifest is built from - see the option's own doc for why the two
-          // are separate parameters rather than one widened one.
-          methodSupport: wsStreamClient,
-          accounting,
-          projection: projection.handlers,
-          body: {
-            applyDocUpdate: (docKey, update) => {
-              bodyTarget?.applyDocUpdate(docKey, update);
-            },
-            applyAwareness: (docKey, frame) => {
-              bodyTarget?.applyAwareness(docKey, frame);
-            },
-          },
-          epicId,
-          // The host this session was established against, which is the same
-          // value the accounting port is built with above. The worker's
-          // write-command queue reads it as its send gate - see
-          // `RuntimeWorkerBootstrap.hostId`.
-          hostId: targetHostId,
-          windowLabel: epicId,
-        });
-
-        const created = createOpenEpicStore({
-          epicId,
-          userId: sessionUserId,
-          // The same value the runtime binding above was built with - see its
-          // own comment. Carried onto the handle so the registry's cap-guard
-          // can tell whether the activity plane speaks for this session.
-          hostId: handleHostId,
-          accounting,
-          // The rebuild half of the plan-denial reprobe. The store decides
-          // WHETHER (it owns the dirtiness that makes a rebuild lossy here);
-          // this decides HOW, because the transport is the provider's.
-          //
-          // Retiring and re-acquiring rather than reconnecting: the closed
-          // client cannot acquire the negative cache's controlled fresh
-          // session, which is the whole reason the deadline exists. Marking
-          // the handle dead is what lets the acquire pass RETIRE it - without
-          // it that pass sees `current.hostId === targetHostId` and re-presents
-          // this same closed handle as `ready`, which is the failure mode the
-          // worker-fatal path above records for the user's own Retry.
-          //
-          // No presentation is written here. A clean session rebuilding after
-          // a deadline the user never saw should not flash a failure at them;
-          // the acquire pass presents `establishing` on its own.
-          onRetryTransport: () => {
-            liveness.dead = true;
-            setRetryGeneration((generation) => generation + 1);
-          },
-          // THIS session's socket, never the app-wide one. Every surface owns
-          // its own transport - a chat opens one per session, and this opener
-          // holds the epic's - so a wake resolved from anywhere else would
-          // collapse the backoff on a connection the user is not waiting for
-          // and leave theirs sitting out its delay. `probeFirst: false`
-          // because a person pressing a button is demanding a re-dial, and the
-          // probe-first flavour answers a live-but-stuck socket with nothing.
-          onWakeTransport: () => {
-            wsStreamClient.reconnectAll(EPIC_SESSION_WAKE_REASON, {
-              probeFirst: false,
-              wakeProbe: null,
-            });
-          },
-          runtime: {
-            port: runtimeWorker.port,
-            command: (command) => {
-              runtimeWorker.command(command);
-            },
-            awarenessOut: (docKey, frame, localClientId) => {
-              runtimeWorker.awarenessOut(docKey, frame, localClientId);
-            },
-            currentUser: (nextUserId) => {
-              runtimeWorker.currentUser(nextUserId);
-            },
-            detach: () => {
-              runtimeWorker.detach();
-            },
-            dispose: () => {
-              runtimeWorker.dispose();
-            },
-          },
-        });
-        projection.attach(created.projection);
-        bodyTarget = created.body;
-
-        /**
-         * The UNAUTHORIZED revalidate, delivered by the PROJECTION rather than by
-         * a callback.
-         *
-         * `onAuthError` fired from the control replica, which is worker-side now.
-         * Its own comment says what it is: "The stream owns UNAUTHORIZED recovery
-         * now: it stays 'reconnecting' and self-revalidates … keep the revalidate
-         * as the sign-out cascade's NET (single-flight, a no-op once already
-         * settled)." A net whose trigger is single-flight and idempotent does not
-         * need callback timing, and the same branch that called it publishes
-         * `snapshotFetchError` one line above - so the fact already crosses.
-         *
-         * Filtered on the CODE. All three branches of that handler publish a
-         * snapshot error; only UNAUTHORIZED is the sign-out cascade's business,
-         * and triggering a revalidate on an INCOMPATIBLE close would be a second
-         * bug wearing this one's clothes.
-         */
-        // Not unsubscribed explicitly: the subscription's lifetime IS this
-        // store's, and the store is what the registry disposes. An unsubscribe
-        // held here would be a second lifetime to keep in step with the first.
-        let revalidatedForUnauthorized = false;
-        created.store.subscribe((state) => {
-          if (state.snapshotFetchError?.code !== "UNAUTHORIZED") {
-            // Re-armed once the error clears, so a later UNAUTHORIZED after a
-            // recovery still reaches the net.
-            revalidatedForUnauthorized = false;
-            return;
-          }
-          // The projection republishes on every publish, not only on change, so
-          // without this the single-flight would be asked once per slice.
-          if (revalidatedForUnauthorized) return;
-          revalidatedForUnauthorized = true;
-          handleSessionAuthError();
-        });
-        const noteSessionHealth = (state: OpenEpicState): void => {
-          if (!state.snapshotLoaded || state.hostTransportStatus !== "open") {
-            return;
-          }
-          // Only a loaded replica on an open transport proves that a previous
-          // plan denial ended. A construction or a transient `connecting`
-          // projection must not reset the ladder.
+    // The mechanical construction kernel - transport, worker, store, close
+    // attribution, liveness and the two construction stamps - lives in
+    // `lib/registries/epic-session-handle-factory.ts` now, beside the registry
+    // whose warm handles those stamps describe. What is assembled here is the
+    // set of ports it used to capture off this component, and nothing about
+    // WHEN a handle is built, adopted, re-pointed or retired has moved with it:
+    // both call sites below are unchanged.
+    const createHandle = (): OpenEpicStoreHandle =>
+      createEpicSessionHandle({
+        epicId,
+        // The host THIS handle is constructed against: the run's
+        // `targetHostId`. Passed as the handle's own host because the requester
+        // it feeds has to keep meaning THE HANDLE'S host after this provider
+        // has re-pointed away from it - a read of the current target there is
+        // the same defect one re-point later.
+        hostId: targetHostId,
+        userId: sessionUserId,
+        openTransport,
+        readRequesterTarget,
+        onAuthError: handleSessionAuthError,
+        adoptLegacyPersistKey: adoptLegacyOpenEpicKey,
+        // The ladder itself stays with this provider (one controller per
+        // mounted provider, cancelled on scope change), so what crosses is the
+        // denial and the handle that owns it.
+        onPlanRestrictedDenial: (owner) => {
+          planRestrictedSessionRebuildBackoff.request(owner, () => {
+            owner.retryTransport();
+          });
+        },
+        markHealthy: () => {
           planRestrictedSessionRebuildBackoff.markHealthy();
-        };
-        detachSessionHealthy = created.store.subscribe(noteSessionHealth);
-        noteSessionHealth(created.store.getState());
-
-        // Construction-honest stamp, written exactly once: `streamClientFactory`
-        // above captures this run's `targetHostId` into the transport it opens,
-        // so the stamp IS the handle's transport binding. Nothing re-stamps a
-        // live handle - a label that can drift from the binding routes RPCs and
-        // capability answers to a host that does not own the stream (F1).
-        // The transport outlives every client on it, so the two lifetimes that
-        // end the session have to close it: dispose (the registry evicting) and
-        // detachTransport (a retained-dirty buffer that must stop dialling a host
-        // this window has left). Composed here rather than inside the store
-        // because the transport is the PROVIDER's to own - the store knows about
-        // clients, not sockets - and idempotently, so either path may run first
-        // or both may run.
-        const handle: OpenEpicStoreHandle = {
-          ...created,
-          dispose: () => {
-            created.dispose();
-            closeSessionTransport("tab-close");
-          },
-          detachTransport: () => {
-            created.detachTransport();
-            closeSessionTransport("repoint");
-          },
-        };
-        // Stamped on the handle that ESCAPES, not on the inner store object:
-        // `handleHostIds` is keyed by identity, and stamping `created` while
-        // returning a wrapper leaves every lookup answering "no construction host
-        // stamp" - which is a thrown invariant, not a silent miss, because the
-        // stamp is what routes RPCs and capability answers to the host that owns
-        // the stream (F1).
-        handleHostIds.set(handle, targetHostId);
-        // Stamped on the SAME escaping handle and for the same reason: this is
-        // the socket `retryRepoint`'s silence gate asks, and it must travel
-        // with the session rather than with the provider that happened to
-        // build it - a warm remount and an adopted sibling both reach this
-        // handle and neither re-runs this factory. Removed by
-        // `closeSessionTransport`.
-        handleStreamClients.set(handle, wsStreamClient);
-        streamStampedHandle = handle;
-        // Armed now that there is something to rebuild. `retryTransport` is
-        // the handle's, not `created`'s: the wrapper is what owns this
-        // session's transport close, and a reprobe that rebuilt the inner
-        // store would leave the socket behind.
-        reprobeHandle = handle;
-        // The same cell the fatal relay above writes, so a death that happened
-        // before this line is already recorded on the handle the moment it
-        // exists.
-        trackEpicSessionHandleLiveness(handle, liveness);
-        trackEpicSessionTransportCloseAttribution(handle, (trigger) => {
-          // The call site with the most specific product intent runs before
-          // the registry's generic disposal mapping. First-wins preserves it
-          // through the later onBeforeDispose callback.
-          if (pendingTransportCloseTrigger === null) {
-            pendingTransportCloseTrigger = trigger;
-          }
-        });
-        return handle;
-      } catch (error: unknown) {
-        // Idempotent, and the handle's own paths are too, so a later
-        // `dispose` on a handle that never escaped cannot double-close.
-        closeSessionTransport("construction-failed");
-        throw error;
-      }
-    };
+        },
+        // `failed` is the presentation that carries the Retry affordance; the
+        // factory has already marked the handle so the next acquisition pass
+        // retires it rather than re-presenting the corpse as `ready`.
+        onRuntimeFatal: () => {
+          presentSession({
+            kind: "failed",
+            targetHostId,
+            originalHostId: originalHostIdRef.current,
+          });
+        },
+        // No presentation here. A clean session rebuilding after a deadline the
+        // user never saw should not flash a failure at them; the acquire pass
+        // presents `establishing` on its own.
+        onRetryTransport: () => {
+          setRetryGeneration((generation) => generation + 1);
+        },
+      });
     let current = sessionRef.current;
     // A handle whose runtime worker died is not a session; it is a corpse that
     // every arm below would treat as live - the fast path would present it
