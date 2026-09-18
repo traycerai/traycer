@@ -79,6 +79,22 @@ import { providerSettingsTabSchema } from "@traycer/protocol/host/provider-nativ
  *     false, and it is the shape of error worth guarding against here: the path
  *     was read down to `.server` and the reasoning stopped there, when the two
  *     `[]` segments that decide the answer come after it.
+ *   - `profiles[].rateLimitLimitedScopes[].severity` needs MORE than a pin when
+ *     you come to freeze it. The advice above ("a leaf got pinned, delete the
+ *     line") is the whole interaction most entries need; this one is the
+ *     exception, and the caveat is repeated here because that is the file you
+ *     will have open, not `frozen-line-projection.ts`.
+ *
+ *     Pinning it arms the projection to DROP scopes, and for this field a drop
+ *     is a false statement rather than a smaller truth: `null` means "could not
+ *     read", `[]` means "read fine, nothing limited", and the consumer
+ *     (`rate-limit-scope-match.ts`) filters by model family and THEN tests
+ *     `length === 0`. Drop the one scope that gated the selected model and the
+ *     UI says "not limited" about a model that is. The projection's
+ *     never-empty-an-array rule does NOT cover this - it is emptiness-shaped
+ *     and the hazard is field-shaped. Pin it together with a way for this field
+ *     to refuse dropping, or not at all.
+ *
  *   - `managedVersions.available[].installState|4.reason` reaches
  *     `providerManagedInstallErrorReasonSchema` - the SAME enum the row's own
  *     `managedInstallState` was just pinned away from. One field being frozen
@@ -284,6 +300,12 @@ function collectEnums(
       // NOT an inert leaf, despite looking like one: its `parts` interleave
       // string literals with schemas, and a schema here constrains the wire
       // exactly as a bare enum would.
+      //
+      // The marker indexes into `parts` INCLUDING the literal segments, so
+      // adding a prefix renumbers it - `slug`1`` becomes `slug`2`` with nothing
+      // having actually moved. Acceptable because the index is what makes two
+      // schema parts in one template distinguishable; just read a change here
+      // as possible renumbering before reading it as a new path.
       for (const [index, part] of (def.parts ?? []).entries()) {
         if (isSchemaPart(part)) {
           collectEnums(part, `${path}\`${index}\``, found, depth + 1);
@@ -323,6 +345,13 @@ function collectEnums(
       // silently-returning walk reports no path and passes while the leak is
       // real. None of those kinds is in these rows today - which is exactly
       // when to make that a checked fact rather than a standing assumption.
+      //
+      // `def.checks` is the key that LOOKS like a remaining hole and is not.
+      // Checks carry functions, numbers and regexes - never schemas (measured:
+      // 2078 nodes walked across these rows, 50 carry checks, 0 schema-bearing)
+      // - and walking them would be actively wrong, because most builtin checks
+      // report `_zod.def.type === undefined`, which is not in the set below and
+      // would make this throw on something as ordinary as `z.number().min(1)`.
       if (!INERT_LEAF_KINDS.has(def.type)) {
         throw new Error(
           `unhandled schema kind "${def.type}" at ${path || "<root>"} - teach ` +

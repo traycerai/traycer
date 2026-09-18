@@ -261,6 +261,41 @@ describe("projectOntoFrozenLine", () => {
     }
   });
 
+  it("lets an arm needing NO repair compete, rather than win outright", () => {
+    // The identity short-circuit used to return `value` the moment any arm
+    // accepted it unchanged, on the reasoning that "identity means the value
+    // already belongs to it". That is the same mistake as scoring the arm
+    // instead of the union: belonging to SOME arm says nothing about what
+    // first-match resolution of the UNREPAIRED value retains - and it threw
+    // away a better candidate the loop had already computed.
+    const armP = z.object({
+      items: z.array(z.enum(["a"])),
+      extra: z.array(z.enum(["x"])),
+    });
+    const armQ = z.object({ items: z.array(z.enum(["a", "b"])) });
+    const union = z.union([armP, armQ]);
+    const value = { items: ["a"], extra: ["x", "y"] };
+
+    // armQ accepts `value` untouched, so the short-circuit would have fired
+    // here and served one element. armP's repair survives the union with two.
+    const served = union.safeParse(projectOntoFrozenLine(union, value));
+    expect(served.success).toBe(true);
+    if (!served.success) return;
+    expect(served.data).toEqual({ items: ["a"], extra: ["x"] });
+  });
+
+  it("still returns an undrifted value by identity, via the tie-break", () => {
+    // Removing the short-circuit must not cost the no-copy property: when
+    // nothing needed repairing the unrepaired value ties on score and the
+    // tie-break prefers it, so the caller still gets the same object back.
+    const union = z.union([
+      z.object({ items: z.array(z.enum(["a"])) }),
+      z.object({ items: z.array(z.enum(["a", "b"])) }),
+    ]);
+    const clean = { items: ["a"] };
+    expect(projectOntoFrozenLine(union, clean)).toBe(clean);
+  });
+
   it("is scored on what the UNION resolves to, not on the arm that won", () => {
     // Every union test above asserts on the PROJECTION. That is the wrong end
     // of the pipe: the caller re-parses through the same union, and a union
