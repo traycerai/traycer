@@ -8,39 +8,41 @@ import {
   type DesktopHistoryDirection,
   type DesktopHistoryGestureView,
 } from "@/components/layout/shell/desktop-history-gesture";
+import { claimBlockingLayer } from "@/components/layout/shell/blocking-layer-claim";
 
 /**
- * Dispatched straight at `document`, where the recognizer listens in the
- * capture phase, with `target` overridden via `defineProperty` - the same
- * technique `shell-gestures.test.tsx` uses for touch/pointer events, applied
- * here to `WheelEvent`, which jsdom constructs but never assigns a `target`
- * to outside a real dispatch off an attached node.
+ * Dispatched on the real, attached `target` itself, with `composed: true`,
+ * and left to propagate up to `document` - where the recognizer listens in
+ * the capture phase - the same way a real wheel event would. The recognizer
+ * reads `event.composedPath()[0] ?? event.target` to resolve ownership
+ * (desktop-history-gesture.ts), and both of those come from the DOM's own
+ * dispatch here rather than a faked EventTarget: a `document.dispatchEvent`
+ * with only `target` overridden via `defineProperty` leaves `composedPath()`
+ * pointing at `document` itself (not an Element), which silently breaks
+ * every ownership check downstream of it.
  */
 function dispatchWheel(options: {
   readonly deltaX: number;
   readonly deltaY: number;
-  readonly target: EventTarget;
+  readonly target: Element;
   readonly cancelable: boolean;
   readonly deltaMode: number;
   readonly ctrlKey: boolean;
 }): WheelEvent {
   const event = new WheelEvent("wheel", {
     bubbles: true,
+    composed: true,
     cancelable: options.cancelable,
     deltaX: options.deltaX,
     deltaY: options.deltaY,
     deltaMode: options.deltaMode,
     ctrlKey: options.ctrlKey,
   });
-  Object.defineProperty(event, "target", {
-    value: options.target,
-    configurable: true,
-  });
-  document.dispatchEvent(event);
+  options.target.dispatchEvent(event);
   return event;
 }
 
-function horizontalWheel(deltaX: number, target: EventTarget): WheelEvent {
+function horizontalWheel(deltaX: number, target: Element): WheelEvent {
   return dispatchWheel({
     deltaX,
     deltaY: 0,
@@ -71,7 +73,7 @@ const ACTIVATION_PX = DESKTOP_HISTORY_GESTURE.intentPx + 8;
 function driveToTravel(
   direction: DesktopHistoryDirection,
   totalTravelPx: number,
-  target: EventTarget,
+  target: Element,
 ): void {
   horizontalWheel(deltaXToward(direction, ACTIVATION_PX), target);
   const remaining = totalTravelPx - ACTIVATION_PX;
@@ -340,6 +342,174 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
   });
 });
 
+// The layer-blocking checks the recognizer defers to (desktop-history-gesture-ownership.ts's
+// desktopHistoryLayerBlocksNavigation) are exercised here through the full
+// recognizer rather than in isolation, since it is only ever consulted from
+// inside blocksNavigation().
+describe("route modals, nested dialogs, and explicit blocking claims", () => {
+  afterEach(() => {
+    document.body.style.pointerEvents = "";
+  });
+
+  function appendLayer(options: {
+    readonly role: string;
+    readonly historySurface?: "allowed" | "blocked";
+    readonly pointerEvents?: "auto" | "none";
+    readonly dataState?: string;
+  }): HTMLElement {
+    const layer = document.createElement("div");
+    layer.setAttribute("role", options.role);
+    if (options.historySurface !== undefined)
+      layer.setAttribute(
+        "data-history-navigation-surface",
+        options.historySurface,
+      );
+    // `pointer-events` inherits, so a locked body would otherwise leak "none"
+    // onto a plain child div. Real Radix Content sets its own pointer-events
+    // explicitly to stay interactive under that same lock - default every
+    // fixture layer to that same explicit "auto" so it models the real DOM
+    // instead of a bare div that happens to inherit the wrong value.
+    layer.style.pointerEvents = options.pointerEvents ?? "auto";
+    if (options.dataState !== undefined)
+      layer.setAttribute("data-state", options.dataState);
+    document.body.appendChild(layer);
+    return layer;
+  }
+
+  function expectRouteBackedModalAllows(
+    direction: DesktopHistoryDirection,
+  ): void {
+    document.body.style.pointerEvents = "none"; // Radix's modal body lock
+    appendLayer({ role: "dialog", historySurface: "allowed" });
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel(direction, DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([direction]);
+  }
+
+  it("allows back while a route-backed settings/history surface is the only layer open, even though it locks the body like an ordinary modal", () => {
+    expectRouteBackedModalAllows("back");
+  });
+
+  it("allows forward while a route-backed settings/history surface is the only layer open, even though it locks the body like an ordinary modal", () => {
+    expectRouteBackedModalAllows("forward");
+  });
+
+  it("blocks navigation while the route surface is explicitly marked blocked, as SystemTabModalSurface does while the theme editor is open", () => {
+    appendLayer({ role: "dialog", historySurface: "blocked" });
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  it("blocks navigation when a nested decision dialog sits above an allowed route surface", () => {
+    appendLayer({ role: "dialog", historySurface: "allowed" }); // the Settings modal
+    appendLayer({ role: "alertdialog" }); // an unmarked confirm dialog stacked on top
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  it("blocks navigation when a menu sits above an allowed route surface", () => {
+    appendLayer({ role: "dialog", historySurface: "allowed" });
+    appendLayer({ role: "menu" });
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  it("blocks navigation when a nested modal menu disables pointer events on the allowed route surface underneath it", () => {
+    appendLayer({
+      role: "dialog",
+      historySurface: "allowed",
+      pointerEvents: "none",
+    });
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  it("does not block navigation over an inline role=listbox (search results, a combobox's own results list) that is not a popup", () => {
+    const inline = document.createElement("div");
+    inline.setAttribute("role", "listbox");
+    document.body.appendChild(inline);
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+
+  it("blocks navigation while a real popup listbox (a shadcn Select's data-slot=select-content) is open", () => {
+    const popup = document.createElement("div");
+    popup.setAttribute("role", "listbox");
+    popup.setAttribute("data-slot", "select-content");
+    document.body.appendChild(popup);
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  it("blocks navigation while a listbox popover sits inside a Radix popper content wrapper", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-radix-popper-content-wrapper", "");
+    document.body.appendChild(wrapper);
+    const popup = document.createElement("div");
+    popup.setAttribute("role", "listbox");
+    wrapper.appendChild(popup);
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+  });
+
+  it("ignores a closed/exiting dialog layer left in the DOM mid-animation", () => {
+    document.body.style.pointerEvents = "none";
+    appendLayer({ role: "dialog", historySurface: "allowed" });
+    appendLayer({ role: "dialog", dataState: "closed" }); // Radix leaves this during its exit animation
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual(["forward"]);
+  });
+
+  it("blocks navigation via an explicit blocking-layer claim even with no dialog markup in the DOM, then allows it again once released", () => {
+    const release = claimBlockingLayer();
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    expect(mounted.probe.navigations).toEqual([]);
+
+    release();
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+});
+
 describe("a stale origin or destination blocks the commit even past the threshold", () => {
   it("refuses to commit when the origin route changed mid-gesture", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
@@ -448,6 +618,50 @@ describe("blur, Escape, and pointerdown cancel a live gesture", () => {
     expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
   });
 
+  it("stops Escape from reaching the route modal's own dismiss handler while a gesture is actively navigating", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("forward", 60, document.body);
+
+    // Registered after the recognizer's own keydown listener, the same order a
+    // route modal's dismissable-layer handler mounts in relative to the
+    // document-level recognizer installed near the app root.
+    const modalEscapeHandler = vi.fn();
+    document.addEventListener("keydown", modalEscapeHandler);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(modalEscapeHandler).not.toHaveBeenCalled();
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
+
+    document.removeEventListener("keydown", modalEscapeHandler);
+  });
+
+  it("leaves Escape to the route modal's own dismiss handler when no gesture is active", () => {
+    mountGesture(DEFAULT_MOUNT); // no wheel driven - sequence stays null
+
+    const modalEscapeHandler = vi.fn();
+    document.addEventListener("keydown", modalEscapeHandler);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(modalEscapeHandler).toHaveBeenCalledTimes(1);
+
+    document.removeEventListener("keydown", modalEscapeHandler);
+  });
+
   it("drops a not-yet-activated gesture on pointerdown, leaving the next gesture unaffected", () => {
     const mounted = mountGesture(DEFAULT_MOUNT);
     const target = document.body;
@@ -532,6 +746,50 @@ describe("the momentum tail after a commit", () => {
     expect(zoomDuringDrain.defaultPrevented).toBe(false);
     expect(mounted.probe.navigations).toEqual(["forward"]);
   });
+
+  it("keeps draining through a tail longer than the quiet window as long as new wheel events keep arriving just inside it", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const target = document.body;
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+    expect(mounted.probe.navigations).toEqual(["back"]);
+
+    // Cumulative elapsed time across this loop is several multiples of
+    // tailMs, but the gap between any two consecutive events never reaches
+    // it - so the tail must never go quiet and reset() must never fire.
+    for (let i = 0; i < 5; i += 1) {
+      vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs - 20);
+      const trailing = horizontalWheel(deltaXToward("back", 2), target);
+      expect(trailing.defaultPrevented).toBe(true);
+    }
+    expect(mounted.probe.navigations).toEqual(["back"]);
+
+    // Now let an actual quiet gap pass.
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.tailMs);
+    expect(mounted.probe.views.at(-1)).toBeNull();
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+});
+
+it("cleanup during the momentum tail after a commit stops the drain and clears the in-flight state", () => {
+  const mounted = mountGesture(DEFAULT_MOUNT);
+  const target = document.body;
+  driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, target);
+  vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+  expect(mounted.probe.navigations).toEqual(["back"]);
+
+  mounted.uninstall();
+  expect(mounted.probe.views.at(-1)).toBeNull();
+
+  // With the listeners removed, a trailing momentum wheel event is no longer
+  // consumed and the tail cannot re-arm.
+  const trailing = horizontalWheel(deltaXToward("back", 20), target);
+  expect(trailing.defaultPrevented).toBe(false);
+
+  vi.advanceTimersByTime(
+    DESKTOP_HISTORY_GESTURE.tailMs + DESKTOP_HISTORY_GESTURE.settleMs,
+  );
+  expect(mounted.probe.navigations).toEqual(["back"]);
 });
 
 it("cleanup removes every listener and clears an in-flight gesture", () => {
@@ -666,5 +924,164 @@ describe("wheel ownership decides who gets the whole sequence", () => {
     vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
 
     expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+
+  // Content that fits exactly has nothing to scroll, so it must not suppress
+  // navigation - including a terminal, which renders inside a scrollable
+  // container whether or not its content currently overflows it.
+  it("still claims the sequence over a terminal container whose content currently fits with nothing to scroll", () => {
+    const terminal = document.createElement("div");
+    terminal.className = "xterm terminal";
+    terminal.style.overflowX = "auto";
+    document.body.appendChild(terminal);
+    Object.defineProperty(terminal, "scrollWidth", {
+      value: 300,
+      configurable: true,
+    });
+    Object.defineProperty(terminal, "clientWidth", {
+      value: 300,
+      configurable: true,
+    });
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("forward", DESKTOP_HISTORY_GESTURE.commitPx, terminal);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual(["forward"]);
+  });
+
+  // A 1px rounding overflow (scrollWidth exceeding clientWidth by no more than
+  // the tolerance ownsDesktopHorizontalWheel allows) still reads as fitting.
+  it("still claims the sequence over a surface only 1px over its client width", () => {
+    const rail = document.createElement("div");
+    rail.style.overflowX = "auto";
+    document.body.appendChild(rail);
+    Object.defineProperty(rail, "scrollWidth", {
+      value: 301,
+      configurable: true,
+    });
+    Object.defineProperty(rail, "clientWidth", {
+      value: 300,
+      configurable: true,
+    });
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    driveToTravel("back", DESKTOP_HISTORY_GESTURE.commitPx, rail);
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+
+  // Ownership is sampled once, off the first event of the sequence - a rail
+  // reaching its scroll boundary mid-drag must not hand the rest of that same
+  // sequence over to navigation.
+  it("keeps a scrollable rail's ownership as content for the whole sequence, even after it reaches its scroll boundary mid-drag", () => {
+    const rail = document.createElement("div");
+    rail.style.overflowX = "auto";
+    document.body.appendChild(rail);
+    Object.defineProperty(rail, "scrollWidth", {
+      value: 400,
+      configurable: true,
+    });
+    Object.defineProperty(rail, "clientWidth", {
+      value: 300,
+      configurable: true,
+    });
+    rail.scrollLeft = 0;
+
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    horizontalWheel(deltaXToward("back", ACTIVATION_PX), rail);
+    rail.scrollLeft = 100; // now sits at its scroll boundary
+    horizontalWheel(
+      deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
+      rail,
+    );
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
+  });
+});
+
+// Ownership is decided entirely off the sequence's FIRST wheel event
+// (installDesktopHistoryGesture's `sequence === null` branch), which reads
+// `event.composedPath()[0] ?? event.target` rather than `event.target`
+// alone. Outside an open shadow root, `event.target` is retargeted to the
+// shadow HOST (per the DOM's shadow-retargeting algorithm), which would
+// otherwise hide the real horizontally-scrollable element inside it (a
+// Pierre diff viewer, for example) from ownsDesktopHorizontalWheel.
+// `horizontalWheel` already dispatches on the real, attached target with
+// `composed: true`, so pointing it at the shadow-root inner element here
+// exercises the DOM's own retargeting/composedPath - no separate helper
+// needed. Only the first event of a sequence needs the real inner element:
+// once ownership is fixed, later events don't consult either.
+describe("wheel events originating inside an open shadow root", () => {
+  function buildShadowScroller(options: {
+    readonly overflow: boolean;
+    readonly ownerHost?: boolean;
+  }): { readonly host: HTMLElement; readonly inner: HTMLElement } {
+    const host = document.createElement("div");
+    if (options.ownerHost === true)
+      host.setAttribute("data-history-gesture-owner", "");
+    document.body.appendChild(host);
+    const shadowRoot = host.attachShadow({ mode: "open" });
+    const inner = document.createElement("div");
+    inner.style.overflowX = "auto";
+    shadowRoot.appendChild(inner);
+    Object.defineProperty(inner, "scrollWidth", {
+      value: options.overflow ? 600 : 300,
+      configurable: true,
+    });
+    Object.defineProperty(inner, "clientWidth", {
+      value: 300,
+      configurable: true,
+    });
+    return { host, inner };
+  }
+
+  it("keeps a horizontally-overflowing scroller inside a shadow root owned by content, reading composedPath's real innermost element rather than the retargeted host", () => {
+    const { host, inner } = buildShadowScroller({ overflow: true });
+    const mounted = mountGesture(DEFAULT_MOUNT);
+
+    horizontalWheel(deltaXToward("back", ACTIVATION_PX), inner);
+    horizontalWheel(
+      deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
+      host,
+    );
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(mounted.probe.views.some((view) => view !== null)).toBe(false);
+  });
+
+  it("allows navigation over a shadow-root inner container that currently fits with nothing to scroll", () => {
+    const { host, inner } = buildShadowScroller({ overflow: false });
+    const mounted = mountGesture(DEFAULT_MOUNT);
+
+    horizontalWheel(deltaXToward("forward", ACTIVATION_PX), inner);
+    horizontalWheel(
+      deltaXToward("forward", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
+      host,
+    );
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual(["forward"]);
+  });
+
+  it("still owns the sequence when the gesture-owner marker sits on the shadow host, crossed from the shadow-root inner target via getRootNode()", () => {
+    const { host, inner } = buildShadowScroller({
+      overflow: false,
+      ownerHost: true,
+    });
+    const mounted = mountGesture(DEFAULT_MOUNT);
+
+    horizontalWheel(deltaXToward("back", ACTIVATION_PX), inner);
+    horizontalWheel(
+      deltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx - ACTIVATION_PX),
+      host,
+    );
+    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.releaseMs);
+
+    expect(mounted.probe.navigations).toEqual([]);
   });
 });

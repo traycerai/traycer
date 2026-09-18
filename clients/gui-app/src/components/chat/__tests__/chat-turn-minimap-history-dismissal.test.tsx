@@ -170,6 +170,28 @@ describe("ChatTurnMinimap dismissal on real router.history navigation", () => {
     expect(screen.getByTestId("chat-turn-minimap-card")).toBeTruthy();
   });
 
+  // The href-only comparison used to miss this: A -> B -> A (a fresh push,
+  // not "back", so it is a NEW entry with its own __TSR_key) -> open the list
+  // here -> back TWO steps, skipping the closed "/chat-b" entry entirely and
+  // landing on the ORIGINAL "/chat-a" entry. Same href as origin, but an
+  // older entry with a different key - the list must still close.
+  it("closes the open list when back navigation skips over a closed entry and lands on an older entry with the same href", async () => {
+    const { router } = renderMinimap();
+    act(() => {
+      router.history.push("/chat-b");
+    });
+    act(() => {
+      router.history.push("/chat-a");
+    });
+    await openMinimap();
+
+    act(() => {
+      router.history.go(-2);
+    });
+
+    expect(screen.queryByTestId("chat-turn-minimap-card")).toBeNull();
+  });
+
   it("leaves the list open when it was never opened for a route that happens to change", async () => {
     const { router } = renderMinimap();
     await flushFrame();

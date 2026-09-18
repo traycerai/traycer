@@ -135,8 +135,10 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   useEffect(() => {
     if (!open || !hasRouterHistory(router)) return;
     const origin = router.history.location.href;
+    const originKey = router.history.location.state.__TSR_key;
     return router.history.subscribe(({ location }) => {
-      if (location.href !== origin) setOpen(false);
+      if (location.href !== origin || location.state.__TSR_key !== originKey)
+        setOpen(false);
     });
   }, [open, router]);
 

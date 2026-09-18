@@ -3,16 +3,19 @@
   width: 72px;
   height: 72px;
   will-change: transform;
+  transition:
+    border-color 100ms ease-out,
+    color 100ms ease-out;
+}
+
+.desktop-history-tint {
+  transition: opacity 100ms ease-out;
 }
 
 .desktop-history-arrow {
   transition:
     scale 100ms ease-out,
     color 100ms ease-out;
-}
-
-[data-phase="canceling"] .desktop-history-cap {
-  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.25, 1);
 }
 
 [data-phase="committed"].desktop-history-overlay {
@@ -29,8 +32,19 @@
   }
 }
 
+[data-reduce-panel-motion] .desktop-history-cap,
+[data-reduce-panel-motion] .desktop-history-tint,
+[data-reduce-panel-motion] .desktop-history-arrow {
+  transition: none;
+}
+
+[data-reduce-panel-motion] [data-phase="committed"].desktop-history-overlay {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .desktop-history-cap,
+  .desktop-history-tint,
   .desktop-history-arrow {
     transition: none !important;
   }

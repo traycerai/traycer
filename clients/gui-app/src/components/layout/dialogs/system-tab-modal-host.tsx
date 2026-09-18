@@ -95,6 +95,7 @@ export function SystemTabModalSurface(
       dataAttributes={{
         "data-leader-scope": LEADER_SCOPE_SETTINGS,
         "data-home-touch-scope": "",
+        "data-history-navigation-surface": editingTheme ? "blocked" : "allowed",
       }}
       promoteAriaLabel={`Open ${meta.label} as a tab`}
       promoteTestId={`system-tab-modal-promote-${active.kind}`}

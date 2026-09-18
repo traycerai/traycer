@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { DesktopHistorySwipes } from "@/components/layout/shell/desktop-history-swipes";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { TileFindOwnerBridge } from "@/components/epic-canvas/tile-find/tile-find-owner-bridge";
@@ -8,7 +9,6 @@ import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
-import { DesktopHistorySwipes } from "@/components/layout/shell/desktop-history-swipes";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
@@ -188,8 +188,8 @@ export function AppShell(props: AppShellProps) {
               {/* Last child, so the frozen screens cover everything they were
                 copied from. Inside this box rather than portalled, because they
                 are this screen leaving rather than a layer over the app. */}
-              <DesktopHistorySwipes />
               {historySwipeTransition}
+              <DesktopHistorySwipes />
             </div>
           </RootDndProvider>
         </div>
