@@ -183,7 +183,7 @@ function LiveRateLimitGlyph({
   return <RateLimitGlyph bars={bars} />;
 }
 
-function RateLimitGlyph({
+export function RateLimitGlyph({
   bars,
 }: {
   readonly bars: ReadonlyArray<HeaderRateLimitBar>;

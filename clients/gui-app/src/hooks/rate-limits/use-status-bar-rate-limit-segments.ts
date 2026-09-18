@@ -575,7 +575,15 @@ export function useStatusBarRateLimitSegments(input: {
         !rateLimits.hiddenProviders.includes(provider.providerId),
     )
     .flatMap((provider) => resolveTargets(provider, input.profileSelection))
-    .map((target, order) => ({ ...target, order }));
+    .map((target, order) => ({
+      ...target,
+      order,
+      // Editor-only segments observe cached data without starting requests.
+      fetchEligible:
+        target.fetchEligible &&
+        rateLimits.enabled &&
+        !rateLimits.hiddenProviders.includes(target.provider.providerId),
+    }));
   const queueObserved = targets.filter(
     (target) => target.lane === "ephemeralProcess",
   );

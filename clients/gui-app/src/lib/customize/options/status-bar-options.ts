@@ -1,6 +1,7 @@
 import {
   registerCustomizeOptions,
   type CustomizeMove,
+  type CustomizeControl,
   type CustomizeOptions,
 } from "@/lib/customize/customize-options";
 import {
@@ -8,23 +9,51 @@ import {
   moveTileIdBefore,
   orderedTileIds,
 } from "@/lib/customize/instance-order";
-import { recordSettingGesture } from "@/lib/customize/history";
 import { useLayoutStore } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { rateLimitCapableProviderIdSchema } from "@traycer/protocol/host/rate-limit";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
-import { providerDisplayName } from "@/lib/provider-ordering";
+import { mergeOrder } from "@/lib/order-merge";
+import {
+  ORDERED_PROVIDERS,
+  providerDisplayName,
+} from "@/lib/provider-ordering";
 
 const PROVIDER_ORDER_SETTING_ID = "statusBar.provider" as const;
+
+function providerIdForTile(tileId: string | null): RateLimitProviderId | null {
+  return (
+    rateLimitCapableProviderIdSchema.options.find(
+      (id) => id === tileId?.split(":")[0],
+    ) ?? null
+  );
+}
+function providerOrder(sceneId: string): ReadonlyArray<RateLimitProviderId> {
+  return [
+    ...new Set(
+      orderedTileIds(PROVIDER_ORDER_SETTING_ID, sceneId, "horizontal").flatMap(
+        (tileId) => {
+          const id = providerIdForTile(tileId);
+          return id === null ? [] : [id];
+        },
+      ),
+    ),
+  ];
+}
+function typedProviderOrder(
+  order: ReadonlyArray<string>,
+): ReadonlyArray<RateLimitProviderId> {
+  return order.flatMap((value) => {
+    const id = providerIdForTile(value);
+    return id === null ? [] : [id];
+  });
+}
 
 function providerMoves(
   providerId: RateLimitProviderId,
   sceneId: string,
 ): ReadonlyArray<CustomizeMove> {
-  const order = orderedTileIds(
-    PROVIDER_ORDER_SETTING_ID,
-    sceneId,
-    "horizontal",
-  );
+  const order = providerOrder(sceneId);
   const directions: ReadonlyArray<{
     readonly id: string;
     readonly label: string;
@@ -41,20 +70,12 @@ function providerMoves(
       announcement: `${providerDisplayName(providerId)} moved ${delta < 0 ? "left" : "right"}`,
       disabled: next === null,
       touches: ["statusBar"],
-      analytics: "layout.statusBar.rateLimits.provider",
+      analytics: "layout.statusBar.segmentOrder",
       run: () => {
         if (next === null) return;
-        recordSettingGesture(
-          "layout.statusBar.rateLimits.provider",
-          label,
-          ["statusBar"],
-          () =>
-            useLayoutStore
-              .getState()
-              .setStatusBarSegmentOrder(
-                next as ReadonlyArray<RateLimitProviderId>,
-              ),
-        );
+        useLayoutStore
+          .getState()
+          .setStatusBarSegmentOrder(typedProviderOrder(next));
       },
     };
   });
@@ -68,7 +89,7 @@ export function registerStatusBarCustomizeOptions(): void {
       const placement = layout.statusBar.placement;
       return {
         state: placement === "header" ? "Header" : "Status bar",
-        control: {
+        control: footerControls({
           id: "statusBar.placement",
           label: "Usage cluster placement",
           touches: ["statusBar"],
@@ -90,21 +111,13 @@ export function registerStatusBarCustomizeOptions(): void {
             },
           ],
           change: (value) => {
-            recordSettingGesture(
-              "layout.statusBar.placement",
-              value === "header"
-                ? "Move usage to header"
-                : "Move usage to status bar",
-              ["statusBar"],
-              () =>
-                useLayoutStore
-                  .getState()
-                  .setStatusBarPlacement(
-                    value === "header" ? "header" : "status-bar",
-                  ),
-            );
+            useLayoutStore
+              .getState()
+              .setStatusBarPlacement(
+                value === "header" ? "header" : "status-bar",
+              );
           },
-        },
+        }),
         moves: [],
         drag: {
           group: "status-bar-placement",
@@ -119,13 +132,7 @@ export function registerStatusBarCustomizeOptions(): void {
               touches: ["statusBar"],
               analytics: "layout.statusBar.placement",
               run: () => {
-                recordSettingGesture(
-                  "layout.statusBar.placement",
-                  "Move usage to header",
-                  ["statusBar"],
-                  () =>
-                    useLayoutStore.getState().setStatusBarPlacement("header"),
-                );
+                useLayoutStore.getState().setStatusBarPlacement("header");
               },
             };
           },
@@ -134,7 +141,7 @@ export function registerStatusBarCustomizeOptions(): void {
     },
   );
 
-  registerCustomizeOptions("statusBar.usage", (): CustomizeOptions => {
+  registerCustomizeOptions("statusBar.usage", (instance): CustomizeOptions => {
     const layout = useLayoutStore.getState();
     const rateLimits = layout.statusBar.rateLimits;
     return {
@@ -145,7 +152,7 @@ export function registerStatusBarCustomizeOptions(): void {
         touches: ["statusBar"],
         analytics: "layout.statusBar.rateLimits.enabled",
         kind: "composite",
-        primary: {
+        primary: usageDisplayControls({
           id: "statusBar.usage.enabled",
           label: "Usage limits",
           touches: ["statusBar"],
@@ -154,23 +161,15 @@ export function registerStatusBarCustomizeOptions(): void {
           checked: rateLimits.enabled,
           pictures: [],
           change: (checked) => {
-            recordSettingGesture(
-              "layout.statusBar.rateLimits.enabled",
-              checked ? "Show usage limits" : "Hide usage limits",
-              ["statusBar"],
-              () =>
-                useLayoutStore
-                  .getState()
-                  .setStatusBarRateLimitsEnabled(checked),
-            );
+            useLayoutStore.getState().setStatusBarRateLimitsEnabled(checked);
           },
-        },
+        }),
         more: [
           {
             id: "statusBar.usage.resourceSide",
             label: "Resource side",
             touches: ["statusBar"],
-            analytics: "layout.statusBar.resources.enabled",
+            analytics: "layout.statusBar.resourceSide",
             kind: "choice",
             value: layout.statusBar.resourceSide,
             options: [
@@ -188,36 +187,46 @@ export function registerStatusBarCustomizeOptions(): void {
               },
             ],
             change: (value) => {
-              recordSettingGesture(
-                "layout.statusBar.resources.enabled",
-                "Move resource segment",
-                ["statusBar"],
-                () =>
-                  useLayoutStore
-                    .getState()
-                    .setStatusBarResourceSide(
-                      value === "left" ? "left" : "right",
-                    ),
-              );
+              useLayoutStore
+                .getState()
+                .setStatusBarResourceSide(value === "left" ? "left" : "right");
             },
           },
         ],
       },
       moves: [],
-      drag: null,
+      drag: {
+        group: "status-bar-placement",
+        axis: "both",
+        resolveDrop: (overId) =>
+          overId === `header.usage@${instance.sceneId}:-`
+            ? {
+                id: "drop",
+                label: "Move usage to header",
+                announcement: "Usage moved to the header",
+                disabled: false,
+                touches: ["statusBar"],
+                analytics: "layout.statusBar.placement",
+                run: () =>
+                  useLayoutStore.getState().setStatusBarPlacement("header"),
+              }
+            : null,
+      },
     };
   });
 
   registerCustomizeOptions(
     "statusBar.provider",
     (instance): CustomizeOptions => {
-      const providerId = instance.tileId as RateLimitProviderId;
+      const providerId = providerIdForTile(instance.tileId);
+      if (providerId === null)
+        return { state: "Unavailable", control: null, moves: [], drag: null };
       const layout = useLayoutStore.getState();
       const hidden =
         layout.statusBar.rateLimits.hiddenProviders.includes(providerId);
       return {
         state: hidden ? "Hidden" : "Visible",
-        control: {
+        control: providerControls(providerId, {
           id: `statusBar.provider.${providerId}`,
           label: providerDisplayName(providerId),
           touches: ["statusBar"],
@@ -226,27 +235,15 @@ export function registerStatusBarCustomizeOptions(): void {
           checked: !hidden,
           pictures: [],
           change: () => {
-            recordSettingGesture(
-              "layout.statusBar.rateLimits.provider",
-              hidden
-                ? `Show ${providerDisplayName(providerId)}`
-                : `Hide ${providerDisplayName(providerId)}`,
-              ["statusBar"],
-              () =>
-                useLayoutStore.getState().toggleStatusBarProvider(providerId),
-            );
+            useLayoutStore.getState().toggleStatusBarProvider(providerId);
           },
-        },
+        }),
         moves: providerMoves(providerId, instance.sceneId),
         drag: {
           group: "status-bar-providers",
           axis: "horizontal",
           resolveDrop: (overId) => {
-            const order = orderedTileIds(
-              PROVIDER_ORDER_SETTING_ID,
-              instance.sceneId,
-              "horizontal",
-            );
+            const order = providerOrder(instance.sceneId);
             const overTileId = overIdToTileId(overId);
             if (overTileId === null) return null;
             const next = moveTileIdBefore(order, providerId, overTileId);
@@ -257,19 +254,11 @@ export function registerStatusBarCustomizeOptions(): void {
               announcement: `${providerDisplayName(providerId)} moved`,
               disabled: false,
               touches: ["statusBar"],
-              analytics: "layout.statusBar.rateLimits.provider",
+              analytics: "layout.statusBar.segmentOrder",
               run: () => {
-                recordSettingGesture(
-                  "layout.statusBar.rateLimits.provider",
-                  "Reorder providers",
-                  ["statusBar"],
-                  () =>
-                    useLayoutStore
-                      .getState()
-                      .setStatusBarSegmentOrder(
-                        next as ReadonlyArray<RateLimitProviderId>,
-                      ),
-                );
+                useLayoutStore
+                  .getState()
+                  .setStatusBarSegmentOrder(typedProviderOrder(next));
               },
             };
           },
@@ -298,84 +287,69 @@ export function registerStatusBarCustomizeOptions(): void {
           checked: resources.enabled,
           pictures: [],
           change: (checked) => {
-            recordSettingGesture(
-              "layout.statusBar.resources.enabled",
-              checked ? "Show resource monitor" : "Hide resource monitor",
-              ["statusBar"],
-              () =>
-                useLayoutStore.getState().setStatusBarResourcesEnabled(checked),
-            );
+            useLayoutStore.getState().setStatusBarResourcesEnabled(checked);
           },
         },
         more: [
           {
-            id: "statusBar.resources.metrics",
-            label: "Metrics",
+            id: "statusBar.resources.scope",
+            label: "Scope",
+            kind: "choice",
             touches: ["statusBar"],
-            analytics: "layout.statusBar.resources.enabled",
-            kind: "multi",
-            values: resources.metrics,
-            lastItemHeld: resources.metrics.length <= 1,
-            moveItem: null,
-            options: [
-              { value: "cpu", label: "CPU", picture: null, override: {} },
-              { value: "memory", label: "Memory", picture: null, override: {} },
-              {
-                value: "processes",
-                label: "Processes",
-                picture: null,
-                override: {},
-              },
-            ],
-            change: (values) => {
-              const metric = (["cpu", "memory", "processes"] as const).find(
-                (candidate) =>
-                  values.includes(candidate) !==
-                  resources.metrics.includes(candidate),
-              );
-              if (metric === undefined) return;
-              recordSettingGesture(
-                "layout.statusBar.resources.enabled",
-                "Change resource metrics",
-                ["statusBar"],
-                () =>
-                  useLayoutStore
-                    .getState()
-                    .toggleStatusBarResourceMetric(metric),
-              );
+            analytics: "layout.statusBar.resources.scope",
+            value: resources.scope,
+            options: (["host-tree", "desktop-app"] as const).map((value) => ({
+              value,
+              label: value === "host-tree" ? "Host and agents" : "Desktop app",
+              picture: null,
+              override: { statusBar: { resources: { scope: value } } },
+            })),
+            change: (value) => {
+              if (value === "host-tree" || value === "desktop-app")
+                useLayoutStore.getState().setStatusBarResourceScope(value);
             },
           },
+          resourceMetricsControl(),
         ],
       },
       moves: [
         {
           id: "move-side",
           label:
-            resources.enabled && layout.statusBar.resourceSide === "left"
+            layout.statusBar.resourceSide === "left"
               ? "Move to right"
               : "Move to left",
           announcement: "Resource monitor moved",
           disabled: false,
           touches: ["statusBar"],
-          analytics: "layout.statusBar.resources.enabled",
+          analytics: "layout.statusBar.resourceSide",
           run: () => {
             const nextSide =
               layout.statusBar.resourceSide === "left" ? "right" : "left";
-            recordSettingGesture(
-              "layout.statusBar.resources.enabled",
-              "Move resource monitor",
-              ["statusBar"],
-              () =>
-                useLayoutStore.getState().setStatusBarResourceSide(nextSide),
-            );
+            useLayoutStore.getState().setStatusBarResourceSide(nextSide);
           },
         },
       ],
-      // No literal two-droppable drag target yet (deviation: the strip has no
-      // dedicated drop zone flanking the usage slot); "Move to left/right"
-      // above is the keyboard twin D25 requires and is currently the only
-      // way to move this segment.
-      drag: null,
+      drag: {
+        group: "status-bar-resources",
+        axis: "horizontal",
+        resolveDrop: (overId) => {
+          const side =
+            (["left", "right"] as const).find((side) =>
+              overId.startsWith(`resources:${side}@`),
+            ) ?? null;
+          if (side === null) return null;
+          return {
+            id: "drop",
+            label: "Move resource monitor",
+            announcement: `Resource monitor moved ${side}`,
+            disabled: false,
+            touches: ["statusBar"],
+            analytics: "layout.statusBar.resourceSide",
+            run: () => useLayoutStore.getState().setStatusBarResourceSide(side),
+          };
+        },
+      },
     };
   });
 
@@ -413,42 +387,25 @@ export function registerStatusBarCustomizeOptions(): void {
             },
           ],
           change: (value) => {
-            recordSettingGesture(
-              "layout.statusBar.placement",
-              value === "header"
-                ? "Move usage to header"
-                : "Move usage to status bar",
-              ["statusBar"],
-              () =>
-                useLayoutStore
-                  .getState()
-                  .setStatusBarPlacement(
-                    value === "header" ? "header" : "status-bar",
-                  ),
-            );
+            useLayoutStore
+              .getState()
+              .setStatusBarPlacement(
+                value === "header" ? "header" : "status-bar",
+              );
           },
         },
         more: [
+          usageToggle(),
           {
             id: "header.usage.resourceMonitor",
             label: "Resource monitor button",
             touches: ["settings"],
-            analytics: "layout.statusBar.resources.enabled",
+            analytics: "showGlobalResourceMonitor",
             kind: "toggle",
             checked: settings.showGlobalResourceMonitor,
             pictures: [],
             change: (checked) => {
-              recordSettingGesture(
-                "layout.statusBar.resources.enabled",
-                checked
-                  ? "Show header resource button"
-                  : "Hide header resource button",
-                ["settings"],
-                () =>
-                  useSettingsStore
-                    .getState()
-                    .setShowGlobalResourceMonitor(checked),
-              );
+              useSettingsStore.getState().setShowGlobalResourceMonitor(checked);
             },
           },
         ],
@@ -462,13 +419,7 @@ export function registerStatusBarCustomizeOptions(): void {
           touches: ["statusBar"],
           analytics: "layout.statusBar.placement",
           run: () => {
-            recordSettingGesture(
-              "layout.statusBar.placement",
-              "Move usage to status bar",
-              ["statusBar"],
-              () =>
-                useLayoutStore.getState().setStatusBarPlacement("status-bar"),
-            );
+            useLayoutStore.getState().setStatusBarPlacement("status-bar");
           },
         },
       ],
@@ -486,13 +437,7 @@ export function registerStatusBarCustomizeOptions(): void {
             touches: ["statusBar"],
             analytics: "layout.statusBar.placement",
             run: () => {
-              recordSettingGesture(
-                "layout.statusBar.placement",
-                "Move usage to status bar",
-                ["statusBar"],
-                () =>
-                  useLayoutStore.getState().setStatusBarPlacement("status-bar"),
-              );
+              useLayoutStore.getState().setStatusBarPlacement("status-bar");
             },
           };
         },
@@ -502,7 +447,216 @@ export function registerStatusBarCustomizeOptions(): void {
 }
 
 function overIdToTileId(overId: string): RateLimitProviderId | null {
-  const separatorIndex = overId.lastIndexOf(":");
+  const separatorIndex = overId.indexOf(":", overId.indexOf("@"));
   if (separatorIndex === -1) return null;
-  return overId.slice(separatorIndex + 1) as RateLimitProviderId;
+  return providerIdForTile(overId.slice(separatorIndex + 1));
+}
+
+function usageToggle(): CustomizeControl {
+  return {
+    id: "statusBar.usage.enabled",
+    label: "Usage limits",
+    kind: "toggle",
+    touches: ["statusBar"],
+    analytics: "layout.statusBar.rateLimits.enabled",
+    checked: useLayoutStore.getState().statusBar.rateLimits.enabled,
+    pictures: [],
+    change: (checked) =>
+      useLayoutStore.getState().setStatusBarRateLimitsEnabled(checked),
+  };
+}
+function footerDisplayControls(): ReadonlyArray<CustomizeControl> {
+  const store = useLayoutStore.getState();
+  const prefs = store.statusBar.rateLimits;
+  return [
+    {
+      id: "statusBar.usage.percentMode",
+      label: "Percentage",
+      kind: "choice",
+      touches: ["statusBar"],
+      analytics: "layout.statusBar.rateLimits.percentMode",
+      value: prefs.percentMode,
+      options: (["used", "remaining"] as const).map((value) => ({
+        value,
+        label: value === "used" ? "Used" : "Remaining",
+        picture: null,
+        override: { statusBar: { rateLimits: { percentMode: value } } },
+      })),
+      change: (value) => {
+        if (value === "used" || value === "remaining")
+          store.setStatusBarPercentMode(value);
+      },
+    },
+    ...(
+      [
+        {
+          key: "showModeWord",
+          label: "Mode word",
+          change: store.setStatusBarShowModeWord,
+          analytics: "layout.statusBar.rateLimits.showModeWord",
+        },
+        {
+          key: "showTimer",
+          label: "Timer",
+          change: store.setStatusBarShowTimer,
+          analytics: "layout.statusBar.rateLimits.showTimer",
+        },
+        {
+          key: "showBar",
+          label: "Mini bar",
+          change: store.setStatusBarShowBar,
+          analytics: "layout.statusBar.rateLimits.showBar",
+        },
+      ] as const
+    ).map(({ key, label, change, analytics }): CustomizeControl => ({
+      id: `statusBar.usage.${key}`,
+      label,
+      change,
+      analytics,
+      touches: ["statusBar"],
+      kind: "toggle",
+      checked: prefs[key],
+      pictures: [],
+    })),
+  ];
+}
+function usageDisplayControls(primary: CustomizeControl): CustomizeControl {
+  return {
+    id: "statusBar.display",
+    label: "Usage display",
+    touches: ["statusBar"],
+    analytics: "layout.statusBar.rateLimits.enabled",
+    kind: "group",
+    controls: [primary, ...footerDisplayControls()],
+  };
+}
+function footerControls(placement: CustomizeControl): CustomizeControl {
+  return {
+    id: "statusBar.footer",
+    label: "Status bar",
+    touches: ["statusBar"],
+    analytics: "layout.statusBar.placement",
+    kind: "group",
+    controls: [
+      placement,
+      {
+        id: "statusBar.footerOnly",
+        label: "Shown when placement is Status bar",
+        kind: "group",
+        touches: ["statusBar"],
+        analytics: "layout.statusBar.rateLimits.enabled",
+        controls: [
+          usageToggle(),
+          ...footerDisplayControls(),
+          footerProvidersControl(),
+          resourceMetricsControl(),
+        ],
+      },
+    ],
+  };
+}
+function providerControls(
+  providerId: RateLimitProviderId,
+  primary: CustomizeControl,
+): CustomizeControl {
+  return {
+    ...primary,
+    kind: "composite",
+    primary,
+    more: [
+      {
+        id: "statusBar.provider.limits",
+        label: "Limits",
+        touches: ["statusBar"],
+        analytics: "layout.statusBar.rateLimits.providerLimits",
+        kind: "provider-limits",
+        providerId,
+      },
+    ],
+  };
+}
+
+function resourceMetricsControl(): CustomizeControl {
+  const resources = useLayoutStore.getState().statusBar.resources;
+  return {
+    id: "statusBar.resources.metrics",
+    label: "Metrics",
+    touches: ["statusBar"],
+    analytics: "layout.statusBar.resources.metric",
+    kind: "multi",
+    values: resources.metrics,
+    lastItemHeld: resources.metrics.length <= 1,
+    moveItem: null,
+    options: [
+      { value: "ramShare", label: "RAM share", picture: null, override: {} },
+      { value: "cpu", label: "CPU", picture: null, override: {} },
+      { value: "memory", label: "Memory", picture: null, override: {} },
+      {
+        value: "processes",
+        label: "Processes",
+        picture: null,
+        override: {},
+      },
+    ],
+    change: (values) => {
+      const metric = (["cpu", "memory", "processes", "ramShare"] as const).find(
+        (candidate) =>
+          values.includes(candidate) !== resources.metrics.includes(candidate),
+      );
+      if (metric === undefined) return;
+      useLayoutStore.getState().toggleStatusBarResourceMetric(metric);
+    },
+  };
+}
+
+function footerProvidersControl(): CustomizeControl {
+  const { segmentOrder: savedOrder, rateLimits } =
+    useLayoutStore.getState().statusBar;
+  const canonical = ORDERED_PROVIDERS.flatMap(({ providerId }) => {
+    const id = providerIdForTile(providerId);
+    return id === null ? [] : [id];
+  });
+  const segmentOrder = mergeOrder(savedOrder, canonical);
+  return {
+    id: "statusBar.providers",
+    label: "Providers",
+    kind: "multi",
+    touches: ["statusBar"],
+    analytics: "layout.statusBar.rateLimits.provider",
+    values: segmentOrder.filter(
+      (id) => !rateLimits.hiddenProviders.includes(id),
+    ),
+    options: segmentOrder.map((id) => ({
+      value: id,
+      label: providerDisplayName(id),
+      picture: null,
+      override: {},
+    })),
+    lastItemHeld: false,
+    change: (values) => {
+      const changed = segmentOrder.find(
+        (id) => values.includes(id) === rateLimits.hiddenProviders.includes(id),
+      );
+      if (changed !== undefined)
+        useLayoutStore.getState().toggleStatusBarProvider(changed);
+    },
+    moveItem: (value, direction) => {
+      const providerId = providerIdForTile(value);
+      if (providerId === null) return null;
+      const next = moveTileId(segmentOrder, providerId, direction);
+      if (next === null) return null;
+      return {
+        id: "provider-order",
+        label: "Reorder providers",
+        announcement: `${providerDisplayName(providerId)} moved`,
+        disabled: false,
+        touches: ["statusBar"],
+        analytics: "layout.statusBar.segmentOrder",
+        run: () =>
+          useLayoutStore
+            .getState()
+            .setStatusBarSegmentOrder(typedProviderOrder(next)),
+      };
+    },
+  };
 }

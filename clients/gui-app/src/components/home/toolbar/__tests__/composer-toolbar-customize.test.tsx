@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
 import { ComposerToolbarRight } from "@/components/home/toolbar/composer-toolbar-right";
 import { ComposerAttachImageButton } from "@/components/home/toolbar/composer-attach-image-button";
 import { ComposerMicSlot } from "@/components/home/toolbar/composer-mic-button";
+import { CustomizePopover } from "@/components/customize/customize-popover";
 import { getCustomizeOptions } from "@/lib/customize/customize-options";
 import { registerComposerToolbarCustomizeOptions } from "@/lib/customize/options/composer-toolbar-options";
 import { undo } from "@/lib/customize/history";
@@ -173,16 +180,28 @@ describe("composer.mic option", () => {
     condition: null,
   };
 
-  it("hiding then undoing restores it", () => {
+  // Rewritten (wave-3 fixup, B3): `composer.mic`'s `change` is now a plain
+  // write with no `recordGesture` of its own - only the popover's `mutate`
+  // records it. Calling `options.control.change(...)` directly (as this test
+  // used to) pushes nothing onto `history.past`, so the `undo()` afterward
+  // had nothing to pop; the old version only looked green because it never
+  // checked history and the direct write happened to leave the right value
+  // in place for its own final assertion. Drives the real popover instead.
+  it("hiding then undoing restores it, through the real popover", () => {
     startSession();
-    const options = getCustomizeOptions(instance);
-    act(() => {
-      if (options?.control?.kind === "choice") options.control.change("hidden");
-    });
+    useCustomizeStore.getState().register(instance);
+    useCustomizeStore.setState({ popoverKey: instance.key });
+    const rects = new Map([[instance.key, new DOMRect(10, 10, 20, 20)]]);
+    render(<CustomizePopover rects={rects} />);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Hidden" }));
+
     expect(useLayoutStore.getState().composer.mic).toBe("hidden");
+    expect(useCustomizeStore.getState().history.past).toHaveLength(1);
 
     act(() => undo());
     expect(useLayoutStore.getState().composer.mic).toBe("visible");
+    expect(useCustomizeStore.getState().history.past).toHaveLength(0);
   });
 });
 

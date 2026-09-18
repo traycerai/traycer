@@ -240,7 +240,6 @@ export function ComposerMicSlot(props: {
     return (
       <span
         ref={ref}
-        aria-hidden
         data-testid="composer-mic-ghost"
         className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border/60 text-muted-foreground/60 opacity-70"
       >
@@ -250,14 +249,14 @@ export function ComposerMicSlot(props: {
   }
   if (props.dictation !== null) {
     return (
-      <span ref={ref} className="contents">
+      <span ref={ref} className="inline-flex items-center">
         <ComposerMicButton control={props.dictation} />
       </span>
     );
   }
   if (props.dictationPreparing !== null) {
     return (
-      <span ref={ref} className="contents">
+      <span ref={ref} className="inline-flex items-center">
         <ComposerMicPreparing status={props.dictationPreparing} />
       </span>
     );

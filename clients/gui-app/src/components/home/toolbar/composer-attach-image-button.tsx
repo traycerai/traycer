@@ -1,4 +1,10 @@
-import { useCallback, useRef, type ChangeEvent } from "react";
+import {
+  useCallback,
+  useRef,
+  type ButtonHTMLAttributes,
+  type Ref,
+  type ChangeEvent,
+} from "react";
 import { ImagePlus } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -61,7 +67,6 @@ export function ComposerAttachImageButton(
     return (
       <span
         ref={hotspotRef}
-        aria-hidden
         data-testid="composer-attach-image-ghost"
         className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border/60 text-muted-foreground/60 opacity-70"
       >
@@ -88,14 +93,23 @@ export function ComposerAttachImageButton(
         sideOffset={undefined}
         align={undefined}
       >
-        <ToolbarIconButton
+        <ComposerAttachImageTrigger
           ref={hotspotRef}
-          aria-label="Attach image"
           onClick={handleOpenImagePicker}
-        >
-          <ImagePlus className="size-4" />
-        </ToolbarIconButton>
+        />
       </TooltipWrapper>
     </>
+  );
+}
+
+export function ComposerAttachImageTrigger(
+  props: ButtonHTMLAttributes<HTMLButtonElement> & {
+    ref?: Ref<HTMLButtonElement>;
+  },
+) {
+  return (
+    <ToolbarIconButton aria-label="Attach image" {...props}>
+      <ImagePlus className="size-4" />
+    </ToolbarIconButton>
   );
 }

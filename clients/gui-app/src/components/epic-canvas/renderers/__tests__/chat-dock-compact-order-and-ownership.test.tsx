@@ -10,11 +10,32 @@ import type { ReactElement, ReactNode } from "react";
 import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * Ticket w3-chat-surfaces: the three reorderable dock rows as Customize
- * hotspots. `chat-tile-lower-surfaces-dock-chrome.test.tsx` already renders
- * this same surface for the compact-chip half of `useChatDockChrome`; this
- * suite renders it for the OTHER half - ghosting, reordering, and undo - and
- * covers the option-spec factories (`composer-dock-options.ts`) directly.
+ * Wave-3 fixup regression (review w3):
+ *
+ * - Should-fix 5 ("compact dock chips ignore dockOrder"): the compact chip
+ *   row used to build chips in a fixed Files -> Agents -> Background order and
+ *   only the EXPANDED dock read `composer.dockOrder`. Reordering rows then
+ *   folding them changed the order back. `chips` in `useChatDockChrome` is now
+ *   sorted through the same `composer.dockOrder`.
+ *
+ * - Blocking 8 ("a temporarily expanded compact section attaches one callback
+ *   ref to two nodes"): the chip and the revealed row shared ONE ref
+ *   callback (`xHotspot.ref`) across two different DOM nodes at once, so
+ *   whichever attached last silently won the Customize registration, and
+ *   detaching the row could clear it while the chip stayed on screen. Fixed
+ *   state (re-verified against the current worktree, since an earlier pass
+ *   here briefly nulled both sides mid-edit): the ROW's `hotspots[section]`
+ *   record always carries the real ref (it only renders at all once its
+ *   section is out of `folded`, i.e. once revealed), and the CHIP's own
+ *   model nulls its ref while `revealed.has(section)`. So exactly one side
+ *   ever holds the callback - the chip while folded, the row once revealed -
+ *   never both.
+ *
+ * This reuses the real-mount harness from `chat-dock-customize.test.tsx`
+ * (Customize session + real `ChatLowerInteractionSurfaces`) merged with
+ * `chat-tile-lower-surfaces-dock-chrome.test.tsx`'s reveal-on-click pattern,
+ * so both fixes are exercised through the actual compact strip, not a
+ * fabricated chip model.
  */
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
@@ -54,8 +75,29 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
 
+// `activeAgentsVisible` (and so `agentsChip`) needs more than a lone
+// mid-turn self - `chat-tile-lower-surfaces-dock-chrome.test.tsx` always
+// pairs `self` with at least one descendant to light it. A self-only agent
+// row does not satisfy it.
 vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
-  useAgentStopControls: () => ({ self: null, descendants: [] }),
+  useAgentStopControls: () => ({
+    self: {
+      id: "chat-1",
+      title: "This chat",
+      surface: "gui",
+      activity: "turn",
+      hostId: "host-1",
+    },
+    descendants: [
+      {
+        id: "child-1",
+        title: "Child one",
+        surface: "gui",
+        activity: "turn",
+        hostId: "host-1",
+      },
+    ],
+  }),
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -108,8 +150,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
+import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import { ChatDockCompactStrip } from "@/components/chat/chat-dock-compact-strip";
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   ChatLowerInteractionSurfaces,
   type ChatLowerInteractionSurfacesProps,
@@ -117,22 +161,8 @@ import {
 import {
   DEFAULT_COMPOSER_LAYOUT,
   useLayoutStore,
-  type DockSection,
 } from "@/stores/settings/layout-store";
-import {
-  getCustomizeOptions,
-  type CustomizeMove,
-} from "@/lib/customize/customize-options";
-import { registerComposerDockCustomizeOptions } from "@/lib/customize/options/composer-dock-options";
-import { CustomizePopover } from "@/components/customize/customize-popover";
-import { undo } from "@/lib/customize/history";
-import {
-  selectedInstances,
-  useCustomizeStore,
-  type HotspotInstance,
-} from "@/stores/customize/customize-store";
-
-registerComposerDockCustomizeOptions();
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
@@ -153,6 +183,21 @@ const EMPTY_RESTORE: ChatRestoreContextValue = {
   accumulatedSetComplete: true,
   revertFileChanges: () => null,
 };
+
+function fileChangeRow(filePath: string): AccumulatedChangeRow {
+  return {
+    filePath,
+    operation: "edit",
+    diffSource: "snapshot",
+    reason: "snapshot",
+    undoable: true,
+    artifact: null,
+    counts: { additions: 1, deletions: 0 },
+    hasContents: true,
+    digest: null,
+    liveDiff: null,
+  };
+}
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -180,13 +225,14 @@ function startCustomizeSession(): void {
 }
 
 function surfacesProps(patch: {
-  readonly chatId: string;
   readonly queueItems: ReadonlyArray<ChatQueuedItem>;
+  readonly accumulatedFileChanges: ReadonlyArray<AccumulatedChangeRow>;
+  readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
 }): ChatLowerInteractionSurfacesProps {
   return {
     epicId: EPIC_ID,
     viewTabId: TAB_ID,
-    chatId: patch.chatId,
+    chatId: CHAT_ID,
     hostId: HOST_ID,
     runtime: { snapshotLoaded: true },
     access: { isViewer: false, canAct: true, readOnlyNotice: null },
@@ -238,7 +284,7 @@ function surfacesProps(patch: {
     composer: {
       sessionSettingsSeed: null,
       fallbackSettingsSeed: null,
-      nodeId: patch.chatId,
+      nodeId: CHAT_ID,
       isActive: true,
       mentionRoots: [],
       fallbackToGlobalMentionRoots: true,
@@ -250,8 +296,11 @@ function surfacesProps(patch: {
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
     },
     todo: null,
-    restoreContext: EMPTY_RESTORE,
-    backgroundItems: [],
+    restoreContext: {
+      ...EMPTY_RESTORE,
+      accumulatedFileChanges: patch.accumulatedFileChanges,
+    },
+    backgroundItems: patch.backgroundItems ?? [],
     providerFallback: NO_PROVIDER_FALLBACK,
     backgroundStopPendingTaskIds: new Set(),
     backgroundStopAllPending: false,
@@ -312,134 +361,165 @@ afterEach(() => {
   });
 });
 
-describe("chat dock ghost rows", () => {
-  it("draws three ghost rows with their truthful conditions when the chat is empty", () => {
-    renderSurfaces(surfacesProps({ chatId: CHAT_ID, queueItems: [] }));
+describe("compact dock chip order follows composer.dockOrder (S5)", () => {
+  it("renders the chips in dockOrder, not the fixed Files -> Agents -> Background order", () => {
+    useLayoutStore.setState({
+      composer: {
+        ...DEFAULT_COMPOSER_LAYOUT,
+        filesChanged: "compact",
+        activeAgents: "compact",
+        background: "compact",
+        // Deliberately NOT the fixed default order.
+        dockOrder: ["background", "activeAgents", "filesChanged"],
+      },
+    });
 
-    const ghosts = screen.getAllByTestId("chat-dock-ghost-row");
-    expect(ghosts).toHaveLength(3);
-    expect(ghosts.map((node) => node.textContent)).toEqual([
-      "nothing changed in this chat",
-      "no agents running",
-      "nothing in the background",
-    ]);
-  });
-
-  it("registers each empty row under this chat's tile id", () => {
-    renderSurfaces(surfacesProps({ chatId: CHAT_ID, queueItems: [] }));
-
-    const instances = [...useCustomizeStore.getState().instances.values()];
-    for (const settingId of [
-      "composer.filesChanged",
-      "composer.activeAgents",
-      "composer.background",
-    ] as const) {
-      const instance = instances.find((i) => i.settingId === settingId);
-      expect(instance?.tileId).toBe(CHAT_ID);
-      expect(instance?.ghost).toBe(true);
-    }
-  });
-});
-
-describe("composer.background option", () => {
-  function dockInstance(section: DockSection): HotspotInstance {
-    return {
-      key: `composer.${section}@shell:${CHAT_ID}`,
-      settingId: `composer.${section}`,
-      sceneId: "shell",
-      tileId: CHAT_ID,
-      node: document.createElement("div"),
-      ghost: false,
-      condition: null,
-    };
-  }
-
-  // Rewritten (wave-3 fixup, B3): `composer.background`'s choice `change` is
-  // now a plain write with no `recordGesture` of its own - only the
-  // popover's `mutate` records it. Calling `options.control.change(...)`
-  // directly (as this test used to) pushes nothing onto `history.past`, so
-  // the `undo()` afterward had nothing to pop and silently did nothing;
-  // the old assertion only read as passing because it never checked history
-  // and the direct write had already landed the value it wanted. Drives the
-  // real popover instead.
-  it("setting it to Compact through the real popover writes the layout store, and Undo restores it", () => {
-    const instance = dockInstance("background");
-    useCustomizeStore.getState().register(instance);
-    useCustomizeStore.setState({ popoverKey: instance.key });
-    const rects = new Map([[instance.key, new DOMRect(10, 10, 20, 20)]]);
-    render(<CustomizePopover rects={rects} />);
-
-    fireEvent.click(screen.getByRole("radio", { name: "Compact" }));
-
-    expect(useLayoutStore.getState().composer.background).toBe("compact");
-    expect(useCustomizeStore.getState().history.past).toHaveLength(1);
-
-    act(() => undo());
-    expect(useLayoutStore.getState().composer.background).toBe("visible");
-    expect(useCustomizeStore.getState().history.past).toHaveLength(0);
-  });
-
-  it("dragging Background above Files changed persists the new dockOrder", () => {
-    const dragging = getCustomizeOptions(dockInstance("background"));
-    const move = dragging?.drag?.resolveDrop(
-      "composer.filesChanged@shell:chat-1",
+    renderSurfaces(
+      surfacesProps({
+        queueItems: [],
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts")],
+        backgroundItems: [
+          {
+            taskId: "task-1",
+            kind: "command",
+            title: "bun test",
+            blockId: "task-1-block",
+            parentTaskId: null,
+            scheduledFor: null,
+            individualStopUnavailable: null,
+          },
+        ],
+      }),
     );
-    expect(move).not.toBeNull();
-    act(() => {
-      if (move !== null && move !== undefined) (move as CustomizeMove).run();
-    });
-    expect(useLayoutStore.getState().composer.dockOrder).toEqual([
-      "background",
-      "filesChanged",
-      "activeAgents",
+
+    const chips = [
+      ...document.querySelectorAll("[data-testid^='chat-dock-chip-']"),
+    ].map((el) => el.getAttribute("data-testid"));
+    expect(chips).toEqual([
+      "chat-dock-chip-background",
+      "chat-dock-chip-activeAgents",
+      "chat-dock-chip-filesChanged",
     ]);
   });
 
-  it("Move up on the middle row swaps it with the row above", () => {
-    const options = getCustomizeOptions(dockInstance("activeAgents"));
-    const moveUp = options?.moves.find((move) => move.id === "move-up");
-    expect(moveUp?.disabled).toBe(false);
-    act(() => moveUp?.run());
-    expect(useLayoutStore.getState().composer.dockOrder).toEqual([
-      "activeAgents",
-      "filesChanged",
-      "background",
+  it("reordering through Move and then folding keeps the new order on the chips", () => {
+    useLayoutStore.setState({
+      composer: {
+        ...DEFAULT_COMPOSER_LAYOUT,
+        filesChanged: "compact",
+        activeAgents: "compact",
+        background: "compact",
+      },
+    });
+    renderSurfaces(
+      surfacesProps({
+        queueItems: [],
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts")],
+        backgroundItems: [
+          {
+            taskId: "task-1",
+            kind: "command",
+            title: "bun test",
+            blockId: "task-1-block",
+            parentTaskId: null,
+            scheduledFor: null,
+            individualStopUnavailable: null,
+          },
+        ],
+      }),
+    );
+    // Default order first.
+    expect(
+      [...document.querySelectorAll("[data-testid^='chat-dock-chip-']")].map(
+        (el) => el.getAttribute("data-testid"),
+      ),
+    ).toEqual([
+      "chat-dock-chip-filesChanged",
+      "chat-dock-chip-activeAgents",
+      "chat-dock-chip-background",
+    ]);
+
+    // Real store write, same as a Move/drag would perform.
+    act(() => {
+      useLayoutStore.setState((state) => ({
+        composer: {
+          ...state.composer,
+          dockOrder: ["background", "filesChanged", "activeAgents"],
+        },
+      }));
+    });
+
+    expect(
+      [...document.querySelectorAll("[data-testid^='chat-dock-chip-']")].map(
+        (el) => el.getAttribute("data-testid"),
+      ),
+    ).toEqual([
+      "chat-dock-chip-background",
+      "chat-dock-chip-filesChanged",
+      "chat-dock-chip-activeAgents",
     ]);
   });
 });
 
-describe("preferred-tile selection across two chat tiles", () => {
-  it("keeps only the focused tile's instance selected for a shared settingId", () => {
-    const instances = new Map<string, HotspotInstance>();
-    const tileA: HotspotInstance = {
-      key: "composer.filesChanged@shell:chat-a",
-      settingId: "composer.filesChanged",
-      sceneId: "shell",
-      tileId: "chat-a",
-      node: document.createElement("div"),
-      ghost: false,
-      condition: null,
-    };
-    const tileB: HotspotInstance = {
-      ...tileA,
-      key: "composer.filesChanged@shell:chat-b",
-      tileId: "chat-b",
-    };
-    instances.set(tileA.key, tileA);
-    instances.set(tileB.key, tileB);
-
-    const preferringA = selectedInstances({
-      instances,
-      preferredTileId: "chat-a",
+describe("temporarily revealing a compact row hands off ownership instead of duplicating it (S8)", () => {
+  it("the chip owns the Customize registration while folded, the ROW takes sole ownership once revealed, and the chip reclaims it on re-fold", () => {
+    useLayoutStore.setState({
+      composer: {
+        ...DEFAULT_COMPOSER_LAYOUT,
+        filesChanged: "compact",
+        activeAgents: "compact",
+        background: "compact",
+      },
     });
-    expect(preferringA).toHaveLength(1);
-    expect(preferringA[0]?.tileId).toBe("chat-a");
+    renderSurfaces(
+      surfacesProps({
+        queueItems: [],
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts")],
+      }),
+    );
 
-    const preferringB = selectedInstances({
-      instances,
-      preferredTileId: "chat-b",
-    });
-    expect(preferringB).toHaveLength(1);
-    expect(preferringB[0]?.tileId).toBe("chat-b");
+    const registeredNode = () =>
+      [...useCustomizeStore.getState().instances.entries()].find(([key]) =>
+        key.startsWith("composer.filesChanged@"),
+      )?.[1].node;
+
+    // Folded: the chip is the sole registered anchor - the row is not even
+    // rendered yet, so there is nothing for it to compete with. The
+    // registered node is the WRAPPER span the ref is attached to
+    // (`chat-dock-compact-strip.tsx`'s `ref={chip.hotspotRef}`), and the
+    // chip's own testid element is a child inside it - so the containment
+    // check goes wrapper-contains-chip, not the other way round.
+    const chip = screen.getByTestId("chat-dock-chip-filesChanged");
+    const foldedNode = registeredNode();
+    expect(foldedNode).toBeDefined();
+    expect(foldedNode && foldedNode.contains(chip)).toBe(true);
+
+    // Reveal the row (the same click a user makes to see it again). Both the
+    // chip and the row are now on screen at once - exactly the overlap the
+    // old bug mishandled by sharing one ref callback between them.
+    fireEvent.click(chip);
+    const panel = screen.getByTestId("accumulated-changes-panel");
+    expect(panel).not.toBeNull();
+
+    // Ownership has moved to the ROW, and only the row - not left on the
+    // chip, and not on both at once (which is what let "whichever attaches
+    // last wins" silently pick either one). Same wrapper-contains-child
+    // direction: the row's registered node is the wrapping span around
+    // `ChatAccumulatedChangesPanel` (`chat-lower-dock.tsx`'s
+    // `ref={props.hotspotRef}`), which contains the panel.
+    const revealedNode = registeredNode();
+    expect(revealedNode).toBeDefined();
+    expect(revealedNode && revealedNode.contains(panel)).toBe(true);
+    expect(revealedNode && chip.contains(revealedNode)).toBe(false);
+
+    // Folding it back (second click) must hand ownership back to the chip,
+    // not leave the setting registered against a node that is about to
+    // unmount - the observable half of "detaching the row can clear
+    // registration while the chip remains".
+    fireEvent.click(chip);
+    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    const refoldedNode = registeredNode();
+    expect(refoldedNode).toBeDefined();
+    expect(refoldedNode && refoldedNode.contains(chip)).toBe(true);
   });
 });

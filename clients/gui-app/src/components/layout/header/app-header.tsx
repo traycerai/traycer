@@ -118,11 +118,11 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
-      <div data-customize-inert className="contents">
+      <div data-customize-inert className="inline-flex items-center">
         <DesktopMenuBar />
       </div>
       {showTabStrip ? (
-        <div data-customize-inert className="contents">
+        <div data-customize-inert className="inline-flex items-center">
           <HistoryNavButtons />
         </div>
       ) : null}
@@ -201,10 +201,13 @@ function HeaderUsageControls(): ReactNode {
   const inHeader = useLayoutStore(
     (state) => state.statusBar.placement === "header",
   );
+  const usageEnabled = useLayoutStore(
+    (state) => state.statusBar.rateLimits.enabled,
+  );
   const { ref, editing } = useLayoutHotspot({
     settingId: "header.usage",
     tileId: null,
-    ghost: !inHeader,
+    ghost: !inHeader || (!usageEnabled && !showGlobalResourceMonitor),
     condition: inHeader ? null : "Usage is placed in the status bar",
   });
   if (!inHeader) {
@@ -217,7 +220,6 @@ function HeaderUsageControls(): ReactNode {
         <span
           ref={ref}
           data-testid="header-usage-ghost"
-          aria-hidden
           className="mr-1 inline-flex h-5 w-16 shrink-0 rounded-md border border-dashed border-border/60"
         />
       </HeaderClusterContextMenu>
@@ -225,8 +227,11 @@ function HeaderUsageControls(): ReactNode {
   }
   return (
     <HeaderClusterContextMenu>
-      <span ref={ref} className="contents">
-        <RateLimitIconButton />
+      <span ref={ref} className="inline-flex items-center">
+        {usageEnabled ? <RateLimitIconButton /> : null}
+        {editing && !usageEnabled && !showGlobalResourceMonitor ? (
+          <span className="inline-flex size-6 rounded-sm border border-dashed border-border/60" />
+        ) : null}
         {showGlobalResourceMonitor ? (
           // Unconditionally the owner of `app.resources.open`: this whole
           // component is behind `inHeader`, so the strip's own popover is not

@@ -1,3 +1,5 @@
+import { useDroppableSlot } from "@/components/customize/use-sortable-proxy";
+import type { DropSlotRect } from "@/components/customize/use-hotspot-rects";
 import { useState, type ReactNode } from "react";
 import {
   DndContext,
@@ -84,6 +86,24 @@ export function DropLine() {
         top: over.rect.top,
         width: vertical ? over.rect.width : 2,
         height: vertical ? 2 : over.rect.height,
+      }}
+    />
+  );
+}
+
+export function CustomizeDropTarget({ slot }: { slot: DropSlotRect }) {
+  const { setNodeRef, isOver } = useDroppableSlot(slot.id, slot.group);
+  return (
+    <div
+      ref={setNodeRef}
+      data-customize-drop-target={slot.id}
+      className="pointer-events-none fixed rounded-sm border border-dashed border-border"
+      style={{
+        left: slot.rect.left,
+        top: slot.rect.top,
+        width: slot.rect.width,
+        height: slot.rect.height,
+        opacity: isOver ? 1 : 0.4,
       }}
     />
   );

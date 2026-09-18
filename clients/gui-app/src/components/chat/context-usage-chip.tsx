@@ -66,7 +66,28 @@ const PINNED_NUMBER_TRANSITION = {
   ease: "easeOut",
 } as const;
 
-export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
+export function ContextUsageChip(props: ContextUsageChipProps) {
+  const tileId = useComposerTileId();
+  const noUsage =
+    props.usage === null || computeEffectiveContextUsage(props.usage) === null;
+  const { ref, editing } = useLayoutHotspot({
+    settingId: "chat.context",
+    tileId,
+    ghost: noUsage,
+    condition: noUsage ? "no usage reported yet" : null,
+  });
+  return <ContextUsageChipView {...props} ref={ref} contextEditing={editing} />;
+}
+
+export function ContextUsageChipView({
+  usage,
+  onCompact,
+  ref: contextHotspotRef,
+  contextEditing,
+}: ContextUsageChipProps & {
+  ref: ((node: HTMLElement | null) => void) | null;
+  contextEditing: boolean;
+}) {
   const preserveFocusOnOpenRef = useRef(false);
   const pinBreakdownActionRef = useRef<HTMLButtonElement>(null);
   const compactTriggerRef = useRef<HTMLButtonElement>(null);
@@ -80,15 +101,8 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
     (s) => s.setPinContextUsageBreakdown,
   );
   const indicatorStyle = useLayoutSetting("contextIndicatorStyle");
-  const tileId = useComposerTileId();
   const effective = computeEffectiveContextUsage(usage);
   const noUsage = usage === null || effective === null;
-  const { ref: contextHotspotRef, editing: contextEditing } = useLayoutHotspot({
-    settingId: "chat.context",
-    tileId,
-    ghost: noUsage,
-    condition: "no usage reported yet",
-  });
 
   useLayoutEffect(() => {
     if (pinContextUsageBreakdown && focusPinnedActionAfterPinRef.current) {
@@ -115,7 +129,6 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
       <span
         ref={contextHotspotRef}
         data-testid="context-usage-chip-ghost"
-        aria-hidden
         className="inline-flex h-5 w-12 shrink-0 items-center justify-center rounded-sm border border-dashed border-border/60 text-ui-xs text-muted-foreground/50"
       >
         —
@@ -134,7 +147,7 @@ export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
 
   if (pinContextUsageBreakdown) {
     return (
-      <span ref={contextHotspotRef} className="contents">
+      <span ref={contextHotspotRef} className="col-span-full block min-w-0">
         <ContextUsagePinnedStrip
           rows={rows}
           effective={effective}
@@ -447,10 +460,10 @@ function ContextUsagePinnedStrip({
   actionRef,
 }: ContextUsagePinnedStripProps) {
   const fields = useLayoutSetting("pinnedContextBreakdownFields");
-  // `rows` is already in canonical order and only ever carries rows the data
-  // supports, so filtering it keeps both properties; the picker decides which
-  // of those the strip prints, not what the data can say.
-  const visibleRows = rows.filter((row) => fields.includes(row.key));
+  const order = useLayoutSetting("pinnedContextBreakdownOrder");
+  const visibleRows = order.flatMap((key) =>
+    rows.filter((row) => row.key === key && fields.includes(key)),
+  );
   const usedSummary = `${formatContextWindowTokens(effective.used)} / ${formatContextWindowTokens(effective.window)} used`;
   return (
     <div

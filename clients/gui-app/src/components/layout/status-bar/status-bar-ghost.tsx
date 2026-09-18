@@ -19,7 +19,6 @@ export function StatusBarGhost(): ReactNode {
     <div
       ref={ref}
       data-testid="status-bar-ghost"
-      aria-hidden
       className="h-6 shrink-0 border-t border-dashed border-border/60 bg-canvas/60 pb-safe-bottom"
     />
   );

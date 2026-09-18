@@ -1,3 +1,5 @@
+import type { CustomizeMove } from "@/lib/customize/customize-options";
+import { useWatchHostScope } from "@/hooks/host-scope/use-watch-host-scope";
 import type { ReactNode } from "react";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import {
@@ -1047,5 +1049,82 @@ function ResourceMonitorSubgroup(): ReactNode {
         }
       />
     </SettingsSubgroup>
+  );
+}
+
+/** Reuse the Settings checklist and passive cache observations in the editor. */
+export function CustomizeProviderLimits(props: {
+  providerId: RateLimitProviderId;
+  onGesture: (action: CustomizeMove) => void;
+}) {
+  const { scope, hasExplicitPick } = useWatchHostScope();
+  const scoped = useScopedHostBinding(scope);
+  const ambient = useHostBinding();
+  if (hasExplicitPick && !isHostScopeUsable(scope.status))
+    return (
+      <p className="text-ui-sm text-muted-foreground">
+        Limits are unavailable until this host reconnects.
+      </p>
+    );
+  return (
+    <HostRuntimeContext.Provider value={scoped ?? ambient}>
+      <CustomizeProviderLimitsList {...props} hostId={scope.hostId} />
+    </HostRuntimeContext.Provider>
+  );
+}
+function CustomizeProviderLimitsList(props: {
+  providerId: RateLimitProviderId;
+  hostId: string | null;
+  onGesture: (action: CustomizeMove) => void;
+}) {
+  const rows = useStatusBarProviderRows(props.hostId);
+  const selections = useLayoutStore(
+    (state) => state.statusBar.rateLimits.providers,
+  );
+  const row = rows.find((row) => row.providerId === props.providerId) ?? {
+    providerId: props.providerId,
+    label: providerDisplayName(props.providerId),
+    profileLabel: "",
+    windows: [],
+  };
+  const selection = statusBarProviderLimitSelection(
+    selections,
+    props.providerId,
+  );
+  const rendered = renderedSelection(row, selection);
+  return (
+    <SettingsCheckboxList
+      items={limitItems(row, rendered)}
+      ariaLabel={`${row.label} limits`}
+      onToggle={(value) =>
+        props.onGesture({
+          id: "provider-limit",
+          label: "Change provider limits",
+          announcement: "Provider limits changed",
+          disabled: false,
+          touches: ["statusBar"],
+          analytics:
+            value.kind === "automatic"
+              ? "layout.statusBar.rateLimits.providerAutomatic"
+              : "layout.statusBar.rateLimits.providerLimits",
+          run: () => {
+            const store = useLayoutStore.getState();
+            if (value.kind === "automatic")
+              store.setStatusBarProviderAutomatic(
+                props.providerId,
+                !rendered.automatic,
+              );
+            else {
+              if (rendered.automatic && !selection.automatic)
+                store.setStatusBarProviderAutomatic(props.providerId, true);
+              store.toggleStatusBarProviderLimit(
+                props.providerId,
+                value.windowKey,
+              );
+            }
+          },
+        })
+      }
+    />
   );
 }

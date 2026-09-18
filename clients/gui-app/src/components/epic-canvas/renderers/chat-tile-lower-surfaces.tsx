@@ -659,19 +659,19 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     settingId: "composer.filesChanged",
     tileId: input.chatId,
     ghost: !changesPresent,
-    condition: "nothing changed in this chat",
+    condition: changesPresent ? null : "nothing changed in this chat",
   });
   const activeAgentsHotspot = useLayoutHotspot({
     settingId: "composer.activeAgents",
     tileId: input.chatId,
     ghost: !activeAgentsHasContent,
-    condition: "no agents running",
+    condition: activeAgentsHasContent ? null : "no agents running",
   });
   const backgroundHotspot = useLayoutHotspot({
     settingId: "composer.background",
     tileId: input.chatId,
     ghost: !input.backgroundVisible,
-    condition: "nothing in the background",
+    condition: input.backgroundVisible ? null : "nothing in the background",
   });
   // The root agent counts as running too when it is itself active, exactly as
   // `ActiveAgentsPanel`'s own header counts it.
@@ -797,7 +797,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "filesChanged",
         glyph: "filesChanged",
-        hotspotRef: filesChangedHotspot.ref,
+        hotspotRef: revealed.has("filesChanged")
+          ? null
+          : filesChangedHotspot.ref,
         working: false,
         // The file count leads and the line counts follow, the same order and
         // the same tones the panel's own header uses - the chip stands in for
@@ -819,7 +821,9 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       models.push({
         section: "activeAgents",
         glyph: "activeAgents",
-        hotspotRef: activeAgentsHotspot.ref,
+        hotspotRef: revealed.has("activeAgents")
+          ? null
+          : activeAgentsHotspot.ref,
         // Mid-turn is the live state here, exactly as the roster in `label`
         // words it - the chip draws it, the sentence says it.
         working: agentsWorking,
@@ -844,7 +848,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         // The section's own mark whatever the rows are - activity lights it
         // rather than replacing it, and the kinds are the panel's to draw.
         glyph: "background",
-        hotspotRef: backgroundHotspot.ref,
+        hotspotRef: revealed.has("background") ? null : backgroundHotspot.ref,
         // The count IS the running count, so anything in it lights the chip -
         // and a shell whose process is alive is in that count whether or not it
         // is monitoring, since the host reports it as `running` either way
@@ -860,8 +864,12 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         pulseToken: backgroundRunning > 0 ? "running" : null,
       });
     }
-    return models;
+    return composer.dockOrder.flatMap((section) =>
+      models.filter((model) => model.section === section),
+    );
   }, [
+    composer.dockOrder,
+    revealed,
     filesChip,
     agentsChip,
     backgroundChip,

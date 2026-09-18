@@ -225,14 +225,13 @@ export function NavigatorResourceHotspotChip(
     return (
       <span
         ref={ref}
-        aria-hidden
         data-testid="sidebar-resource-chip-ghost"
         className="h-3 w-10 shrink-0 rounded-sm border border-dashed border-border/60 opacity-70"
       />
     );
   }
   return (
-    <span ref={ref} className="contents">
+    <span ref={ref} className="inline-flex items-center">
       <OwnerResourceChip
         epicId={props.owner.epicId}
         kind={props.owner.kind}

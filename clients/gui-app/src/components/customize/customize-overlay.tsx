@@ -9,7 +9,10 @@ import { useHotspotRects } from "@/components/customize/use-hotspot-rects";
 import { useCustomizeInert } from "@/components/customize/use-customize-inert";
 import { CustomizeBar } from "@/components/customize/customize-bar";
 import { CustomizePopover } from "@/components/customize/customize-popover";
-import { CustomizeDnd } from "@/components/customize/customize-dnd";
+import {
+  CustomizeDnd,
+  CustomizeDropTarget,
+} from "@/components/customize/customize-dnd";
 import {
   exitCustomize,
   setCustomizeInputMethod,
@@ -175,6 +178,15 @@ function LiveOverlay({ pointerEntry }: { pointerEntry: boolean }) {
         />
       </m.div>
       <CustomizeDnd>
+        {measurements.slots
+          .filter(
+            (slot) =>
+              slot.tileId === null ||
+              selected.some((instance) => instance.tileId === slot.tileId),
+          )
+          .map((slot) => (
+            <CustomizeDropTarget key={slot.id} slot={slot} />
+          ))}
         <CustomizeProxies instances={selected} rects={measurements.rects} />
       </CustomizeDnd>
       <CustomizePopover rects={measurements.rects} />

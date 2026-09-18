@@ -1,3 +1,4 @@
+import { useCustomizeStore } from "@/stores/customize/customize-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -67,12 +68,18 @@ vi.mock(
   },
 );
 
-vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
-  useRateLimitProfileSelection: () => ({
-    shownProfiles: {},
-    lastProfileByHarness: {},
+vi.mock(
+  "@/hooks/rate-limits/use-rate-limit-profile-selection",
+  async (original) => ({
+    ...(await original<
+      typeof import("@/hooks/rate-limits/use-rate-limit-profile-selection")
+    >()),
+    useRateLimitProfileSelection: () => ({
+      shownProfiles: {},
+      lastProfileByHarness: {},
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
   useRateLimitQueueScope: () => null,
@@ -1045,5 +1052,165 @@ describe("<AppStatusBar /> resource action ownership", () => {
     });
 
     expect(claimsOpenAction()).toBe("true");
+  });
+});
+
+describe("<AppStatusBar /> Customize editing (review w3 fixups)", () => {
+  beforeEach(() => {
+    scope = hostScopeFixture({});
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    useCustomizeStore.setState({ session: null, instances: new Map() });
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  function startEditingSession(): void {
+    useCustomizeStore.setState({
+      session: { scene: "in-place", opener: { kind: "none" }, startedAt: 0 },
+      instances: new Map(),
+      history: { past: [], future: [] },
+      announcement: "",
+    });
+  }
+
+  it("draws a resource ghost while editing with resources off, and nothing outside a session", () => {
+    useLayoutStore.setState({
+      statusBar: {
+        ...DEFAULT_STATUS_BAR_LAYOUT,
+        resources: { ...DEFAULT_STATUS_BAR_LAYOUT.resources, enabled: false },
+      },
+    });
+    startEditingSession();
+
+    render(<AppStatusBar />);
+    expect(screen.getByTestId("status-bar-resources-ghost")).not.toBeNull();
+    expect(screen.queryByTestId("status-bar-resource-segment")).toBeNull();
+    expect(screen.queryByTestId("resource-monitor-popover")).toBeNull();
+
+    cleanup();
+    useCustomizeStore.setState({ session: null });
+    render(<AppStatusBar />);
+    expect(screen.queryByTestId("status-bar-resources-ghost")).toBeNull();
+  });
+
+  it("renders the resource segment before the usage slot when resourceSide is left, and after it when right", () => {
+    useLayoutStore.setState({
+      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, resourceSide: "left" },
+    });
+    const { unmount } = render(<AppStatusBar />);
+    const resourceSegmentLeft = screen.getByTestId(
+      "status-bar-resource-segment",
+    );
+    const slotLeft = screen.getByTestId("status-bar-rate-limit-slot");
+    // Resource segment comes first in the tree: `slotLeft` FOLLOWS it.
+    expect(
+      Boolean(
+        resourceSegmentLeft.compareDocumentPosition(slotLeft) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+    unmount();
+
+    useLayoutStore.setState({
+      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, resourceSide: "right" },
+    });
+    render(<AppStatusBar />);
+    const resourceSegmentRight = screen.getByTestId(
+      "status-bar-resource-segment",
+    );
+    const slotRight = screen.getByTestId("status-bar-rate-limit-slot");
+    // Now the slot comes first: `resourceSegmentRight` FOLLOWS it.
+    expect(
+      Boolean(
+        slotRight.compareDocumentPosition(resourceSegmentRight) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the usage handle registered and rendered while the watched host's pick is unresolved", () => {
+    useWatchHostStore.setState({ scopedHostId: "host-b" });
+    scope = hostScopeFixture({
+      hosts: [HOST_A, HOST_B],
+      host: HOST_B,
+      activeHostId: "host-a",
+      activeHost: HOST_A,
+      isViewingActive: false,
+      status: "unreachable",
+    });
+    startEditingSession();
+
+    render(<AppStatusBar />);
+
+    // The strip is showing the host-unavailable notice instead of the
+    // cluster ...
+    expect(screen.getByTestId("status-bar-host-unavailable")).not.toBeNull();
+    // ... but the handle above that gate is still there and still a real
+    // hotspot, not silently dropped along with the cluster it opens.
+    const handle = screen.getByTestId("status-bar-usage-handle");
+    expect(handle).not.toBeNull();
+    const instance = [...useCustomizeStore.getState().instances.values()].find(
+      (candidate) => candidate.settingId === "statusBar.usage",
+    );
+    expect(instance).toBeDefined();
+    expect(instance?.ghost).toBe(true);
+    expect(instance?.condition).toBe("The selected host is unavailable");
+  });
+
+  it("shows a passive ghost placeholder per configured provider when usage limits are switched off", () => {
+    windowedProviders = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+      {
+        providerId: "opencode",
+        lane: "httpFetch",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+    ];
+    useLayoutStore.setState({
+      statusBar: {
+        ...DEFAULT_STATUS_BAR_LAYOUT,
+        rateLimits: {
+          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
+          enabled: false,
+        },
+      },
+    });
+    startEditingSession();
+
+    render(<AppStatusBar />);
+
+    const providerInstances = [
+      ...useCustomizeStore.getState().instances.values(),
+    ].filter((candidate) => candidate.settingId === "statusBar.provider");
+    expect(providerInstances).toHaveLength(2);
+    expect(providerInstances.every((instance) => instance.ghost)).toBe(true);
+    expect(
+      new Set(providerInstances.map((instance) => instance.tileId)),
+    ).toEqual(new Set(["codex:", "opencode:"]));
+
+    // Outside a session there is nothing to restore, so no ghosts mount.
+    cleanup();
+    useCustomizeStore.setState({ session: null, instances: new Map() });
+    render(<AppStatusBar />);
+    expect(
+      [...useCustomizeStore.getState().instances.values()].filter(
+        (candidate) => candidate.settingId === "statusBar.provider",
+      ),
+    ).toHaveLength(0);
   });
 });

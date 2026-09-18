@@ -5,6 +5,7 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini-bar";
 import {
+  statusBarSegmentKey,
   statusBarSegmentTooltip,
   type StatusBarUsageParts,
 } from "@/components/layout/status-bar/status-bar-usage-display";
@@ -92,6 +93,8 @@ function providerGhostCondition(
 ): string | null {
   if (segment.hidden) return "Hidden from the status bar";
   if (segment.state === "cold") return "No reading yet";
+  if (segment.state === "unavailable" || segment.state === "degraded")
+    return statusBarSegmentTooltip(segment);
   return null;
 }
 
@@ -102,7 +105,7 @@ export function StatusBarProviderSegment(
   const ghost = segment.hidden || segment.state === "cold";
   const { ref, editing } = useLayoutHotspot({
     settingId: "statusBar.provider",
-    tileId: segment.providerId,
+    tileId: statusBarSegmentKey(segment),
     ghost,
     condition: providerGhostCondition(segment),
   });

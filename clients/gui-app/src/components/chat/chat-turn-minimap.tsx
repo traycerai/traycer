@@ -8,6 +8,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
+  type Ref,
 } from "react";
 import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
@@ -29,6 +30,7 @@ import {
 } from "@/components/minimap/minimap-track-geometry";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
@@ -38,6 +40,7 @@ import {
 } from "@/stores/settings/settings-store";
 
 export interface ChatTurnMinimapProps {
+  readonly ref?: Ref<HTMLDivElement>;
   /** The array the list renders - the rail's `rowIndex` values feed
    *  `positionAtIndex`, so they must live in LIST index space, which on the
    *  windowed line includes placeholder rows. */
@@ -64,6 +67,7 @@ function clampIndex(index: number, itemCount: number): number {
 
 /** One compact window of turns. Hover or focus opens the full turn list. */
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
+  const { ref } = props;
   const {
     bottomInset,
     inViewRefreshRef,
@@ -106,6 +110,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const [maxVisibleItems, setMaxVisibleItems] = useState(2);
   const [open, setOpen] = useState(false);
   const regionRef = useRef<HTMLDivElement | null>(null);
+  const measuredRef = useMemo(() => mergeRefs(regionRef, ref), [ref]);
   const hitStripRef = useRef<HTMLButtonElement | null>(null);
 
   const refreshCurrent = useCallback((): void => {
@@ -316,7 +321,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
           side === "left" ? "left-3" : "right-3",
         )}
         {...paneActivationDeferProps}
-        ref={regionRef}
+        ref={measuredRef}
         role="group"
         style={{ height: resolveChatTurnMinimapHeightStyle(railItems.length) }}
       >

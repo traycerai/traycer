@@ -68,8 +68,8 @@ import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
-import { getCustomizeOptions } from "@/lib/customize/customize-options";
 import { registerChatSurfacesCustomizeOptions } from "@/lib/customize/options/chat-surfaces-options";
+import { CustomizePopover } from "@/components/customize/customize-popover";
 import { undo } from "@/lib/customize/history";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { InterviewSegment } from "@/stores/composer/chat-store";
@@ -2725,7 +2725,18 @@ describe("ChatMessages scroll policy", () => {
       expect(instance?.condition).toBe("Hidden");
     });
 
-    it("choosing Left writes the setting, and Undo restores it", async () => {
+    // Rewritten (wave-3 fixup, B3): `chat.minimapSide`'s choice `change` is
+    // now a plain write with no `recordGesture` of its own - only the
+    // popover's `mutate` records it. Calling `options.control.change(...)`
+    // directly against a hand-built instance (as this test used to) pushes
+    // nothing onto `history.past`, so the `undo()` afterward had nothing to
+    // pop; the old assertion only read as passing because it checked the
+    // post-`change` value before ever exercising `undo`'s real behaviour.
+    // Drives the real popover instead, against the REAL registered instance
+    // (not a hand-built stand-in), and also checks the measurable side
+    // effect: going from "hide" to "left" swaps the dashed ghost rail for
+    // the real minimap, and Undo swaps it back.
+    it("choosing Left through the real popover writes the setting, swaps the ghost for the real minimap, and Undo restores both", async () => {
       useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
       renderChatMessages({
         messages: makeTranscript(20),
@@ -2733,22 +2744,41 @@ describe("ChatMessages scroll policy", () => {
       });
       await settleLegendList();
 
-      const options = getCustomizeOptions({
-        key: "chat.minimapSide@shell:task-1",
-        settingId: "chat.minimapSide",
-        sceneId: "shell",
-        tileId: "task-1",
-        node: document.createElement("div"),
-        ghost: false,
-        condition: null,
-      });
+      expect(screen.getByTestId("chat-minimap-ghost")).not.toBeNull();
+      expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+
+      const instance = [
+        ...useCustomizeStore.getState().instances.values(),
+      ].find((candidate) => candidate.settingId === "chat.minimapSide");
+      expect(instance).toBeDefined();
+      if (!instance) throw new Error("chat.minimapSide did not register");
       act(() => {
-        if (options?.control?.kind === "choice") options.control.change("left");
+        useCustomizeStore.setState({ popoverKey: instance.key });
       });
+      const rects = new Map([[instance.key, new DOMRect(10, 10, 20, 20)]]);
+      render(<CustomizePopover rects={rects} />);
+
+      fireEvent.click(screen.getByRole("radio", { name: "Left" }));
+
       expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
+      expect(useCustomizeStore.getState().history.past).toHaveLength(1);
+      // Measurable side effect, not just the store: content is present and
+      // the side is no longer "hide", so the ghost placeholder gives way to
+      // the real minimap.
+      await waitFor(() =>
+        expect(screen.queryByTestId("chat-minimap-ghost")).toBeNull(),
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("chat-turn-minimap")).not.toBeNull(),
+      );
 
       act(() => undo());
       expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
+      expect(useCustomizeStore.getState().history.past).toHaveLength(0);
+      await waitFor(() =>
+        expect(screen.queryByTestId("chat-turn-minimap")).toBeNull(),
+      );
+      expect(screen.getByTestId("chat-minimap-ghost")).not.toBeNull();
     });
   });
 

@@ -1,4 +1,6 @@
+import { withOptionPictures } from "@/lib/customize/options/with-option-pictures";
 import { useSyncExternalStore, type ReactNode } from "react";
+import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import type { AnalyticsSetting } from "@/lib/analytics";
 import type { CustomizeSettingId } from "@/lib/customize/catalog";
 import type { LayoutPatch } from "@/lib/customize/history";
@@ -20,6 +22,14 @@ interface ControlBase {
 }
 export type CustomizeControl = ControlBase &
   (
+    | {
+        readonly kind: "group";
+        readonly controls: ReadonlyArray<CustomizeControl>;
+      }
+    | {
+        readonly kind: "provider-limits";
+        readonly providerId: RateLimitProviderId;
+      }
     | {
         readonly kind: "choice";
         readonly value: string;
@@ -43,7 +53,9 @@ export type CustomizeControl = ControlBase &
          * the selected ones) rather than the selection. Absent for a plain
          * checklist with no meaningful order of its own (`sidebar.resourceChips`).
          */
-        readonly moveItem: ((value: string, direction: -1 | 1) => void) | null;
+        readonly moveItem:
+          | ((value: string, direction: -1 | 1) => CustomizeMove | null)
+          | null;
       }
     | {
         readonly kind: "composite";
@@ -107,7 +119,10 @@ export function registerCustomizeOptions(
 export function getCustomizeOptions(
   instance: HotspotInstance,
 ): CustomizeOptions | null {
-  return registry.get(instance.settingId)?.(instance) ?? null;
+  const options = registry.get(instance.settingId)?.(instance) ?? null;
+  return options?.control
+    ? { ...options, control: withOptionPictures(options.control) }
+    : options;
 }
 export function useCustomizeOptionsRegistry(): void {
   useSyncExternalStore(

@@ -47,33 +47,7 @@ export function ActiveAgentsPanel(props: {
       variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger
-          className="group/agents flex min-w-0 flex-1 items-center text-left"
-          variant="panel"
-        >
-          <ChevronDown
-            aria-hidden
-            className={cn(
-              "size-3 shrink-0 text-muted-foreground/70 transition-transform",
-              open ? null : "-rotate-90",
-            )}
-          />
-          <LivePulse
-            size="xs"
-            tone="active"
-            ariaLabel="Agents running"
-            className={undefined}
-          />
-          <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
-            Active agents
-          </span>
-          <span aria-hidden className="shrink-0 text-muted-foreground/40">
-            ·
-          </span>
-          <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-            {runningCount} running
-          </span>
-        </CollapsibleTrigger>
+        <ActiveAgentsHeader open={open} runningCount={runningCount} />
         {open ? null : (
           // Collapsed: a one-click "Stop all" lives in the header (like the
           // accumulated-changes "Undo all"). Expanding moves it onto the
@@ -109,5 +83,43 @@ export function ActiveAgentsPanel(props: {
         </div>
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+export function ActiveAgentsHeader({
+  open,
+  runningCount,
+}: {
+  open: boolean;
+  runningCount: number;
+}) {
+  return (
+    <CollapsibleTrigger
+      className="group/agents flex min-w-0 flex-1 items-center text-left"
+      variant="panel"
+    >
+      <ChevronDown
+        aria-hidden
+        className={cn(
+          "size-3 shrink-0 text-muted-foreground/70 transition-transform",
+          open ? null : "-rotate-90",
+        )}
+      />
+      <LivePulse
+        size="xs"
+        tone="active"
+        ariaLabel="Agents running"
+        className={undefined}
+      />
+      <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
+        Active agents
+      </span>
+      <span aria-hidden className="shrink-0 text-muted-foreground/40">
+        ·
+      </span>
+      <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+        {runningCount} running
+      </span>
+    </CollapsibleTrigger>
   );
 }

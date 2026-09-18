@@ -1,3 +1,4 @@
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
@@ -145,31 +146,13 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // control.
   const trigger = (
     <DropdownMenuTrigger asChild>
-      <ToolbarPillButton
+      <PermissionsTrigger
         ref={interactive ? hotspotRef : undefined}
-        aria-label={label}
+        label={label}
         disabled={disabled}
-        className={cn(
-          "max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50",
-          compact && "justify-center",
-        )}
-      >
-        <Icon className="size-4 shrink-0" />
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden",
-            compact && "hidden",
-          )}
-        >
-          {label}
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
-            compact && "hidden",
-          )}
-        />
-      </ToolbarPillButton>
+        compact={compact}
+        icon={<Icon className="size-4 shrink-0" />}
+      />
     </DropdownMenuTrigger>
   );
 
@@ -316,5 +299,46 @@ function PermissionOptionBody(props: {
         </span>
       ) : null}
     </span>
+  );
+}
+
+export function PermissionsTrigger({
+  label,
+  disabled,
+  compact,
+  icon,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  compact: boolean;
+  icon: ReactNode;
+  ref?: Ref<HTMLButtonElement>;
+}) {
+  return (
+    <ToolbarPillButton
+      {...rest}
+      aria-label={label}
+      disabled={disabled}
+      className={cn(
+        "max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50",
+        compact && "justify-center",
+      )}
+    >
+      {icon}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden",
+          compact && "hidden",
+        )}
+      >
+        {label}
+      </span>
+      <ChevronDown
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
+          compact && "hidden",
+        )}
+      />
+    </ToolbarPillButton>
   );
 }

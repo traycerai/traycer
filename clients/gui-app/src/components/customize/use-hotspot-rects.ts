@@ -4,7 +4,14 @@ import type {
   InstanceKey,
 } from "@/stores/customize/customize-store";
 
+export interface DropSlotRect {
+  readonly id: string;
+  readonly group: string;
+  readonly tileId: string | null;
+  readonly rect: DOMRect;
+}
 export interface HotspotRects {
+  readonly slots: ReadonlyArray<DropSlotRect>;
   readonly source: ReadonlyMap<InstanceKey, HotspotInstance>;
   readonly rects: ReadonlyMap<InstanceKey, DOMRect>;
   readonly unreachable: ReadonlySet<InstanceKey>;
@@ -15,6 +22,7 @@ export function useHotspotRects(
 ): HotspotRects {
   const [measured, setMeasured] = useState<HotspotRects>({
     source: instances,
+    slots: [],
     rects: new Map(),
     unreachable: new Set(),
     version: 0,
@@ -37,8 +45,33 @@ export function useHotspotRects(
           unreachable.add(key);
         else rects.set(key, rect);
       }
+      const slots: DropSlotRect[] = [];
+      for (const node of document.querySelectorAll<HTMLElement>(
+        "[data-customize-drop-slot]",
+      )) {
+        const id = node.dataset.customizeDropSlot;
+        const group = node.dataset.customizeDropGroup;
+        const rect = node.getBoundingClientRect();
+        if (
+          !id ||
+          !group ||
+          !node.getClientRects().length ||
+          rect.width <= 0 ||
+          rect.height <= 0 ||
+          node.closest('[hidden], [aria-hidden="true"]')
+        )
+          continue;
+        resize.observe(node);
+        slots.push({
+          id,
+          group,
+          tileId: node.dataset.customizeDropTile ?? null,
+          rect,
+        });
+      }
       setMeasured((previous) => ({
         source: instances,
+        slots,
         rects,
         unreachable,
         version: previous.version + 1,

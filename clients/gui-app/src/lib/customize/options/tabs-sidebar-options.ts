@@ -3,7 +3,6 @@ import {
   type CustomizeMove,
   type CustomizeOptions,
 } from "@/lib/customize/customize-options";
-import { recordSettingGesture } from "@/lib/customize/history";
 import { getLeftPanelDefinition } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import {
   groupSidebarPanelWithPrevious,
@@ -17,7 +16,10 @@ import type {
   LeftPanelGroup,
   LeftPanelId,
 } from "@/stores/epics/left-panel-store";
-import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
+import {
+  LEFT_PANEL_IDS,
+  useEpicLeftPanelStore,
+} from "@/stores/epics/left-panel-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
 import {
@@ -39,13 +41,8 @@ function panelMoves(panelId: LeftPanelId): ReadonlyArray<CustomizeMove> {
   const groups = useEpicLeftPanelStore.getState().panelGroups;
   const actions = sidebarPanelRowActions(groups, panelId);
   const definition = getLeftPanelDefinition(panelId);
-  const write = (label: string, next: ReadonlyArray<LeftPanelGroup>): void => {
-    recordSettingGesture(
-      "layout.sidebar.panelVisibility",
-      label,
-      ["panels"],
-      () => useEpicLeftPanelStore.getState().applyPanelGroups(next),
-    );
+  const write = (next: ReadonlyArray<LeftPanelGroup>): void => {
+    useEpicLeftPanelStore.getState().applyPanelGroups(next);
   };
   return [
     {
@@ -55,7 +52,7 @@ function panelMoves(panelId: LeftPanelId): ReadonlyArray<CustomizeMove> {
       disabled: !actions.canMoveUp,
       touches: ["panels"],
       analytics: "layout.sidebar.panelVisibility",
-      run: () => write("Move up", moveSidebarPanelUp(groups, panelId)),
+      run: () => write(moveSidebarPanelUp(groups, panelId)),
     },
     {
       id: "move-down",
@@ -64,7 +61,7 @@ function panelMoves(panelId: LeftPanelId): ReadonlyArray<CustomizeMove> {
       disabled: !actions.canMoveDown,
       touches: ["panels"],
       analytics: "layout.sidebar.panelVisibility",
-      run: () => write("Move down", moveSidebarPanelDown(groups, panelId)),
+      run: () => write(moveSidebarPanelDown(groups, panelId)),
     },
     {
       id: "group-with-previous",
@@ -73,11 +70,7 @@ function panelMoves(panelId: LeftPanelId): ReadonlyArray<CustomizeMove> {
       disabled: !actions.canGroupWithPrevious,
       touches: ["panels"],
       analytics: "layout.sidebar.panelVisibility",
-      run: () =>
-        write(
-          "Group with previous",
-          groupSidebarPanelWithPrevious(groups, panelId),
-        ),
+      run: () => write(groupSidebarPanelWithPrevious(groups, panelId)),
     },
     {
       id: "ungroup",
@@ -86,7 +79,7 @@ function panelMoves(panelId: LeftPanelId): ReadonlyArray<CustomizeMove> {
       disabled: !actions.canUngroup,
       touches: ["panels"],
       analytics: "layout.sidebar.panelVisibility",
-      run: () => write("Ungroup", ungroupSidebarPanel(groups, panelId)),
+      run: () => write(ungroupSidebarPanel(groups, panelId)),
     },
   ];
 }
@@ -114,12 +107,7 @@ export function registerTabsSidebarCustomizeOptions(): void {
             });
             return;
           }
-          recordSettingGesture(
-            "homeTabEnabled",
-            checked ? "Show Home tab" : "Hide Home tab",
-            ["settings"],
-            () => useSettingsStore.getState().setHomeTabEnabled(checked),
-          );
+          useSettingsStore.getState().setHomeTabEnabled(checked);
         },
       },
       moves: [],
@@ -128,7 +116,9 @@ export function registerTabsSidebarCustomizeOptions(): void {
   });
 
   registerCustomizeOptions("sidebar.panel", (instance): CustomizeOptions => {
-    const panelId = instance.tileId as LeftPanelId;
+    const panelId = LEFT_PANEL_IDS.find((id) => id === instance.tileId);
+    if (panelId === undefined)
+      return { state: "Unavailable", control: null, moves: [], drag: null };
     const groups = useEpicLeftPanelStore.getState().panelGroups;
     const definition = getLeftPanelDefinition(panelId);
     // The registering component (a real tile or `RailGhostTile`) already
@@ -152,15 +142,9 @@ export function registerTabsSidebarCustomizeOptions(): void {
           // this factory to know the LIVE presence signal, and a check that
           // silently fell back to auto would immediately revert itself the
           // moment presence disagreed.
-          recordSettingGesture(
-            "layout.sidebar.panelVisibility",
-            checked ? `Show ${definition.title}` : `Hide ${definition.title}`,
-            ["panels"],
-            () =>
-              useEpicLeftPanelStore
-                .getState()
-                .setPanelVisibilityOverride(panelId, checked),
-          );
+          useEpicLeftPanelStore
+            .getState()
+            .setPanelVisibilityOverride(panelId, checked);
         },
       },
       moves: panelMoves(panelId),
@@ -189,12 +173,7 @@ export function registerTabsSidebarCustomizeOptions(): void {
             touches: ["panels"],
             analytics: "layout.sidebar.panelVisibility",
             run: () => {
-              recordSettingGesture(
-                "layout.sidebar.panelVisibility",
-                "Arrange sidebar",
-                ["panels"],
-                () => useEpicLeftPanelStore.getState().applyPanelGroups(next),
-              );
+              useEpicLeftPanelStore.getState().applyPanelGroups(next);
             },
           };
         },
@@ -225,12 +204,7 @@ export function registerTabsSidebarCustomizeOptions(): void {
           const next = NAVIGATOR_RESOURCE_METRICS.filter((metric) =>
             values.includes(metric),
           );
-          recordSettingGesture(
-            "layout.sidebar.resourceMetrics",
-            "Change resource metrics",
-            ["settings"],
-            () => useSettingsStore.getState().setNavigatorResourceMetrics(next),
-          );
+          useSettingsStore.getState().setNavigatorResourceMetrics(next);
         },
       },
       moves: [],
@@ -242,5 +216,7 @@ export function registerTabsSidebarCustomizeOptions(): void {
 function overIdToPanelId(overId: string): LeftPanelId | null {
   const separatorIndex = overId.lastIndexOf(":");
   if (separatorIndex === -1) return null;
-  return overId.slice(separatorIndex + 1) as LeftPanelId;
+  return (
+    LEFT_PANEL_IDS.find((id) => id === overId.slice(separatorIndex + 1)) ?? null
+  );
 }

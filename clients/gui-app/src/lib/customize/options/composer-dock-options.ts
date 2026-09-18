@@ -3,7 +3,6 @@ import {
   type CustomizeMove,
   type CustomizeOptions,
 } from "@/lib/customize/customize-options";
-import { recordSettingGesture } from "@/lib/customize/history";
 import {
   DOCK_SECTION_IDS,
   useLayoutStore,
@@ -43,10 +42,8 @@ function moveDockBeforeTarget(
   return next;
 }
 
-function writeDockOrder(label: string, next: ReadonlyArray<DockSection>): void {
-  recordSettingGesture("layout.composer.dockOrder", label, ["composer"], () =>
-    useLayoutStore.getState().setComposerDockOrder(next),
-  );
+function writeDockOrder(next: ReadonlyArray<DockSection>): void {
+  useLayoutStore.getState().setComposerDockOrder(next);
 }
 
 function dockMoves(id: DockSection): ReadonlyArray<CustomizeMove> {
@@ -63,7 +60,7 @@ function dockMoves(id: DockSection): ReadonlyArray<CustomizeMove> {
       touches: ["composer"],
       analytics: "layout.composer.dockOrder",
       run: () => {
-        if (up !== null) writeDockOrder("Move up", up);
+        if (up !== null) writeDockOrder(up);
       },
     },
     {
@@ -74,7 +71,7 @@ function dockMoves(id: DockSection): ReadonlyArray<CustomizeMove> {
       touches: ["composer"],
       analytics: "layout.composer.dockOrder",
       run: () => {
-        if (down !== null) writeDockOrder("Move down", down);
+        if (down !== null) writeDockOrder(down);
       },
     },
   ];
@@ -87,9 +84,7 @@ function overIdToDockSection(overId: string): DockSection | null {
   const prefix = "composer.";
   if (!settingId.startsWith(prefix)) return null;
   const candidate = settingId.slice(prefix.length);
-  return (DOCK_SECTION_IDS as ReadonlyArray<string>).includes(candidate)
-    ? (candidate as DockSection)
-    : null;
+  return DOCK_SECTION_IDS.find((id) => id === candidate) ?? null;
 }
 
 function dockDrag(id: DockSection) {
@@ -110,7 +105,7 @@ function dockDrag(id: DockSection) {
         disabled: false,
         touches: ["composer"] as const,
         analytics: "layout.composer.dockOrder" as const,
-        run: () => writeDockOrder("Arrange dock", next),
+        run: () => writeDockOrder(next),
       };
     },
   };
@@ -143,19 +138,11 @@ export function registerComposerDockCustomizeOptions(): void {
           },
         ],
         change: (value) => {
-          recordSettingGesture(
-            "layout.composer.filesChanged",
-            value === "compact"
-              ? "Compact files changed"
-              : "Show files changed",
-            ["composer"],
-            () =>
-              useLayoutStore
-                .getState()
-                .setComposerFilesChanged(
-                  value === "compact" ? "compact" : "visible",
-                ),
-          );
+          useLayoutStore
+            .getState()
+            .setComposerFilesChanged(
+              value === "compact" ? "compact" : "visible",
+            );
         },
       },
       moves: dockMoves("filesChanged"),
@@ -189,19 +176,11 @@ export function registerComposerDockCustomizeOptions(): void {
           },
         ],
         change: (value) => {
-          recordSettingGesture(
-            "layout.composer.activeAgents",
-            value === "compact"
-              ? "Compact active agents"
-              : "Show active agents",
-            ["composer"],
-            () =>
-              useLayoutStore
-                .getState()
-                .setComposerActiveAgents(
-                  value === "compact" ? "compact" : "visible",
-                ),
-          );
+          useLayoutStore
+            .getState()
+            .setComposerActiveAgents(
+              value === "compact" ? "compact" : "visible",
+            );
         },
       },
       moves: dockMoves("activeAgents"),
@@ -235,17 +214,9 @@ export function registerComposerDockCustomizeOptions(): void {
           },
         ],
         change: (value) => {
-          recordSettingGesture(
-            "layout.composer.background",
-            value === "compact" ? "Compact background" : "Show background",
-            ["composer"],
-            () =>
-              useLayoutStore
-                .getState()
-                .setComposerBackground(
-                  value === "compact" ? "compact" : "visible",
-                ),
-          );
+          useLayoutStore
+            .getState()
+            .setComposerBackground(value === "compact" ? "compact" : "visible");
         },
       },
       moves: dockMoves("background"),

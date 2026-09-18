@@ -27,7 +27,7 @@ export interface ChatDockCompactChipModel {
   readonly section: ChatDockSection;
   readonly glyph: ChatDockCompactChipGlyph;
   /** This chip's Customize hotspot, while it stands in for the folded row. */
-  readonly hotspotRef: (node: HTMLElement | null) => void;
+  readonly hotspotRef: ((node: HTMLElement | null) => void) | null;
   /**
    * True while something in this section is in flight.
    *

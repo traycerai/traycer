@@ -215,21 +215,6 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
     [availabilityContext, panelGroups],
   );
   const editing = useCustomizeStore((state) => state.session !== null);
-  // Every panel this build knows about that isn't currently on the rail -
-  // presence-gated, or explicitly hidden - so a Customize session can still
-  // configure it. Not positioned inside its stored group's pill: the pill
-  // combines panels into one real button, and a ghost sharing that slot with
-  // a visible sibling would need a second target on the same pixels.
-  const hiddenPanelIds = useMemo(
-    () =>
-      editing
-        ? LEFT_PANEL_DEFINITIONS.filter(
-            (definition) =>
-              !isLeftPanelVisible(definition, availabilityContext),
-          ).map((definition) => definition.id)
-        : [],
-    [editing, availabilityContext],
-  );
   // Which icon lights up. Resolved rather than compared against `activePanelId`
   // directly so a hidden active panel highlights whatever the body fell back
   // to, instead of leaving the rail with nothing marked.
@@ -313,42 +298,63 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
                 orientation={orientation}
               />
             ) : null}
-            {visibleGroups.map((group, groupIndex) => {
-              const groupDropPosition =
-                railPanelDropPreview?.kind === "left-panel-rail" &&
-                railPanelDropPreview.panelId === group.primaryPanel.id
-                  ? railPanelDropPreview.position
-                  : null;
-              return (
-                <Fragment key={group.primaryPanel.id}>
-                  <RailGroupButton
-                    tabId={tabId}
-                    panelIds={group.panelIds}
-                    primaryPanel={group.primaryPanel}
-                    orientation={orientation}
-                    active={groupIndex === activeGroupIndex && !collapsed}
-                    onClick={() => handleClick(group.panelIds)}
-                    onContextMenu={setContextPanelId}
-                    dropPosition={
-                      groupDropPosition === "combine" ? "combine" : null
-                    }
-                  />
-                  {railBoundaryIndex === groupIndex + 1 ? (
-                    <RailBoundaryPreview
-                      definition={panelSectionDropDefinition}
-                      orientation={orientation}
-                    />
-                  ) : null}
-                </Fragment>
-              );
-            })}
-            {hiddenPanelIds.map((panelId) => (
-              <RailGhostTile
-                key={panelId}
-                panelId={panelId}
-                orientation={orientation}
-              />
-            ))}
+            {editing
+              ? panelGroups.flatMap((group) =>
+                  group.panelIds.map((panelId) => {
+                    const definition = getLeftPanelDefinition(panelId);
+                    return isLeftPanelVisible(
+                      definition,
+                      availabilityContext,
+                    ) ? (
+                      <RailGroupButton
+                        key={panelId}
+                        tabId={tabId}
+                        panelIds={[panelId]}
+                        primaryPanel={definition}
+                        orientation={orientation}
+                        active={activePanelId === panelId && !collapsed}
+                        onClick={() => handleClick(group.panelIds)}
+                        onContextMenu={setContextPanelId}
+                        dropPosition={null}
+                      />
+                    ) : (
+                      <RailGhostTile
+                        key={panelId}
+                        panelId={panelId}
+                        orientation={orientation}
+                      />
+                    );
+                  }),
+                )
+              : visibleGroups.map((group, groupIndex) => {
+                  const groupDropPosition =
+                    railPanelDropPreview?.kind === "left-panel-rail" &&
+                    railPanelDropPreview.panelId === group.primaryPanel.id
+                      ? railPanelDropPreview.position
+                      : null;
+                  return (
+                    <Fragment key={group.primaryPanel.id}>
+                      <RailGroupButton
+                        tabId={tabId}
+                        panelIds={group.panelIds}
+                        primaryPanel={group.primaryPanel}
+                        orientation={orientation}
+                        active={groupIndex === activeGroupIndex && !collapsed}
+                        onClick={() => handleClick(group.panelIds)}
+                        onContextMenu={setContextPanelId}
+                        dropPosition={
+                          groupDropPosition === "combine" ? "combine" : null
+                        }
+                      />
+                      {railBoundaryIndex === groupIndex + 1 ? (
+                        <RailBoundaryPreview
+                          definition={panelSectionDropDefinition}
+                          orientation={orientation}
+                        />
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
           </div>
         </ContextMenuTrigger>
         <RailContextMenuContent
@@ -719,7 +725,6 @@ function RailGhostTile(props: {
     >
       <div
         ref={ref}
-        aria-hidden
         data-testid={`epic-rail-ghost-${props.panelId}`}
         className={cn(
           LEFT_PANEL_RAIL_TILE_CLASS,

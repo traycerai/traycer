@@ -4,7 +4,6 @@ import {
   type CustomizeMove,
   type CustomizeOptions,
 } from "@/lib/customize/customize-options";
-import { recordSettingGesture } from "@/lib/customize/history";
 import {
   TOOLBAR_ITEM_IDS,
   useLayoutStore,
@@ -89,13 +88,8 @@ function moveBeforeTarget(
   return { ...cleared, [targetSide]: nextList };
 }
 
-function writeToolbarOrder(label: string, next: ComposerToolbarOrder): void {
-  recordSettingGesture(
-    "layout.composer.toolbarOrder",
-    label,
-    ["composer"],
-    () => useLayoutStore.getState().setComposerToolbarOrder(next),
-  );
+function writeToolbarOrder(next: ComposerToolbarOrder): void {
+  useLayoutStore.getState().setComposerToolbarOrder(next);
 }
 
 function toolbarMoves(id: ToolbarItemId): ReadonlyArray<CustomizeMove> {
@@ -113,7 +107,7 @@ function toolbarMoves(id: ToolbarItemId): ReadonlyArray<CustomizeMove> {
       touches: ["composer"],
       analytics: "layout.composer.toolbarOrder",
       run: () => {
-        if (left !== null) writeToolbarOrder("Move left", left);
+        if (left !== null) writeToolbarOrder(left);
       },
     },
     {
@@ -124,7 +118,7 @@ function toolbarMoves(id: ToolbarItemId): ReadonlyArray<CustomizeMove> {
       touches: ["composer"],
       analytics: "layout.composer.toolbarOrder",
       run: () => {
-        if (right !== null) writeToolbarOrder("Move right", right);
+        if (right !== null) writeToolbarOrder(right);
       },
     },
     {
@@ -138,8 +132,7 @@ function toolbarMoves(id: ToolbarItemId): ReadonlyArray<CustomizeMove> {
       touches: ["composer"],
       analytics: "layout.composer.toolbarOrder",
       run: () => {
-        if (toOtherSide !== null)
-          writeToolbarOrder("Move to other side", toOtherSide);
+        if (toOtherSide !== null) writeToolbarOrder(toOtherSide);
       },
     },
   ];
@@ -152,9 +145,7 @@ function overIdToToolbarItemId(overId: string): ToolbarItemId | null {
   const prefix = "composer.";
   if (!settingId.startsWith(prefix)) return null;
   const candidate = settingId.slice(prefix.length);
-  return (TOOLBAR_ITEM_IDS as ReadonlyArray<string>).includes(candidate)
-    ? (candidate as ToolbarItemId)
-    : null;
+  return TOOLBAR_ITEM_IDS.find((id) => id === candidate) ?? null;
 }
 
 function toolbarDrag(id: ToolbarItemId) {
@@ -165,8 +156,28 @@ function toolbarDrag(id: ToolbarItemId) {
       overId: string,
     ): CustomizeMove | CustomizeDropRefusal | null => {
       const targetId = overIdToToolbarItemId(overId);
-      if (targetId === null) return null;
+      const slot =
+        (["left", "right"] as const).find((side) =>
+          overId.startsWith(`toolbar:${side}@`),
+        ) ?? null;
+      if (targetId === null && slot === null) return null;
       const order = useLayoutStore.getState().composer.toolbar;
+      if (slot !== null) {
+        if (id === "model" && slot === "left")
+          return { refused: "The model chip must stay on the right" };
+        const cleared = withoutItem(order, id);
+        return {
+          id: "drop",
+          label: "Arrange toolbar",
+          announcement: `${TOOLBAR_ITEM_LABELS[id]} moved`,
+          disabled: false,
+          touches: ["composer"],
+          analytics: "layout.composer.toolbarOrder",
+          run: () =>
+            writeToolbarOrder({ ...cleared, [slot]: [...cleared[slot], id] }),
+        };
+      }
+      if (targetId === null) return null;
       if (id === "model" && sideOf(order, targetId) === "left") {
         return { refused: "The model chip must stay on the right" };
       }
@@ -180,7 +191,7 @@ function toolbarDrag(id: ToolbarItemId) {
         disabled: false,
         touches: ["composer"] as const,
         analytics: "layout.composer.toolbarOrder" as const,
-        run: () => writeToolbarOrder("Arrange toolbar", next),
+        run: () => writeToolbarOrder(next),
       };
     },
   };
@@ -213,17 +224,9 @@ export function registerComposerToolbarCustomizeOptions(): void {
           },
         ],
         change: (value) => {
-          recordSettingGesture(
-            "layout.composer.attachImage",
-            value === "hidden" ? "Hide attach image" : "Show attach image",
-            ["composer"],
-            () =>
-              useLayoutStore
-                .getState()
-                .setComposerAttachImage(
-                  value === "hidden" ? "hidden" : "visible",
-                ),
-          );
+          useLayoutStore
+            .getState()
+            .setComposerAttachImage(value === "hidden" ? "hidden" : "visible");
         },
       },
       moves: toolbarMoves("attachImage"),
@@ -257,15 +260,9 @@ export function registerComposerToolbarCustomizeOptions(): void {
           },
         ],
         change: (value) => {
-          recordSettingGesture(
-            "layout.composer.access",
-            value === "compact" ? "Compact access" : "Show access",
-            ["composer"],
-            () =>
-              useLayoutStore
-                .getState()
-                .setComposerAccess(value === "compact" ? "compact" : "visible"),
-          );
+          useLayoutStore
+            .getState()
+            .setComposerAccess(value === "compact" ? "compact" : "visible");
         },
       },
       moves: toolbarMoves("access"),
@@ -323,13 +320,7 @@ export function registerComposerToolbarCustomizeOptions(): void {
             if (value !== "text" && value !== "bars" && value !== "bars-text") {
               return;
             }
-            recordSettingGesture(
-              "layout.composer.reasoningIndicator",
-              "Change model chip style",
-              ["composer"],
-              () =>
-                useLayoutStore.getState().setComposerReasoningIndicator(value),
-            );
+            useLayoutStore.getState().setComposerReasoningIndicator(value);
           },
         },
         more: [
@@ -356,15 +347,9 @@ export function registerComposerToolbarCustomizeOptions(): void {
             ],
             change: (value) => {
               if (value !== "slider" && value !== "list") return;
-              recordSettingGesture(
-                "layout.composer.reasoningFooterControl",
-                "Change picker footer control",
-                ["composer"],
-                () =>
-                  useLayoutStore
-                    .getState()
-                    .setComposerReasoningFooterControl(value),
-              );
+              useLayoutStore
+                .getState()
+                .setComposerReasoningFooterControl(value);
             },
           },
         ],
@@ -405,15 +390,9 @@ export function registerComposerToolbarCustomizeOptions(): void {
           },
         ],
         change: (value) => {
-          recordSettingGesture(
-            "layout.composer.mic",
-            value === "hidden" ? "Hide microphone" : "Show microphone",
-            ["composer"],
-            () =>
-              useLayoutStore
-                .getState()
-                .setComposerMic(value === "hidden" ? "hidden" : "visible"),
-          );
+          useLayoutStore
+            .getState()
+            .setComposerMic(value === "hidden" ? "hidden" : "visible");
         },
       },
       moves: toolbarMoves("mic"),

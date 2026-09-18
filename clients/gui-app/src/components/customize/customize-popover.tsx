@@ -1,3 +1,4 @@
+import { CustomizeProviderLimits } from "@/components/settings/panels/layout/status-bar-layout-group";
 import { isCustomizePointerInput } from "@/lib/customize/enter-exit";
 import { useCustomizeLayout } from "@/components/customize/use-customize-layout";
 import { useMemo, useState } from "react";
@@ -155,7 +156,7 @@ function Control({
     control.kind === "composite" &&
       disclosure !== null &&
       control.more.some((item) =>
-        `${item.id} ${item.label}`
+        `${item.id} ${item.label} ${item.kind === "choice" || item.kind === "multi" ? item.options.map((option) => option.label).join(" ") : ""}`
           .toLowerCase()
           .includes(disclosure.toLowerCase()),
       ),
@@ -166,6 +167,29 @@ function Control({
       control.label,
       control.touches,
       run,
+    );
+  if (control.kind === "group")
+    return (
+      <fieldset className="flex min-w-0 flex-col gap-3">
+        <legend className="text-ui-sm font-medium">{control.label}</legend>
+        {control.controls.map((item) => (
+          <Control key={item.id} control={item} disclosure={disclosure} />
+        ))}
+      </fieldset>
+    );
+  if (control.kind === "provider-limits")
+    return (
+      <CustomizeProviderLimits
+        providerId={control.providerId}
+        onGesture={(action) =>
+          recordSettingGesture(
+            action.analytics,
+            action.label,
+            action.touches,
+            action.run,
+          )
+        }
+      />
     );
   if (control.kind === "composite")
     return (
@@ -229,6 +253,17 @@ function Control({
       </div>
     );
   const moveItem = control.moveItem;
+  const move = (value: string, direction: -1 | 1) => {
+    const action = moveItem?.(value, direction);
+    if (!action || action.disabled) return;
+    recordSettingGesture(
+      action.analytics,
+      action.label,
+      action.touches,
+      action.run,
+    );
+    useCustomizeStore.getState().announce(action.announcement);
+  };
   return (
     <div
       role="group"
@@ -274,7 +309,7 @@ function Control({
                   size="sm"
                   variant="outline"
                   disabled={index === 0}
-                  onClick={() => mutate(() => moveItem(option.value, -1))}
+                  onClick={() => move(option.value, -1)}
                 >
                   Move up
                 </Button>
@@ -283,7 +318,7 @@ function Control({
                   size="sm"
                   variant="outline"
                   disabled={index === control.options.length - 1}
-                  onClick={() => mutate(() => moveItem(option.value, 1))}
+                  onClick={() => move(option.value, 1)}
                 >
                   Move down
                 </Button>

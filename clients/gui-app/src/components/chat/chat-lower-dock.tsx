@@ -216,7 +216,6 @@ function dockGhostRow(props: {
       key={props.key}
       ref={props.hotspotRef}
       data-testid="chat-dock-ghost-row"
-      aria-hidden
       className={cn(
         "flex items-center px-3 py-2 text-ui-xs text-muted-foreground/60",
         props.separated && "border-t border-border/50",
@@ -239,7 +238,7 @@ function dockRow(props: {
   const { dock } = props;
   if (props.section === "filesChanged") {
     return (
-      <span key={props.key} className="contents" ref={props.hotspotRef}>
+      <span key={props.key} className="block min-w-0" ref={props.hotspotRef}>
         <ChatAccumulatedChangesPanel
           restore={dock.restore}
           separated={props.separated}
@@ -251,7 +250,7 @@ function dockRow(props: {
   if (props.section === "activeAgents") {
     if (dock.selfAgent === null) return null;
     return (
-      <span key={props.key} className="contents" ref={props.hotspotRef}>
+      <span key={props.key} className="block min-w-0" ref={props.hotspotRef}>
         <ActiveAgentsPanel
           epicId={dock.epicId}
           viewTabId={dock.viewTabId}
@@ -267,7 +266,7 @@ function dockRow(props: {
   // managed-command rows come from a different stream and need not wait on it.
   const items = dock.backgroundItems ?? [];
   return (
-    <span key={props.key} className="contents" ref={props.hotspotRef}>
+    <span key={props.key} className="block min-w-0" ref={props.hotspotRef}>
       <BackgroundItemsPanel
         items={items}
         epicId={dock.epicId}

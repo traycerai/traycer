@@ -5,8 +5,8 @@ import {
 import {
   registerCustomizeOptions,
   type CustomizeOptions,
+  type CustomizeMove,
 } from "@/lib/customize/customize-options";
-import { recordSettingGesture } from "@/lib/customize/history";
 import { useLayoutStore } from "@/stores/settings/layout-store";
 import {
   useSettingsStore,
@@ -14,22 +14,28 @@ import {
   type MinimapPlacement,
 } from "@/stores/settings/settings-store";
 
-function movePinnedField(value: string, direction: -1 | 1): void {
+function movePinnedField(
+  value: string,
+  direction: -1 | 1,
+): CustomizeMove | null {
   const order = useSettingsStore.getState().pinnedContextBreakdownOrder;
   const index = order.findIndex((field) => field === value);
-  if (index === -1) return;
+  if (index === -1) return null;
   const nextIndex = index + direction;
-  if (nextIndex < 0 || nextIndex >= order.length) return;
+  if (nextIndex < 0 || nextIndex >= order.length) return null;
   const next = [...order];
   const swapped = next[index];
   next[index] = next[nextIndex];
   next[nextIndex] = swapped;
-  recordSettingGesture(
-    "pinnedContextBreakdownOrder",
-    "Reorder context fields",
-    ["settings"],
-    () => useSettingsStore.getState().setPinnedContextBreakdownOrder(next),
-  );
+  return {
+    id: "move-field",
+    label: "Reorder context fields",
+    announcement: "Context field moved",
+    disabled: false,
+    touches: ["settings"],
+    analytics: "pinnedContextBreakdownOrder",
+    run: () => useSettingsStore.getState().setPinnedContextBreakdownOrder(next),
+  };
 }
 
 const MINIMAP_PLACEMENT_LABELS: Record<MinimapPlacement, string> = {
@@ -86,12 +92,7 @@ export function registerChatSurfacesCustomizeOptions(): void {
               return;
             }
             const style: ContextIndicatorStyle = value;
-            recordSettingGesture(
-              "contextIndicatorStyle",
-              "Change context indicator style",
-              ["settings"],
-              () => useSettingsStore.getState().setContextIndicatorStyle(style),
-            );
+            useSettingsStore.getState().setContextIndicatorStyle(style);
           },
         },
         more: [
@@ -104,15 +105,7 @@ export function registerChatSurfacesCustomizeOptions(): void {
             checked: pinned,
             pictures: [],
             change: (checked) => {
-              recordSettingGesture(
-                "pinContextUsageBreakdown",
-                checked ? "Pin context breakdown" : "Unpin context breakdown",
-                ["settings"],
-                () =>
-                  useSettingsStore
-                    .getState()
-                    .setPinContextUsageBreakdown(checked),
-              );
+              useSettingsStore.getState().setPinContextUsageBreakdown(checked);
             },
           },
           {
@@ -135,15 +128,7 @@ export function registerChatSurfacesCustomizeOptions(): void {
                 values.includes(field),
               );
               if (next.length === 0) return;
-              recordSettingGesture(
-                "pinnedContextBreakdownFields",
-                "Change pinned context fields",
-                ["settings"],
-                () =>
-                  useSettingsStore
-                    .getState()
-                    .setPinnedContextBreakdownFields(next),
-              );
+              useSettingsStore.getState().setPinnedContextBreakdownFields(next);
             },
           },
           {
@@ -168,19 +153,11 @@ export function registerChatSurfacesCustomizeOptions(): void {
               },
             ],
             change: (value) => {
-              recordSettingGesture(
-                "layout.composer.compactButton",
-                value === "hidden"
-                  ? "Hide compact button"
-                  : "Show compact button",
-                ["composer"],
-                () =>
-                  useLayoutStore
-                    .getState()
-                    .setComposerCompactButton(
-                      value === "hidden" ? "hidden" : "visible",
-                    ),
-              );
+              useLayoutStore
+                .getState()
+                .setComposerCompactButton(
+                  value === "hidden" ? "hidden" : "visible",
+                );
             },
           },
         ],
@@ -224,19 +201,30 @@ export function registerChatSurfacesCustomizeOptions(): void {
         change: (value) => {
           if (value !== "left" && value !== "right" && value !== "hide") return;
           const placement: MinimapPlacement = value;
-          recordSettingGesture(
-            "chatTurnMinimapSide",
-            "Change minimap side",
-            ["settings"],
-            () => useSettingsStore.getState().setMinimapSide(placement),
-          );
+          useSettingsStore.getState().setMinimapSide(placement);
         },
       },
-      // No literal two-droppable drag target (deviation, matching the
-      // status bar's resource segment - see status-bar-options.ts): the
-      // choice control above is the only way to move this rail today.
       moves: [],
-      drag: null,
+      drag: {
+        group: "chat-minimap",
+        axis: "both",
+        resolveDrop: (overId) => {
+          const side =
+            (["left", "right"] as const).find((side) =>
+              overId.startsWith(`minimap:${side}@`),
+            ) ?? null;
+          if (side === null) return null;
+          return {
+            id: "drop",
+            label: "Change minimap side",
+            announcement: `Minimap moved ${side}`,
+            disabled: false,
+            touches: ["settings"],
+            analytics: "chatTurnMinimapSide",
+            run: () => useSettingsStore.getState().setMinimapSide(side),
+          };
+        },
+      },
     };
   });
 }

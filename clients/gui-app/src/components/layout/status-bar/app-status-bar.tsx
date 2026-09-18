@@ -1,3 +1,4 @@
+import { CustomizeDropSlot } from "@/components/customize/customize-drop-slot";
 import { use, useEffect, useState, type ReactNode } from "react";
 import { useLayoutHotspot } from "@/components/customize/use-layout-hotspot";
 import { useCustomizeStore } from "@/stores/customize/customize-store";
@@ -20,6 +21,7 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
   useRateLimitProfileSelection,
+  resolveStatusBarProfileIds,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { useStatusBarWindowedProviders } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
@@ -92,6 +94,7 @@ function ScopedAppStatusBar(props: {
     (state) => state.statusBar.resources.enabled,
   );
   const editing = useCustomizeStore((state) => state.session !== null);
+  const resourceSide = useLayoutStore((state) => state.statusBar.resourceSide);
   // Resolved here rather than in the cluster because it has two readers on
   // opposite sides of the gate below: the segments, and the right-click menu
   // that wraps the whole strip. One resolution is what keeps the menu's list
@@ -162,6 +165,26 @@ function ScopedAppStatusBar(props: {
   const scopedToOwnHost =
     !props.hasExplicitPick || isHostScopeUsable(scope.status);
 
+  const resourceGhost = editing ? <StatusBarResourceGhost /> : null;
+  const resources = resourcesEnabled ? (
+    <ResourceMonitorPopover
+      trigger="custom"
+      contentSide="top"
+      claimsOpenAction={claimsResourcesAction}
+      triggerNode={
+        <StatusBarResourceSegment
+          {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
+          hostId={scope.hostId}
+          hostLabel={scope.hostLabel}
+          hasExplicitPick={props.hasExplicitPick}
+          interactive
+        />
+      }
+    />
+  ) : (
+    resourceGhost
+  );
+
   return (
     // The menu wraps the strip's ROOT, so a right-click anywhere on it lands -
     // including the padding under the row. The controls that own their own
@@ -194,6 +217,13 @@ function ScopedAppStatusBar(props: {
         className="shrink-0 border-t border-border/90 bg-canvas pb-safe-bottom text-canvas-foreground"
       >
         <div className="flex h-6 items-center gap-2 px-2 text-ui-xs tabular-nums">
+          <CustomizeDropSlot
+            id="resources:left"
+            group="status-bar-resources"
+            tileId={null}
+            className="inline-flex size-5 shrink-0"
+          />
+          {resourceSide === "left" ? resources : null}
           {/*
             The panel and its chord live HERE, above everything that can hide
             the segments, because the panel stays meaningful in every state the
@@ -259,22 +289,13 @@ function ScopedAppStatusBar(props: {
             before printing a number, so an unresolved pick reads as dashes
             rather than as the ambient host's figures.
           */}
-          {resourcesEnabled ? (
-            <ResourceMonitorPopover
-              trigger="custom"
-              contentSide="top"
-              claimsOpenAction={claimsResourcesAction}
-              triggerNode={
-                <StatusBarResourceSegment
-                  {...{ [STATUS_BAR_MENU_EXEMPT_ATTRIBUTE]: "" }}
-                  hostId={scope.hostId}
-                  hostLabel={scope.hostLabel}
-                  hasExplicitPick={props.hasExplicitPick}
-                  interactive
-                />
-              }
-            />
-          ) : null}
+          {resourceSide === "right" ? resources : null}
+          <CustomizeDropSlot
+            id="resources:right"
+            group="status-bar-resources"
+            tileId={null}
+            className="inline-flex size-5 shrink-0"
+          />
         </div>
       </div>
     </StatusBarVisibilityMenu>
@@ -299,32 +320,56 @@ function StatusBarUsageSlot(props: {
   // Registered unconditionally (before the early returns below) so the handle
   // is a hotspot whether or not the cluster it opens is currently on screen -
   // the whole point of a handle that "stays" while its segments ghost.
+  const disabledCondition = props.rateLimitsEnabled
+    ? null
+    : "Usage limits are turned off";
   const { ref: handleRef } = useLayoutHotspot({
     settingId: "statusBar.usage",
     tileId: null,
-    ghost: !props.rateLimitsEnabled,
-    condition: props.rateLimitsEnabled ? null : "Usage limits are turned off",
+    ghost: !props.rateLimitsEnabled || !props.scopedToOwnHost,
+    condition: props.scopedToOwnHost
+      ? disabledCondition
+      : "The selected host is unavailable",
   });
-  if (!props.scopedToOwnHost)
-    return <StatusBarHostNotice scope={props.scope} />;
+
+  const providerGhosts =
+    props.editing && props.scopedToOwnHost
+      ? props.providers.flatMap((provider) =>
+          resolveStatusBarProfileIds(
+            props.profileSelection,
+            provider.providerId,
+            provider.profiles,
+          ).map((profileId) => (
+            <StatusBarProviderGhost
+              key={`${provider.providerId}:${profileId ?? ""}`}
+              provider={provider}
+              profileId={profileId}
+            />
+          )),
+        )
+      : null;
   return (
     <>
       {props.editing ? (
         <span
           ref={handleRef}
           data-testid="status-bar-usage-handle"
-          aria-hidden
-          className="mr-1 inline-flex size-3 shrink-0 rounded-xs border border-dashed border-border/60"
+          className="mr-1 inline-flex size-6 shrink-0 rounded-xs border border-dashed border-border/60"
         />
       ) : null}
-      {props.rateLimitsEnabled ? (
+      {!props.scopedToOwnHost ? (
+        <StatusBarHostNotice scope={props.scope} />
+      ) : null}
+      {props.scopedToOwnHost && props.rateLimitsEnabled ? (
         <StatusBarRateLimitCluster
           hostId={props.scope.hostId}
           providers={props.providers}
           profileSelection={props.profileSelection}
           editing={props.editing}
         />
-      ) : null}
+      ) : (
+        providerGhosts
+      )}
     </>
   );
 }
@@ -387,6 +432,46 @@ function StatusBarHostNotice(props: { readonly scope: HostScope }): ReactNode {
       >
         Show the active host
       </button>
+    </span>
+  );
+}
+
+function StatusBarResourceGhost() {
+  const { ref } = useLayoutHotspot({
+    settingId: "statusBar.resources",
+    tileId: null,
+    ghost: true,
+    condition: "Resources are turned off",
+  });
+  return (
+    <span
+      ref={ref}
+      data-testid="status-bar-resources-ghost"
+      className="inline-flex shrink-0 rounded-sm border border-dashed border-border/60 px-2 text-muted-foreground"
+    >
+      Resources
+    </span>
+  );
+}
+function StatusBarProviderGhost({
+  provider,
+  profileId,
+}: {
+  provider: ConfiguredRateLimitProvider;
+  profileId: string | null;
+}) {
+  const { ref } = useLayoutHotspot({
+    settingId: "statusBar.provider",
+    tileId: `${provider.providerId}:${profileId ?? ""}`,
+    ghost: true,
+    condition: "Usage is unavailable or turned off",
+  });
+  return (
+    <span
+      ref={ref}
+      className="inline-flex shrink-0 rounded-sm border border-dashed border-border/60 px-1 text-muted-foreground"
+    >
+      {providerDisplayName(provider.providerId)}
     </span>
   );
 }

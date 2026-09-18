@@ -1,3 +1,5 @@
+import { CustomizeDropSlot } from "@/components/customize/customize-drop-slot";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import { memo } from "react";
 import { useComposerLayout } from "@/lib/layout-overrides";
 import {
@@ -6,6 +8,7 @@ import {
 } from "@/components/home/toolbar/composer-toolbar-item";
 
 function ComposerToolbarLeftImpl(props: ComposerToolbarItemsProps) {
+  const tileId = useComposerTileId();
   const order = useComposerLayout().toolbar.left;
 
   return (
@@ -17,6 +20,12 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarItemsProps) {
           {renderToolbarItem(id, props)}
         </span>
       ))}
+      <CustomizeDropSlot
+        id="toolbar:left"
+        group="composer-toolbar"
+        tileId={tileId}
+        className="inline-flex size-6 shrink-0"
+      />
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { CustomizeDropSlot } from "@/components/customize/customize-drop-slot";
 import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
 import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
@@ -2790,11 +2791,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
   const chatTurnMinimapSide = useLayoutSetting("chatTurnMinimapSide");
   const isMobileViewport = useIsMobileViewport();
+  const minimapEmptyCondition = !hasContent ? "No messages yet" : null;
   const { ref: minimapHotspotRef, editing: minimapEditing } = useLayoutHotspot({
     settingId: "chat.minimapSide",
     tileId: taskId,
     ghost: chatTurnMinimapSide === "hide" || !hasContent,
-    condition: chatTurnMinimapSide === "hide" ? "Hidden" : "No messages yet",
+    condition:
+      chatTurnMinimapSide === "hide" ? "Hidden" : minimapEmptyCondition,
   });
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
@@ -3904,7 +3907,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       <div
         ref={minimapHotspotRef}
         data-testid="chat-minimap-ghost"
-        aria-hidden
         className={cn(
           "pointer-events-none absolute top-0 bottom-0 hidden w-2 md:block",
           minimapGhostSide === "left" ? "left-3" : "right-3",
@@ -3929,6 +3931,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           onPointerDown={handleTranscriptPointerDown}
           className="relative flex-1 overflow-hidden"
         >
+          <CustomizeDropSlot
+            id="minimap:left"
+            group="chat-minimap"
+            tileId={taskId}
+            className="absolute inset-y-0 left-0 w-6"
+          />
+          <CustomizeDropSlot
+            id="minimap:right"
+            group="chat-minimap"
+            tileId={taskId}
+            className="absolute inset-y-0 right-0 w-6"
+          />
           <ChatTimeline
             rows={listRows}
             onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
@@ -3967,8 +3981,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             side: chatTurnMinimapSide,
             mobileViewport: isMobileViewport,
           }) ? (
-            <div className="contents max-md:hidden" ref={minimapHotspotRef}>
+            <div className="contents max-md:hidden">
               <ChatTurnMinimap
+                ref={minimapHotspotRef}
                 rows={listRows}
                 transcriptWindow={transcriptWindow}
                 inViewRefreshRef={minimapInViewRefreshRef}

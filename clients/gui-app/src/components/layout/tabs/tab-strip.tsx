@@ -495,7 +495,6 @@ function HomeGhostSlot(): ReactNode {
   return (
     <div
       ref={ref}
-      aria-hidden
       data-testid="tab-home-ghost"
       className={cn(
         headerTabClassName("own", false),

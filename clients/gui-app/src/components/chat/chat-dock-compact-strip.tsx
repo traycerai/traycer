@@ -157,7 +157,11 @@ export function ChatDockCompactStrip(): ReactNode {
       className="ml-auto flex min-w-0 shrink-0 items-center gap-1"
     >
       {value.chips.map((chip) => (
-        <span key={chip.section} className="contents" ref={chip.hotspotRef}>
+        <span
+          key={chip.section}
+          className="inline-flex items-center"
+          ref={chip.hotspotRef}
+        >
           <ChatDockCompactChip
             icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
             text={chip.text}
