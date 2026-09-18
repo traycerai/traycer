@@ -11,6 +11,7 @@ import type {
   CreateChatResponseV12,
   DeleteChatRequest,
   DeleteChatResponse,
+  RenameChatRequest,
   SetChatArchivedRequest,
   SetChatArchivedResponse,
   UpdateChatProfileRequest,
@@ -26,8 +27,10 @@ import {
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
-import { useHostBinding } from "@/lib/host";
-import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import {
+  useEpicRecordMutationClient,
+  type EpicRecordMutationContext,
+} from "@/hooks/epic/use-epic-record-mutation-client";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -105,6 +108,7 @@ interface ChatMutationTarget {
 export type ArchiveChatMutationInput = SetChatArchivedRequest &
   ChatMutationTarget;
 export type DeleteChatMutationInput = DeleteChatRequest & ChatMutationTarget;
+export type RenameChatMutationInput = RenameChatRequest & ChatMutationTarget;
 
 /**
  * What a chat mutation has to remember to refresh the record list afterwards:
@@ -126,19 +130,6 @@ export type DeleteChatMutationOptions = Omit<
   >,
   "mutationFn"
 >;
-
-/** The named target is fixed even if the viewing epic changes hosts. */
-function useChatMutationClient(): (
-  variables: ChatMutationTarget,
-) => HostClient<HostRpcRegistry> | null {
-  const sessionClient = useEpicSessionHostClient();
-  const binding = useHostBinding();
-  return ({ hostId }) => {
-    if (hostId === null) return null;
-    if (sessionClient?.getActiveHostId() === hostId) return sessionClient;
-    return resolveNamedHostClient(binding, hostId);
-  };
-}
 
 /** Resolve viewer state independently of the mutation's fixed destination. */
 function getChatMutationViewer(
@@ -573,36 +564,29 @@ export function useEpicUpdateChatProfile(): UseMutationResult<
   });
 }
 
-/**
- * Mutation hook for epic.renameChat.
- * Input enters pending (read-only) state; success is silent.
- *
- * Scoped to the Epic SESSION's host, like archive above and for the same
- * reason: both call sites (the sidebar chat tree, the canvas tab rename) sit
- * inside an Epic and outside every tile `TabHostProvider`. The ambient client
- * this used to read is the effective host, which diverges from the session
- * host for the whole of a re-point that is establishing and after one that
- * failed - a window in which the sidebar stays interactive because only the
- * canvas is made inert. A rename issued then addressed the machine the WINDOW
- * had moved to rather than the one projecting the row being renamed.
- */
+/** Rename the authoritative record on its owning host. */
 export function useEpicRenameChat() {
-  const client = useEpicSessionHostClient();
+  const client = useEpicRecordMutationClient();
+  const sessionClient = useEpicSessionHostClient();
   const queryClient = useQueryClient();
-  return useHostMutation({
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.renameChat",
+    EpicRecordMutationContext,
+    RenameChatMutationInput
+  >({
     client,
     method: "epic.renameChat",
-    mapVariables: (variables) => variables,
+    mapVariables: ({ epicId, chatId, title }) => ({ epicId, chatId, title }),
     options: {
-      // Captured at mutate time, per the host-swap convention: a swap while the
-      // rename is in flight must not invalidate a different machine's list.
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: ({ hostId }) => ({
+        hostId,
+        viewerHostId: sessionClient?.getActiveHostId() ?? null,
+      }),
       onSuccess: (_data, _variables, ctx) => {
-        // The title now lives in the chat database. For a chat whose doc entry
-        // the upgrade sweep removed there is no replicated write to re-project,
-        // so without this refetch the row keeps its old title until the poll
-        // fires - a rename that reads as a no-op.
-        invalidateEpicChatRecords(queryClient, ctx.hostId);
+        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+          invalidateEpicChatRecords(queryClient, hostId);
+        }
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't rename agent.");
@@ -631,7 +615,7 @@ function useEpicArchiveChatMutation(
   HostRpcError,
   ArchiveChatMutationInput
 > {
-  const client = useChatMutationClient();
+  const client = useEpicRecordMutationClient();
   const sessionClient = useEpicSessionHostClient();
   const queryClient = useQueryClient();
   // An imperative post-write read: the viewer's cloud replica can lag the
@@ -803,7 +787,7 @@ export function useEpicDeleteChat(): UseMutationResult<
   DeleteChatMutationInput,
   ChatRecordMutationContext
 > {
-  const client = useChatMutationClient();
+  const client = useEpicRecordMutationClient();
   const sessionClient = useEpicSessionHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
@@ -844,10 +828,11 @@ export function useEpicDeleteChat(): UseMutationResult<
           // cloud record query is unresolved.
           useEpicCanvasStore
             .getState()
-            .closeConfirmedDeletedChatTiles(
+            .closeConfirmedDeletedAgentTiles(
               variables.epicId,
               variables.chatId,
               ctx.hostId,
+              "chat",
             );
         }
         // Ticket 15 (decision #29): a deleted chat can never be reopened -
