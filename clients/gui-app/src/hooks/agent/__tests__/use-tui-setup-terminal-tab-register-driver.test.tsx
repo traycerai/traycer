@@ -286,7 +286,9 @@ describe("useTuiSetupTerminalTabRegisterDriver", () => {
     // The terminal lands as a tab of the OWNER's pane (B), never the
     // unrelated active pane (A), and focus is left exactly where it was -
     // pane A is still globally active and its own active tab is unchanged,
-    // exactly as a background (host-pushed) open must leave it.
+    // and pane B's own active tab is STILL the owning terminal agent, not
+    // the newly inserted background terminal - exactly as a background
+    // (host-pushed) open must leave both panes.
     expect(terminalRef).toBeDefined();
     expect(
       tabsOf(viewTabId, activePane).some(
@@ -295,6 +297,7 @@ describe("useTuiSetupTerminalTabRegisterDriver", () => {
     ).toBe(false);
     expect(activePaneIdOrThrow(viewTabId)).toBe(paneA);
     expect(activePane.activeTabId).toBe("unrelated-tui-agent-instance");
+    expect(ownerPane.activeTabId).toBe("tui-agent-instance");
     if (terminalRef === undefined) throw new Error("expected a terminal tab");
 
     // The user closes the auto-opened setup terminal tab.

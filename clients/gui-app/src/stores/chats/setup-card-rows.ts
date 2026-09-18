@@ -13,7 +13,6 @@ import {
 // per window - see `row-projection.ts`.
 import {
   partitionSetupCardWindows,
-  isGenesisSetupWindow,
   type SetupCardWindow,
 } from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
@@ -124,14 +123,9 @@ export function buildSetupCardRows(
     windowIndex: aligned.identity.windowIndex,
     isActive: aligned.identity.isActive,
     hasCreatingEvent: aligned.identity.hasCreatingEvent,
-    isGenesisPin:
-      aligned.identity.isGenesisPin ??
-      isGenesisSetupWindow({
-        windowIndex: aligned.identity.windowIndex,
-        hasCreatingEvent: aligned.identity.hasCreatingEvent,
-        createdAt: aligned.identity.createdAt,
-        events,
-      }),
+    // Legacy whole-log projection supplies its own flag during alignment.
+    // Older windowed hosts omit it; a partial slice cannot prove genesis.
+    isGenesisPin: aligned.identity.isGenesisPin ?? false,
     triggeringMessageId: aligned.triggeringMessageId,
     model: deriveViewModel(
       aligned.events,

@@ -113,6 +113,16 @@ describe("buildSetupCardRows", () => {
     expect(row.triggeringMessageId).toBeNull();
   });
 
+  it("computes isGenesisPin: true for a genuine legacy genesis window (no host list, events ARE the whole log)", () => {
+    // The legacy line (`wholeLogWindows: []`) has no partial-slice problem -
+    // `events` IS the whole log, so the local computation is fully
+    // authoritative here, unlike the windowed line's cold slices below.
+    const row = onlyRow([
+      setupEvent("setup.running", { workspacePath: "/repo" }, null),
+    ]);
+    expect(row.isGenesisPin).toBe(true);
+  });
+
   it("supersedes creating with running (creating -> setting-up)", () => {
     const row = onlyRow([
       setupEvent(
@@ -743,6 +753,31 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
           isActive: true,
           hasCreatingEvent: false,
           isGenesisPin: false,
+        },
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].isGenesisPin).toBe(false);
+  });
+
+  it("defaults isGenesisPin to false when the host omits it (older host), never inferring genesis from the partial cold slice", () => {
+    // Same cold, fork-blind slice as the explicit-false test above, but for
+    // an OLDER host that predates the field entirely - `isGenesisPin` is
+    // simply absent from the identity, not published `false`. Falling back
+    // to a local re-derivation here is exactly the misread the previous
+    // test guards against; with no whole-log context to derive from safely,
+    // the only correct default is `false`.
+    const rows = buildSetupCardRows(
+      [setupEvent("setup.running", { workspacePath: "/repo" }, 1_000)],
+      BINDING,
+      [
+        {
+          createdAt: 1_000,
+          windowIndex: 0,
+          isActive: true,
+          hasCreatingEvent: false,
+          // isGenesisPin omitted entirely.
         },
       ],
     );
