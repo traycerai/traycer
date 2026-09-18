@@ -61,7 +61,10 @@ function resetStores(): void {
 }
 
 beforeEach(resetStores);
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("CustomizeSearch", () => {
   it("tracks aria-activedescendant to the highlighted result and keeps focus in the input", () => {
@@ -141,32 +144,59 @@ describe("CustomizeSearch", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(useCustomizeStore.getState().search.query).toBe("");
   });
-  // Review w2, finding 3: results must render through the real Popover
-  // machinery (collision-aware positioning against the safe viewport), not a
-  // plain `absolute top-full` box that can end up below the viewport when
-  // the bar sits at a bottom corner.
-  it("results render through the real, collision-aware Popover and never take focus from the input", () => {
+  function stubInputGeometry(
+    input: HTMLInputElement,
+    rect: { top: number; bottom: number },
+  ): void {
+    input.getBoundingClientRect = () =>
+      new DOMRect(0, rect.top, 200, rect.bottom - rect.top);
+  }
+
+  it("flips the results panel above the input when the space below is under half the viewport and the space above is larger", () => {
+    vi.stubGlobal("innerHeight", 800);
     const instance = micInstance();
     useCustomizeStore.getState().register(instance);
     render(<CustomizeSearch unreachable={new Set()} />);
     const input = screen.getByRole("combobox", {
       name: "Search layout settings",
-    });
+    }) as HTMLInputElement;
     input.focus();
+    // Near the bottom of an 800px-tall viewport: 20px below, 750px above.
+    stubInputGeometry(input, { top: 750, bottom: 780 });
 
     fireEvent.change(input, { target: { value: "mic" } });
 
     const listbox = screen.getByRole("listbox", { name: "Layout settings" });
-    const content = listbox.closest("[data-customize-editor]");
-    expect(content).not.toBeNull();
-    // The collision-driven max-height machinery: Radix's own
-    // `--radix-popover-content-available-height` custom property, read by
-    // this element's own max-height, not a fixed `50svh` box.
-    expect(content?.className).toContain(
-      "var(--radix-popover-content-available-height)",
-    );
-    // `onOpenAutoFocus` is prevented: opening the results never steals focus
-    // away from the search field.
+    const content = listbox.closest<HTMLElement>("[data-customize-editor]");
+    if (content === null)
+      throw new Error("expected a data-customize-editor panel");
+    expect(content.className).toContain("bottom-full");
+    expect(content.className).not.toContain("top-full");
+    expect(content.style.maxHeight).toBe("400px");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("keeps the results panel below the input when there is enough room below", () => {
+    vi.stubGlobal("innerHeight", 800);
+    const instance = micInstance();
+    useCustomizeStore.getState().register(instance);
+    render(<CustomizeSearch unreachable={new Set()} />);
+    const input = screen.getByRole("combobox", {
+      name: "Search layout settings",
+    }) as HTMLInputElement;
+    input.focus();
+    // Near the top of an 800px-tall viewport: 10px above, 760px below.
+    stubInputGeometry(input, { top: 10, bottom: 40 });
+
+    fireEvent.change(input, { target: { value: "mic" } });
+
+    const listbox = screen.getByRole("listbox", { name: "Layout settings" });
+    const content = listbox.closest<HTMLElement>("[data-customize-editor]");
+    if (content === null)
+      throw new Error("expected a data-customize-editor panel");
+    expect(content.className).toContain("top-full");
+    expect(content.className).not.toContain("bottom-full");
+    expect(content.style.maxHeight).toBe("400px");
     expect(document.activeElement).toBe(input);
   });
 });

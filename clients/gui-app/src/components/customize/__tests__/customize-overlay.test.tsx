@@ -1,3 +1,8 @@
+import {
+  registerCustomizeOptions,
+  type CustomizeControl,
+  type CustomizeOptions,
+} from "@/lib/customize/customize-options";
 import userEvent from "@testing-library/user-event";
 import {
   act,
@@ -494,5 +499,66 @@ describe("CustomizeOverlay", () => {
     expect(
       tooltips.some((tooltip) => tooltip.textContent.includes(label)),
     ).toBe(true);
+  });
+  it("Tab inside the open hotspot form still wraps last-to-first through the real Radix FocusScope after a detour through search", async () => {
+    const a = instance(
+      "composer.mic",
+      fixtureNode({ x: 0, y: 0, width: 24, height: 24 }),
+    );
+    useCustomizeStore.getState().register(a);
+    const control: CustomizeControl = {
+      kind: "multi",
+      id: "fixture.primary",
+      label: "Primary setting",
+      touches: ["composer"],
+      analytics: "layout.composer.mic",
+      values: [],
+      lastItemHeld: false,
+      options: [
+        { value: "a", label: "Option A", picture: null, override: {} },
+        { value: "b", label: "Option B", picture: null, override: {} },
+      ],
+      change: () => undefined,
+    };
+    const options: CustomizeOptions = {
+      state: "Option A",
+      control,
+      moves: [],
+      drag: null,
+    };
+    const unregisterOptions = registerCustomizeOptions(
+      "composer.mic",
+      () => options,
+    );
+    try {
+      act(() => {
+        useCustomizeStore.setState({ popoverKey: a.key, invoker: a.key });
+      });
+      render(<CustomizeOverlay />);
+      const controls = () => [
+        ...document.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'),
+      ];
+      await waitFor(() => expect(controls()).toHaveLength(2));
+      const [firstControl, lastControl] = controls();
+
+      const search = document.querySelector<HTMLInputElement>(
+        "[data-customize-search]",
+      );
+      if (search === null)
+        throw new Error("search input not found in the rendered bar");
+      const user = userEvent.setup();
+      await user.click(search);
+      await user.keyboard("m");
+      expect(useCustomizeStore.getState().search.query).toBe("m");
+
+      await user.click(lastControl);
+      expect(document.activeElement).toBe(lastControl);
+
+      await user.tab();
+
+      expect(document.activeElement).toBe(firstControl);
+    } finally {
+      unregisterOptions();
+    }
   });
 });
