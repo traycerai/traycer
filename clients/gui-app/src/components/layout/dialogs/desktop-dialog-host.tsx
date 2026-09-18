@@ -23,6 +23,9 @@ export function DesktopDialogHost(): ReactNode {
   );
   const appUpdates = useDesktopAppUpdates();
   const appUpdateSnapshot = appUpdates.snapshot;
+  const draftsEntryPoint = useDesktopDialogStore(
+    (state) => state.draftsEntryPoint,
+  );
   const activeDialog = useDesktopDialogStore((state) => state.activeDialog);
   const updateUnsyncedEpics = useDesktopDialogStore(
     (state) => state.updateUnsyncedEpics,
@@ -54,7 +57,11 @@ export function DesktopDialogHost(): ReactNode {
   return (
     <>
       {activeDialog === "drafts" ? (
-        <DraftsDialog hostId={hostId} onClose={close} />
+        <DraftsDialog
+          hostId={hostId}
+          entryPoint={draftsEntryPoint}
+          onClose={close}
+        />
       ) : null}
       <AboutDetailsDialog
         open={activeDialog === "about-details"}

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { DraftsDialog } from "@/components/composer/drafts/drafts-dialog";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
@@ -96,6 +97,7 @@ vi.mock("@/hooks/drafts/use-draft-inventory-actions", () => ({
 }));
 
 beforeEach(() => {
+  vi.spyOn(Analytics.getInstance(), "track").mockImplementation(() => true);
   inventoryMock.rows = [];
   inventoryMock.calls = [];
   actionsMock.calls = [];
@@ -104,17 +106,28 @@ beforeEach(() => {
   actionsMock.deleteRow.mockReset();
 });
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("<DraftsDialog />", () => {
+  it.each(["menu", "shortcut", "palette"] as const)(
+    "records an empty dialog opened from %s",
+    (entryPoint) => {
+      const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+      render(<DraftsDialog entryPoint={entryPoint} hostId={null} onClose={() => undefined} />);
+      expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftsListOpened, {
+        surface: "avatar_menu", entry_point: entryPoint, draft_count: "0",
+      });
+    },
+  );
+
   it("shows the empty message at zero drafts", () => {
-    render(<DraftsDialog hostId="host-a" onClose={() => undefined} />);
+    render(<DraftsDialog entryPoint="menu" hostId="host-a" onClose={() => undefined} />);
 
     expect(screen.getByText("No drafts yet")).toBeTruthy();
   });
 
   it("reads the landing inventory under `all`, scoped to no active draft", () => {
-    render(<DraftsDialog hostId="host-a" onClose={() => undefined} />);
+    render(<DraftsDialog entryPoint="menu" hostId="host-a" onClose={() => undefined} />);
 
     expect(inventoryMock.calls.at(-1)).toEqual({
       scope: { surface: "landing", activeDraftId: null },
@@ -123,7 +136,7 @@ describe("<DraftsDialog />", () => {
   });
 
   it("resolves the row actions against the dialog's own hostId", () => {
-    render(<DraftsDialog hostId="host-effective" onClose={() => undefined} />);
+    render(<DraftsDialog entryPoint="menu" hostId="host-effective" onClose={() => undefined} />);
 
     expect(actionsMock.calls.at(-1)).toEqual({ hostId: "host-effective" });
   });
@@ -134,7 +147,7 @@ describe("<DraftsDialog />", () => {
       chatRow({ id: "d-chat", preview: "Half-written question" }),
       newChatRow({ id: "d-new-chat", preview: "A fresh agent" }),
     ];
-    render(<DraftsDialog hostId="host-a" onClose={() => undefined} />);
+    render(<DraftsDialog entryPoint="menu" hostId="host-a" onClose={() => undefined} />);
 
     expect(screen.queryByText("No drafts yet")).toBeNull();
     expect(document.querySelectorAll("li")).toHaveLength(3);
@@ -148,13 +161,13 @@ describe("<DraftsDialog />", () => {
     const row = landingRow({ id: "d-landing", preview: "Ship the notes" });
     inventoryMock.rows = [row];
     const onClose = vi.fn();
-    render(<DraftsDialog hostId="host-a" onClose={onClose} />);
+    render(<DraftsDialog entryPoint="menu" hostId="host-a" onClose={onClose} />);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Open draft: Ship the notes" }),
     );
 
-    expect(actionsMock.openRow).toHaveBeenCalledWith(row);
+    expect(actionsMock.openRow).toHaveBeenCalledWith(row, "keyboard");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -162,11 +175,11 @@ describe("<DraftsDialog />", () => {
     const row = landingRow({ id: "d-landing", preview: "Ship the notes" });
     inventoryMock.rows = [row];
     const onClose = vi.fn();
-    render(<DraftsDialog hostId="host-a" onClose={onClose} />);
+    render(<DraftsDialog entryPoint="menu" hostId="host-a" onClose={onClose} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy draft" }));
 
-    expect(actionsMock.copyRow).toHaveBeenCalledWith(row);
+    expect(actionsMock.copyRow).toHaveBeenCalledWith(row, "keyboard");
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -174,11 +187,11 @@ describe("<DraftsDialog />", () => {
     const row = landingRow({ id: "d-landing", preview: "Ship the notes" });
     inventoryMock.rows = [row];
     const onClose = vi.fn();
-    render(<DraftsDialog hostId="host-a" onClose={onClose} />);
+    render(<DraftsDialog entryPoint="menu" hostId="host-a" onClose={onClose} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Delete draft" }));
 
-    expect(actionsMock.deleteRow).toHaveBeenCalledWith(row);
+    expect(actionsMock.deleteRow).toHaveBeenCalledWith(row, "keyboard");
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -199,7 +212,9 @@ describe("<DraftsDialog />", () => {
     actionsMock.openRow.mockImplementationOnce(() => {
       requestWhenOpenRowRan = useNewConversationModalOpenStore.getState().request;
     });
-    render(<DraftsDialog hostId="host-a" onClose={() => undefined} />);
+    render(
+      <DraftsDialog entryPoint="menu" hostId="host-a" onClose={() => undefined} />,
+    );
 
     fireEvent.click(
       screen.getByRole("button", {

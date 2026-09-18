@@ -10,6 +10,13 @@ import {
 import { LayersPlus } from "lucide-react";
 import { useStore } from "zustand";
 
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsCountBucket,
+  type AnalyticsDraftEntryPoint,
+  type AnalyticsDraftInput,
+} from "@/lib/analytics";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import {
@@ -32,7 +39,10 @@ import {
 import { useDraftInventory } from "@/hooks/drafts/use-draft-inventory";
 import { useDraftInventoryActions } from "@/hooks/drafts/use-draft-inventory-actions";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { registerActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
+import {
+  registerActiveDraftsControl,
+  type DraftsControlEntryPoint,
+} from "@/lib/commands/active-drafts-control-registry";
 import {
   type DraftInventoryRow,
   type DraftInventoryScope,
@@ -69,6 +79,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   const { scope, hostId, pickerStore, editorRef, active } = props;
   const mobile = useIsMobileViewport();
   const [open, setOpenState] = useState(false);
+  const openRef = useRef(open);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const restoreEditorFocusRef = useRef(false);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -77,20 +88,29 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
 
   const rows = useDraftInventory(scope, "current");
   const currentCount = rows.length;
-  const { openRow, copyRow, deleteRow } = useDraftInventoryActions(hostId);
+  const { openRow, copyRow, deleteRow } = useDraftInventoryActions(
+    hostId,
+    "start_page",
+  );
 
   const selectedId = resolveSelectedId(rows, highlightedId);
   const selectedRow = rows.find((row) => row.id === selectedId);
 
   const setOpen = useCallback(
-    (nextOpen: boolean) => {
-      if (nextOpen) {
+    (nextOpen: boolean, entryPoint: AnalyticsDraftEntryPoint) => {
+      if (nextOpen && !openRef.current) {
+        Analytics.getInstance().track(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: entryPoint,
+          draft_count: analyticsCountBucket(currentCount),
+        });
         restoreEditorFocusRef.current = editorRef.current?.hasFocus() ?? false;
         setHighlightedId(null);
       }
+      openRef.current = nextOpen;
       setOpenState(nextOpen);
     },
-    [editorRef],
+    [editorRef, currentCount],
   );
 
   const focusEditor = useCallback(() => {
@@ -101,9 +121,12 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   useEffect(() => {
     openRef.current = open;
   }, [open]);
-  const openList = useCallback(() => {
-    setOpen(true);
-  }, [setOpen]);
+  const openList = useCallback(
+    (entryPoint: DraftsControlEntryPoint) => {
+      setOpen(true, entryPoint);
+    },
+    [setOpen],
+  );
   useEffect(() => {
     if (!active) return;
     return registerActiveDraftsControl(openList);
@@ -138,19 +161,19 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   );
 
   const handleOpenRow = useCallback(
-    (row: DraftInventoryRow) => {
+    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
       restoreEditorFocusRef.current = false;
       setOpenState(false);
-      openRow(row);
+      openRow(row, input);
     },
     [openRow],
   );
   // Delete keeps the list open on the NEXT row (the deleted one is about to
   // leave the projection), so a run of deletions needs one keystroke each.
   const handleDeleteRow = useCallback(
-    (row: DraftInventoryRow) => {
+    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
       setHighlightedId(neighbourRowId(rows, row.id));
-      deleteRow(row);
+      deleteRow(row, input);
     },
     [deleteRow, rows],
   );
@@ -159,13 +182,13 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
     event.preventDefault();
     event.stopPropagation();
     if (selectedRow === undefined) return;
-    copyRow(selectedRow);
+    copyRow(selectedRow, "keyboard");
   });
   const claimDeleteKey = useBareKeyClaimer("d", (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (selectedRow === undefined) return;
-    handleDeleteRow(selectedRow);
+    handleDeleteRow(selectedRow, "keyboard");
   });
   const rowHighlighted = selectedRow !== undefined;
   // `active` is the SURFACE's own focus, and it gates the keys as well as the
@@ -195,7 +218,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        setOpen(false);
+        setOpen(false, "button");
         return;
       }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -218,7 +241,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
         // Not consumed and not prevented: the claimer's own window listener
         // runs in the bubble phase and answers it.
         if (isClaimedRowLetter(event, rowHighlighted)) return;
-        setOpen(false);
+        setOpen(false, "button");
         return;
       }
       if (event.key === "Enter") {
@@ -230,7 +253,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
         event.preventDefault();
         event.stopPropagation();
         if (selectedRow === undefined) return;
-        handleOpenRow(selectedRow);
+        handleOpenRow(selectedRow, "keyboard");
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -275,9 +298,9 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
                 sourceChip={null}
                 mobile={mobile}
                 onHighlight={() => setHighlightedId(row.id)}
-                onOpen={() => handleOpenRow(row)}
-                onCopy={() => copyRow(row)}
-                onDelete={() => handleDeleteRow(row)}
+                onOpen={(input) => handleOpenRow(row, input)}
+                onCopy={(input) => copyRow(row, input)}
+                onDelete={(input) => handleDeleteRow(row, input)}
               />
             ))}
           </CommandGroup>
@@ -312,7 +335,11 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
 
   if (mobile) {
     return (
-      <Drawer open={open} onOpenChange={setOpen} direction="bottom">
+      <Drawer
+        open={open}
+        onOpenChange={(nextOpen) => setOpen(nextOpen, "button")}
+        direction="bottom"
+      >
         <DraftsTriggerRail>
           <DrawerTrigger asChild>{trigger}</DrawerTrigger>
         </DraftsTriggerRail>
@@ -329,7 +356,10 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => setOpen(nextOpen, "button")}
+    >
       <DraftsTriggerRail>
         <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       </DraftsTriggerRail>

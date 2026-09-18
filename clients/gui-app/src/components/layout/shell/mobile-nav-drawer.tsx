@@ -228,7 +228,7 @@ export function MobileNavDrawer(): ReactNode {
           className={ROW_CLASS}
           onClick={() => {
             close();
-            useDesktopDialogStore.getState().openDrafts();
+            useDesktopDialogStore.getState().openDrafts("menu");
           }}
         >
           <LayersPlus className="size-4" />

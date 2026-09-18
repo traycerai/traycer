@@ -219,6 +219,12 @@ export function analyticsCountBucket(
   return "21+";
 }
 
+export type AnalyticsDraftSurface = "start_page" | "avatar_menu";
+export type AnalyticsDraftInput = "keyboard" | "pointer";
+export type AnalyticsDraftEntryPoint = "button" | "shortcut" | "palette" | "menu";
+export type AnalyticsDraftKind = "start_page" | "chat" | "new_agent";
+export type AnalyticsDraftAge = "under_1h" | "1h_24h" | "1d_7d" | "over_7d";
+
 /** Session age of the renderer process at sample time. Resource retention
  * bugs show up as heap correlating with this bucket, so it is the axis every
  * resource sample must carry. */
@@ -502,6 +508,12 @@ export enum AnalyticsEvent {
   ShareInviteSent = "share_invite_sent",
   ShareRoleChanged = "share_role_changed",
   ShareAccessRevoked = "share_access_revoked",
+  DraftsListOpened = "drafts_list_opened",
+  DraftOpened = "draft_opened",
+  DraftCopied = "draft_copied",
+  DraftDeleted = "draft_deleted",
+  DraftDeleteUndone = "draft_delete_undone",
+  DraftsShortcutRedirected = "drafts_shortcut_redirected",
   NotificationCenterOpened = "notification_center_opened",
   NotificationFilterChanged = "notification_filter_changed",
   NotificationActivationCompleted = "notification_activation_completed",
@@ -883,6 +895,35 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ShareAccessRevoked]: {
     readonly target: "person" | "team";
   };
+  readonly [AnalyticsEvent.DraftsListOpened]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly entry_point: AnalyticsDraftEntryPoint;
+    readonly draft_count: AnalyticsCountBucket;
+  };
+  readonly [AnalyticsEvent.DraftOpened]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+    readonly input: AnalyticsDraftInput;
+    readonly already_open: boolean;
+    readonly draft_age: AnalyticsDraftAge;
+  };
+  readonly [AnalyticsEvent.DraftCopied]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+    readonly input: AnalyticsDraftInput;
+  };
+  readonly [AnalyticsEvent.DraftDeleted]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+    readonly input: AnalyticsDraftInput;
+    readonly undo_offered: boolean;
+    readonly draft_age: AnalyticsDraftAge;
+  };
+  readonly [AnalyticsEvent.DraftDeleteUndone]: {
+    readonly surface: AnalyticsDraftSurface;
+    readonly draft_kind: AnalyticsDraftKind;
+  };
+  readonly [AnalyticsEvent.DraftsShortcutRedirected]: null;
   readonly [AnalyticsEvent.NotificationCenterOpened]: {
     readonly entry_point: AnalyticsNotificationEntryPoint;
     readonly host_state: AnalyticsNotificationHostState;
@@ -1630,6 +1671,26 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["target", "role"],
   ),
   ...eventKeyEntries(
+    [AnalyticsEvent.DraftsListOpened],
+    ["surface", "entry_point", "draft_count"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftOpened],
+    ["surface", "draft_kind", "input", "already_open", "draft_age"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftCopied],
+    ["surface", "draft_kind", "input"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftDeleted],
+    ["surface", "draft_kind", "input", "undo_offered", "draft_age"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftDeleteUndone],
+    ["surface", "draft_kind"],
+  ),
+  ...eventKeyEntries(
     [AnalyticsEvent.NotificationCenterOpened],
     ["entry_point", "host_state", "attention_bucket", "unread_bucket"],
   ),
@@ -1713,6 +1774,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
 ]);
 
 const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
+  AnalyticsEvent.DraftsShortcutRedirected,
   AnalyticsEvent.SignInSucceeded,
   AnalyticsEvent.HostFailover,
   AnalyticsEvent.HostRecovered,
@@ -1768,6 +1830,10 @@ const EXACT_PROPERTY_VALUES: {
   command: ANALYTICS_COMMANDS,
   context: new Set(["personal", "team"]),
   count_bucket: ANALYTICS_COUNT_BUCKETS,
+  draft_count: ANALYTICS_COUNT_BUCKETS,
+  draft_kind: new Set(["start_page", "chat", "new_agent"]),
+  draft_age: new Set(["under_1h", "1h_24h", "1d_7d", "over_7d"]),
+  input: new Set(["keyboard", "pointer"]),
   entry_point: ANALYTICS_NOTIFICATION_ENTRY_POINTS,
   filter: ANALYTICS_NOTIFICATION_FILTERS,
   host_state: ANALYTICS_NOTIFICATION_HOST_STATES,
@@ -1813,6 +1879,22 @@ function eventValueEntries(
 }
 
 const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.DraftsListOpened,
+      AnalyticsEvent.DraftOpened,
+      AnalyticsEvent.DraftCopied,
+      AnalyticsEvent.DraftDeleted,
+      AnalyticsEvent.DraftDeleteUndone,
+    ],
+    "surface",
+    new Set(["start_page", "avatar_menu"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.DraftsListOpened],
+    "entry_point",
+    new Set(["button", "shortcut", "palette", "menu"]),
+  ),
   ...eventValueEntries(
     [AnalyticsEvent.NotificationNewRevealed],
     "count_bucket",
@@ -2019,6 +2101,8 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
 ]);
 
 const BOOLEAN_PROPERTY_KEYS = new Set<string>([
+  "already_open",
+  "undo_offered",
   "cascade",
   "cleanup_worktrees",
   "customized",
@@ -2210,7 +2294,13 @@ function analyticsPropertiesAreRelationallyValid(
   return true;
 }
 
-const NOTIFICATION_STRICT_EVENTS = new Set<AnalyticsEvent>([
+const STRICT_EVENTS = new Set<AnalyticsEvent>([
+  AnalyticsEvent.DraftsListOpened,
+  AnalyticsEvent.DraftOpened,
+  AnalyticsEvent.DraftCopied,
+  AnalyticsEvent.DraftDeleted,
+  AnalyticsEvent.DraftDeleteUndone,
+  AnalyticsEvent.DraftsShortcutRedirected,
   AnalyticsEvent.NotificationCenterOpened,
   AnalyticsEvent.NotificationFilterChanged,
   AnalyticsEvent.NotificationActivationCompleted,
@@ -2227,14 +2317,14 @@ export function sanitizeAnalyticsProperties(
   const record: Record<string, unknown> = { ...properties };
   const expectedKeys = eventPropertyKeys(event);
   if (expectedKeys === null) return null;
-  // The notification event family rejects rather than silently strips: a
+  // The notification and draft families reject rather than silently strip: a
   // property outside its exact allowlist is a caller bug (e.g. an
   // accidentally attached feed/host identifier), not extra data to discard
   // quietly. Other events keep the historical strip-only behavior other call
   // sites already rely on (see "strips identifiers, paths, content, queries,
   // and raw errors at runtime").
   if (
-    NOTIFICATION_STRICT_EVENTS.has(event) &&
+    STRICT_EVENTS.has(event) &&
     Object.keys(record).length !== expectedKeys.length
   ) {
     return null;

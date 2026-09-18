@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   DraftRowBody,
   DraftRowTrailing,
@@ -15,20 +15,38 @@ import {
   draftRowSourceChip,
   type DraftInventoryRow,
 } from "@/lib/drafts/draft-inventory";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsCountBucket,
+  type AnalyticsDraftInput,
+} from "@/lib/analytics";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import type { DraftsDialogEntryPoint } from "@/stores/dialogs/desktop-dialog-store";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 
 /** Mounted only while open, keeping keystroke subscriptions out of app chrome. */
 export function DraftsDialog(props: {
   readonly hostId: string | null;
+  readonly entryPoint: DraftsDialogEntryPoint;
   readonly onClose: () => void;
 }): ReactNode {
   const rows = useDraftInventory(
     { surface: "landing", activeDraftId: null },
     "all",
   );
-  const actions = useDraftInventoryActions(props.hostId);
+  const actions = useDraftInventoryActions(props.hostId, "avatar_menu");
   const openingRow = useRef(false);
+  const recordedOpen = useRef(false);
+  useEffect(() => {
+    if (recordedOpen.current) return;
+    recordedOpen.current = true;
+    Analytics.getInstance().track(AnalyticsEvent.DraftsListOpened, {
+      surface: "avatar_menu",
+      entry_point: props.entryPoint,
+      draft_count: analyticsCountBucket(rows.length),
+    });
+  }, [props.entryPoint, rows.length]);
   return (
     <Dialog
       open
@@ -57,14 +75,14 @@ export function DraftsDialog(props: {
                 <DialogDraftRow
                   key={row.id}
                   row={row}
-                  onOpen={() => {
+                  onOpen={(input) => {
                     openingRow.current = true;
                     useNewConversationModalOpenStore.getState().close();
                     props.onClose();
-                    actions.openRow(row);
+                    actions.openRow(row, input);
                   }}
-                  onCopy={() => actions.copyRow(row)}
-                  onDelete={() => actions.deleteRow(row)}
+                  onCopy={(input) => actions.copyRow(row, input)}
+                  onDelete={(input) => actions.deleteRow(row, input)}
                 />
               ))}
             </ul>
@@ -77,9 +95,9 @@ export function DraftsDialog(props: {
 
 function DialogDraftRow(props: {
   readonly row: DraftInventoryRow;
-  readonly onOpen: () => void;
-  readonly onCopy: () => void;
-  readonly onDelete: () => void;
+  readonly onOpen: (input: AnalyticsDraftInput) => void;
+  readonly onCopy: (input: AnalyticsDraftInput) => void;
+  readonly onDelete: (input: AnalyticsDraftInput) => void;
 }) {
   const { row, onOpen, onCopy, onDelete } = props;
   const relative = useRelativeTimestamp(row.lastTouchedAt);
@@ -88,7 +106,7 @@ function DialogDraftRow(props: {
       <button
         type="button"
         aria-label={`Open draft: ${row.preview}`}
-        onClick={onOpen}
+        onClick={(event) => onOpen(event.detail === 0 ? "keyboard" : "pointer")}
         className="absolute inset-0 rounded-md hover:bg-foreground/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
       />
       <div className="pointer-events-none relative flex min-w-0 flex-col gap-0.5 px-3 py-2">

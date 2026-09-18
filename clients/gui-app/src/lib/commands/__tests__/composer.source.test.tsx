@@ -158,6 +158,15 @@ vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
     latestConversationWorkspaceSeedMock.seed,
 }));
 
+// The row itself is a boundary: what happens once `openDrafts` is called
+// (registry-then-dialog-store routing) is `active-drafts-control-registry`'s
+// own test file's job. This file is only about the row's shape and that it
+// calls the seam with the right entry point.
+const openDraftsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/keybindings/dispatch", () => ({
+  openDrafts: openDraftsMock,
+}));
+
 function ctx(
   activeEpicId: string | null,
   focusedComposerKind: FocusedComposerKind | null,
@@ -300,6 +309,7 @@ describe("composerSource", () => {
     resetActiveModelPickerForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
+    openDraftsMock.mockReset();
   });
 
   afterEach(() => {
@@ -311,6 +321,7 @@ describe("composerSource", () => {
     resetActiveModelPickerForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
+    openDraftsMock.mockReset();
   });
 
   // H10/H12: Drafts is always in the palette, even with no composer focused -
@@ -335,7 +346,7 @@ describe("composerSource", () => {
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
-  it("emits a Drafts row bound to composer.drafts on the landing composer", () => {
+  it("emits a Drafts row with no actionId, whose run() opens the avatar Drafts dialog", () => {
     registerFocusedComposerControls(
       "landing",
       stubControls({}),
@@ -345,9 +356,17 @@ describe("composerSource", () => {
       (row) => row.id === "composer:drafts",
     );
     expect(item).toBeDefined();
-    expect(item?.actionId).toBe("composer.drafts");
+    // `null`, not `"composer.drafts"`: the row does not route through the
+    // central dispatcher (which would fire the shortcut's own redirect
+    // event) - it calls the shared `openDrafts` seam directly, entry point
+    // "palette".
+    expect(item?.actionId).toBe(null);
     expect(item?.label).toBe("Drafts");
     expect(item?.shortcut).toBe("mod+s");
+
+    void item?.run(ctx(null, "landing"));
+
+    expect(openDraftsMock).toHaveBeenCalledWith("palette");
   });
 
   // H10/H12: unlike every other row here, Drafts does not depend on a

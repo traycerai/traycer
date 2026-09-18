@@ -42,6 +42,7 @@ import type {
   CommandSubpage,
   ReactCommandSource,
 } from "@/lib/commands/types";
+import { openDrafts } from "@/lib/keybindings/dispatch";
 import type { ChordString } from "@/lib/keybindings/chord";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -126,9 +127,11 @@ function buildDraftsItem(shortcut: ChordString | null): CommandItem {
     group: "suggested",
     scope: "actions",
     shortcut,
-    actionId: "composer.drafts",
+    actionId: null,
     subpage: null,
-    run: () => undefined,
+    run: () => {
+      openDrafts("palette");
+    },
   };
 }
 

@@ -6,6 +6,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
+import { Analytics, AnalyticsEvent, type AnalyticsDraftInput } from "@/lib/analytics";
 import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
 import {
   acquireDraftMirrorSession,
@@ -32,9 +33,9 @@ import {
  * providers it would otherwise need only to render a list.
  */
 const actions = {
-  openRow: vi.fn<(row: DraftInventoryRow) => void>(),
-  copyRow: vi.fn<(row: DraftInventoryRow) => void>(),
-  deleteRow: vi.fn<(row: DraftInventoryRow) => void>(),
+  openRow: vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
+  copyRow: vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
+  deleteRow: vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
 };
 vi.mock("@/hooks/drafts/use-draft-inventory-actions", () => ({
   useDraftInventoryActions: () => actions,
@@ -184,6 +185,7 @@ describe("ComposerDraftsControl", () => {
     actions.openRow.mockReset();
     actions.copyRow.mockReset();
     actions.deleteRow.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("lists the start page's other drafts and never the one being edited", () => {
@@ -206,6 +208,92 @@ describe("ComposerDraftsControl", () => {
 
     expect(screen.queryByRole("button", { name: "All" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start page" })).toBeNull();
+  });
+
+  // T09: the pill click is the "button" entry point (H06's shortcut and the
+  // palette are the other two, threaded through the registry below).
+  it("fires drafts_list_opened with entry_point button when the pill opens the list", () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    renderLandingControl("landing-active");
+
+    openList();
+
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftsListOpened, {
+      surface: "start_page",
+      entry_point: "button",
+      draft_count: "1",
+    });
+  });
+
+  it("does not refire drafts_list_opened while the list stays open", () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    renderLandingControl("landing-active");
+    openList();
+    trackSpy.mockClear();
+
+    pressKey("ArrowDown");
+
+    expect(trackSpy).not.toHaveBeenCalled();
+  });
+
+  it("threads the registry's own entry point into drafts_list_opened for shortcut and palette, and never toggles the list closed (review finding 5)", () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    renderLandingControl("landing-active");
+
+    let opened = false;
+    act(() => {
+      opened = openActiveDraftsControl("shortcut");
+    });
+    expect(opened).toBe(true);
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftsListOpened, {
+      surface: "start_page",
+      entry_point: "shortcut",
+      draft_count: "1",
+    });
+    expect(listedRowIds()).toEqual(["landing-a"]);
+
+    // Ensure-open, not toggle: a second shortcut fire while already open
+    // must leave the list open and fire no second event.
+    trackSpy.mockClear();
+    act(() => {
+      opened = openActiveDraftsControl("shortcut");
+    });
+    expect(opened).toBe(true);
+    expect(listedRowIds()).toEqual(["landing-a"]);
+    expect(trackSpy).not.toHaveBeenCalled();
+
+    // The regression this fix closes: choosing "Drafts" from an already-open
+    // palette must not close the list out from under it either.
+    trackSpy.mockClear();
+    act(() => {
+      opened = openActiveDraftsControl("palette");
+    });
+    expect(opened).toBe(true);
+    expect(listedRowIds()).toEqual(["landing-a"]);
+    expect(trackSpy).not.toHaveBeenCalled();
+
+    // Only an explicit dismissal closes it - a fresh entry point afterward
+    // opens it again and fires its own event.
+    pressKey("Escape");
+    expect(listedRowIds()).toEqual([]);
+
+    trackSpy.mockClear();
+    act(() => {
+      opened = openActiveDraftsControl("palette");
+    });
+    expect(opened).toBe(true);
+    expect(listedRowIds()).toEqual(["landing-a"]);
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftsListOpened, {
+      surface: "start_page",
+      entry_point: "palette",
+      draft_count: "1",
+    });
   });
 
   it("counts only the current-surface rows, and hides the badge at zero", () => {
@@ -267,33 +355,7 @@ describe("ComposerDraftsControl", () => {
     expect(content?.textContent).not.toContain("@CODE_OF_CONDUCT.md");
   });
 
-  // Review finding 5: the registry's callback must ensure the list open, not
-  // toggle it - a second shortcut fire, or choosing "Drafts" from the palette
-  // while the list is already open, must never close it.
-  it("the registry's shortcut/palette entries ensure the list open, never toggling it closed", () => {
-    renderLandingControl("landing-active");
-
-    let opened = false;
-    act(() => {
-      opened = openActiveDraftsControl("shortcut");
-    });
-    expect(opened).toBe(true);
-    expect(listedRowIds()).toEqual(["landing-a"]);
-
-    act(() => {
-      opened = openActiveDraftsControl("shortcut");
-    });
-    expect(opened).toBe(true);
-    expect(listedRowIds()).toEqual(["landing-a"]);
-
-    act(() => {
-      opened = openActiveDraftsControl("palette");
-    });
-    expect(opened).toBe(true);
-    expect(listedRowIds()).toEqual(["landing-a"]);
-  });
-
-  it("opens the highlighted row on Enter and closes the list", () => {
+  it("opens the highlighted row on Enter and closes the list, with keyboard input", () => {
     renderLandingControl("landing-active");
     openList();
 
@@ -301,10 +363,11 @@ describe("ComposerDraftsControl", () => {
 
     expect(actions.openRow).toHaveBeenCalledTimes(1);
     expect(actions.openRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.openRow.mock.calls[0]?.[1]).toBe("keyboard");
     expect(listedRowIds()).toEqual([]);
   });
 
-  it("copies on C and keeps the list open", () => {
+  it("copies on C and keeps the list open, with keyboard input", () => {
     renderLandingControl("landing-active");
     openList();
 
@@ -312,10 +375,11 @@ describe("ComposerDraftsControl", () => {
 
     expect(actions.copyRow).toHaveBeenCalledTimes(1);
     expect(actions.copyRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.copyRow.mock.calls[0]?.[1]).toBe("keyboard");
     expect(listedRowIds()).toEqual(["landing-a"]);
   });
 
-  it("deletes on D and keeps the list open", () => {
+  it("deletes on D and keeps the list open, with keyboard input", () => {
     renderLandingControl("landing-active");
     openList();
 
@@ -323,7 +387,40 @@ describe("ComposerDraftsControl", () => {
 
     expect(actions.deleteRow).toHaveBeenCalledTimes(1);
     expect(actions.deleteRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.deleteRow.mock.calls[0]?.[1]).toBe("keyboard");
     expect(listedRowIds()).toEqual(["landing-a"]);
+  });
+
+  // The row's own key buttons read a real click's `event.detail` (nonzero)
+  // apart from a synthetic Enter/Space activation (`detail: 0`) - the same
+  // distinction `event.detail === 0` draws in production.
+  it("classifies a key button's activation by its event detail: 0 is keyboard, nonzero is pointer", () => {
+    renderLandingControl("landing-active");
+    openList();
+    const copyButton = screen.getByRole("button", { name: "Copy draft" });
+
+    fireEvent.click(copyButton);
+    expect(actions.copyRow.mock.calls[0]?.[1]).toBe("keyboard");
+
+    fireEvent.click(copyButton, { detail: 1 });
+    expect(actions.copyRow.mock.calls[1]?.[1]).toBe("pointer");
+  });
+
+  // cmdk's own row click (`onSelect`) never reaches a keyboard Enter - the
+  // control's window-level capture below answers that first - so it is
+  // hardcoded to pointer regardless of the click's `detail`.
+  it("opens with pointer input when the row itself is clicked", () => {
+    renderLandingControl("landing-active");
+    openList();
+    const row = document.querySelector<HTMLElement>(
+      '[data-draft-row-id="landing-a"]',
+    );
+    if (row === null) throw new Error("expected the landing-a row to render");
+
+    fireEvent.click(row);
+
+    expect(actions.openRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.openRow.mock.calls[0]?.[1]).toBe("pointer");
   });
 
   it("closes on any other printable key, so typing reaches the editor", () => {

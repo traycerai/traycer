@@ -106,7 +106,7 @@ export function UserMenu(props: UserMenuProps) {
           <DropdownMenuItem
             onSelect={() => {
               setOpen(false);
-              useDesktopDialogStore.getState().openDrafts();
+              useDesktopDialogStore.getState().openDrafts("menu");
             }}
           >
             <LayersPlus className="size-3.5" />

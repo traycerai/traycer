@@ -4,7 +4,13 @@
  * when they close. This avoids the dead-shortcut window a single-slot registry
  * creates when its winning registration unmounts.
  */
-type DraftsControlAction = () => void;
+import type { AnalyticsDraftEntryPoint } from "@/lib/analytics";
+
+export type DraftsControlEntryPoint = Extract<
+  AnalyticsDraftEntryPoint,
+  "shortcut" | "palette"
+>;
+type DraftsControlAction = (entryPoint: DraftsControlEntryPoint) => void;
 
 const stack: DraftsControlAction[] = [];
 
@@ -18,10 +24,12 @@ export function registerActiveDraftsControl(
   };
 }
 
-export function openActiveDraftsControl(): boolean {
+export function openActiveDraftsControl(
+  entryPoint: DraftsControlEntryPoint,
+): boolean {
   const action = stack.at(-1);
   if (action === undefined) return false;
-  action();
+  action(entryPoint);
   return true;
 }
 

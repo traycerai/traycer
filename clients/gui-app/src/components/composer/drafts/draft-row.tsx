@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { CommandItem } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
+import type { AnalyticsDraftInput } from "@/lib/analytics";
 import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 
@@ -23,9 +24,9 @@ interface DraftRowProps {
   /** Phones swap the key hints for tappable trailing buttons (D22). */
   readonly mobile: boolean;
   readonly onHighlight: () => void;
-  readonly onOpen: () => void;
-  readonly onCopy: () => void;
-  readonly onDelete: () => void;
+  readonly onOpen: (input: AnalyticsDraftInput) => void;
+  readonly onCopy: (input: AnalyticsDraftInput) => void;
+  readonly onDelete: (input: AnalyticsDraftInput) => void;
 }
 
 /**
@@ -49,7 +50,7 @@ export function DraftRow(props: DraftRowProps) {
       // has to reach vaul's own pointer handling.
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
       onMouseMove={onHighlight}
-      onSelect={onOpen}
+      onSelect={() => onOpen("pointer")}
     >
       <DraftRowBody
         row={row}
@@ -108,9 +109,9 @@ export function DraftRowBody(props: {
 export function DraftRowTrailing(props: {
   readonly mobile: boolean;
   readonly relative: string;
-  readonly onOpen: () => void;
-  readonly onCopy: () => void;
-  readonly onDelete: () => void;
+  readonly onOpen: (input: AnalyticsDraftInput) => void;
+  readonly onCopy: (input: AnalyticsDraftInput) => void;
+  readonly onDelete: (input: AnalyticsDraftInput) => void;
 }) {
   const { mobile, relative, onOpen, onCopy, onDelete } = props;
   if (mobile) {
@@ -174,7 +175,7 @@ function DraftRowKeyButton(props: {
   readonly word: string;
   readonly glyph: string;
   readonly shortcut: string;
-  readonly onPress: () => void;
+  readonly onPress: (input: AnalyticsDraftInput) => void;
 }) {
   const { label, word, glyph, shortcut, onPress } = props;
   return (
@@ -190,7 +191,7 @@ function DraftRowKeyButton(props: {
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        onPress();
+        onPress(event.detail === 0 ? "keyboard" : "pointer");
       }}
     >
       {/* D14: hover OR highlight. The cluster hover is the pointer's way in;
@@ -210,7 +211,7 @@ function DraftRowKeyButton(props: {
 
 function DraftRowIconButton(props: {
   readonly label: string;
-  readonly onPress: () => void;
+  readonly onPress: (input: AnalyticsDraftInput) => void;
   readonly children: ReactNode;
 }) {
   const { label, onPress, children } = props;
@@ -222,7 +223,7 @@ function DraftRowIconButton(props: {
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        onPress();
+        onPress(event.detail === 0 ? "keyboard" : "pointer");
       }}
     >
       {children}
