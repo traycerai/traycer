@@ -19,16 +19,20 @@ export interface TileOverlayView {
  * Resolves what the tile overlay does. Pointer blocking is gated on the guest
  * not yet being interactive - never on the same flag that hides the overlay -
  * so a live, presented guest is never click-blocked by a stale loader. A
- * terminal surface (dead / stalled) blocks so its Retry stays clickable.
+ * terminal surface (dead / stalled) blocks while painted so its Retry stays
+ * clickable.
  *
- * The loading surface only paints when there is nothing meaningful beneath
- * it: the guest is not presented (`guestInteractive` false - attaching, or
- * re-attaching after a renderer reset), or the tile has not yet seen a
- * committed document (`documentCommitted` false - a fresh tab still at its
- * `about:blank` birth). Once a page has committed, a navigation away from it
- * keeps that page painted until the next one commits, so status text over
- * it is noise; the toolbar spinner carries in-flight navigation, as in any
- * browser.
+ * The loading AND stalled surfaces only paint when there is nothing
+ * meaningful beneath them: the guest is not presented (`guestInteractive`
+ * false - attaching, or re-attaching after a renderer reset), or the tile
+ * has not yet seen a committed document (`documentCommitted` false - a fresh
+ * tab still at its `about:blank` birth). Once a page has committed, a
+ * navigation away from it keeps that page painted until the next one
+ * commits, so status text over it is noise - "This page did not load" over a
+ * page that plainly did is the complaint this exists to prevent. The toolbar
+ * carries in-flight navigation instead, as in any browser: the spinner, and
+ * a Stop in place of Reload. The stalled surface is reserved for a tab that
+ * has never shown a page, where it is the only feedback there is.
  */
 export function resolveTileOverlay(
   status: BrowserViewStatus,
@@ -42,11 +46,16 @@ export function resolveTileOverlay(
   if (status === "dead") {
     return { visible: true, blocking: true, surface: "dead" };
   }
+  const nothingBeneath = !guestInteractive || !documentCommitted;
   if (navigationStalled) {
-    return { visible: true, blocking: true, surface: "stalled" };
+    return {
+      visible: nothingBeneath,
+      blocking: nothingBeneath,
+      surface: "stalled",
+    };
   }
   return {
-    visible: !guestInteractive || !documentCommitted,
+    visible: nothingBeneath,
     blocking: !guestInteractive,
     surface: "loading",
   };

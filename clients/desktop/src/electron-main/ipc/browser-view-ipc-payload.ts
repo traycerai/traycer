@@ -63,6 +63,7 @@ const nativeTabCapabilitySchema = nativeTabKeySchema.extend({
 const electronTabControlActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("navigate"), url: nonEmptyStringSchema }),
   z.object({ kind: z.literal("reload") }),
+  z.object({ kind: z.literal("stop") }),
   z.object({ kind: z.literal("goBack") }),
   z.object({ kind: z.literal("goForward") }),
   z.object({ kind: z.literal("zoomIn") }),
