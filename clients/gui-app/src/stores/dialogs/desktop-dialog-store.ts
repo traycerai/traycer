@@ -6,7 +6,7 @@ import {
   type ReportIssueDraftContext,
 } from "@/lib/report-issue-draft-context";
 
-export type DraftsDialogEntryPoint = "menu" | "shortcut" | "palette";
+export type DraftsDialogEntryPoint = "menu" | "palette";
 
 export type DesktopDialogKind =
   | "drafts"

@@ -12,7 +12,6 @@ import {
 } from "@/lib/keybindings/dispatch";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
 import { isRepeatSensitiveAction } from "@/lib/keybindings/dispatch";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 function noopRouter(): KeybindingRouter {
@@ -97,13 +96,10 @@ describe("active-drafts-control-registry", () => {
   });
 });
 
-// H12: `Cmd+S` opens the start-page control when one is active; anywhere else
-// it opens the avatar menu's Drafts dialog, remembering which entry point
-// asked (`draftsEntryPoint`). `openDrafts` is the shared seam the shortcut's
-// static handler and the palette's own row both call - only the SHORTCUT arm
-// fires `drafts_shortcut_redirected` (the ticket restricts the event to that
-// one entry point).
-describe("composer.drafts / openDrafts falling back to the avatar Drafts dialog", () => {
+// H13: `Cmd+S` opens the start-page control when one is active and does
+// nothing anywhere else. The palette still uses `openDrafts`, which prefers
+// the control and otherwise opens the avatar Drafts dialog.
+describe("composer.drafts / openDrafts", () => {
   beforeEach(() => {
     resetActiveDraftsControlForTests();
     useDesktopDialogStore.getState().close();
@@ -114,48 +110,26 @@ describe("composer.drafts / openDrafts falling back to the avatar Drafts dialog"
     vi.restoreAllMocks();
   });
 
-  it("opens the dialog and fires drafts_shortcut_redirected for the shortcut fallback", () => {
-    const trackSpy = vi
-      .spyOn(Analytics.getInstance(), "track")
-      .mockImplementation(() => true);
-
-    expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
-
-    expect(useDesktopDialogStore.getState().activeDialog).toBe("drafts");
-    expect(useDesktopDialogStore.getState().draftsEntryPoint).toBe("shortcut");
-    expect(trackSpy).toHaveBeenCalledWith(
-      AnalyticsEvent.DraftsShortcutRedirected,
-      null,
-    );
+  it("does not open the dialog or swallow Cmd+S when no start-page control is active", () => {
+    expect(dispatchAction("composer.drafts", noopRouter())).toBe(false);
+    expect(useDesktopDialogStore.getState().activeDialog).toBe(null);
   });
 
-  it("prefers the real registry over the dialog when a composer is active, firing no redirect event", () => {
+  it("opens the registered start-page control and never the dialog", () => {
     const composer = vi.fn<(entryPoint: DraftsControlEntryPoint) => void>();
     registerActiveDraftsControl(composer);
-    const trackSpy = vi
-      .spyOn(Analytics.getInstance(), "track")
-      .mockImplementation(() => true);
 
     expect(dispatchAction("composer.drafts", noopRouter())).toBe(true);
 
     expect(composer).toHaveBeenCalledWith("shortcut");
     expect(useDesktopDialogStore.getState().activeDialog).toBe(null);
-    expect(trackSpy).not.toHaveBeenCalled();
   });
 
-  it("routes the palette's own openDrafts to the dialog too, but never fires the shortcut-redirect event", () => {
-    const trackSpy = vi
-      .spyOn(Analytics.getInstance(), "track")
-      .mockImplementation(() => true);
-
+  it("routes the palette's own openDrafts to the dialog when no control is active", () => {
     expect(openDrafts("palette")).toBe(true);
 
     expect(useDesktopDialogStore.getState().activeDialog).toBe("drafts");
     expect(useDesktopDialogStore.getState().draftsEntryPoint).toBe("palette");
-    expect(trackSpy).not.toHaveBeenCalledWith(
-      AnalyticsEvent.DraftsShortcutRedirected,
-      expect.anything(),
-    );
   });
 
   it("routes the palette to the real registry over the dialog when a composer is active", () => {
@@ -176,6 +150,7 @@ describe("composer.drafts action metadata + dispatch reservation", () => {
       kind: "chord",
       category: "app",
       defaultChord: "mod+s",
+      description: "Open the start-page drafts list.",
     });
     expect(getDefaultBindings()["composer.drafts"]).toBe("mod+s");
     expect(isRepeatSensitiveAction("composer.drafts")).toBe(true);

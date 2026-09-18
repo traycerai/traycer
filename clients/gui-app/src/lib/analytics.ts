@@ -513,7 +513,6 @@ export enum AnalyticsEvent {
   DraftCopied = "draft_copied",
   DraftDeleted = "draft_deleted",
   DraftDeleteUndone = "draft_delete_undone",
-  DraftsShortcutRedirected = "drafts_shortcut_redirected",
   NotificationCenterOpened = "notification_center_opened",
   NotificationFilterChanged = "notification_filter_changed",
   NotificationActivationCompleted = "notification_activation_completed",
@@ -923,7 +922,6 @@ export interface AnalyticsEventProperties {
     readonly surface: AnalyticsDraftSurface;
     readonly draft_kind: AnalyticsDraftKind;
   };
-  readonly [AnalyticsEvent.DraftsShortcutRedirected]: null;
   readonly [AnalyticsEvent.NotificationCenterOpened]: {
     readonly entry_point: AnalyticsNotificationEntryPoint;
     readonly host_state: AnalyticsNotificationHostState;
@@ -1774,7 +1772,6 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
 ]);
 
 const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
-  AnalyticsEvent.DraftsShortcutRedirected,
   AnalyticsEvent.SignInSucceeded,
   AnalyticsEvent.HostFailover,
   AnalyticsEvent.HostRecovered,
@@ -2300,7 +2297,6 @@ const STRICT_EVENTS = new Set<AnalyticsEvent>([
   AnalyticsEvent.DraftCopied,
   AnalyticsEvent.DraftDeleted,
   AnalyticsEvent.DraftDeleteUndone,
-  AnalyticsEvent.DraftsShortcutRedirected,
   AnalyticsEvent.NotificationCenterOpened,
   AnalyticsEvent.NotificationFilterChanged,
   AnalyticsEvent.NotificationActivationCompleted,

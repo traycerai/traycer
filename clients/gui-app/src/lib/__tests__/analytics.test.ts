@@ -1173,21 +1173,14 @@ describe("analytics", () => {
           draft_kind: "chat",
         }),
       ).toEqual({ surface: "start_page", draft_kind: "chat" });
-      expect(
-        sanitizeAnalyticsProperties(
-          AnalyticsEvent.DraftsShortcutRedirected,
-          null,
-        ),
-      ).toEqual({});
     });
 
-    // H10/H12: the avatar menu replaced Home as the second surface, and it
-    // is reachable from all three entry points the dialog can open from.
+    // H13: the avatar dialog opens from the menu item and the palette only.
     it("accepts drafts_list_opened from the avatar menu at each of its entry points", async () => {
       const { AnalyticsEvent, sanitizeAnalyticsProperties } =
         await import("@/lib/analytics");
 
-      for (const entry_point of ["menu", "shortcut", "palette"] as const) {
+      for (const entry_point of ["menu", "palette"] as const) {
         expect(
           sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
             surface: "avatar_menu",
@@ -1309,7 +1302,6 @@ describe("analytics", () => {
         AnalyticsEvent.DraftCopied,
         AnalyticsEvent.DraftDeleted,
         AnalyticsEvent.DraftDeleteUndone,
-        AnalyticsEvent.DraftsShortcutRedirected,
       ] as const;
 
       for (const event of events) {
@@ -1327,13 +1319,6 @@ describe("analytics", () => {
           draft_kind: "chat",
           input: "pointer",
           chatId: "chat-1",
-        }),
-      ).toBeNull();
-      // `DraftsShortcutRedirected` carries no properties at all - any key
-      // attached to it is already one too many.
-      expect(
-        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsShortcutRedirected, {
-          surface: "start_page",
         }),
       ).toBeNull();
     });

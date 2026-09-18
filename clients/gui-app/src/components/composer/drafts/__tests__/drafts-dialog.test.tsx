@@ -109,7 +109,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("<DraftsDialog />", () => {
-  it.each(["menu", "shortcut", "palette"] as const)(
+  it.each(["menu", "palette"] as const)(
     "records an empty dialog opened from %s",
     (entryPoint) => {
       const trackSpy = vi.spyOn(Analytics.getInstance(), "track");

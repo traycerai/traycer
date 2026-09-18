@@ -11,11 +11,7 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
 import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import {
-  type DraftsControlEntryPoint,
-  openActiveDraftsControl,
-} from "@/lib/commands/active-drafts-control-registry";
+import { openActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -442,15 +438,12 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   // No-op (false) when no composer is active, matching the "hidden/disabled"
   // surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
-  "composer.drafts": () => openDrafts("shortcut"),
+  "composer.drafts": () => openActiveDraftsControl("shortcut"),
 };
 
-export function openDrafts(entryPoint: DraftsControlEntryPoint): boolean {
+export function openDrafts(entryPoint: "palette"): boolean {
   if (openActiveDraftsControl(entryPoint)) return true;
   useDesktopDialogStore.getState().openDrafts(entryPoint);
-  if (entryPoint === "shortcut") {
-    Analytics.getInstance().track(AnalyticsEvent.DraftsShortcutRedirected, null);
-  }
   return true;
 }
 

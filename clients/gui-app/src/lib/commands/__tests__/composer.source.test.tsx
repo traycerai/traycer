@@ -357,9 +357,8 @@ describe("composerSource", () => {
     );
     expect(item).toBeDefined();
     // `null`, not `"composer.drafts"`: the row does not route through the
-    // central dispatcher (which would fire the shortcut's own redirect
-    // event) - it calls the shared `openDrafts` seam directly, entry point
-    // "palette".
+    // central dispatcher (Cmd+S opens only the start-page control) - it
+    // calls the shared `openDrafts` seam directly, entry point "palette".
     expect(item?.actionId).toBe(null);
     expect(item?.label).toBe("Drafts");
     expect(item?.shortcut).toBe("mod+s");
@@ -369,9 +368,9 @@ describe("composerSource", () => {
     expect(openDraftsMock).toHaveBeenCalledWith("palette");
   });
 
-  // H10/H12: unlike every other row here, Drafts does not depend on a
-  // focused composer - off the start page, Cmd+S still has somewhere to go
-  // (the avatar menu's dialog), so the palette keeps offering it.
+  // H13: unlike every other row here, Drafts does not depend on a focused
+  // composer - the palette still opens the avatar dialog when no start-page
+  // control is active.
   it("keeps the Drafts row on a non-landing composer", () => {
     registerFocusedComposerControls(
       "chat-tile",

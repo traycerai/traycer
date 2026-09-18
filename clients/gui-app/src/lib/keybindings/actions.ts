@@ -831,7 +831,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
   "composer.drafts": {
     id: "composer.drafts",
     label: "Drafts",
-    description: "Open the start-page drafts list or the all-drafts dialog.",
+    description: "Open the start-page drafts list.",
     category: "app",
     kind: "chord",
     defaultChord: "mod+s",
