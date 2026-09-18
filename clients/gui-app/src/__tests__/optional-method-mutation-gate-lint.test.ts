@@ -41,8 +41,7 @@ import { describe, expect, it } from "vitest";
  *   of its own: `worktree-auto-cleanup-chip.tsx` gates on the always-co-shipped
  *   `worktree.getAutoCleanupPolicy` instead.
  * - A call-and-catch degrade, typed into the mutation's own result instead of
- *   a pre-flight check: `drafts.retract`'s `DraftRetractResult` has an
- *   explicit `"unsupported"` arm; `epic.updateChatRunSettings` /
+ *   a pre-flight check: `epic.updateChatRunSettings` /
  *   `updateChatProfile` are documented fire-and-forget ("no `onError` toast...
  *   against an old host the call fails with `E_HOST_UNSUPPORTED`... callers
  *   treat as legacy behavior"); `providers.modelProviderAuth` /
@@ -122,8 +121,6 @@ const DEFINITION_FILES = new Set(
  * string; every call site targeting it is treated as satisfied.
  */
 const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
-  "drafts.retract":
-    'typed call-and-catch: `DraftRetractResult` has an explicit "unsupported" arm (use-draft-retract.ts)',
   "epic.updateChatRunSettings":
     'documented fire-and-forget: no onError, E_HOST_UNSUPPORTED degrades to "persists on next send" (use-epic-chat-mutations.ts)',
   "epic.updateChatProfile":

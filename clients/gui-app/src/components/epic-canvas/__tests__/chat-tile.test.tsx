@@ -1355,6 +1355,8 @@ describe("<ChatTile />", () => {
           origin: null,
           publication: null,
           supersedes: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });

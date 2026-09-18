@@ -10,7 +10,7 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
 import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
-import { stashActivePrompt } from "@/lib/commands/active-prompt-stash-registry";
+import { openActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -437,7 +437,7 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   // No-op (false) when no composer is active, matching the "hidden/disabled"
   // surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
-  "composer.stash": () => stashActivePrompt(),
+  "composer.drafts": () => openActiveDraftsControl(),
 };
 
 export function dispatchAction(
@@ -476,7 +476,7 @@ export function isExternallyHandled(id: ActionId): boolean {
 // canvas (the store reuses an active blank tab), but on the landing page it
 // shares the new-terminal handler, so it needs the same protection.
 const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
-  "composer.stash",
+  "composer.drafts",
   "composer.model-picker.toggle",
   "app.terminal.toggle",
   "app.terminal.new",

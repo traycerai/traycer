@@ -1,4 +1,4 @@
-import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
+import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {

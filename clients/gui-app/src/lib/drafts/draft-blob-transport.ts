@@ -1,4 +1,4 @@
-import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import type { ImageBlob, ImageBytes } from "@/lib/attachments/image-bytes";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { DraftWrite } from "@traycer/protocol/host";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -10,9 +10,7 @@ import {
 } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64, base64ToBytes } from "@/lib/composer/image-base64";
-import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
-import { readPromptStashRestoreBlobs } from "@/lib/composer/prompt-stash-repository";
-import type { PromptStashImageBlob } from "@/lib/composer/prompt-stash-codec";
+import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   authorizesCloudCapability,
@@ -264,21 +262,11 @@ function isBlobUnsupported(error: unknown): boolean {
   );
 }
 
-async function localBytesForHash(
-  hash: string,
-): Promise<Uint8Array<ArrayBuffer> | null> {
-  const fromLanding = await getImageBytes(hash);
-  if (fromLanding !== undefined) return fromLanding;
-  const stash = await readPromptStashRestoreBlobs([hash]);
-  if (stash.status !== "ok") return null;
-  return stash.blobs.get(hash)?.bytes ?? null;
-}
-
 /**
- * Upload every `blobHashes` entry the local partition (or stash repo)
- * still holds. Missing local bytes and digest-mismatch skip that hash
- * (fail closed per-image). A host that withholds the methods is treated
- * as an old host: hash-only content, never an error surface.
+ * Upload every `blobHashes` entry the local landing partition still holds.
+ * Missing local bytes and digest-mismatch skip that hash (fail closed
+ * per-image). A host that withholds the methods is treated as an old host:
+ * hash-only content, never an error surface.
  */
 export type DraftBlobClient = {
   readonly request: HostRequester<HostRpcRegistry>["request"];
@@ -422,14 +410,14 @@ async function uploadOneDraftBlob(
   // is answered.
   const epoch = blobEpochOf(hostId);
   try {
-    // Inside the try, not before it. The local read is IndexedDB (or the stash
-    // repo) and can reject; outside the containment that rejection escaped as
-    // the flight's own, and the cleanup `.finally` chained onto it - which
-    // nothing awaits - became a SECOND, detached unhandled rejection even when
-    // the caller handled the first. The "never rejects" claim above has to be
-    // true across the whole operation for that discarded promise to be safe.
-    const bytes = await localBytesForHash(sha256);
-    if (bytes === null) return false;
+    // Inside the try, not before it. The local read is IndexedDB and can
+    // reject; outside the containment that rejection escaped as the flight's
+    // own, and the cleanup `.finally` chained onto it - which nothing awaits -
+    // became a SECOND, detached unhandled rejection even when the caller
+    // handled the first. The "never rejects" claim above has to be true across
+    // the whole operation for that discarded promise to be safe.
+    const bytes = await getImageBytes(sha256);
+    if (bytes === undefined) return false;
     const response = await client.request("drafts.putBlob", {
       sha256,
       bytesBase64: bytesToBase64(bytes),
@@ -511,7 +499,7 @@ export function readDraftBlobsIntoLocalStore(
   hostId: string,
   client: DraftBlobClient,
   hashes: readonly string[],
-): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
+): Promise<ReadonlyMap<string, ImageBlob>> {
   return readDraftBlobs(hostId, client, hashes, putImageBytesAtHash);
 }
 
@@ -522,7 +510,7 @@ export function readDraftBlobsForRecovery(
   hostId: string,
   client: DraftBlobClient,
   hashes: readonly string[],
-): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
+): Promise<ReadonlyMap<string, ImageBlob>> {
   return readDraftBlobs(hostId, client, hashes, () => Promise.resolve(true));
 }
 
@@ -531,8 +519,8 @@ async function readDraftBlobs(
   client: DraftBlobClient,
   hashes: readonly string[],
   store: (hash: string, bytes: ImageBytes) => Promise<boolean>,
-): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
-  const images = new Map<string, PromptStashImageBlob>();
+): Promise<ReadonlyMap<string, ImageBlob>> {
+  const images = new Map<string, ImageBlob>();
   if (hashes.length === 0) return images;
   if (blobUnsupportedHosts.has(hostId)) return images;
   // Captured before the first request, exactly as `uploadOneDraftBlob` does.
