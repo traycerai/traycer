@@ -296,6 +296,34 @@ describe("projectOntoFrozenLine", () => {
     expect(projectOntoFrozenLine(union, clean)).toBe(clean);
   });
 
+  it("copies an already-acceptable value when a repair strictly outscores it", () => {
+    // The documented exception to identity, pinned rather than just described.
+    // The test above is a TIE by construction - both arms score 1 - so it only
+    // covers the easy half. Here a repaired candidate strictly wins, and a
+    // value the union already accepted comes back rebuilt.
+    const armA = z.object({
+      items: z.array(z.enum(["a"])),
+      extra: z.array(z.enum(["x"])),
+    });
+    const armB = z.object({ items: z.array(z.enum(["a", "b"])) });
+    const union = z.union([armA, armB]);
+    const clean = { items: ["a", "b"], extra: ["x", "x"] };
+
+    // The union accepts it untouched - so this is NOT a repair of broken input.
+    expect(union.safeParse(clean).success).toBe(true);
+    expect(union.parse(clean)).toEqual({ items: ["a", "b"] });
+
+    const projected = projectOntoFrozenLine(union, clean);
+    expect(projected).not.toBe(clean);
+
+    // Nothing is LOST - the element count goes up, never down, because an
+    // accepted value is always its own candidate. What moves is composition:
+    // `items:"b"` is dropped, which the frozen line could have represented, to
+    // buy two `extra` elements. Element count cannot say whether that trade is
+    // right, which is exactly why it is written down rather than relied upon.
+    expect(union.parse(projected)).toEqual({ items: ["a"], extra: ["x", "x"] });
+  });
+
   it("is scored on what the UNION resolves to, not on the arm that won", () => {
     // Every union test above asserts on the PROJECTION. That is the wrong end
     // of the pipe: the caller re-parses through the same union, and a union

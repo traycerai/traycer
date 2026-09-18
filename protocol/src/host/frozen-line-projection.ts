@@ -163,6 +163,25 @@ function countArrayElements(value: unknown): number {
  * to change, so a caller can tell the two cases apart by reference and an
  * undrifted payload is handed on untouched rather than rebuilt.
  *
+ * ONE EXCEPTION, inside an overlapping union. There, identity is preserved only
+ * when the unrepaired value TIES the best-scoring candidate - which is the
+ * common case, and every union these rows reach - but a repaired candidate that
+ * strictly outscores it wins, and then a value the union already accepted comes
+ * back as a copy. Measured over 20,000 randomised overlapping unions restricted
+ * to already-accepted values: 8103 such values, 218 (~2.7%) returned as a copy.
+ *
+ * No data is lost when that happens - of those 218, 218 gained elements and
+ * none lost any, which is structural rather than lucky: if the union accepts
+ * `value` then the accepting arm's projection IS `value`, so it is always in
+ * the running and the maximum can only meet or beat it. What changes is
+ * COMPOSITION - the score counts array elements without regard to which field
+ * they sit in, so it will trade an element the frozen line CAN represent for
+ * two elements elsewhere. That is in tension with this module's stated rule
+ * ("drop the members that line cannot represent") and element count is not the
+ * measure that can settle it. Dormant on these rows, since every union here
+ * yields exactly one candidate arm; worth revisiting before a second
+ * overlapping union is added.
+ *
  * Identity is about the RESULT, not about the work. Every object and record
  * node allocates a `{ ...value }` on the way down and discards it when no child
  * moved, and the union case runs TWO `safeParse` calls per candidate arm - one
@@ -171,14 +190,37 @@ function countArrayElements(value: unknown): number {
  * not N+1, and each union parse internally re-tries arms, so the arm-level work
  * is nearer N + N^2. Measured on a 3-arm union: 3 arm parses, 3 union parses.
  *
- * So this is not free. On a `providers.list` payload both the head and the 7.0
- * row accept - 8 rows with full `nativeCapabilities`, plus a native MCP result
- * of 6 servers x 8 tools, on which the walk returns identity - the walk costs
- * about 3x the frozen parse it precedes and the combined call about 4x a bare
- * parse. Those RATIOS held across runtimes; the absolute did not, so it is
- * worth naming: ~0.12 ms under vitest's Node workers (parse ~0.029 ms) and
- * ~0.17 ms under Bun directly (parse ~0.041 ms). An earlier revision claimed
- * 2.5x/3x from a run with too little warm-up.
+ * So this is not free, and the number moved when the union rule changed - twice
+ * now, which is the argument for measuring it rather than carrying it forward.
+ * On a `providers.list` payload both the head and the 7.0 row accept - 8 rows
+ * with full `nativeCapabilities`, plus a native MCP result of 6 servers x 8
+ * tools, on which the walk returns identity - measured at 5000 iterations after
+ * 500 of warm-up:
+ *
+ *     vitest Node workers   walk ~11-12x parse, combined ~12-13x, ~0.53 ms
+ *     Bun directly          walk ~6.6-7.2x,     combined ~7.7-8.1x, ~0.33 ms
+ *
+ * (bare frozen parse ~0.040-0.047 ms on both). Unlike the earlier figures the
+ * RATIOS do not hold across runtimes here, so both are given; Node is the one
+ * CI measures.
+ *
+ * Two earlier revisions of this paragraph were wrong. It first claimed 2.5x/3x
+ * from a run with too little warm-up; corrected to ~3x/~4x; and then the very
+ * next commit roughly DOUBLED the real cost without touching the paragraph, by
+ * removing the identity short-circuit in the union case. The common no-drift
+ * path no longer exits at the first matching arm - every arm is now projected
+ * and parsed, and each candidate triggers a full union parse of its subtree.
+ * Instrumented on a 3-arm union with a clean value: 3 arm parses + 1 union
+ * parse, where it used to be 1 arm parse and no union parse.
+ *
+ * That is a real regression in cost, accepted because the short-circuit was
+ * returning wrong answers (see the union case). It is also recoverable: the
+ * scoring loop only earns anything with TWO OR MORE candidate arms, and all
+ * eleven unions these rows reach yield exactly one. Where a single arm is a
+ * candidate and the union carries no checks of its own, arm-accepts implies
+ * union-accepts, so the union parse can be skipped outright. Not done here -
+ * it is an optimisation, and this change had already grown two rounds of
+ * correctness fixes.
  *
  * Bounded work on a response already parsed twice over (here and again by the
  * peer), and it buys the tabs a `.catch()` would otherwise drop - but state it
@@ -367,9 +409,21 @@ function project(schema: z.ZodType, value: unknown): unknown {
         //   accepted `value` untouched, short-circuited, and the peer received
         //   {items:["a"]} - one element, with armP's better answer discarded.
         //
-        // The tie-break keeps what the short-circuit was actually FOR: on an
-        // equal score the unrepaired value wins, so an undrifted payload is
-        // still returned by identity and never copied.
+        // The tie-break recovers most of what the short-circuit was for: ON AN
+        // EQUAL SCORE the unrepaired value wins, so it is returned by identity
+        // rather than rebuilt. Not "never copied" though - a repaired candidate
+        // that STRICTLY outscores it still wins, and then an already-acceptable
+        // value comes back as a copy (~2.7% of accepted values over 20,000
+        // randomised overlapping unions; see the `project` docblock for why
+        // that is a composition question and not data loss). Every union these
+        // rows reach yields exactly one candidate, so identity holds throughout
+        // production today.
+        //
+        // The comparison is order-symmetric: scored first, the identity
+        // candidate is displaced only by a strictly higher score; scored last,
+        // it wins on `>` or on this tie-break. A tie between two REPAIRED
+        // candidates still falls to declaration order, which is the one case
+        // these rules do not decide.
         if (
           retained > bestRetained ||
           (retained === bestRetained && projected === value)
