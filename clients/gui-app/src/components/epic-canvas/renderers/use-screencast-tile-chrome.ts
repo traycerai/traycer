@@ -1,3 +1,4 @@
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { SyntheticEvent } from "react";
 import type {
   BrowserNavState,
@@ -24,6 +25,8 @@ const SCREENCAST_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   back: true,
   forward: true,
   reload: true,
+  // The screencast nav wire has no stop; the spinner rides inside Reload.
+  stop: false,
   zoom: false,
   devtools: false,
   find: false,
@@ -82,7 +85,13 @@ export function useScreencastTileChrome(
   const addressValue = draft.addressValue;
   const navigateToUrl = (url: string): void => {
     draft.onAddressSubmitted(url);
-    if (url === normalizeBrowserAddressInput(liveUrl)) {
+    if (
+      url ===
+      normalizeBrowserAddressInput(
+        liveUrl,
+        useSettingsStore.getState().browserSearchEngine,
+      )
+    ) {
       onReload();
     } else {
       onNavigateUrl(url);
@@ -111,7 +120,10 @@ export function useScreencastTileChrome(
     annotation: null,
     onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
       event.preventDefault();
-      const url = normalizeBrowserAddressInput(addressValue);
+      const url = normalizeBrowserAddressInput(
+        addressValue,
+        useSettingsStore.getState().browserSearchEngine,
+      );
       navigateToUrl(url);
     },
     onAddressChange: draft.onAddressChange,
@@ -125,6 +137,7 @@ export function useScreencastTileChrome(
       onForward();
     },
     onReload,
+    onStop: ignoreChromeAction,
     onZoomOut: ignoreChromeAction,
     onZoomIn: ignoreChromeAction,
     onResetZoom: ignoreChromeAction,

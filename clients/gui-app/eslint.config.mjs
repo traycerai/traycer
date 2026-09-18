@@ -1678,6 +1678,20 @@ const restyleExemptions = [
       },
     ],
   },
+  {
+    // The discovery popover replaces Radix's default open/close animation and
+    // the plate's ring with its own scale/opacity keyframes and box-shadow
+    // (onboarding-diorama.css's sibling stylesheet, onboarding-agents.css),
+    // driven by `data-motion`/`data-visible` rather than the `layout` prop -
+    // no `layout` value expresses "cancel the ring for a hand-drawn shadow".
+    files: ["src/components/onboarding/onboarding-provider-discovery.tsx"],
+    contracts: [
+      {
+        pattern: "^PopoverContent$",
+        allow: ["shape", "onboarding-discovery-popover"],
+      },
+    ],
+  },
 ];
 
 // ── App-wide host reads that are RIGHT where they are, exempted per FILE. ──
@@ -2781,6 +2795,11 @@ export default tseslint.config(
             "appearance-wallpaper-*", // src/components/home/appearance-wallpaper.css
             "landing-appearance-surface", // src/components/home/appearance-wallpaper.css
             "onboarding-*", // a <style> element inside onboarding-page.tsx
+            "diorama-*", // src/components/onboarding/onboarding-diorama.css
+            "session-import-*", // src/components/onboarding/onboarding-import.css
+            // src/components/settings/panels/getting-started-settings.css -
+            // a <progress>, whose fill and track are pseudo-elements.
+            "settings-setup-meter",
 
             // Class names owned by a library, not by us.
             "not-prose", // @tailwindcss/typography, loaded via @plugin
@@ -2795,6 +2814,12 @@ export default tseslint.config(
             "status-ping",
             "tc-*",
             "traycer-md-*",
+            // Styled by first-task-guide.css, not by this component - the
+            // plugin only walks index.css's @import chain, and that
+            // stylesheet is imported from the guide's coachmark portal, not
+            // from a component this rule can see.
+            "first-task-coachmark",
+            "first-task-coachmark-*",
           ],
         },
       ],

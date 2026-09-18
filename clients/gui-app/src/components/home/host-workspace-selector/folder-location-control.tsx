@@ -271,7 +271,7 @@ function FolderLocationMenu(props: {
  * menu's typeahead, bridges vertical arrows into the filtered menu items, and
  * lets Escape reach Radix's dismissal handler.
  */
-function ExistingWorktreeList(props: {
+export function ExistingWorktreeList(props: {
   readonly rows: ReadonlyArray<UnifiedPickerWorktreeRow>;
   readonly promoteRowId: string | null;
   readonly uncommittedByPath: ReadonlyMap<string, number>;

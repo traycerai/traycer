@@ -107,6 +107,18 @@ describe("settings search", () => {
     expect(labelsFor("proxy", DESKTOP)).toContain("Shell");
   });
 
+  it("reaches the replay card by the words the old General row owned", () => {
+    // The tour's replay moved out of General, and its vocabulary moved with
+    // it: these queries appear in no label anywhere and must still land on
+    // the card, anchor included, rather than at the top of a page.
+    expect(landingFor("walkthrough", DESKTOP)).toBe(
+      "getting-started#getting-started-product-tour",
+    );
+    for (const query of ["product tour", "first run", "intro"]) {
+      expect(labelsFor(query, DESKTOP)).toContain("Initial tour");
+    }
+  });
+
   it("reaches a bespoke page through the vocabulary it is really about", () => {
     // Providers and Worktrees have no indexable rows — they are per-provider
     // and per-worktree at runtime — so their reachability IS their keywords.
@@ -166,7 +178,7 @@ describe("settings search", () => {
     expect(landingFor("terminal font", DESKTOP)).toBe(
       "appearance#appearance-terminal-font",
     );
-    expect(landingFor("website sessions", DESKTOP)).toBe("general#<top>");
+    expect(landingFor("website sessions", DESKTOP)).toBe("browser#<top>");
   });
 
   it("returns nothing for a query with no plausible match", () => {
@@ -335,13 +347,15 @@ describe("settings search", () => {
       );
     });
 
-    it("never offers the data-gated Browser rows", () => {
+    it("never offers the data-gated Browser rows, but still offers the page itself", () => {
       // "Detected dev origins" renders only once a terminal has printed a
       // local URL. No shell can promise that, so no shell offers it.
       expect(labelsFor("dev origins", DESKTOP)).not.toContain(
         "Detected dev origins",
       );
-      expect(labelsFor("browser", DESKTOP)).not.toContain("Browser");
+      // The Browser PAGE is unconditional - only its dev-origins/website-
+      // sessions rows are data/host-gated - so "browser" now surfaces it.
+      expect(labelsFor("browser", DESKTOP)).toContain("Browser");
     });
 
     it("sends selected-host vocabulary to the Overview page", () => {
@@ -387,7 +401,7 @@ describe("settings search", () => {
       // the page.
       for (const context of [DESKTOP, MOBILE]) {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
-          expect(landingsFor(query, context), query).toContain("general#<top>");
+          expect(landingsFor(query, context), query).toContain("browser#<top>");
         }
         for (const query of ["notification hooks", "webhook", "toast"]) {
           expect(landingsFor(query, context), query).toContain(

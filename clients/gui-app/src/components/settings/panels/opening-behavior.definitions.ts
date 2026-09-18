@@ -1,11 +1,8 @@
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
-// The four per-kind link rows and the four per-category tile rows render only
-// while their parent row is switched off its default ("per-kind" /
-// "per-category") — a MODE — so an anchor naming one would resolve to nothing
-// on most installs. They fold into the parent row instead: a hit on "github
-// link" lands on "Open links", the control that has to change first anyway.
+// Per-category rows contribute to their parent search target because they
+// only render when per-type placement is enabled.
 export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
   page: {
     label: "Opening behavior",
@@ -107,7 +104,6 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
       "artifacts",
       "agents",
       "terminals",
-      "browsers",
     ],
   },
   tileContent: {
@@ -129,15 +125,6 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
-  tileBrowser: {
-    kind: "row",
-    group: "tilePlacement",
-    search: { contributesTo: "openNewTiles" },
-    label: "Browsers",
-    description: "Browser sessions and their tabs.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
   tileSideChat: {
     kind: "row",
     group: "tilePlacement",
@@ -147,27 +134,5 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
       "Asides started with /btw or /side, placed next to the chat they were asked from.",
     availableWhen: alwaysAvailable,
     keywords: [],
-  },
-  // Its own group, not a fifth per-type row: the answer is whether the tile
-  // appears at all, not where it lands, and a standalone row under "Open new
-  // tiles" read as an override with the wrong tint.
-  agentTabs: {
-    kind: "group",
-    search: { anchor: "opening-agent-tabs" },
-    label: "Agent-opened tabs",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "popup", "browser", "surface"],
-  },
-  agentOpenedTabs: {
-    kind: "row",
-    group: "agentTabs",
-    search: { anchor: "opening-tiles-agent-opened" },
-    label: "Agent-opened tabs",
-    description:
-      "Tabs an agent opens while driving a browser session. Tabs a page opens, including links you click in it, always land as browser tiles.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "popup", "automatic", "background", "browser"],
   },
 });
