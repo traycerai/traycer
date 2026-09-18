@@ -62,11 +62,12 @@ const ROLE_OPTIONS: ReadonlyArray<{
   readonly value: ChatSearchRoleFilter;
   readonly label: string;
 }> = [
-  { value: "any", label: "Anyone" },
-  // The filter reads authorship of prompts only; assistant text, notices and
-  // cards match under every choice.
-  { value: "human", label: "People" },
-  { value: "agent", label: "Agents" },
+  { value: "any", label: "All messages" },
+  // Whose words: only the prompts this user typed, or only the agent's
+  // replies. Notices, cards and prompts sent by other agents match under
+  // "All messages" alone.
+  { value: "human", label: "Your messages" },
+  { value: "assistant", label: "Agent replies" },
 ];
 
 const DATE_OPTIONS: ReadonlyArray<{
@@ -312,7 +313,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
         >
           <SelectTrigger
             size="sm"
-            aria-label="Prompt author"
+            aria-label="Message filter"
             className="w-auto"
           >
             <SelectValue />
