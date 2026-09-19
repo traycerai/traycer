@@ -163,7 +163,14 @@ export function measuredLandingImageSize(hash: string): number | null {
   return measuredSizes.get(hash) ?? null;
 }
 
-async function sha256Hex(bytes: ImageBytes): Promise<string> {
+/**
+ * The content address every hash in this partition is derived from. Exported
+ * because a caller that has to MINT a hash node before storing the bytes -
+ * `unrecorded-prompt-handoff.ts`, materializing an inline `b64content` image -
+ * must arrive at the same digest `putImage` would, or the node it writes names
+ * a hash the store never holds.
+ */
+export async function sha256Hex(bytes: ImageBytes): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),

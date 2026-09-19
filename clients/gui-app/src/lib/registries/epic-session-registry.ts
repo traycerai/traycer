@@ -41,7 +41,7 @@ export const EpicSessionContext = createStableDevContext(
   () => createContext<OpenEpicStoreHandle | null>(null),
 );
 
-type EpicSessionPresentationState =
+export type EpicSessionPresentationState =
   | {
       readonly kind: "ready";
       readonly targetHostId: string | null;
@@ -205,9 +205,32 @@ export const registry = new OpenEpicSessionRegistry({
   // bootstrap selected it.
   maxLive: () => getRetentionProfile().maxLiveEpics,
 });
+const ownershipReleasedListeners = new Set<(epicId: string) => void>();
+
 registry.setReleaseListener((epicId) => {
   void releaseDesktopEpicOwnershipForEpic(epicId);
+  // Told AFTER the release is issued, so whoever tracks which tabs hold a
+  // claim (the session controller) can be reconciled to what just happened
+  // rather than keep a flag the release made false.
+  for (const listener of Array.from(ownershipReleasedListeners)) {
+    listener(epicId);
+  }
 });
+
+/**
+ * Observe the registry handing an epic's desktop ownership back - every
+ * discard except a re-point and a park. The registry stays the one place that
+ * DECIDES the release; this is only how the holder of the per-tab claimed
+ * flags learns of it.
+ */
+export function subscribeEpicOwnershipReleased(
+  listener: (epicId: string) => void,
+): () => void {
+  ownershipReleasedListeners.add(listener);
+  return () => {
+    ownershipReleasedListeners.delete(listener);
+  };
+}
 
 // `openEpicHostIds()` used to sit here - the per-open-epic producer set for
 // agent activity (`s5-parity-gaps` gap 1), consumed by an

@@ -36,11 +36,21 @@ import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
-import { inlineHashOnlyImageBytes } from "@/lib/composer/image-atoms";
+import {
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
+} from "@/lib/composer/image-atoms";
 import { withHeldComposerContentImageRoots } from "@/lib/composer/composer-content-image-roots";
 import { toast } from "sonner";
 
 import { appLogger } from "@/lib/logger";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import {
+  confirmedDraftBlobHashes,
+  currentDraftBlobOwnerId,
+  isDraftBlobUnbridgeable,
+  putDraftBlobs,
+} from "@/lib/drafts/draft-blob-transport";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import {
   draftImageInliningNeeded,
@@ -109,6 +119,24 @@ export interface ChatMessageActionsInput {
    * surfaces the count so that isn't a surprise.
    */
   readonly queuedCount: number;
+  /**
+   * Whether THIS chat's live stream can materialize a draft blob from a bare
+   * hash (`chat.subscribe@1.12`).
+   *
+   * A GETTER, not the boolean, and the same shape `useChatComposerSubmit` and
+   * the initial-handoff driver take - for the reason
+   * `submit-host-held-image-hashes.ts` states at length: an edit's image read is
+   * asynchronous, and the capability can change under it. A reconnect onto a
+   * downgraded host between Save and the byte read would leave a captured `true`
+   * sending bare hashes into a session that cannot resolve them. Read at each
+   * consultation, the answer is the one the send will actually meet.
+   *
+   * It is a per-CHAT fact rather than a per-host one: one host can serve this
+   * chat on a stream that understands the bridge and its neighbour on one that
+   * does not, which is why it arrives from the tile rather than being read from
+   * a module here.
+   */
+  readonly getDraftBlobBridgeSupported: () => boolean;
 }
 
 export interface ChatMessageActionsResult {
@@ -116,8 +144,8 @@ export interface ChatMessageActionsResult {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   /**
-   * Opens the fork dialog to branch the chat through the given assistant
-   * message, pre-configured for the chosen fork mode ("cross-question" =
+   * Opens the fork dialog through the given assistant message, or the latest
+   * checkpoint when null, pre-configured for the chosen fork mode ("cross-question" =
    * source binding verbatim + carried questions settled as reference;
    * "ab-worktree" = new worktrees carrying the working tree + unanswered
    * carried questions re-opened as answerable). Used by pending and resolved
@@ -129,7 +157,7 @@ export interface ChatMessageActionsResult {
    * point passes `null` (open on the source chat's own host).
    */
   readonly forkAtAssistantMessage: (
-    assistantMessageId: string,
+    assistantMessageId: string | null,
     mode: ChatForkMode,
     interviewBlockId: string | null,
     initialHostId: string | null,
@@ -239,6 +267,9 @@ export function useChatMessageActions(
   // The chat is bound to this tab's host for life, so both its own staged
   // slot and the fork scratch slot it seeds belong to that host.
   const tabHostId = useTabHostId();
+  // The chat's own host, not the app-wide one, for the same reason `tabHostId`
+  // is: the bytes an edit uploads must land where the edit will be sent.
+  const tabHostClient = useTabHostClient();
   const {
     dispatchUi,
     activeInlineEdit,
@@ -264,6 +295,7 @@ export function useChatMessageActions(
     confirmingDeleteMessageId,
     setForkTarget,
     worktreeBinding,
+    getDraftBlobBridgeSupported,
   } = input;
 
   /**
@@ -515,8 +547,44 @@ export function useChatMessageActions(
       // they always have. Only what the user added since is this client's to
       // supply. Re-inlining the inherited ones would put the whole screenshot
       // back on a wire that has been carrying a 64-character hash.
-      const hostHeld = new Set(blobHashesFromContent(live.initialContent));
-      const pending = draftImageInliningNeeded(live.content, hostHeld);
+      const inherited = new Set(blobHashesFromContent(live.initialContent));
+      // ...and what this client has since PUT on the host joins them, because a
+      // digest the host acknowledges holding is a digest it can materialize.
+      //
+      // The ordinary send's `submitHostHeldImageHashes` in the same union, and
+      // deliberately not a call to it: that function's inherited half comes from
+      // the composer incarnation registry, which an inline edit has no entry in -
+      // its seeded document IS its record. Everything below the first line is
+      // that function, so read its docblock for the argument; what follows is
+      // only what differs.
+      //
+      // Recomputed at every call rather than captured: the upload below widens
+      // it mid-flight, and the chat's stream can lose the bridge while an
+      // image read is still running. Both readings have to be as of NOW - which
+      // is also why `getDraftBlobBridgeSupported` is a getter and not the
+      // boolean this render saw.
+      const hostHeldFor = (content: JsonContent): ReadonlySet<string> => {
+        if (!getDraftBlobBridgeSupported()) return inherited;
+        const confirmed = confirmedDraftBlobHashes(
+          tabHostId,
+          currentDraftBlobOwnerId(),
+          hashOnlyImageHashes(content),
+        );
+        if (confirmed.size === 0) return inherited;
+        const held = new Set(inherited);
+        for (const hash of confirmed) {
+          // A digest this host has refused by FORMAT is subtracted even when it
+          // is otherwise confirmed: both can be true after a downgrade, and the
+          // refusal is the more recent and more specific fact.
+          if (isDraftBlobUnbridgeable(tabHostId, hash)) continue;
+          held.add(hash);
+        }
+        return held;
+      };
+      const pending = draftImageInliningNeeded(
+        live.content,
+        hostHeldFor(live.content),
+      );
       // The editing SESSION, not just its target. Cancel-and-reopen of the same
       // message keeps `targetMessageId` and is a different edit entirely - the
       // user did not press send on it.
@@ -539,22 +607,70 @@ export function useChatMessageActions(
       const rootsLabel = `inline-edit-submit:${targetMessageId}`;
       // The hold/release try/finally lives in the helper: a `try` without a
       // `catch` in a hook body defeats the React Compiler's memoization.
+      // The live document's hash-only images MINUS anything host-held, read as
+      // of NOW. Hoisted out of the `prepareDraftImageInlining` argument because
+      // the upload below has to be followed by exactly this read: the set that
+      // survives an upload is the set that still owes bytes.
+      const readRequiredHashes = (): ReadonlyArray<string> => {
+        const current = currentLiveInlineEdit();
+        if (current === null) return [];
+        if (current.sessionId !== sessionId) return [];
+        return draftImageInliningNeeded(
+          current.content,
+          hostHeldFor(current.content),
+        );
+      };
       void withHeldComposerContentImageRoots(
         rootsLabel,
         live.content,
         async () => {
+          // UPLOAD FIRST, and inline only what the upload could not place.
+          //
+          // The order is the whole point of the arm. `prepareDraftImageInlining`
+          // reads bytes for its `initialHashes` unconditionally on the first
+          // pass, so a set computed before the upload would be read, base64'd
+          // and committed even for digests the host had meanwhile acked - the
+          // megabyte back on a wire that was about to carry 64 characters.
+          //
+          // Inside the held roots, so the bytes this reads are the ones the GC
+          // is being told not to collect. Before the reconcile loop, because
+          // that loop's first act is the read this upload exists to avoid.
+          //
+          // FAIL-CLOSED per digest and by construction, not by checking: the
+          // return value is ignored because the only thing that widens
+          // `hostHeldFor` is the confirmation `putDraftBlobs` records, and it
+          // records one only for a digest the host acked. A missing local blob,
+          // a digest mismatch, an over-cap body, a failed put, a host that
+          // withholds the methods - every one of them simply leaves the hash in
+          // the required set below, where it inlines exactly as it did before
+          // this arm existed.
+          //
+          // Only `pending` is offered. An image pasted DURING the upload is not
+          // chased with a second one: it arrives in the reconcile loop and
+          // travels inline, which costs bytes and never an image.
+          if (tabHostClient !== null && getDraftBlobBridgeSupported()) {
+            await putDraftBlobs(
+              tabHostId,
+              tabHostClient,
+              pending,
+              // Read at the upload. An account switch between Save and here
+              // must record the confirmation against whoever is signed in NOW,
+              // because that is who `hostHeldFor` will ask about.
+              currentDraftBlobOwnerId(),
+            );
+          }
           await prepareDraftImageInlining({
-            initialHashes: pending,
+            // Post-upload, so a digest the host just acked is never read for
+            // bytes. Empty is the ordinary outcome of a successful upload, and
+            // it is a real state here rather than a degenerate one: the loop
+            // resolves nothing, finds nothing missing, and commits an empty map
+            // - which is the synchronous send with every node left hash-only.
+            initialHashes: readRequiredHashes(),
             // The edit composer's bytes are mirrored to the CHAT's own host,
             // not the app-wide one, and the live mirror session is resolved
             // here rather than captured in render.
             target: draftImageByteTargetForHost(tabHostId),
-            readRequiredHashes: () => {
-              const current = currentLiveInlineEdit();
-              if (current === null) return [];
-              if (current.sessionId !== sessionId) return [];
-              return draftImageInliningNeeded(current.content, hostHeld);
-            },
+            readRequiredHashes,
             // Synchronous with the final required-set read: no image can
             // arrive between that check and this send.
             commit: (base64ByHash) => {
@@ -614,7 +730,14 @@ export function useChatMessageActions(
         });
       });
     },
-    [currentLiveInlineEdit, dispatchUi, submitPreparedEdit, tabHostId],
+    [
+      currentLiveInlineEdit,
+      dispatchUi,
+      getDraftBlobBridgeSupported,
+      submitPreparedEdit,
+      tabHostClient,
+      tabHostId,
+    ],
   );
 
   const submitInlineEdit = useCallback(() => {
@@ -656,8 +779,8 @@ export function useChatMessageActions(
   );
 
   // Open the fork dialog seeded to branch the source chat through
-  // `assistantMessageId`. Shared by the per-message fork buttons and the
-  // interview actions so all entry points seed identically.
+  // `assistantMessageId`, or the latest available checkpoint when null. Shared
+  // by the host picker, per-message fork buttons, and interview actions.
   // Cross Question seeds the source binding VERBATIM (same working copy:
   // local stays local, an existing worktree is adopted — matching the "+ chat"
   // defaults in a Task) and settles carried questions as reference. A/B Fork
@@ -667,7 +790,7 @@ export function useChatMessageActions(
   // carried questions re-open as answerable.
   const forkAtAssistantMessage = useCallback(
     (
-      assistantMessageId: string,
+      assistantMessageId: string | null,
       mode: ChatForkMode,
       interviewBlockId: string | null,
       initialHostId: string | null,

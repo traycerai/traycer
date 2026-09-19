@@ -1,5 +1,11 @@
-import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { RefObject } from "react";
 import type {
   ChatActiveTurn,
@@ -26,9 +32,14 @@ import {
   NO_HOST_HELD_HASHES,
 } from "@/lib/composer/host-held-image-hashes";
 import { submitHostHeldImageHashes } from "@/lib/composer/submit-host-held-image-hashes";
+import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import { reinlineRefusedSendContent } from "@/lib/drafts/draft-image-retry-content";
 import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
-import { withHeldComposerContentImageRoots } from "@/lib/composer/composer-content-image-roots";
+import {
+  holdComposerContentImageRoots,
+  releaseComposerContentImageRoots,
+  withHeldComposerContentImageRoots,
+} from "@/lib/composer/composer-content-image-roots";
 import {
   draftImageInliningNeeded,
   prepareDraftImageInlining,
@@ -248,9 +259,61 @@ export function useChatComposerSubmit(
   // One confirmation flight at a time, so repeated clicks cannot start a
   // second read or produce a second send.
   const conflictInliningFlight = useRef(false);
+  // GC root while the interrupt-restart dialog is open. This is the one send
+  // path that parks a fully built document in component state and waits for a
+  // HUMAN: `clearAcceptedDraft` has not run - the send has not gone out - but
+  // any other composer sending in the meantime schedules the reconcile, and the
+  // confirm would then dispatch hash-only nodes whose bytes were deleted while
+  // the dialog sat there. `restore.content` is the same document hash-only, so
+  // rooting `content` covers both.
+  //
+  // This module rather than a holder registry of its own, and the release is
+  // why: it SCHEDULES a sweep, closing the hole a plain unregister leaves -
+  // dropping the last root for a hash otherwise makes it an orphan with nothing
+  // to trigger the reconcile that would collect it.
+  useEffect(() => {
+    const content = pendingConflict?.content ?? null;
+    if (content === null) return;
+    const holderId = `steer-conflict:${taskId}`;
+    holdComposerContentImageRoots(holderId, content);
+    return () => {
+      releaseComposerContentImageRoots(holderId);
+    };
+  }, [pendingConflict, taskId]);
   const [annotationPreparationPending, setAnnotationPreparationPending] =
     useState(false);
   const annotationPrepFlight = useRef(false);
+  /**
+   * The re-entry half of the submit generation guard.
+   *
+   * `requested` is set by the commit below when the draft moved under an
+   * in-flight preparation; `attempt` bounds the re-entry to ONE, so a user
+   * typing through both passes sends nothing and clears nothing rather than
+   * looping. Both are read and reset by the latch owner - the preparation's
+   * single exit - so the re-entry is not turned away by its own predecessor's
+   * flight. Same shape as the new-conversation modal's and for the same reason;
+   * see `composer-submit-generation.ts`.
+   */
+  const submitReentryRequested = useRef(false);
+  const submitReentryAttempt = useRef(0);
+  /**
+   * The re-entry's trigger, as STATE rather than a ref holding `submitDraft`.
+   *
+   * The latch owner cannot call `submitDraft` directly - it lives inside it -
+   * and the obvious way round, a ref refreshed to the latest `submitDraft`, is
+   * refused by `react-hooks/immutability`: `submitDraft` captures that ref, so
+   * the write can never precede the capture, and hoisting the write above the
+   * `useCallback` only trades the error for a forward reference the compiler
+   * also refuses.
+   *
+   * So the latch owner records the source, bumps the tick, and the layout
+   * effect below performs the call - on the CURRENT `submitDraft`, which is
+   * what the ref was for. The tick is consumed by a ref rather than cleared,
+   * because clearing state inside an effect body is its own rule.
+   */
+  const submitReentrySource = useRef<ChatComposerSubmitSource | null>(null);
+  const [submitReentryTick, setSubmitReentryTick] = useState(0);
+  const handledSubmitReentryTick = useRef(0);
 
   // Everything an ACCEPTED submit does to the composer, shared by the send and
   // the side-chat paths so a refused one leaves the text in place on both.
@@ -417,12 +480,15 @@ export function useChatComposerSubmit(
           draftImageBase64ByHash,
         );
         // Re-read the sidecar array for the same reason the document is
-        // re-read: an annotation attached while the crop bytes resolved is
-        // what the user is looking at, and the `clearDraft` below wipes it -
-        // the pre-flight capture would drop it silently. `annotationImages`
-        // still covers only the records captured BEFORE that read, so a late
-        // annotation sends its record without an inlined crop atom rather
-        // than not being sent at all.
+        // re-read: the `clearDraft` below wipes it, so it must be read live,
+        // and `readDraftSidecars` is the single accessor precisely so the
+        // pre-flight read and this one cannot diverge.
+        //
+        // They cannot diverge for a second reason on the async path: a sidecar
+        // change bumps `revision`, so the generation guard in `commit` has
+        // already re-entered rather than reaching here. `annotationImages`
+        // therefore describes the records read back on this line, which is what
+        // lets `appendImageAttachmentAtoms` pair each record with its crop.
         const { annotationRecords: liveAnnotationRecords } =
           readDraftSidecars(taskId);
         const settings = buildChatRunSettings({
@@ -646,8 +712,27 @@ export function useChatComposerSubmit(
         queueEditTargetId,
         resetEpoch: readComposerDraftSnapshot(taskId).resetEpoch,
       };
+      // The draft this submit is FOR, by its OTHER carrier. `resetEpoch` above
+      // answers "is this still the same submit"; this answers "is this still the
+      // same draft", and the two deliberately move on different events -
+      // `resetEpoch` only on a replacement, `revision` on every real change.
+      //
+      // For THIS surface `revision` is the right carrier because it is exactly
+      // what `clearAcceptedDraft` wipes: the document AND the browser-annotation
+      // sidecar, which bumps it too (see `DraftState.revision`). So a crop
+      // attached or taken back during the read moves it, the same as a
+      // keystroke, and neither needs a guard of its own.
+      const generation = captureComposerSubmitGeneration(
+        () => readComposerDraftSnapshot(taskId).revision,
+      );
 
       if (annotationRecords.length === 0 && pendingImageHashes.length === 0) {
+        // This exit never enters the flight, so the latch owner below never
+        // runs to reset the bound. Without this, a re-entry that lands here -
+        // the user deleted the image during the read - leaves `attempt` at 1
+        // and the NEXT unrelated submit that needs a re-entry is silently
+        // refused one.
+        submitReentryAttempt.current = 0;
         submitPreparedDraft([], NO_DRAFT_IMAGE_BYTES);
         return;
       }
@@ -711,17 +796,13 @@ export function useChatComposerSubmit(
             // Synchronous with the final required-set read above it: no image
             // can arrive between that check and this send.
             commit: (draftImageBase64ByHash) => {
-              // A re-created editor is a DIFFERENT document. `editor` here is
-              // the handle captured before the read, so without this the send
-              // would carry the destroyed editor's content while
-              // `clearAcceptedDraft` cleared the live one - a stale prompt sent
-              // and a live one wiped.
-              if (editorRef.current?.getEditorIncarnation() !== incarnation) {
-                return;
-              }
-              // And the same document in the same editor can still be a
-              // different SUBMIT: the queue-edit destination may have been
-              // cancelled or switched, or the document replaced underneath.
+              // A different SUBMIT, not merely a different draft: the
+              // queue-edit destination was cancelled or switched, or the
+              // document was REPLACED underneath (a restore, another window, a
+              // clear). The gesture this flight was started by no longer names
+              // anything, so there is nothing to re-enter for - re-running it
+              // would send the restored, unrelated draft into the cancelled
+              // item's destination. The only plain abort here.
               if (
                 queueEditTargetIdRef.current !== intent.queueEditTargetId ||
                 readComposerDraftSnapshot(taskId).resetEpoch !==
@@ -729,51 +810,42 @@ export function useChatComposerSubmit(
               ) {
                 return;
               }
-              // The annotation set must be the SAME set the crops were
-              // resolved from - in both directions, because the two sides are
-              // carried separately and only agree if nothing moved.
+              // THE DRAFT MOVED UNDER THIS FLIGHT, by either of its two
+              // carriers.
               //
-              // Added: the record is live but has no resolved crop atom, and
-              // the protocol needs the crop to ride an `imageAttachment`.
-              // Sending delivered the record bare and then cleared the
-              // sidecar, so the crop was gone for good.
+              // A re-created editor is a different document, and so is a bumped
+              // draft revision - typing, or attaching/removing a browser
+              // annotation. Both mean the same thing for this decision, so they
+              // are asked together rather than as two guards that could
+              // disagree. `editor` here is the handle captured before the read:
+              // committing on it would send a document the user can no longer
+              // see and let `clearAcceptedDraft` wipe the one they can.
               //
-              // Removed: the atom is still in `annotationImages` and
-              // `appendImageAttachmentAtoms` still appends it, while the live
-              // records no longer describe it - so the message carries a crop
-              // of something the user deleted, with no metadata saying what it
-              // is. That is the worse of the two: a send that shows an image
-              // the user chose to take out.
+              // The answer is to RE-ENTER, not to abort, and the annotation
+              // sidecar is why it cannot be the re-read alone. `annotationImages`
+              // holds the crops resolved for the sidecar as it stood at the
+              // first submit, and `commit` is synchronous by contract, so this
+              // preparation can neither grow an atom nor drop one. Committing
+              // anyway appends a crop for an annotation the user has since
+              // REMOVED - an ordinary image, with no record beside it saying
+              // what it is - and sends one attached during the read with no crop
+              // at all. Aborting instead leaves a user who pressed Enter with
+              // nothing sent; re-entry resolves the sidecar that is actually on
+              // screen.
               //
-              // `commit` is synchronous by contract - that is what makes the
-              // image set exact - so this preparation can neither grow an atom
-              // nor drop one safely. Either way the send is abandoned: nothing
-              // is cleared, the composer is untouched, and the next send
-              // resolves the current set in its own pre-flight capture.
-              const resolvedCrops = new Set(
-                annotationImages.map((atom) => atom.hash),
-              );
-              const liveCrops = new Set(
-                readDraftSidecars(taskId).annotationRecords.map(
-                  (record) => record.imageHash,
-                ),
-              );
-              const added = [...liveCrops].filter(
-                (hash) => !resolvedCrops.has(hash),
-              ).length;
-              const removed = [...resolvedCrops].filter(
-                (hash) => !liveCrops.has(hash),
-              ).length;
-              if (added > 0 || removed > 0) {
-                toast.info(
-                  "Annotations changed - send again to include them.",
-                  {
-                    description:
-                      removed > 0
-                        ? "An annotation was removed while the images were being prepared."
-                        : "An annotation was added while the images were being prepared.",
-                  },
-                );
+              // This replaced an added/removed comparison of the two crop sets,
+              // which asked the same question through a strictly weaker carrier:
+              // it was blind to a swap that keeps the hash set identical, and it
+              // could not see a keystroke at all.
+              if (
+                editorRef.current?.getEditorIncarnation() !== incarnation ||
+                !generation.stillCurrent()
+              ) {
+                // Bounded to ONE: typing through both passes sends nothing and
+                // clears nothing, leaving the draft intact to send again.
+                if (submitReentryAttempt.current === 0) {
+                  submitReentryRequested.current = true;
+                }
                 return;
               }
               submitPreparedDraft(annotationImages, draftImageBase64ByHash);
@@ -781,8 +853,49 @@ export function useChatComposerSubmit(
           });
         },
         () => {
+          // The single exit. The latch is released FIRST so the re-entry below
+          // is not turned away by its own predecessor's flight, and the
+          // re-entry runs from here rather than from `commit` for exactly that
+          // reason: `commit` is still inside the preparation, and the helper's
+          // own release would land after a nested flight had claimed the latch.
           annotationPrepFlight.current = false;
           setAnnotationPreparationPending(false);
+          if (!submitReentryRequested.current) {
+            // Only when nothing is QUEUED. The tick below is delivered on a
+            // macrotask, so between it and the layout effect a second chain can
+            // start and settle here - and resetting the count then would wipe
+            // the bound belonging to a re-entry that has not run yet.
+            // Unreachable today (a second chain with images cannot settle
+            // first, and one without sends and empties the draft, so the queued
+            // re-entry dies on the empty-draft guard), which is exactly why it
+            // is written down: it holds by ARGUMENT about today's control flow,
+            // not by construction, and the argument dies the day someone adds
+            // an await to the fast path.
+            if (submitReentrySource.current === null) {
+              submitReentryAttempt.current = 0;
+            }
+            return;
+          }
+          submitReentryRequested.current = false;
+          submitReentryAttempt.current += 1;
+          // From the TOP, not from the annotation stage: the empty-draft guard,
+          // the live blocking guards and the sidecar read all live there, and
+          // one of the things the draft can have changed into is empty.
+          // THE GAP IS A MACROTASK, NOT A COMMIT. This runs in a promise
+          // continuation, so React schedules the render through the Scheduler's
+          // MessageChannel instead of flushing inline, and the browser can
+          // dispatch queued input before the layout effect runs. The latch was
+          // released at the top of this arm, so an Enter landing in that window
+          // starts its OWN flight and the queued re-entry is then turned away
+          // by `annotationPrepFlight` and silently dropped.
+          //
+          // That costs nothing: the user's own submit re-reads the live
+          // document and sends it, which is the same outcome the re-entry
+          // existed to produce - one send, current text. Recorded because the
+          // direct call this replaced could not be dropped, so the property is
+          // new.
+          submitReentrySource.current = source;
+          setSubmitReentryTick((tick) => tick + 1);
         },
       ).catch((error: unknown) => {
         appLogger.error(
@@ -821,6 +934,40 @@ export function useChatComposerSubmit(
       toolbarStore,
     ],
   );
+  // The re-entry itself. Declared AFTER `submitDraft` so it can name it
+  // directly - that is the whole point of routing through state instead of a
+  // ref. The source is taken and cleared before the call, so a `submitDraft`
+  // identity change on a later render re-runs this to a no-op.
+  //
+  // RECORDING THE TICK BEFORE CALLING IS WHAT MAKES THIS STRICTMODE-SAFE, and
+  // it is not a stylistic ordering. Dev double-invokes effects on the same
+  // component instance, and refs survive that simulated remount - so the second
+  // invoke reads its own write and early-returns. The naive
+  // `useLayoutEffect(() => submitDraft(source), [tick])` would send TWICE in
+  // dev and once in prod, which is the worst shape that bug can take.
+  //
+  // LAYOUT-timed against a PAINTED FRAME, not merely for promptness. The commit
+  // that delivers the tick also carries `annotationPreparationPending === false`
+  // from the line above - spinner gone, send button live - and this effect
+  // re-enters before the browser paints, so that intermediate frame never
+  // reaches the screen. Under `useEffect` the spinner blinks AND the macrotask
+  // window becomes one in which the user can see and click an enabled button.
+  //
+  // What keeps that from being circular: the hook's own pending flag is not
+  // what gates the re-entry. `attachmentPreparationPending` arriving here is
+  // the PASTE flag (`chat-composer.tsx:675` passes `pastePending`), and it is a
+  // term in `submitBlocked`, which is `submitDraft`'s first guard - so were the
+  // hook's own flag fed back in, that intermediate commit would re-arm the gate
+  // mid-flight. Re-entrancy is held by `annotationPrepFlight` instead, and that
+  // split is why this works.
+  useLayoutEffect(() => {
+    if (submitReentryTick === handledSubmitReentryTick.current) return;
+    handledSubmitReentryTick.current = submitReentryTick;
+    const source = submitReentrySource.current;
+    if (source === null) return;
+    submitReentrySource.current = null;
+    submitDraft(source);
+  }, [submitReentryTick, submitDraft]);
 
   const restartStagedConflict = useCallback(
     (pendingConflict: PendingSteerConflict): void => {

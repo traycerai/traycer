@@ -77,8 +77,8 @@ The saved-draft store owns content and image retention; reopening a closed row
 uses its current content. An already-open row is skipped. A missing adopted
 mirror is read from its owner host; transient host/image failures retain the
 recovery action, while permanent draft deletion prunes it. Bulk recovery keeps
-the surviving draft selection. History's Drafts list and Cmd/Ctrl+Shift+T reuse
-the same saved rows.
+the surviving draft selection. The composer's Drafts control and
+Cmd/Ctrl+Shift+T reuse the same saved rows.
 
 Recovery supports only the current reference-based journal format. It neither
 stores editor snapshots nor imports drafts from older recovery formats. Saved

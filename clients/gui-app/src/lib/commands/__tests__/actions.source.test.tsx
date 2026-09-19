@@ -75,9 +75,9 @@ describe("actionsSource", () => {
     expect(ids).not.toContain("action:app.palette.open");
   });
 
-  it("skips composer.stash (owned by the context-gated composer source)", () => {
+  it("skips composer.drafts (owned by the context-gated composer source)", () => {
     const ids = captureItems().map((item) => item.id);
-    expect(ids).not.toContain("action:composer.stash");
+    expect(ids).not.toContain("action:composer.drafts");
   });
 
   it("lists the desktop-only status-bar toggle on desktop", () => {

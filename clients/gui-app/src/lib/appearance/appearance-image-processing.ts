@@ -2,7 +2,7 @@ import { imageSize } from "image-size";
 import {
   canonicalImageMimeType,
   sniffImageMimeType,
-} from "@/lib/composer/prompt-stash-image-signature";
+} from "@/lib/attachments/image-mime-signature";
 import {
   bitmapCanvasToBlob,
   createBitmapCanvas,

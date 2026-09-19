@@ -71,6 +71,12 @@ import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import { PanelGroupSectionHeader } from "@/components/epic-canvas/sidebar/epic-sidebar-header";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
+import { EpicSidebarMessageHits } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits";
+import {
+  messageHitsTreeState,
+  showsMessageHitsSection,
+  useEpicSidebarMessageHits,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import {
   ArtifactReadLifecycleBridge,
   ArtifactTreePanelBody,
@@ -1167,6 +1173,21 @@ function SidebarReparentPanelDropZone(props: {
 }
 
 function ChatsPanelBody(props: LeftPanelBodyProps) {
+  // Asked here and placed by the tree, so the panel's one search box drives
+  // both readers - the tree's title filter and the index's message hits - off
+  // a single request, and the tree's empty state knows what the messages below
+  // it found. See `epic-sidebar-message-hits-state.ts`.
+  const hits = useEpicSidebarMessageHits({
+    epicId: props.epicId,
+    tabId: props.tabId,
+  });
+  const hitsState = messageHitsTreeState(hits.status);
+  const messageHits = {
+    state: hitsState,
+    node: showsMessageHitsSection(hitsState) ? (
+      <EpicSidebarMessageHits state={hits} />
+    ) : null,
+  };
   return (
     <SnapshotGate skeleton={CHATS_PANEL_SKELETON}>
       <SidebarReparentPanelDropZone
@@ -1174,7 +1195,11 @@ function ChatsPanelBody(props: LeftPanelBodyProps) {
         viewTabId={props.tabId}
         panelId="chats"
       >
-        <ChatTreePanelBody epicId={props.epicId} tabId={props.tabId} />
+        <ChatTreePanelBody
+          epicId={props.epicId}
+          tabId={props.tabId}
+          messageHits={messageHits}
+        />
       </SidebarReparentPanelDropZone>
     </SnapshotGate>
   );
@@ -1521,7 +1546,7 @@ function SidebarBulkDeleteController(props: {
       return;
     }
     targets.forEach((target) => {
-      markArtifactSelfDeleted(target.id);
+      if (target.kind !== "terminal-agent") markArtifactSelfDeleted(target.id);
     });
     setDeletePending(true);
     void Promise.allSettled(
@@ -1542,6 +1567,7 @@ function SidebarBulkDeleteController(props: {
             return deleteTerminalAgent.mutateAsync({
               epicId: props.epicId,
               tuiAgentId: target.id,
+              hostId: recordById.get(target.id)?.hostId ?? sessionHostId,
             });
         }
       }),
@@ -1554,6 +1580,7 @@ function SidebarBulkDeleteController(props: {
           (tile, epicId) =>
             epicId === props.epicId &&
             tile.type !== "chat" &&
+            tile.type !== "terminal-agent" &&
             successfulIds.includes(tile.id),
         );
         const failedIds = targets.flatMap((target, index) =>
@@ -1565,9 +1592,12 @@ function SidebarBulkDeleteController(props: {
         // still-being-deleted tab) get pushed as a route entry. Instead,
         // close every successfully-deleted open tab raw, then compute and
         // commit the post-batch focus target exactly once.
-        // The chat mutation already closed exactly the owning host's tiles.
+        // Agent mutation hooks already closed the owning host's tiles.
         const openTargets = targets.flatMap((target, index) => {
-          if (target.kind === "chat" || results[index].status !== "fulfilled")
+          if (
+            target.kind !== "artifact" ||
+            results[index].status !== "fulfilled"
+          )
             return [];
           const found = findOpenArtifactInTab(props.tabId, target.id);
           return found === null ? [] : [found];
@@ -1585,8 +1615,13 @@ function SidebarBulkDeleteController(props: {
             return getCurrentNestedFocusTarget(canvas);
           });
         }
-        failedIds.forEach((id) => {
-          unmarkArtifactSelfDeleted(id);
+        targets.forEach((target, index) => {
+          if (
+            target.kind !== "terminal-agent" &&
+            results[index].status === "rejected"
+          ) {
+            unmarkArtifactSelfDeleted(target.id);
+          }
         });
         clearSelectedIds(successfulIds);
         if (failedIds.length === 0) {

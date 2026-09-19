@@ -13,6 +13,19 @@ import { useCallback, type KeyboardEvent, type RefObject } from "react";
  */
 export const ROW_TARGET_SELECTOR = "[data-history-row-target]";
 
+/**
+ * The other kind of stop under the same scroll container: a chat-search result
+ * control, which marks itself with its own attribute
+ * (`chat-search-keyboard-nav.ts`, whose rows History's message-hit section
+ * reuses verbatim). Those rows are rendered by shared components that place
+ * their own marker, so History reads THEIR marker rather than asking them to
+ * carry a second one - and in exchange the hit's expand toggle and its "Show
+ * more" button become stops too, exactly as they are in the search dialog.
+ */
+const CHAT_SEARCH_NAV_SELECTOR = "[data-chat-search-nav]";
+
+const NAV_STOP_SELECTOR = `${ROW_TARGET_SELECTOR}, ${CHAT_SEARCH_NAV_SELECTOR}`;
+
 export interface HistoryListKeyboardNav {
   /** Bind to the search box: ArrowDown drops into the first result. */
   readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
@@ -27,7 +40,12 @@ export interface HistoryListKeyboardNav {
 }
 
 /**
- * Every row target under `scope`, in DOM order.
+ * Every stop under `scope`, in DOM order - task rows and message hits alike.
+ *
+ * Disabled controls are dropped: `HTMLElement.focus()` does nothing on one, so
+ * a disabled stop left in the sequence swallows the keystroke and parks the
+ * traversal. No history row target is ever disabled; a hit's "Show more"
+ * button is, while its page is in flight.
  *
  * `scope` is the scroll container rather than one `<ul>`, and that is the
  * whole of what makes preserved-orphan rows reachable: they render in their
@@ -40,7 +58,9 @@ export interface HistoryListKeyboardNav {
  */
 function rowTargets(scope: HTMLElement | null): ReadonlyArray<HTMLElement> {
   if (scope === null) return [];
-  return Array.from(scope.querySelectorAll<HTMLElement>(ROW_TARGET_SELECTOR));
+  return Array.from(
+    scope.querySelectorAll<HTMLElement>(NAV_STOP_SELECTOR),
+  ).filter((element) => !element.hasAttribute("disabled"));
 }
 
 /**

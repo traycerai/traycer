@@ -7,6 +7,7 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import type { EdgeDropPosition } from "@/stores/epics/canvas/tile-tree";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 
 export type InitialChatHandoffStatus =
@@ -349,11 +350,33 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
       ...basePersistOptions(persistKey(STORE_KEYS.initialChatHandoff)),
       // v2 dropped the `hostId` segment from every persisted map key (see
       // `initialChatHandoffKey` for why); v3 re-reads `placement`, whose shape
-      // the tile-opening refactor changed. `migrateInitialChatHandoffState`
-      // handles both, and is idempotent for a blob already at either.
-      version: 3,
+      // the tile-opening refactor changed; v4 is the base64 strip below.
+      // `migrateInitialChatHandoffState` handles all three, and is idempotent
+      // for a blob already at any of them.
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       migrate: (persisted) => migrateInitialChatHandoffState(persisted),
+      // Serialization boundary: a persisted handoff NEVER carries base64. A
+      // handoff registered by this build is hash-only already — the composers
+      // register the hash-only document and the resend resolves bytes through
+      // `prepareDraftImageInlining` — so this strip normally changes nothing.
+      //
+      // What it is FOR is the v3 blob: every handoff written before this change
+      // carried the fully-inlined message, which is what put a multi-megabyte
+      // image in `localStorage` under this key. Such an entry keeps its base64
+      // IN MEMORY across the migration and still re-sends (the resend passes a
+      // b64 node through untouched); only its next persisted copy loses the
+      // image, and by then the entry has almost always been consumed. That
+      // one-relaunch window is the accepted cost of not running an async byte
+      // conversion inside a synchronous localStorage hydration.
+      partialize: (state) => ({
+        handoffs: Object.fromEntries(
+          Object.entries(state.handoffs).map(([key, handoff]) => [
+            key,
+            { ...handoff, content: stripBase64ImageNodes(handoff.content) },
+          ]),
+        ),
+      }),
     },
   ),
 );
