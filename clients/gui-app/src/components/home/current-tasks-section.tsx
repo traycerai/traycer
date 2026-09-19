@@ -66,7 +66,7 @@ export function CurrentTasksSection(): ReactNode {
           aria-labelledby={headingId}
           className="mt-7 flex min-h-0 flex-col"
         >
-          <div className="flex shrink-0 items-center justify-between gap-3 px-1">
+          <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-1">
             <h2
               id={headingId}
               className="text-overline font-semibold uppercase tracking-[0.06em] text-muted-foreground"
@@ -87,10 +87,6 @@ export function CurrentTasksSection(): ReactNode {
               )}
             </button>
           </div>
-          <p className="mx-1 mt-0.5 mb-3 shrink-0 text-pretty text-ui-xs text-muted-foreground">
-            Tasks in progress, pinned, or open in a tab. Everything else is in
-            History.
-          </p>
           <div className="min-h-0 overflow-y-auto">
             {confirmedEmpty ? (
               <div className="flex flex-col items-center gap-1.5 px-4 py-9 text-center">

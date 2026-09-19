@@ -163,7 +163,7 @@ describe("<CurrentTasksSection />", () => {
   });
 
   describe("content", () => {
-    it("renders the heading, caption, View history and the three groups", () => {
+    it("renders the heading, View history and the three groups", () => {
       setGroups({
         inProgress: [task("a", {})],
         pinned: [task("b", { isPinned: true })],
@@ -175,7 +175,7 @@ describe("<CurrentTasksSection />", () => {
       expect(
         within(section).getByRole("heading", { name: "Current tasks" }),
       ).not.toBeNull();
-      expect(within(section).getByText(CAPTION)).not.toBeNull();
+      expect(within(section).queryByText(CAPTION)).toBeNull();
       expect(
         within(section).getByRole("button", { name: /^View history/ }),
       ).not.toBeNull();
@@ -337,7 +337,7 @@ describe("<CurrentTasksSection />", () => {
         expect(
           screen.getByRole("heading", { name: "Current tasks" }),
         ).not.toBeNull();
-        expect(screen.getByText(CAPTION)).not.toBeNull();
+        expect(screen.queryByText(CAPTION)).toBeNull();
       },
     );
 
@@ -404,7 +404,7 @@ describe("<CurrentTasksSection />", () => {
       expect(
         screen.getByRole("heading", { name: "Current tasks" }),
       ).not.toBeNull();
-      expect(screen.getByText(CAPTION)).not.toBeNull();
+      expect(screen.queryByText(CAPTION)).toBeNull();
       expect(
         within(group("Pinned")).getByText(PINS_UNAVAILABLE_NOTICE),
       ).not.toBeNull();
