@@ -47,25 +47,31 @@
  * `.describe()`, `.meta()` and `.register()` as the outermost call, the check
  * `z.instanceof` installs, and a cycle closed through a const declared inside
  * the thunk (`z.json()`, or a getter or `z.lazy` naming that const; naming
- * the module-scope stand-in itself is fine). The first read REFUSES the
- * global-registry case, and any `_zod` or `_zod.bag` key the stand-in did not
- * get (that is `z.instanceof`), with an error naming the rule; the rest has
- * no runtime trace, and `lazy-schema-thunk-rules-scan.test.ts` rejects all of
- * them in source. Put the metadata on an inner schema, or declare that
+ * the module-scope stand-in itself is fine). The check forms of the metadata
+ * (`.check(z.describe(...))`, `.with(z.meta(...))`, and every schema that
+ * inherits such a check) register during construction, so the stand-in gets
+ * them too. Once the stand-in is built, the first read REFUSES a
+ * global-registry entry that differs from the discarded instance's, and any
+ * `_zod` or `_zod.bag` key the stand-in did not get (that is `z.instanceof`),
+ * with an error naming the rule; the rest has no runtime trace, and
+ * `lazy-schema-thunk-rules-scan.test.ts` rejects all of them in source. Put
+ * the metadata on an inner schema, use its check form, or declare that
  * schema eagerly.
  *
  * `build` must have no effect beyond the value it returns. It runs on the
  * first read, not at import, so a registration or counter inside it happens
- * late or never; register at module scope and build inside the thunk.
+ * late or never; register at module scope and build inside the thunk. An
+ * `id` in zod metadata is such a registration: the registry lists ids.
  *
- * A read that fails leaves no half-built schema. A throw from `build`, or the
- * global-registry refusal, happens before the stand-in is touched: it stays
- * pending, and the next read runs `build` again. A throw once zod is
- * constructing the stand-in in place (the lost-key refusal, or a zod change,
- * since `build` just succeeded on the same `def`) cannot be retried, because
- * zod defines some keys non-configurable. The stand-in then gets its trigger
- * back and rethrows that same error on every later read; only those keys
- * (`_def`, a literal's `value`) keep what the failed construction gave them.
+ * A read that fails leaves no half-built schema. A throw from `build` happens
+ * before the stand-in is touched: it stays pending, and the next read runs
+ * `build` again. A throw once zod is constructing the stand-in in place
+ * (either refusal, or a zod change, since `build` just succeeded on the same
+ * `def`) cannot be retried, because zod defines some keys non-configurable.
+ * The stand-in then gets its trigger back and rethrows that same error on
+ * every later read; only those keys (`_def`, a literal's `value`) keep what
+ * the failed construction gave them, and zod's global registry keeps any
+ * entry a check-form `describe` or `meta` gave the stand-in.
  *
  * `build` must enclose the whole initialiser, including any base lookup
  * (`base.extend(...)`, `base.shape.x`): a thunk that returns an
@@ -128,23 +134,10 @@ function zodInternals(schema: object): object {
   return internals;
 }
 
-/**
- * Every zod copy shares one global registry through this global, so the
- * helper reads it without importing zod.
- */
-function isInGlobalRegistry(schema: object): boolean {
-  const registry: unknown = Reflect.get(globalThis, "__zod_globalRegistry");
-  if (!isObject(registry)) {
-    return false;
-  }
-  const has: unknown = Reflect.get(registry, "has");
-  return (
-    typeof has === "function" && Reflect.apply(has, registry, [schema]) === true
-  );
-}
-
 type Construction = {
-  /** The discarded instance's `_zod`. */
+  /** The instance `build` returned, discarded once the stand-in is built. */
+  readonly built: object;
+  /** Its `_zod`. */
   readonly internals: object;
   readonly prototype: object | null;
   readonly def: object;
@@ -154,8 +147,8 @@ type Construction = {
 };
 
 /**
- * Reads what `construct` needs from the instance `build` returned, and
- * refuses it before anything touches the stand-in.
+ * Reads what `construct` needs from the instance `build` returned, before
+ * anything touches the stand-in.
  */
 function readConstruction(built: object): Construction {
   const internals = zodInternals(built);
@@ -170,12 +163,8 @@ function readConstruction(built: object): Construction {
   ) {
     throw notAZodSchema();
   }
-  if (isInGlobalRegistry(built)) {
-    throw lostPostConstructionState(
-      "global-registry metadata (.describe, .meta or .register)",
-    );
-  }
   return {
+    built,
     internals,
     prototype: Object.getPrototypeOf(built),
     def,
@@ -189,8 +178,8 @@ function readConstruction(built: object): Construction {
 /**
  * A key the discarded instance's `_zod` or `_zod.bag` has and the stand-in's
  * lacks was attached after construction (`z.instanceof` sets `bag.Class`).
- * Forcing every protocol stand-in finds no such key, so this refuses only
- * state that would otherwise be lost.
+ * `lazy-schema-force-all.test.ts` forces every stand-in and finds no such
+ * key, so this refuses only state that would otherwise be lost.
  */
 function refuseLostInternals(built: object, own: object): void {
   for (const key of Reflect.ownKeys(built)) {
@@ -209,6 +198,57 @@ function refuseLostInternals(built: object, own: object): void {
         `_zod.bag.${String(key)} (z.instanceof sets bag.Class)`,
       );
     }
+  }
+}
+
+function sameEntry(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) {
+    return true;
+  }
+  if (!isObject(a) || !isObject(b)) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(a);
+  return (
+    keys.length === Reflect.ownKeys(b).length &&
+    keys.every(
+      (key) =>
+        Reflect.getOwnPropertyDescriptor(b, key) !== undefined &&
+        Object.is(Reflect.get(a, key), Reflect.get(b, key)),
+    )
+  );
+}
+
+/**
+ * zod's global registry holds `.describe`, `.meta` and `.register` metadata;
+ * every zod copy shares it through this global, so the helper reads it
+ * without importing zod. The check forms register during construction, so
+ * the stand-in's entry equals the discarded instance's; the method forms
+ * register the instance a method returns after construction, and the
+ * stand-in's entry lacks it. `get` merges the `parent` entry (the method
+ * forms clone with a parent), so it runs once `parent` is copied.
+ */
+function refuseLostMetadata(built: object, standIn: object): void {
+  const registry: unknown = Reflect.get(globalThis, "__zod_globalRegistry");
+  if (!isObject(registry)) {
+    return;
+  }
+  const has: unknown = Reflect.get(registry, "has");
+  const get: unknown = Reflect.get(registry, "get");
+  if (typeof has !== "function" || typeof get !== "function") {
+    return;
+  }
+  if (
+    Reflect.apply(has, registry, [built]) !==
+      Reflect.apply(has, registry, [standIn]) ||
+    !sameEntry(
+      Reflect.apply(get, registry, [built]),
+      Reflect.apply(get, registry, [standIn]),
+    )
+  ) {
+    throw lostPostConstructionState(
+      "global-registry metadata (.describe, .meta or .register as the outermost call)",
+    );
   }
 }
 
@@ -246,6 +286,7 @@ function construct(standIn: object, construction: Construction): void {
       }
     }
     refuseLostInternals(internals, ownInternals);
+    refuseLostMetadata(construction.built, standIn);
     // As `new` leaves it.
     Object.defineProperty(standIn, "_zod", { configurable: false });
   } catch (error) {

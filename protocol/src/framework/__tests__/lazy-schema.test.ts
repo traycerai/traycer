@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
+import { describe as zodDescribe, meta as zodMeta, z } from "zod";
 import {
   lazySchema,
   lazySchemaStats,
@@ -9,6 +9,8 @@ import {
   toStreamFieldJsonSchemaText,
   toUnknownKeyTree,
 } from "@traycer/protocol/framework/json-schema-fingerprint";
+
+const titled = z.meta({ title: "T" });
 
 function readZod(schema: object): object {
   const internals: unknown = Reflect.get(schema, "_zod");
@@ -38,28 +40,24 @@ function errorMessage(value: unknown): string {
   throw new Error(`expected an Error, got ${String(value)}`);
 }
 
-type IssueSnapshot = {
-  readonly code: string;
-  readonly message: string;
-  readonly path: ReadonlyArray<PropertyKey>;
-};
-
 type ParseSnapshot =
   | { readonly success: true; readonly data: unknown }
-  | { readonly success: false; readonly issues: ReadonlyArray<IssueSnapshot> };
+  | { readonly success: false; readonly issues: ReadonlyArray<object> };
 
-function snapshotIssues(
-  issues: ReadonlyArray<{
-    readonly code: string;
-    readonly message: string;
-    readonly path: ReadonlyArray<PropertyKey>;
-  }>,
-): ReadonlyArray<IssueSnapshot> {
-  return issues.map((issue) => ({
-    code: issue.code,
-    message: issue.message,
-    path: [...issue.path],
-  }));
+function snapshotIssue(issue: object): object {
+  const snapshot: { [key: string]: unknown } = {};
+  for (const key of Reflect.ownKeys(issue)) {
+    if (typeof key !== "string") {
+      continue;
+    }
+    const value = Reflect.get(issue, key);
+    if (key === "path" && Array.isArray(value)) {
+      snapshot[key] = [...value];
+    } else {
+      snapshot[key] = value;
+    }
+  }
+  return snapshot;
 }
 
 function snapshotParse(
@@ -67,19 +65,16 @@ function snapshotParse(
     | { readonly success: true; readonly data: unknown }
     | {
         readonly success: false;
-        readonly error: {
-          readonly issues: ReadonlyArray<{
-            readonly code: string;
-            readonly message: string;
-            readonly path: ReadonlyArray<PropertyKey>;
-          }>;
-        };
+        readonly error: { readonly issues: ReadonlyArray<object> };
       },
 ): ParseSnapshot {
   if (result.success) {
     return { success: true, data: result.data };
   }
-  return { success: false, issues: snapshotIssues(result.error.issues) };
+  return {
+    success: false,
+    issues: result.error.issues.map(snapshotIssue),
+  };
 }
 
 async function expectEagerTwinIssues(
@@ -316,19 +311,71 @@ describe("lazySchema describe parent", () => {
     const second = thrown(() => {
       void pending.parse;
     });
-    expect(errorMessage(second)).toMatch(/global-registry metadata/);
-    expect(runs).toBe(2);
+    expect(second).toBe(first);
+    expect(runs).toBe(1);
   }
 
-  it("refuses outermost .describe and retries the thunk while pending", () => {
+  function expectCheckFormParity(init: () => z.ZodType): void {
+    const standIn = lazySchema(init);
+    const twin = init();
+    expect(z.toJSONSchema(standIn)).toEqual(z.toJSONSchema(twin));
+    expect(standIn.description).toBe(twin.description);
+    expect(z.globalRegistry.get(standIn)).toEqual(z.globalRegistry.get(twin));
+    expect(standIn.safeParse("ok").success).toBe(true);
+    expect(twin.safeParse("ok").success).toBe(true);
+    expect(standIn.safeParse(1).success).toBe(false);
+    expect(twin.safeParse(1).success).toBe(false);
+  }
+
+  it("refuses outermost .describe; build runs once and later reads rethrow the same error", () => {
     const base = z.string();
     expectGlobalRegistryRefusal(() => base.describe("x"));
   });
 
-  it("refuses outermost .meta and .register(z.globalRegistry) the same way", () => {
+  it("refuses outermost .meta and .register(z.globalRegistry); build runs once and later reads rethrow the same error", () => {
     expectGlobalRegistryRefusal(() => z.string().meta({ id: "M" }));
     expectGlobalRegistryRefusal(() =>
       z.string().register(z.globalRegistry, {}),
+    );
+  });
+
+  it("check-form describe is not refused and matches the eager twin", () => {
+    expectCheckFormParity(() => z.string().check(zodDescribe("x")));
+  });
+
+  it("with(meta({id})) is not refused and matches the eager twin", () => {
+    expectCheckFormParity(() => z.string().with(zodMeta({ id: "M" })));
+  });
+
+  it("check(titled) at module-scope z.meta is not refused and matches the eager twin", () => {
+    expectCheckFormParity(() => z.string().check(titled));
+  });
+
+  it("a check-described base followed by .min(3) is not refused and matches the eager twin", () => {
+    const init = (): z.ZodType => z.string().check(z.describe("cb")).min(3);
+    const standIn = lazySchema(init);
+    const twin = init();
+    expect(z.toJSONSchema(standIn)).toEqual(z.toJSONSchema(twin));
+    expect(standIn.description).toBe(twin.description);
+    expect(z.globalRegistry.get(standIn)).toEqual(z.globalRegistry.get(twin));
+    expect(standIn.safeParse("abc").success).toBe(true);
+    expect(twin.safeParse("abc").success).toBe(true);
+    expect(standIn.safeParse("ab").success).toBe(false);
+    expect(twin.safeParse("ab").success).toBe(false);
+  });
+
+  it("check-describe plus matching .register is not refused because the registry entries are equal", () => {
+    expectCheckFormParity(() =>
+      z
+        .string()
+        .check(z.describe("a"))
+        .register(z.globalRegistry, { description: "a" }),
+    );
+  });
+
+  it('check-describe then .describe("b") is refused fail-closed because the entries differ', () => {
+    expectGlobalRegistryRefusal(() =>
+      z.string().check(z.describe("a")).describe("b"),
     );
   });
 
@@ -635,7 +682,7 @@ describe("lazySchema eager-twin failing inputs", () => {
       if (parsed.success) {
         throw new Error("eager z.instanceof twin accepted a failing input");
       }
-      const issues = snapshotIssues(parsed.error.issues);
+      const issues = parsed.error.issues;
       expect(issues.length).toBeGreaterThan(0);
       const firstIssue = issues[0];
       if (firstIssue === undefined) {

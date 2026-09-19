@@ -162,7 +162,7 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
     expect(defDesc?.configurable, canaryMessage(version)).toBe(false);
   });
 
-  it("globalThis.__zod_globalRegistry exists with has, and .describe() adds the clone", () => {
+  it("globalThis.__zod_globalRegistry exists with has and get, and .describe() adds the clone", () => {
     const version = readZodPackageVersion();
     const registry: unknown = Reflect.get(globalThis, "__zod_globalRegistry");
     expect(typeof registry, canaryMessage(version)).toBe("object");
@@ -171,7 +171,9 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
       throw new Error(canaryMessage(version));
     }
     const has = Reflect.get(registry, "has");
+    const get = Reflect.get(registry, "get");
     expect(typeof has, canaryMessage(version)).toBe("function");
+    expect(typeof get, canaryMessage(version)).toBe("function");
     if (typeof has !== "function") {
       throw new Error(canaryMessage(version));
     }
@@ -184,6 +186,65 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
     expect(Reflect.apply(has, registry, [base]), canaryMessage(version)).toBe(
       false,
     );
+  });
+
+  it("z.describe / z.meta checks register the instance inside construction", () => {
+    const version = readZodPackageVersion();
+    const built = z.string().check(z.describe("via check"));
+    const constr = readZodField(built, "constr");
+    const def = readZodField(built, "def");
+    if (typeof constr !== "function") {
+      throw new Error(canaryMessage(version));
+    }
+    const inst: unknown = Reflect.construct(constr, [def]);
+    expect(typeof inst, canaryMessage(version)).toBe("object");
+    if (!(inst instanceof z.ZodType)) {
+      throw new Error(canaryMessage(version));
+    }
+    expect(z.globalRegistry.has(inst), canaryMessage(version)).toBe(true);
+  });
+
+  it(".describe() / .meta() clone with a parent and register after construction", () => {
+    const version = readZodPackageVersion();
+    const base = z.string();
+    const described = base.describe("labelled");
+    const withMeta = base.meta({ id: "CanaryMeta" });
+    expect(z.globalRegistry.has(base), canaryMessage(version)).toBe(false);
+    expect(z.globalRegistry.has(described), canaryMessage(version)).toBe(true);
+    expect(z.globalRegistry.has(withMeta), canaryMessage(version)).toBe(true);
+    expect(readZodField(described, "parent"), canaryMessage(version)).toBe(
+      base,
+    );
+    expect(readZodField(withMeta, "parent"), canaryMessage(version)).toBe(base);
+  });
+
+  it("globalRegistry.get merges the parent entry minus id", () => {
+    const version = readZodPackageVersion();
+    const parent = z.string().meta({ id: "CanaryThing", title: "T" });
+    const child = parent.describe("child");
+    expect(z.globalRegistry.get(parent), canaryMessage(version)).toEqual({
+      id: "CanaryThing",
+      title: "T",
+    });
+    expect(z.globalRegistry.get(child), canaryMessage(version)).toEqual({
+      title: "T",
+      description: "child",
+    });
+  });
+
+  it("add with an existing id overwrites the _idmap entry and does not throw", () => {
+    const version = readZodPackageVersion();
+    const first = z.string().meta({ id: "CanaryOverwrite" });
+    const second = z.string();
+    expect(() => {
+      z.globalRegistry.add(second, { id: "CanaryOverwrite" });
+    }, canaryMessage(version)).not.toThrow();
+    expect(z.globalRegistry.has(second), canaryMessage(version)).toBe(true);
+    expect(z.globalRegistry.has(first), canaryMessage(version)).toBe(true);
+    expect(
+      z.globalRegistry._idmap.get("CanaryOverwrite"),
+      canaryMessage(version),
+    ).toBe(second);
   });
 
   it("z.instanceof sets _zod.bag.Class", () => {
