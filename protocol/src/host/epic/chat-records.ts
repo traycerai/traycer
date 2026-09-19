@@ -22,12 +22,13 @@ import {
   guiHarnessIdSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
-const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const sha256HexSchema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
 
 /**
  * The epic's chat RECORDS, as its serving host's chat registry holds them.
@@ -84,9 +85,11 @@ const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
  * render, because there is nothing the user could do about it except upgrade the
  * host they are already talking to.
  */
-export const listChatRecordsRequestSchema = z.object({
-  epicId: z.string().min(1),
-});
+export const listChatRecordsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+  }),
+);
 export type ListChatRecordsRequest = z.infer<
   typeof listChatRecordsRequestSchema
 >;
@@ -109,7 +112,9 @@ export type ListChatRecordsRequest = z.infer<
  * question than "may this host write the row". The host knows which of its
  * rows its outbox owns; that fact is what ships.
  */
-export const chatRecordOriginSchema = z.enum(["own", "foreign"]);
+export const chatRecordOriginSchema = lazySchema(() =>
+  z.enum(["own", "foreign"]),
+);
 export type ChatRecordOrigin = z.infer<typeof chatRecordOriginSchema>;
 
 /**
@@ -140,95 +145,99 @@ export type ChatRecordOrigin = z.infer<typeof chatRecordOriginSchema>;
  * plus `head` alone). `docResident` is the field that cannot be shared - see
  * the stream row's note for why a delta may not state it.
  */
-export const chatRecordSummarySchema = z.object({
-  chatId: z.string().min(1),
-  /**
-   * IDENTITY-BEARING, not informational. `chatId` is host-minted and therefore
-   * NOT globally unique: server-side a chat is identified by the triple
-   * `(taskId, ownerUserId, chatId)`, and two users can legitimately hold the
-   * same `chatId` within one task. Anything that keys, caches, dedupes or
-   * unions these rows must key on the owner too - dropping it collapses two
-   * different people's chats into one entry, which is a privacy bug wearing a
-   * UI costume. Non-empty for the same reason `chatId` is: an empty owner
-   * would give every owner-less row one shared record key, so the wire
-   * boundary rejects it rather than letting a consumer discover the collision.
-   */
-  ownerUserId: z.string().min(1),
-  /** The host that MINTED the chat - the registry's `originHostId`. Identity
-   * for host-scoped keying (a chat is bound to its minting host for life), so
-   * non-empty like the other two identity components. */
-  originHostId: z.string().min(1),
-  title: z.string(),
-  isTitleEditedByUser: z.boolean(),
-  parentChatId: z.string().nullable(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  /**
-   * Whether the chat is archived. THE RENDERING-AUTHORITATIVE FIELD, and the
-   * only one of this pair that every row can answer.
-   *
-   * It exists because the two planes disagree about the TYPE of this fact: the
-   * host registry stores an archive TIMESTAMP, the cloud row stores a BOOLEAN,
-   * and a foreign row is a replica of the cloud row. So a client that derived
-   * archived-ness from `archivedAt` would read every foreign archived chat as
-   * active. For an own row this is exactly `archivedAt !== null`; for a foreign
-   * row it is the only truth there is.
-   */
-  archived: z.boolean(),
-  /**
-   * WHEN the chat was archived, or `null`.
-   *
-   * `null` means one of two different things and cannot distinguish them:
-   * an active chat, or a FOREIGN archived chat whose timestamp never crossed
-   * the cloud row (which carries only the boolean). Read `archived` for the
-   * state; read this only to DISPLAY a time, and only when `archived` is true.
-   */
-  archivedAt: z.number().int().nonnegative().nullable(),
-  /**
-   * The registry's run-settings SUMMARY: the harness id, or `null` when the
-   * chat has no settings (or was written before the field existed). Not the
-   * settings tuple - the registry does not hold one.
-   */
-  runSettingsSummary: z.string().nullable(),
-  /**
-   * Per-chat MONOTONIC revision of this row's state.
-   *
-   * The record layer's staleness test, and the only ordering fact on the row.
-   * The owning host bumps it on every host-authoritative write and the server
-   * bumps it on every server-authoritative one; a consumer - the inbox
-   * applying a feed op, or a client applying a stream `upsert` - accepts a row
-   * only when its revision strictly exceeds the one already held, and drops it
-   * otherwise. That is what makes replayed, reordered and duplicated deltas
-   * harmless without any merge logic.
-   *
-   * Per CHAT, so revisions from two different chats are incomparable, and it
-   * is NOT a timestamp: host clocks skew, and `updatedAt` is display metadata
-   * that no ordering decision may read.
-   */
-  revision: z.number().int().nonnegative(),
-  /**
-   * Who may read the chat - SERVER-AUTHORITATIVE, replicated in.
-   *
-   * The same vocabulary the cloud row defines, reused rather than restated:
-   * this field IS that row's value, carried into the host's SQLite by the
-   * inbox, so a second enum here would be a seam where two spellings of one
-   * fact could drift apart. `private` is the owner alone; `task` is every
-   * collaborator holding a task permission.
-   *
-   * A host may never write it. A row that has not yet been published, or whose
-   * host has never heard from the server about it, reads `private` - the
-   * closed default, so an unsynced row is never rendered as shared.
-   */
-  visibility: cloudChatVisibilitySchema,
-  /** Whether the serving host owns this row or holds a read-only replica. */
-  origin: chatRecordOriginSchema,
-});
+export const chatRecordSummarySchema = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1),
+    /**
+     * IDENTITY-BEARING, not informational. `chatId` is host-minted and therefore
+     * NOT globally unique: server-side a chat is identified by the triple
+     * `(taskId, ownerUserId, chatId)`, and two users can legitimately hold the
+     * same `chatId` within one task. Anything that keys, caches, dedupes or
+     * unions these rows must key on the owner too - dropping it collapses two
+     * different people's chats into one entry, which is a privacy bug wearing a
+     * UI costume. Non-empty for the same reason `chatId` is: an empty owner
+     * would give every owner-less row one shared record key, so the wire
+     * boundary rejects it rather than letting a consumer discover the collision.
+     */
+    ownerUserId: z.string().min(1),
+    /** The host that MINTED the chat - the registry's `originHostId`. Identity
+     * for host-scoped keying (a chat is bound to its minting host for life), so
+     * non-empty like the other two identity components. */
+    originHostId: z.string().min(1),
+    title: z.string(),
+    isTitleEditedByUser: z.boolean(),
+    parentChatId: z.string().nullable(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+    /**
+     * Whether the chat is archived. THE RENDERING-AUTHORITATIVE FIELD, and the
+     * only one of this pair that every row can answer.
+     *
+     * It exists because the two planes disagree about the TYPE of this fact: the
+     * host registry stores an archive TIMESTAMP, the cloud row stores a BOOLEAN,
+     * and a foreign row is a replica of the cloud row. So a client that derived
+     * archived-ness from `archivedAt` would read every foreign archived chat as
+     * active. For an own row this is exactly `archivedAt !== null`; for a foreign
+     * row it is the only truth there is.
+     */
+    archived: z.boolean(),
+    /**
+     * WHEN the chat was archived, or `null`.
+     *
+     * `null` means one of two different things and cannot distinguish them:
+     * an active chat, or a FOREIGN archived chat whose timestamp never crossed
+     * the cloud row (which carries only the boolean). Read `archived` for the
+     * state; read this only to DISPLAY a time, and only when `archived` is true.
+     */
+    archivedAt: z.number().int().nonnegative().nullable(),
+    /**
+     * The registry's run-settings SUMMARY: the harness id, or `null` when the
+     * chat has no settings (or was written before the field existed). Not the
+     * settings tuple - the registry does not hold one.
+     */
+    runSettingsSummary: z.string().nullable(),
+    /**
+     * Per-chat MONOTONIC revision of this row's state.
+     *
+     * The record layer's staleness test, and the only ordering fact on the row.
+     * The owning host bumps it on every host-authoritative write and the server
+     * bumps it on every server-authoritative one; a consumer - the inbox
+     * applying a feed op, or a client applying a stream `upsert` - accepts a row
+     * only when its revision strictly exceeds the one already held, and drops it
+     * otherwise. That is what makes replayed, reordered and duplicated deltas
+     * harmless without any merge logic.
+     *
+     * Per CHAT, so revisions from two different chats are incomparable, and it
+     * is NOT a timestamp: host clocks skew, and `updatedAt` is display metadata
+     * that no ordering decision may read.
+     */
+    revision: z.number().int().nonnegative(),
+    /**
+     * Who may read the chat - SERVER-AUTHORITATIVE, replicated in.
+     *
+     * The same vocabulary the cloud row defines, reused rather than restated:
+     * this field IS that row's value, carried into the host's SQLite by the
+     * inbox, so a second enum here would be a seam where two spellings of one
+     * fact could drift apart. `private` is the owner alone; `task` is every
+     * collaborator holding a task permission.
+     *
+     * A host may never write it. A row that has not yet been published, or whose
+     * host has never heard from the server about it, reads `private` - the
+     * closed default, so an unsynced row is never rendered as shared.
+     */
+    visibility: cloudChatVisibilitySchema,
+    /** Whether the serving host owns this row or holds a read-only replica. */
+    origin: chatRecordOriginSchema,
+  }),
+);
 export type ChatRecordSummary = z.infer<typeof chatRecordSummarySchema>;
 
 /** FROZEN. `epic.listChatRecords@1.0` serves exactly this response. */
-export const listChatRecordsResponseSchema = z.object({
-  chats: z.array(chatRecordSummarySchema),
-});
+export const listChatRecordsResponseSchema = lazySchema(() =>
+  z.object({
+    chats: z.array(chatRecordSummarySchema),
+  }),
+);
 export type ListChatRecordsResponse = z.infer<
   typeof listChatRecordsResponseSchema
 >;
@@ -304,14 +313,18 @@ export type ListChatRecordsResponse = z.infer<
  * So the marker is not metadata. It is the doc-replica-derived distinction,
  * preserved for a client that no longer has a doc replica to derive it from.
  */
-export const chatRecordSummaryV11Schema = chatRecordSummarySchema.extend({
-  docResident: z.boolean(),
-});
+export const chatRecordSummaryV11Schema = lazySchema(() =>
+  chatRecordSummarySchema.extend({
+    docResident: z.boolean(),
+  }),
+);
 export type ChatRecordSummaryV11 = z.infer<typeof chatRecordSummaryV11Schema>;
 
-export const listChatRecordsResponseV11Schema = z.object({
-  chats: z.array(chatRecordSummaryV11Schema),
-});
+export const listChatRecordsResponseV11Schema = lazySchema(() =>
+  z.object({
+    chats: z.array(chatRecordSummaryV11Schema),
+  }),
+);
 export type ListChatRecordsResponseV11 = z.infer<
   typeof listChatRecordsResponseV11Schema
 >;
@@ -333,10 +346,11 @@ export type ListChatRecordsResponseV11 = z.infer<
  * an absent field would have to be given a default - which is precisely the
  * host-side guess this field exists to remove.
  */
-export const listChatRecordsRequestV11Schema =
+export const listChatRecordsRequestV11Schema = lazySchema(() =>
   listChatRecordsRequestSchema.extend({
     hasDocReplica: z.boolean(),
-  });
+  }),
+);
 export type ListChatRecordsRequestV11 = z.infer<
   typeof listChatRecordsRequestV11Schema
 >;
@@ -363,19 +377,21 @@ export type ListChatRecordsRequestV11 = z.infer<
  * overwrite the digest exists to refuse (the same warning
  * `cloudChatSummarySchema` carries).
  */
-export const chatRecordHeadStampSchema = z.object({
-  /** Digest of the head document's exact bytes. The freshness key. */
-  headSha256: sha256HexSchema,
-  /** Sequence the head was pinned at. A projection - never an ordering fact. */
-  throughRecordSeq: z.number().int().nonnegative(),
-  /**
-   * Server-monotonic publication time. The head's ONLY ordering fact. Bounded
-   * like the row's other timestamps: the server stamps and clamps it as an
-   * integer millisecond count, so a negative or fractional value cannot be a
-   * publication time and is refused at the wire.
-   */
-  publishedAt: z.number().int().nonnegative(),
-});
+export const chatRecordHeadStampSchema = lazySchema(() =>
+  z.object({
+    /** Digest of the head document's exact bytes. The freshness key. */
+    headSha256: sha256HexSchema,
+    /** Sequence the head was pinned at. A projection - never an ordering fact. */
+    throughRecordSeq: z.number().int().nonnegative(),
+    /**
+     * Server-monotonic publication time. The head's ONLY ordering fact. Bounded
+     * like the row's other timestamps: the server stamps and clamps it as an
+     * integer millisecond count, so a negative or fractional value cannot be a
+     * publication time and is refused at the wire.
+     */
+    publishedAt: z.number().int().nonnegative(),
+  }),
+);
 export type ChatRecordHeadStamp = z.infer<typeof chatRecordHeadStampSchema>;
 
 // ─── `epic.listChatRecords@1.2` - the publication head on the row ───────────
@@ -419,14 +435,18 @@ export type ChatRecordHeadStamp = z.infer<typeof chatRecordHeadStampSchema>;
  * non-strict object is stripped by an older peer's schema, so the row still
  * projects onto every released minor.
  */
-export const chatRecordSummaryV12Schema = chatRecordSummaryV11Schema.extend({
-  head: chatRecordHeadStampSchema.nullable().optional(),
-});
+export const chatRecordSummaryV12Schema = lazySchema(() =>
+  chatRecordSummaryV11Schema.extend({
+    head: chatRecordHeadStampSchema.nullable().optional(),
+  }),
+);
 export type ChatRecordSummaryV12 = z.infer<typeof chatRecordSummaryV12Schema>;
 
-export const listChatRecordsResponseV12Schema = z.object({
-  chats: z.array(chatRecordSummaryV12Schema),
-});
+export const listChatRecordsResponseV12Schema = lazySchema(() =>
+  z.object({
+    chats: z.array(chatRecordSummaryV12Schema),
+  }),
+);
 export type ListChatRecordsResponseV12 = z.infer<
   typeof listChatRecordsResponseV12Schema
 >;
@@ -477,18 +497,20 @@ export type ListChatRecordsResponseV12 = z.infer<
  * upgrade path can say "that host issued no stamp" instead of inventing an
  * epoch a client would send back. See {@link listTuiAgentsResponseV13Schema}.
  */
-export const listChatRecordsResponseV13Schema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("snapshot"),
-    listStamp: recordListStampSchema.nullable(),
-    chats: z.array(chatRecordSummaryV12Schema),
-  }),
-  z.object({
-    kind: z.literal("unchanged"),
-    listStamp: recordListStampSchema,
-    touched: z.array(recordListRecencyPatchSchema),
-  }),
-]);
+export const listChatRecordsResponseV13Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      listStamp: recordListStampSchema.nullable(),
+      chats: z.array(chatRecordSummaryV12Schema),
+    }),
+    z.object({
+      kind: z.literal("unchanged"),
+      listStamp: recordListStampSchema,
+      touched: z.array(recordListRecencyPatchSchema),
+    }),
+  ]),
+);
 export type ListChatRecordsResponseV13 = z.infer<
   typeof listChatRecordsResponseV13Schema
 >;
@@ -503,10 +525,11 @@ export type ListChatRecordsResponseV13 = z.infer<
  * client must never synthesize one, and must drop the one it holds when the
  * store it was read into is replaced.
  */
-export const listChatRecordsRequestV13Schema =
+export const listChatRecordsRequestV13Schema = lazySchema(() =>
   listChatRecordsRequestV11Schema.extend({
     knownRevision: recordListStampSchema.nullable(),
-  });
+  }),
+);
 export type ListChatRecordsRequestV13 = z.infer<
   typeof listChatRecordsRequestV13Schema
 >;
@@ -536,9 +559,11 @@ export type ListChatRecordsRequestV13 = z.infer<
  *
  * `head` has the same optional-and-nullable meaning it has on the list row.
  */
-export const chatRecordSummaryStreamV13Schema = chatRecordSummarySchema.extend({
-  head: chatRecordHeadStampSchema.nullable().optional(),
-});
+export const chatRecordSummaryStreamV13Schema = lazySchema(() =>
+  chatRecordSummarySchema.extend({
+    head: chatRecordHeadStampSchema.nullable().optional(),
+  }),
+);
 export type ChatRecordSummaryStreamV13 = z.infer<
   typeof chatRecordSummaryStreamV13Schema
 >;
@@ -591,17 +616,21 @@ export type ChatRecordSummaryStreamV13 = z.infer<
  * the row already gave it - the harness mark - which is strictly what that
  * host's own client showed before this method existed.
  */
-export const getChatRunSettingsRequestSchema = z.object({
-  epicId: z.string().min(1),
-  chatId: z.string().min(1),
-});
+export const getChatRunSettingsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    chatId: z.string().min(1),
+  }),
+);
 export type GetChatRunSettingsRequest = z.infer<
   typeof getChatRunSettingsRequestSchema
 >;
 
-export const getChatRunSettingsResponseSchema = z.object({
-  settings: chatRunSettingsSchema.nullable(),
-});
+export const getChatRunSettingsResponseSchema = lazySchema(() =>
+  z.object({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
 export type GetChatRunSettingsResponse = z.infer<
   typeof getChatRunSettingsResponseSchema
 >;
@@ -625,27 +654,29 @@ export type GetChatRunSettingsResponse = z.infer<
  * released line. Do NOT add ids here - extend the persisted enum and let the
  * v2.0 line carry them.
  */
-export const chatRunSettingsHarnessIdSchemaV10 = guiHarnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-]);
+export const chatRunSettingsHarnessIdSchemaV10 = lazySchema(() =>
+  guiHarnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+  ]),
+);
 
 /**
  * Frozen `epic.getChatRunSettings@1.0` settings tuple. Hand-copied off
@@ -666,20 +697,24 @@ export const chatRunSettingsHarnessIdSchemaV10 = guiHarnessIdSchema.extract([
  * major 3 (the head) binds the live tuple and is the only line that may spell
  * `auto`.
  */
-export const chatRunSettingsSchemaV10 = z.object({
-  harnessId: chatRunSettingsHarnessIdSchemaV10,
-  model: z.string().min(1),
-  permissionMode: permissionModeSchemaPreAuto,
-  reasoningEffort: z.string().nullable(),
-  serviceTier: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  profileId: z.string().nullable().default(null),
-});
+export const chatRunSettingsSchemaV10 = lazySchema(() =>
+  z.object({
+    harnessId: chatRunSettingsHarnessIdSchemaV10,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchemaPreAuto,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type ChatRunSettingsV10 = z.infer<typeof chatRunSettingsSchemaV10>;
 
-export const getChatRunSettingsResponseSchemaV10 = z.object({
-  settings: chatRunSettingsSchemaV10.nullable(),
-});
+export const getChatRunSettingsResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    settings: chatRunSettingsSchemaV10.nullable(),
+  }),
+);
 export type GetChatRunSettingsResponseV10 = z.infer<
   typeof getChatRunSettingsResponseSchemaV10
 >;
@@ -699,52 +734,58 @@ export type GetChatRunSettingsResponseV10 = z.infer<
  * removing an id upstream then fails to compile here instead of silently
  * narrowing a released line.
  */
-const chatRunSettingsHarnessIdSchemaV20 = guiHarnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-  "reasonix",
-]);
+const chatRunSettingsHarnessIdSchemaV20 = lazySchema(() =>
+  guiHarnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+  ]),
+);
 
 /**
  * Frozen `epic.getChatRunSettings@2.0` settings tuple. Hand-copied off
  * `chatRunSettingsSchema` for the same reason the V10 copy is: pinning only
  * the id over a LIVE body is a half freeze.
  */
-export const chatRunSettingsSchemaV20 = z.object({
-  harnessId: chatRunSettingsHarnessIdSchemaV20,
-  model: z.string().min(1),
-  // Pinned pre-`auto` for the same half-freeze reason the id is: 2.0 is
-  // RELEASED, so an `auto` chat read on that line would fail the whole
-  // response rather than one field. Major 3 (the head) binds the live tuple
-  // and is the only line that may spell `auto`.
-  permissionMode: permissionModeSchemaPreAuto,
-  reasoningEffort: z.string().nullable(),
-  serviceTier: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  profileId: z.string().nullable().default(null),
-});
+export const chatRunSettingsSchemaV20 = lazySchema(() =>
+  z.object({
+    harnessId: chatRunSettingsHarnessIdSchemaV20,
+    model: z.string().min(1),
+    // Pinned pre-`auto` for the same half-freeze reason the id is: 2.0 is
+    // RELEASED, so an `auto` chat read on that line would fail the whole
+    // response rather than one field. Major 3 (the head) binds the live tuple
+    // and is the only line that may spell `auto`.
+    permissionMode: permissionModeSchemaPreAuto,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type ChatRunSettingsV20 = z.infer<typeof chatRunSettingsSchemaV20>;
 
-export const getChatRunSettingsResponseSchemaV20 = z.object({
-  settings: chatRunSettingsSchemaV20.nullable(),
-});
+export const getChatRunSettingsResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    settings: chatRunSettingsSchemaV20.nullable(),
+  }),
+);
 export type GetChatRunSettingsResponseV20 = z.infer<
   typeof getChatRunSettingsResponseSchemaV20
 >;
@@ -810,7 +851,9 @@ export type GetChatRunSettingsResponseV20 = z.infer<
  * whole record table. Never add this name to the unary released floor
  * (`released-floor.ts`), which is fail-closed on the name set.
  */
-export const hostChatRecordsSubscribeOpenRequestSchemaV10 = z.object({});
+export const hostChatRecordsSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({}),
+);
 export type HostChatRecordsSubscribeOpenRequestV10 = z.infer<
   typeof hostChatRecordsSubscribeOpenRequestSchemaV10
 >;
@@ -831,7 +874,9 @@ export type HostChatRecordsSubscribeOpenRequestV10 = z.infer<
  * client unable to render the end state at all, so widening it is a NEW MINOR,
  * never a silent addition.
  */
-export const chatRecordRemovalReasonSchema = z.enum(["deleted", "revoked"]);
+export const chatRecordRemovalReasonSchema = lazySchema(() =>
+  z.enum(["deleted", "revoked"]),
+);
 export type ChatRecordRemovalReason = z.infer<
   typeof chatRecordRemovalReasonSchema
 >;
@@ -855,25 +900,31 @@ export type ChatRecordRemovalReason = z.infer<
 // agreed to exactly these frame kinds. New frames go on a new minor's union
 // below, and the host gates their emission on the NEGOTIATED version.
 const hostChatRecordsSubscribeSharedServerFrameSchemasV10 = [
-  z.object({
-    kind: z.literal("upsert"),
-    ...textFrameFields,
-    epicId: z.string().min(1),
-    chatId: z.string().min(1),
-    revision: z.number().int().nonnegative(),
-    record: chatRecordSummarySchema,
-  }),
-  z.object({
-    kind: z.literal("remove"),
-    ...textFrameFields,
-    epicId: z.string().min(1),
-    chatId: z.string().min(1),
-    reason: chatRecordRemovalReasonSchema,
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    ...textFrameFields,
-  }),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("upsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: chatRecordSummarySchema,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("remove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ),
 ] as const;
 
 /**
@@ -953,12 +1004,14 @@ function refineTuiUpsertEnvelope(
   }
 }
 
-export const hostChatRecordsSubscribeServerFrameSchemaV10 = z
-  .discriminatedUnion(
-    "kind",
-    hostChatRecordsSubscribeSharedServerFrameSchemasV10,
-  )
-  .superRefine(refineChatUpsertEnvelope);
+export const hostChatRecordsSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z
+    .discriminatedUnion(
+      "kind",
+      hostChatRecordsSubscribeSharedServerFrameSchemasV10,
+    )
+    .superRefine(refineChatUpsertEnvelope),
+);
 export type HostChatRecordsSubscribeServerFrameV10 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV10
 >;
@@ -975,27 +1028,29 @@ export type HostChatRecordsSubscribeServerFrameV10 = z.infer<
 // only ever say `deleted` (the rows are structurally owner-only, so there is
 // no entitlement to revoke), but the enum is shared rather than narrowed so
 // a future sharing surface cannot fork the vocabulary.
-export const hostChatRecordsSubscribeServerFrameSchemaV11 = z
-  .discriminatedUnion("kind", [
-    ...hostChatRecordsSubscribeSharedServerFrameSchemasV10,
-    z.object({
-      kind: z.literal("tuiUpsert"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      record: tuiAgentRecordSummarySchema,
-    }),
-    z.object({
-      kind: z.literal("tuiRemove"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      reason: chatRecordRemovalReasonSchema,
-    }),
-  ])
-  .superRefine(refineChatUpsertEnvelope)
-  .superRefine(refineTuiUpsertEnvelope);
+export const hostChatRecordsSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      ...hostChatRecordsSubscribeSharedServerFrameSchemasV10,
+      z.object({
+        kind: z.literal("tuiUpsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        record: tuiAgentRecordSummarySchema,
+      }),
+      z.object({
+        kind: z.literal("tuiRemove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        reason: chatRecordRemovalReasonSchema,
+      }),
+    ])
+    .superRefine(refineChatUpsertEnvelope)
+    .superRefine(refineTuiUpsertEnvelope),
+);
 export type HostChatRecordsSubscribeServerFrameV11 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV11
 >;
@@ -1011,30 +1066,32 @@ export type HostChatRecordsSubscribeServerFrameV11 = z.infer<
 // before: a `@1.1` subscriber agreed to a `tuiUpsert` carrying the full
 // registry row, so the host must never hand it a narrow `cloud` arm it cannot
 // parse. It keeps receiving its own host's rows exactly as it did.
-export const hostChatRecordsSubscribeServerFrameSchemaV12 = z
-  .discriminatedUnion("kind", [
-    ...hostChatRecordsSubscribeSharedServerFrameSchemasV10,
-    z.object({
-      kind: z.literal("tuiUpsert"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      record: tuiAgentRecordSummaryV12Schema,
-    }),
-    // Unchanged from `@1.1`, restated rather than shared: the frozen `@1.1`
-    // union is declared above this point and must not take a reference to a
-    // const introduced below it.
-    z.object({
-      kind: z.literal("tuiRemove"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      reason: chatRecordRemovalReasonSchema,
-    }),
-  ])
-  .superRefine(refineChatUpsertEnvelope)
-  .superRefine(refineTuiUpsertEnvelope);
+export const hostChatRecordsSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      ...hostChatRecordsSubscribeSharedServerFrameSchemasV10,
+      z.object({
+        kind: z.literal("tuiUpsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        record: tuiAgentRecordSummaryV12Schema,
+      }),
+      // Unchanged from `@1.1`, restated rather than shared: the frozen `@1.1`
+      // union is declared above this point and must not take a reference to a
+      // const introduced below it.
+      z.object({
+        kind: z.literal("tuiRemove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        reason: chatRecordRemovalReasonSchema,
+      }),
+    ])
+    .superRefine(refineChatUpsertEnvelope)
+    .superRefine(refineTuiUpsertEnvelope),
+);
 export type HostChatRecordsSubscribeServerFrameV12 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV12
 >;
@@ -1061,48 +1118,50 @@ export type HostChatRecordsSubscribeServerFrameV12 = z.infer<
 // Every arm is restated rather than spread from the frozen `@1.0` set: that
 // set embeds the pre-`head` `chatRecordSummarySchema` in its `upsert`, which
 // is precisely the arm this minor grows.
-export const hostChatRecordsSubscribeServerFrameSchemaV13 = z
-  .discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("upsert"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      chatId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      record: chatRecordSummaryStreamV13Schema,
-    }),
-    z.object({
-      kind: z.literal("remove"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      chatId: z.string().min(1),
-      reason: chatRecordRemovalReasonSchema,
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-    // Unchanged from `@1.2`, restated for the same reason its own `tuiRemove`
-    // was: a frozen union declared above must not take a reference to a const
-    // introduced below it.
-    z.object({
-      kind: z.literal("tuiUpsert"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      record: tuiAgentRecordSummaryV12Schema,
-    }),
-    z.object({
-      kind: z.literal("tuiRemove"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      reason: chatRecordRemovalReasonSchema,
-    }),
-  ])
-  .superRefine(refineChatUpsertEnvelope)
-  .superRefine(refineTuiUpsertEnvelope);
+export const hostChatRecordsSubscribeServerFrameSchemaV13 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        record: chatRecordSummaryStreamV13Schema,
+      }),
+      z.object({
+        kind: z.literal("remove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        reason: chatRecordRemovalReasonSchema,
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      // Unchanged from `@1.2`, restated for the same reason its own `tuiRemove`
+      // was: a frozen union declared above must not take a reference to a const
+      // introduced below it.
+      z.object({
+        kind: z.literal("tuiUpsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        record: tuiAgentRecordSummaryV12Schema,
+      }),
+      z.object({
+        kind: z.literal("tuiRemove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        reason: chatRecordRemovalReasonSchema,
+      }),
+    ])
+    .superRefine(refineChatUpsertEnvelope)
+    .superRefine(refineTuiUpsertEnvelope),
+);
 export type HostChatRecordsSubscribeServerFrameV13 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV13
 >;
@@ -1141,60 +1200,63 @@ export type HostChatRecordsSubscribeServerFrameV13 = z.infer<
 // Every arm is restated rather than spread from an older set for the same
 // reason `@1.3` restated `@1.0`'s: those sets embed the pre-stamp frames this
 // minor grows.
-export const hostChatRecordsSubscribeServerFrameSchemaV14 = z
-  .discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("upsert"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      chatId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      listRevision: recordListRevisionSchema,
-      record: chatRecordSummaryStreamV13Schema,
-    }),
-    z.object({
-      kind: z.literal("remove"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      chatId: z.string().min(1),
-      listRevision: recordListRevisionSchema,
-      reason: chatRecordRemovalReasonSchema,
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("tuiUpsert"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      listRevision: recordListRevisionSchema,
-      record: tuiAgentRecordSummaryV13Schema,
-    }),
-    z.object({
-      kind: z.literal("tuiRemove"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      tuiAgentId: z.string().min(1),
-      listRevision: recordListRevisionSchema,
-      reason: chatRecordRemovalReasonSchema,
-    }),
-  ])
-  .superRefine(refineChatUpsertEnvelope)
-  .superRefine(refineTuiUpsertEnvelope);
+export const hostChatRecordsSubscribeServerFrameSchemaV14 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        listRevision: recordListRevisionSchema,
+        record: chatRecordSummaryStreamV13Schema,
+      }),
+      z.object({
+        kind: z.literal("remove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        listRevision: recordListRevisionSchema,
+        reason: chatRecordRemovalReasonSchema,
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("tuiUpsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        listRevision: recordListRevisionSchema,
+        record: tuiAgentRecordSummaryV13Schema,
+      }),
+      z.object({
+        kind: z.literal("tuiRemove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        listRevision: recordListRevisionSchema,
+        reason: chatRecordRemovalReasonSchema,
+      }),
+    ])
+    .superRefine(refineChatUpsertEnvelope)
+    .superRefine(refineTuiUpsertEnvelope),
+);
 export type HostChatRecordsSubscribeServerFrameV14 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV14
 >;
 
-export const hostChatRecordsSubscribeClientFrameSchemaV10 =
+export const hostChatRecordsSubscribeClientFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 export type HostChatRecordsSubscribeClientFrameV10 = z.infer<
   typeof hostChatRecordsSubscribeClientFrameSchemaV10
 >;

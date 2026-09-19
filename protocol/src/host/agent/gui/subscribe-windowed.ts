@@ -42,6 +42,7 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import { runtimeTodoStatusSchema } from "@traycer/protocol/host/agent/gui/agent-runtime";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The pinned todo stack's state, as the host folds it.
@@ -52,22 +53,26 @@ import { runtimeTodoStatusSchema } from "@traycer/protocol/host/agent/gui/agent-
  * the client holds a window, and the published index section stores the same
  * shape so a published copy shows the todos a live one does.
  */
-export const pinnedTodoItemSchema = z.object({
-  id: z.string(),
-  // The runtime's own status enum, not a restatement of it: a hand-copied
-  // union here would be a second list to keep in step with the harness
-  // adapters that produce these.
-  status: runtimeTodoStatusSchema,
-  text: z.string(),
-  priority: z.string().nullable(),
-  activeForm: z.string().nullable(),
-});
+export const pinnedTodoItemSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    // The runtime's own status enum, not a restatement of it: a hand-copied
+    // union here would be a second list to keep in step with the harness
+    // adapters that produce these.
+    status: runtimeTodoStatusSchema,
+    text: z.string(),
+    priority: z.string().nullable(),
+    activeForm: z.string().nullable(),
+  }),
+);
 export type PinnedTodoItem = z.infer<typeof pinnedTodoItemSchema>;
 
-export const pinnedTodoSnapshotSchema = z.object({
-  id: z.string(),
-  items: z.array(pinnedTodoItemSchema),
-});
+export const pinnedTodoSnapshotSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    items: z.array(pinnedTodoItemSchema),
+  }),
+);
 export type PinnedTodoSnapshot = z.infer<typeof pinnedTodoSnapshotSchema>;
 
 /**
@@ -142,11 +147,13 @@ export const RANGE_REQUEST_ID_MAX_CHARS = 128;
 export const RANGE_REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /** A `requestId` bounded in bytes, not just in code units. */
-const rangeRequestIdSchema = z
-  .string()
-  .min(1)
-  .max(RANGE_REQUEST_ID_MAX_CHARS)
-  .regex(RANGE_REQUEST_ID_PATTERN);
+const rangeRequestIdSchema = lazySchema(() =>
+  z
+    .string()
+    .min(1)
+    .max(RANGE_REQUEST_ID_MAX_CHARS)
+    .regex(RANGE_REQUEST_ID_PATTERN),
+);
 
 /**
  * Bound on the host-minted accumulated-change digest.
@@ -170,10 +177,12 @@ export const ACCUMULATED_CHANGE_DIGEST_MAX_CHARS = 128;
  * to the persisted record appears here automatically and only the two
  * transcript arrays are excluded by hand.
  */
-export const chatRecordSchema = chatSchema.omit({
-  messages: true,
-  events: true,
-});
+export const chatRecordSchema = lazySchema(() =>
+  chatSchema.omit({
+    messages: true,
+    events: true,
+  }),
+);
 export type ChatRecord = z.infer<typeof chatRecordSchema>;
 
 /**
@@ -187,61 +196,63 @@ export type ChatRecord = z.infer<typeof chatRecordSchema>;
  * call, where a body over 1 MiB riding the BULK lane is correct rather than a
  * hazard, because nothing about it is ordered against the delta stream.
  */
-export const chatAccumulatedFileChangeSummarySchema = z.object({
-  filePath: z.string(),
-  operation: checkpointFileOperationSchema,
-  diffSource: diffSourceSchema,
-  reason: fileEditReasonSchema,
-  undoable: z.boolean(),
-  /**
-   * Whether contents are fetchable at all. A change whose diff source is
-   * `none` has no before/after to ask for, and the client must render it as a
-   * plain row rather than offering a diff that would come back empty.
-   */
-  hasContents: z.boolean(),
-  /**
-   * Which VERSION of this file's accumulated change the summary describes.
-   *
-   * Opaque to the client: echo it verbatim on
-   * {@link chatReadAccumulatedFileChangeRequestSchema}, never parse it. The host
-   * mints it and is free to change how.
-   *
-   * Present because a path is not a version. The client renders the summary
-   * (operation, reason, undoable) at one instant and asks for contents at
-   * another, and the agent can edit the same file in between - so a request
-   * keyed on `{chatId, path}` alone can pair NEWER bodies with the STALE
-   * metadata still on screen, with nothing in either message able to detect it.
-   * The digest makes that a rejected request rather than a wrong diff.
-   */
-  digest: z.string().max(ACCUMULATED_CHANGE_DIGEST_MAX_CHARS),
-  /**
-   * The `+`/`-` the panel shows BEFORE anyone opens a diff.
-   *
-   * Host-computed, because on this line the client has no contents to count
-   * from. The panel derives every row's magnitude and its collapsed header
-   * total from `beforeContent`/`afterContent` today
-   * (`chat-accumulated-changes-panel.tsx`), so a summary without these renders
-   * every file as `+0 / -0` and the header as nothing - a plain regression a
-   * cold review caught, and exactly the kind the zero-regression bar is about.
-   *
-   * `null` when there is nothing to count: a change whose `diffSource` is
-   * `none` has no before/after at all, which the panel must render as a bare
-   * row rather than as a zero-line diff. Distinct from `{0, 0}`, which means
-   * "counted, and the file came back unchanged".
-   *
-   * The active turn is NOT counted here. Its rows carry per-edit streaming
-   * counts the panel already overlays, and the host only recomputes cumulative
-   * contents at turn end - so a host-computed value mid-turn would be the
-   * stale one, and would replace a live number with an older one.
-   */
-  counts: z
-    .object({
-      additions: z.number().int().nonnegative(),
-      deletions: z.number().int().nonnegative(),
-    })
-    .nullable(),
-  artifact: checkpointArtifactTagSchema.nullish(),
-});
+export const chatAccumulatedFileChangeSummarySchema = lazySchema(() =>
+  z.object({
+    filePath: z.string(),
+    operation: checkpointFileOperationSchema,
+    diffSource: diffSourceSchema,
+    reason: fileEditReasonSchema,
+    undoable: z.boolean(),
+    /**
+     * Whether contents are fetchable at all. A change whose diff source is
+     * `none` has no before/after to ask for, and the client must render it as a
+     * plain row rather than offering a diff that would come back empty.
+     */
+    hasContents: z.boolean(),
+    /**
+     * Which VERSION of this file's accumulated change the summary describes.
+     *
+     * Opaque to the client: echo it verbatim on
+     * {@link chatReadAccumulatedFileChangeRequestSchema}, never parse it. The host
+     * mints it and is free to change how.
+     *
+     * Present because a path is not a version. The client renders the summary
+     * (operation, reason, undoable) at one instant and asks for contents at
+     * another, and the agent can edit the same file in between - so a request
+     * keyed on `{chatId, path}` alone can pair NEWER bodies with the STALE
+     * metadata still on screen, with nothing in either message able to detect it.
+     * The digest makes that a rejected request rather than a wrong diff.
+     */
+    digest: z.string().max(ACCUMULATED_CHANGE_DIGEST_MAX_CHARS),
+    /**
+     * The `+`/`-` the panel shows BEFORE anyone opens a diff.
+     *
+     * Host-computed, because on this line the client has no contents to count
+     * from. The panel derives every row's magnitude and its collapsed header
+     * total from `beforeContent`/`afterContent` today
+     * (`chat-accumulated-changes-panel.tsx`), so a summary without these renders
+     * every file as `+0 / -0` and the header as nothing - a plain regression a
+     * cold review caught, and exactly the kind the zero-regression bar is about.
+     *
+     * `null` when there is nothing to count: a change whose `diffSource` is
+     * `none` has no before/after at all, which the panel must render as a bare
+     * row rather than as a zero-line diff. Distinct from `{0, 0}`, which means
+     * "counted, and the file came back unchanged".
+     *
+     * The active turn is NOT counted here. Its rows carry per-edit streaming
+     * counts the panel already overlays, and the host only recomputes cumulative
+     * contents at turn end - so a host-computed value mid-turn would be the
+     * stale one, and would replace a live number with an older one.
+     */
+    counts: z
+      .object({
+        additions: z.number().int().nonnegative(),
+        deletions: z.number().int().nonnegative(),
+      })
+      .nullable(),
+    artifact: checkpointArtifactTagSchema.nullish(),
+  }),
+);
 export type ChatAccumulatedFileChangeSummary = z.infer<
   typeof chatAccumulatedFileChangeSummarySchema
 >;
@@ -255,19 +266,21 @@ export type ChatAccumulatedFileChangeSummary = z.infer<
  * A body over 1 MiB riding the BULK lane is correct here rather than a hazard:
  * this is a unary call, ordered against nothing on the delta stream.
  */
-export const chatReadAccumulatedFileChangeRequestSchema = z.object({
-  /**
-   * Present because a chat id alone does not address a chat on this host: live
-   * sessions are keyed by `(epicId, chatId)`, exactly as every chat-scoped
-   * stream frame is (`chatReferenceFields`). An earlier draft of this schema
-   * carried only `chatId` and there was no way to resolve it.
-   */
-  epicId: z.string(),
-  chatId: z.string(),
-  filePath: z.string(),
-  /** Copied verbatim from the summary being displayed. */
-  digest: z.string().max(ACCUMULATED_CHANGE_DIGEST_MAX_CHARS),
-});
+export const chatReadAccumulatedFileChangeRequestSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Present because a chat id alone does not address a chat on this host: live
+     * sessions are keyed by `(epicId, chatId)`, exactly as every chat-scoped
+     * stream frame is (`chatReferenceFields`). An earlier draft of this schema
+     * carried only `chatId` and there was no way to resolve it.
+     */
+    epicId: z.string(),
+    chatId: z.string(),
+    filePath: z.string(),
+    /** Copied verbatim from the summary being displayed. */
+    digest: z.string().max(ACCUMULATED_CHANGE_DIGEST_MAX_CHARS),
+  }),
+);
 export type ChatReadAccumulatedFileChangeRequest = z.infer<
   typeof chatReadAccumulatedFileChangeRequestSchema
 >;
@@ -281,16 +294,15 @@ export type ChatReadAccumulatedFileChangeRequest = z.infer<
  * whose metadata describes a different edit. Modelled as a normal response
  * rather than an error because it is an ordinary race, not a fault.
  */
-export const chatReadAccumulatedFileChangeResponseSchema = z.discriminatedUnion(
-  "stale",
-  [
+export const chatReadAccumulatedFileChangeResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("stale", [
     z.object({
       stale: z.literal(false),
       beforeContent: z.string().nullable(),
       afterContent: z.string().nullable(),
     }),
     z.object({ stale: z.literal(true) }),
-  ],
+  ]),
 );
 export type ChatReadAccumulatedFileChangeResponse = z.infer<
   typeof chatReadAccumulatedFileChangeResponseSchema
@@ -339,16 +351,18 @@ export {
  * hydration and the scroll is what is being held back, so the target is
  * never requested and the request parks forever.
  */
-export const chatLocateRowRequestSchema = z.object({
-  /**
-   * Present for the same reason it is on
-   * {@link chatReadAccumulatedFileChangeRequestSchema}: a chat id alone does not
-   * address a chat on this host - sessions are keyed by `(epicId, chatId)`.
-   */
-  epicId: z.string(),
-  chatId: z.string(),
-  target: transcriptRowLocatorSchema,
-});
+export const chatLocateRowRequestSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Present for the same reason it is on
+     * {@link chatReadAccumulatedFileChangeRequestSchema}: a chat id alone does not
+     * address a chat on this host - sessions are keyed by `(epicId, chatId)`.
+     */
+    epicId: z.string(),
+    chatId: z.string(),
+    target: transcriptRowLocatorSchema,
+  }),
+);
 export type ChatLocateRowRequest = z.infer<typeof chatLocateRowRequestSchema>;
 
 /**
@@ -390,22 +404,24 @@ export type ChatLocateRowRequest = z.infer<typeof chatLocateRowRequestSchema>;
  * `reindexed`, which advances the epoch by the same predicate. A row id would
  * be a second, weaker check on top of a complete one.
  */
-export const chatLocateRowResponseSchema = z.discriminatedUnion("found", [
-  z.object({
-    found: z.literal(true),
-    ordinal: z.number().int().nonnegative(),
-    /**
-     * The transcript epoch the ordinal is numbered in.
-     *
-     * The client compares it against the epoch its own window is holding and
-     * discards the answer on a mismatch, exactly as it does for a `loadRange`
-     * response - same coordinate, same rule, so the two cannot disagree about
-     * what makes an ordinal usable.
-     */
-    epoch: z.number().int().nonnegative(),
-  }),
-  z.object({ found: z.literal(false) }),
-]);
+export const chatLocateRowResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("found", [
+    z.object({
+      found: z.literal(true),
+      ordinal: z.number().int().nonnegative(),
+      /**
+       * The transcript epoch the ordinal is numbered in.
+       *
+       * The client compares it against the epoch its own window is holding and
+       * discards the answer on a mismatch, exactly as it does for a `loadRange`
+       * response - same coordinate, same rule, so the two cannot disagree about
+       * what makes an ordinal usable.
+       */
+      epoch: z.number().int().nonnegative(),
+    }),
+    z.object({ found: z.literal(false) }),
+  ]),
+);
 export type ChatLocateRowResponse = z.infer<typeof chatLocateRowResponseSchema>;
 
 /**
@@ -475,195 +491,200 @@ export {
  * is where the window sits in the sequence and whether it is still open, and
  * that is exactly what this carries.
  */
-export const setupCardWindowIdentitySchema = z.object({
-  /**
-   * The window's anchor - the earliest setup-event timestamp in it.
-   *
-   * The MATCH KEY, and the reason this works: a client re-partitioning one
-   * window's events computes the same value, because it is a property of those
-   * events and not of the window's position. Ties are broken by array order,
-   * so two lifecycles stamped in the same millisecond still map one-to-one.
-   */
-  createdAt: z.number(),
-  /** The window's position in the whole-log partition. */
-  windowIndex: z.number().int().nonnegative(),
-  /**
-   * True only for the window still OPEN at the end of the log. A closed window
-   * keeps whatever state its last event left it in - which CAN be `setting-up`
-   * when the worktree vanished mid-setup - so a client must read this rather
-   * than infer liveness from the state.
-   */
-  isActive: z.boolean(),
-  /**
-   * The timestamp of the event that CLOSED this window, or `null` while it is
-   * still open.
-   *
-   * The boundary a slice cannot see, published because the client cannot derive
-   * it. A lifecycle ends either at a `worktree.missing` - which is not a setup
-   * event, so a range serving only setup rows never carries it - or at one of
-   * `closesWindow`'s defensive re-bind boundaries. Either way the host holds
-   * that stamp at partition time and the client holds nothing that implies it.
-   *
-   * What it settles: whether a live setup event stamped after the last known
-   * window belongs to that window or opens a new lifecycle. Both look identical
-   * from timestamps and window contents alone, and the client had been
-   * inferring it - a guess with a counterexample either way.
-   *
-   * OPTIONAL, so a host that predates this field simply omits it and the client
-   * degrades to that inference, with the ambiguity documented as a skew
-   * limitation. Additive and optional, and the `1.8` line is unreleased, so no
-   * version bump is owed.
-   */
-  closedAt: z.number().nullable().optional(),
-  /**
-   * Whether the window holds a `setup.creating` event, which is what
-   * distinguishes a live mid-conversation creation from the back-filled genesis
-   * worktree the transcript pins to the top.
-   */
-  hasCreatingEvent: z.boolean(),
-  /** Whole-log placement: fork-created worktrees belong after inherited history.
-   * Optional for hosts predating this field; a range can omit the fork event. */
-  isGenesisPin: z.boolean().optional(),
-});
+export const setupCardWindowIdentitySchema = lazySchema(() =>
+  z.object({
+    /**
+     * The window's anchor - the earliest setup-event timestamp in it.
+     *
+     * The MATCH KEY, and the reason this works: a client re-partitioning one
+     * window's events computes the same value, because it is a property of those
+     * events and not of the window's position. Ties are broken by array order,
+     * so two lifecycles stamped in the same millisecond still map one-to-one.
+     */
+    createdAt: z.number(),
+    /** The window's position in the whole-log partition. */
+    windowIndex: z.number().int().nonnegative(),
+    /**
+     * True only for the window still OPEN at the end of the log. A closed window
+     * keeps whatever state its last event left it in - which CAN be `setting-up`
+     * when the worktree vanished mid-setup - so a client must read this rather
+     * than infer liveness from the state.
+     */
+    isActive: z.boolean(),
+    /**
+     * The timestamp of the event that CLOSED this window, or `null` while it is
+     * still open.
+     *
+     * The boundary a slice cannot see, published because the client cannot derive
+     * it. A lifecycle ends either at a `worktree.missing` - which is not a setup
+     * event, so a range serving only setup rows never carries it - or at one of
+     * `closesWindow`'s defensive re-bind boundaries. Either way the host holds
+     * that stamp at partition time and the client holds nothing that implies it.
+     *
+     * What it settles: whether a live setup event stamped after the last known
+     * window belongs to that window or opens a new lifecycle. Both look identical
+     * from timestamps and window contents alone, and the client had been
+     * inferring it - a guess with a counterexample either way.
+     *
+     * OPTIONAL, so a host that predates this field simply omits it and the client
+     * degrades to that inference, with the ambiguity documented as a skew
+     * limitation. Additive and optional, and the `1.8` line is unreleased, so no
+     * version bump is owed.
+     */
+    closedAt: z.number().nullable().optional(),
+    /**
+     * Whether the window holds a `setup.creating` event, which is what
+     * distinguishes a live mid-conversation creation from the back-filled genesis
+     * worktree the transcript pins to the top.
+     */
+    hasCreatingEvent: z.boolean(),
+    /** Whole-log placement: fork-created worktrees belong after inherited history.
+     * Optional for hosts predating this field; a range can omit the fork event. */
+    isGenesisPin: z.boolean().optional(),
+  }),
+);
 export type SetupCardWindowIdentity = z.infer<
   typeof setupCardWindowIdentitySchema
 >;
 
-export const chatTranscriptDerivedSchema = z.object({
-  /**
-   * The most recent assistant usage report, for the context chip. Nullable
-   * rather than optional: "no assistant row has reported usage" is a real
-   * state on a fresh chat, and the client must render the chip's empty form
-   * rather than treat it as "not supported".
-   */
-  latestAssistantUsage: tokenUsageSchema.nullable(),
-  /**
-   * The pinned-todo fold's result. The fold is a stateful accumulator with a
-   * reset rule keyed on user rows, so it cannot be evaluated over a window -
-   * a client holding the tail alone would show the todos of whatever turn it
-   * happens to have hydrated. `null` means the fold found no live todo, which
-   * is the ordinary state for most chats.
-   */
-  pinnedTodo: pinnedTodoSnapshotSchema.nullable(),
-  /**
-   * The task-tool accumulator behind {@link pinnedTodo}, as of the same fold.
-   *
-   * Carried SEPARATELY because the fold maintains it separately: the task
-   * tools are a delta protocol, and a semantic `todo` block outranks the task
-   * list without stopping it. So `pinnedTodo` is regularly a semantic todo
-   * while the accumulator holds an unrelated checklist that the live turn's
-   * next `update`/`complete` is going to address.
-   *
-   * The client resumes the fold from this to overlay the running turn. Seeding
-   * from `pinnedTodo.items` instead - the same field, read as if it were the
-   * accumulator - drops an update whose id is absent, or rewrites a semantic
-   * item on an id collision, and the dock then sits on the wrong checklist for
-   * the rest of the turn.
-   *
-   * Empty for a chat that used no task tools, which is most of them.
-   */
-  pinnedTaskTodoItems: z.array(pinnedTodoItemSchema),
-  /**
-   * The message id a fork of this chat would cut at - what the composer's
-   * switch-host gesture means by "fork the chat as it stands". `null` when the
-   * chat has no boundary yet (the agent has never replied, or its only
-   * assistant turn is the one running right now), which the gesture reports
-   * rather than opening a dialog pointed at nothing.
-   *
-   * A scalar rather than per-row skeleton fields: see `fork-boundary.ts`, which
-   * holds the derivation and the reasoning. Note this is only the CHAT-level
-   * boundary - the per-message fork buttons read the row the user pointed at,
-   * which is hydrated by construction.
-   */
-  latestForkableAssistantMessageId: z.string().nullable(),
-  /**
-   * The setup interruption the composer would restore a draft from.
-   *
-   * Here rather than derived client-side because the event it comes from
-   * OCCUPIES NO ORDINAL. `partitionSetupCardWindows` skips a path-less
-   * `setup.failed` deliberately - it can neither name a workspace nor drive a
-   * retry, so it forms no card - and the host and the renderer agree about that
-   * by sharing the same partition. What neither noticed is that
-   * `selectRestorableSetupInterruption` reads the SAME event straight off the
-   * full array, for a purpose that has nothing to do with rows.
-   *
-   * A row-less event is in no row's record set, so `sliceTranscriptTail` never
-   * includes it and `loadRange` - addressed by ordinal - can never ask for it.
-   * It is not "evicted and refetchable"; on the windowed line it is unreachable
-   * outright, and the composer would silently stop restoring drafts after a
-   * setup failure.
-   *
-   * So it ships as what it always was: chat-level aux state. `null` when there
-   * is no restorable interruption, which is the ordinary case.
-   *
-   * The general rule this settles: **an event the client reads but no row
-   * renders must ride the snapshot.** Ordinals address rows; anything outside
-   * that space needs its own carriage.
-   */
-  restorableSetupInterruption: restorableSetupInterruptionSchema.nullable(),
-  /**
-   * Where each host-pending interview's answer card would render.
-   *
-   * One entry per id in the same snapshot's own `pendingInterviews` (see
-   * `chatWindowedSnapshotSchema`), so the two are read as a pair: an `ordinal`
-   * says the card is merely cold and names the row to hydrate, a `null` ordinal
-   * says no row can ever draw it, and a pending id with no entry at all says
-   * the host has not judged it yet. The dismiss affordance is gated on the
-   * second of those three and nothing else - see `interview-answerability.ts`
-   * for why the third is a real state on this line and not on the legacy one.
-   *
-   * Empty for the overwhelming majority of snapshots, because it is bounded by
-   * a pending set that is usually empty.
-   */
-  interviewAnswerability: z.array(interviewAnswerabilitySchema),
-  /**
-   * The nudge key of the latest assistant turn when that turn ended in a
-   * recoverable provider-auth failure, `null` when it did not.
-   *
-   * `null` is the ordinary state and means "the last turn did not fail on a
-   * credential" - never "not hydrated". That distinction is the whole point:
-   * the store's own backwards scan cannot tell the two apart once `messages` is
-   * a window, and it resolves the ambiguity by staying silent, so a headless
-   * failure followed by a few user rows silently stops mounting the re-auth
-   * banner. See `provider-auth-failure.ts`, which both lines call.
-   */
-  latestAssistantAuthFailureTurnKey: z.string().nullable(),
-  /**
-   * Every setup lifecycle window in the chat, in chronological order.
-   *
-   * ## Why this is chat-level and not per-row context
-   *
-   * A setup card's row id is `setup-card:<chatId>:<windowIndex>:<createdAt>`,
-   * and `windowIndex` is a position in a partition over the chat's WHOLE event
-   * log. A client hydrating one card in isolation re-runs that partition over
-   * that window's events alone, renumbers the card to 0, and can revive a
-   * historically closed window as active.
-   *
-   * `TranscriptRowContext` carries the right answers and cannot deliver them,
-   * because the lookup is CIRCULAR: the context map is keyed by row id, and a
-   * client that renumbered the window computes a different row id, so it cannot
-   * find the entry that would have corrected it. Every repair keyed on the row
-   * id has that shape.
-   *
-   * So the answer travels as chat-level aux, keyed on `createdAt` - which the
-   * client derives identically from the window's own events, because it is the
-   * earliest setup-event timestamp IN that window. That is what breaks the
-   * circle: the match key is local, the index is not.
-   *
-   * Bounded by the number of setup lifecycles a chat has had - one for most
-   * chats, a handful for a heavily re-bound one - never by rows.
-   */
-  setupCardWindows: z.array(setupCardWindowIdentitySchema),
-});
+export const chatTranscriptDerivedSchema = lazySchema(() =>
+  z.object({
+    /**
+     * The most recent assistant usage report, for the context chip. Nullable
+     * rather than optional: "no assistant row has reported usage" is a real
+     * state on a fresh chat, and the client must render the chip's empty form
+     * rather than treat it as "not supported".
+     */
+    latestAssistantUsage: tokenUsageSchema.nullable(),
+    /**
+     * The pinned-todo fold's result. The fold is a stateful accumulator with a
+     * reset rule keyed on user rows, so it cannot be evaluated over a window -
+     * a client holding the tail alone would show the todos of whatever turn it
+     * happens to have hydrated. `null` means the fold found no live todo, which
+     * is the ordinary state for most chats.
+     */
+    pinnedTodo: pinnedTodoSnapshotSchema.nullable(),
+    /**
+     * The task-tool accumulator behind {@link pinnedTodo}, as of the same fold.
+     *
+     * Carried SEPARATELY because the fold maintains it separately: the task
+     * tools are a delta protocol, and a semantic `todo` block outranks the task
+     * list without stopping it. So `pinnedTodo` is regularly a semantic todo
+     * while the accumulator holds an unrelated checklist that the live turn's
+     * next `update`/`complete` is going to address.
+     *
+     * The client resumes the fold from this to overlay the running turn. Seeding
+     * from `pinnedTodo.items` instead - the same field, read as if it were the
+     * accumulator - drops an update whose id is absent, or rewrites a semantic
+     * item on an id collision, and the dock then sits on the wrong checklist for
+     * the rest of the turn.
+     *
+     * Empty for a chat that used no task tools, which is most of them.
+     */
+    pinnedTaskTodoItems: z.array(pinnedTodoItemSchema),
+    /**
+     * The message id a fork of this chat would cut at - what the composer's
+     * switch-host gesture means by "fork the chat as it stands". `null` when the
+     * chat has no boundary yet (the agent has never replied, or its only
+     * assistant turn is the one running right now), which the gesture reports
+     * rather than opening a dialog pointed at nothing.
+     *
+     * A scalar rather than per-row skeleton fields: see `fork-boundary.ts`, which
+     * holds the derivation and the reasoning. Note this is only the CHAT-level
+     * boundary - the per-message fork buttons read the row the user pointed at,
+     * which is hydrated by construction.
+     */
+    latestForkableAssistantMessageId: z.string().nullable(),
+    /**
+     * The setup interruption the composer would restore a draft from.
+     *
+     * Here rather than derived client-side because the event it comes from
+     * OCCUPIES NO ORDINAL. `partitionSetupCardWindows` skips a path-less
+     * `setup.failed` deliberately - it can neither name a workspace nor drive a
+     * retry, so it forms no card - and the host and the renderer agree about that
+     * by sharing the same partition. What neither noticed is that
+     * `selectRestorableSetupInterruption` reads the SAME event straight off the
+     * full array, for a purpose that has nothing to do with rows.
+     *
+     * A row-less event is in no row's record set, so `sliceTranscriptTail` never
+     * includes it and `loadRange` - addressed by ordinal - can never ask for it.
+     * It is not "evicted and refetchable"; on the windowed line it is unreachable
+     * outright, and the composer would silently stop restoring drafts after a
+     * setup failure.
+     *
+     * So it ships as what it always was: chat-level aux state. `null` when there
+     * is no restorable interruption, which is the ordinary case.
+     *
+     * The general rule this settles: **an event the client reads but no row
+     * renders must ride the snapshot.** Ordinals address rows; anything outside
+     * that space needs its own carriage.
+     */
+    restorableSetupInterruption: restorableSetupInterruptionSchema.nullable(),
+    /**
+     * Where each host-pending interview's answer card would render.
+     *
+     * One entry per id in the same snapshot's own `pendingInterviews` (see
+     * `chatWindowedSnapshotSchema`), so the two are read as a pair: an `ordinal`
+     * says the card is merely cold and names the row to hydrate, a `null` ordinal
+     * says no row can ever draw it, and a pending id with no entry at all says
+     * the host has not judged it yet. The dismiss affordance is gated on the
+     * second of those three and nothing else - see `interview-answerability.ts`
+     * for why the third is a real state on this line and not on the legacy one.
+     *
+     * Empty for the overwhelming majority of snapshots, because it is bounded by
+     * a pending set that is usually empty.
+     */
+    interviewAnswerability: z.array(interviewAnswerabilitySchema),
+    /**
+     * The nudge key of the latest assistant turn when that turn ended in a
+     * recoverable provider-auth failure, `null` when it did not.
+     *
+     * `null` is the ordinary state and means "the last turn did not fail on a
+     * credential" - never "not hydrated". That distinction is the whole point:
+     * the store's own backwards scan cannot tell the two apart once `messages` is
+     * a window, and it resolves the ambiguity by staying silent, so a headless
+     * failure followed by a few user rows silently stops mounting the re-auth
+     * banner. See `provider-auth-failure.ts`, which both lines call.
+     */
+    latestAssistantAuthFailureTurnKey: z.string().nullable(),
+    /**
+     * Every setup lifecycle window in the chat, in chronological order.
+     *
+     * ## Why this is chat-level and not per-row context
+     *
+     * A setup card's row id is `setup-card:<chatId>:<windowIndex>:<createdAt>`,
+     * and `windowIndex` is a position in a partition over the chat's WHOLE event
+     * log. A client hydrating one card in isolation re-runs that partition over
+     * that window's events alone, renumbers the card to 0, and can revive a
+     * historically closed window as active.
+     *
+     * `TranscriptRowContext` carries the right answers and cannot deliver them,
+     * because the lookup is CIRCULAR: the context map is keyed by row id, and a
+     * client that renumbered the window computes a different row id, so it cannot
+     * find the entry that would have corrected it. Every repair keyed on the row
+     * id has that shape.
+     *
+     * So the answer travels as chat-level aux, keyed on `createdAt` - which the
+     * client derives identically from the window's own events, because it is the
+     * earliest setup-event timestamp IN that window. That is what breaks the
+     * circle: the match key is local, the index is not.
+     *
+     * Bounded by the number of setup lifecycles a chat has had - one for most
+     * chats, a handful for a heavily re-bound one - never by rows.
+     */
+    setupCardWindows: z.array(setupCardWindowIdentitySchema),
+  }),
+);
 export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
 
 /** Frozen derived shape for chat.subscribe@1.8–1.12, before fork-aware placement. */
-export const chatTranscriptDerivedSchemaPreSetupPlacement =
+export const chatTranscriptDerivedSchemaPreSetupPlacement = lazySchema(() =>
   chatTranscriptDerivedSchema.extend({
     setupCardWindows: z.array(
       setupCardWindowIdentitySchema.omit({ isGenesisPin: true }),
     ),
-  });
+  }),
+);
 
 /**
  * The hydrated rows a snapshot ships inline - the streaming tail.
@@ -674,41 +695,43 @@ export const chatTranscriptDerivedSchemaPreSetupPlacement =
  * places it, so the client can seat the tail against a skeleton it has not
  * finished receiving yet.
  */
-export const chatTranscriptWindowSchema = z.object({
-  fromOrdinal: z.number().int().nonnegative(),
-  /**
-   * One ROW id per row in the tail, in order - the same identity echo a
-   * `range` carries, and read the same way.
-   *
-   * The tail is emitted BEFORE the skeleton streams, so the client cannot check
-   * these against an index it does not have yet. That is not what they are for
-   * here: without them the client has to take the tail's extent positionally
-   * (`fromOrdinal` to `rowCount`) and leave every id blank until a skeleton
-   * chunk supplies one, which also leaves {@link rowContext} with nothing to
-   * key on.
-   *
-   * Optional rather than defaulted, for the reason `row-context.ts` gives:
-   * absent is a producer that has nothing to say, not an empty answer. A host
-   * that predates the field leaves the client on the positional read it used
-   * before; an empty ARRAY would be indistinguishable from "this tail served no
-   * rows", which is a real and different state.
-   */
-  rowIds: z.array(z.string()).optional(),
-  /** Rows whose required record set is incomplete in this tail. */
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchema),
-  events: z.array(chatEventSchema),
-  /**
-   * What the tail's rows render WITH, by row id - see
-   * {@link chatRangeResponseSchema}'s field of the same name.
-   *
-   * The tail needs this for the same reason a range does and with less chance
-   * of repair: the planner counts these rows hydrated, so no range is ever
-   * asked for them and a wrong elapsed time or profile label persists until the
-   * rows are evicted. Most tails have nothing to say and omit it.
-   */
-  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
-});
+export const chatTranscriptWindowSchema = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    /**
+     * One ROW id per row in the tail, in order - the same identity echo a
+     * `range` carries, and read the same way.
+     *
+     * The tail is emitted BEFORE the skeleton streams, so the client cannot check
+     * these against an index it does not have yet. That is not what they are for
+     * here: without them the client has to take the tail's extent positionally
+     * (`fromOrdinal` to `rowCount`) and leave every id blank until a skeleton
+     * chunk supplies one, which also leaves {@link rowContext} with nothing to
+     * key on.
+     *
+     * Optional rather than defaulted, for the reason `row-context.ts` gives:
+     * absent is a producer that has nothing to say, not an empty answer. A host
+     * that predates the field leaves the client on the positional read it used
+     * before; an empty ARRAY would be indistinguishable from "this tail served no
+     * rows", which is a real and different state.
+     */
+    rowIds: z.array(z.string()).optional(),
+    /** Rows whose required record set is incomplete in this tail. */
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchema),
+    events: z.array(chatEventSchema),
+    /**
+     * What the tail's rows render WITH, by row id - see
+     * {@link chatRangeResponseSchema}'s field of the same name.
+     *
+     * The tail needs this for the same reason a range does and with less chance
+     * of repair: the planner counts these rows hydrated, so no range is ever
+     * asked for them and a wrong elapsed time or profile label persists until the
+     * rows are evicted. Most tails have nothing to say and omit it.
+     */
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
 
 /**
@@ -732,16 +755,18 @@ export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
  *
  * Hand-frozen field-for-field, NOT `.extend()` off the live shape.
  */
-export const chatTranscriptWindowSchemaPreFallback = z.object({
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()).optional(),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPreFallback),
-  events: z.array(chatEventSchema),
-  rowContext: z
-    .record(z.string(), transcriptRowContextSchemaPreFallback)
-    .optional(),
-});
+export const chatTranscriptWindowSchemaPreFallback = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()).optional(),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreFallback),
+    events: z.array(chatEventSchema),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreFallback)
+      .optional(),
+  }),
+);
 
 /**
  * Wire-freeze copy of the tail bound to `chat.subscribe@1.10`: the live tail
@@ -750,27 +775,31 @@ export const chatTranscriptWindowSchemaPreFallback = z.object({
  * three body channels. `rowContext` stays live: `1.10` is the line that
  * introduced the live row context. Hand-frozen field-for-field.
  */
-export const chatTranscriptWindowSchemaPreShellHost = z.object({
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()).optional(),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPreShellHost),
-  events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
-});
+export const chatTranscriptWindowSchemaPreShellHost = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()).optional(),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreShellHost),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
 
 /**
  * Wire-freeze copy of the tail bound to `chat.subscribe@1.11`/`@1.12`.
  * Shell-host fields are present, but browser-session references are not.
  */
-export const chatTranscriptWindowSchemaPreBrowser = z.object({
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()).optional(),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPreBrowser),
-  events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
-});
+export const chatTranscriptWindowSchemaPreBrowser = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()).optional(),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreBrowser),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
 
 /**
  * A slice of the skeleton.
@@ -786,12 +815,14 @@ export const chatTranscriptWindowSchemaPreBrowser = z.object({
  * what it has assembled. A mismatch means chunks were lost and the client
  * re-requests rather than rendering a short transcript.
  */
-export const chatSkeletonChunkSchema = z.object({
-  epoch: z.number().int().nonnegative(),
-  fromOrdinal: z.number().int().nonnegative(),
-  entries: z.array(rowSkeletonEntrySchema),
-  isFinal: z.boolean(),
-});
+export const chatSkeletonChunkSchema = lazySchema(() =>
+  z.object({
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    entries: z.array(rowSkeletonEntrySchema),
+    isFinal: z.boolean(),
+  }),
+);
 export type ChatSkeletonChunk = z.infer<typeof chatSkeletonChunkSchema>;
 
 /**
@@ -835,22 +866,24 @@ export type ChatSkeletonChunk = z.infer<typeof chatSkeletonChunkSchema>;
  *   mutations - rare, and worth a refetch to avoid a delta format whose edge
  *   cases nobody would exercise often enough to trust.
  */
-export const chatIndexChangeSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("appended"),
-    entries: z.array(rowSkeletonEntrySchema),
-  }),
-  z.object({
-    type: z.literal("updated"),
-    entries: z.array(
-      z.object({
-        ordinal: z.number().int().nonnegative(),
-        entry: rowSkeletonEntrySchema,
-      }),
-    ),
-  }),
-  z.object({ type: z.literal("reindexed") }),
-]);
+export const chatIndexChangeSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("appended"),
+      entries: z.array(rowSkeletonEntrySchema),
+    }),
+    z.object({
+      type: z.literal("updated"),
+      entries: z.array(
+        z.object({
+          ordinal: z.number().int().nonnegative(),
+          entry: rowSkeletonEntrySchema,
+        }),
+      ),
+    }),
+    z.object({ type: z.literal("reindexed") }),
+  ]),
+);
 export type ChatIndexChange = z.infer<typeof chatIndexChangeSchema>;
 
 /**
@@ -867,52 +900,54 @@ export type ChatIndexChange = z.infer<typeof chatIndexChangeSchema>;
  * asked for is not always a range that fits. The client requests the remainder
  * from there; it is not an error.
  */
-export const chatRangeResponseSchema = z.object({
-  requestId: rangeRequestIdSchema,
-  epoch: z.number().int().nonnegative(),
-  fromOrdinal: z.number().int().nonnegative(),
-  /**
-   * One ROW id per served row, in order.
-   *
-   * Not `(kind, messageId | eventId)`: a row can be several records (a folded
-   * assistant turn), several rows can share one record set (that turn's slices
-   * and the steer bubbles between them), and a setup card or a synthesized
-   * stopped row has no single record to name. Record identity cannot address a
-   * row - see `row-projection.ts`.
-   */
-  rowIds: z.array(z.string()),
-  /** Rows whose required record set is incomplete in this response. */
-  incompleteRowIds: z.array(z.string()).optional(),
-  /**
-   * The DEDUPLICATED union of records the served rows render from - not a
-   * parallel array to `rowIds`. A turn's records appear once however many of
-   * its slices are in the span.
-   */
-  messages: z.array(messageSchema),
-  events: z.array(chatEventSchema),
-  /**
-   * What the served rows render WITH, by row id.
-   *
-   * The host projects a row against whole history; this response serves that
-   * row's records alone. Anything the renderer derives by looking at rows
-   * AROUND the one it is drawing therefore gets a different answer from an
-   * isolated span - and in two cases the re-derived row id then disagrees with
-   * the skeleton, so the ordinal is suppressed and the row draws unplaced at
-   * the tail. Those derivations read this instead.
-   *
-   * A map holding only rows with something to say, not a parallel array to
-   * `rowIds`: most rows need none, and `{}` per row is real bytes on a frame
-   * that has already overshot its budget once.
-   *
-   * Absent for a row means "the projection has nothing to add", NOT a default -
-   * a consumer falls back to its own derivation, which is what keeps a host
-   * predating a field from silently asserting one.
-   */
-  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
-  reachedStart: z.boolean(),
-  reachedEnd: z.boolean(),
-  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
-});
+export const chatRangeResponseSchema = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    /**
+     * One ROW id per served row, in order.
+     *
+     * Not `(kind, messageId | eventId)`: a row can be several records (a folded
+     * assistant turn), several rows can share one record set (that turn's slices
+     * and the steer bubbles between them), and a setup card or a synthesized
+     * stopped row has no single record to name. Record identity cannot address a
+     * row - see `row-projection.ts`.
+     */
+    rowIds: z.array(z.string()),
+    /** Rows whose required record set is incomplete in this response. */
+    incompleteRowIds: z.array(z.string()).optional(),
+    /**
+     * The DEDUPLICATED union of records the served rows render from - not a
+     * parallel array to `rowIds`. A turn's records appear once however many of
+     * its slices are in the span.
+     */
+    messages: z.array(messageSchema),
+    events: z.array(chatEventSchema),
+    /**
+     * What the served rows render WITH, by row id.
+     *
+     * The host projects a row against whole history; this response serves that
+     * row's records alone. Anything the renderer derives by looking at rows
+     * AROUND the one it is drawing therefore gets a different answer from an
+     * isolated span - and in two cases the re-derived row id then disagrees with
+     * the skeleton, so the ordinal is suppressed and the row draws unplaced at
+     * the tail. Those derivations read this instead.
+     *
+     * A map holding only rows with something to say, not a parallel array to
+     * `rowIds`: most rows need none, and `{}` per row is real bytes on a frame
+     * that has already overshot its budget once.
+     *
+     * Absent for a row means "the projection has nothing to add", NOT a default -
+     * a consumer falls back to its own derivation, which is what keeps a host
+     * predating a field from silently asserting one.
+     */
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
 
 /**
@@ -921,55 +956,61 @@ export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
  * {@link chatTranscriptWindowSchemaPreFallback} for why all three are frozen
  * together. Hand-frozen field-for-field.
  */
-export const chatRangeResponseSchemaPreFallback = z.object({
-  requestId: rangeRequestIdSchema,
-  epoch: z.number().int().nonnegative(),
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPreFallback),
-  events: z.array(chatEventSchema),
-  rowContext: z
-    .record(z.string(), transcriptRowContextSchemaPreFallback)
-    .default({}),
-  reachedStart: z.boolean(),
-  reachedEnd: z.boolean(),
-  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
-});
+export const chatRangeResponseSchemaPreFallback = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreFallback),
+    events: z.array(chatEventSchema),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreFallback)
+      .default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
 
 /**
  * Wire-freeze copy of the `range` response bound to `chat.subscribe@1.10` -
  * see {@link chatTranscriptWindowSchemaPreShellHost}. Hand-frozen
  * field-for-field.
  */
-export const chatRangeResponseSchemaPreShellHost = z.object({
-  requestId: rangeRequestIdSchema,
-  epoch: z.number().int().nonnegative(),
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPreShellHost),
-  events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
-  reachedStart: z.boolean(),
-  reachedEnd: z.boolean(),
-  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
-});
+export const chatRangeResponseSchemaPreShellHost = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreShellHost),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
 
 /** Wire-freeze copy of the range response for `@1.11`/`@1.12`. */
-export const chatRangeResponseSchemaPreBrowser = z.object({
-  requestId: rangeRequestIdSchema,
-  epoch: z.number().int().nonnegative(),
-  fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(z.string()),
-  incompleteRowIds: z.array(z.string()).optional(),
-  messages: z.array(messageSchemaPreBrowser),
-  events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
-  reachedStart: z.boolean(),
-  reachedEnd: z.boolean(),
-  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
-});
+export const chatRangeResponseSchemaPreBrowser = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(messageSchemaPreBrowser),
+    events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
 
 /**
  * A request for a span of bodies.
@@ -1203,30 +1244,32 @@ export const ACCUMULATED_CHANGE_CHUNK_MAX_BYTES = 256 * 1024;
  * were lost, and the panel re-requests rather than rendering a total that
  * silently under-counts the files it would revert.
  */
-export const chatAccumulatedChangeChunkSchema = z.object({
-  epoch: z.number().int().nonnegative(),
-  /**
-   * Which RE-STREAM this chunk belongs to. Incremented by the host every time
-   * it starts the summary stream over, and unrelated to the transcript epoch.
-   *
-   * The client rebuilds from `fromIndex: 0` on every re-stream, so a chunk is
-   * only ever an extension of chunks from its OWN generation. Without this the
-   * client's only test is `fromIndex > assembled.length`, and the array it
-   * measures is the PREVIOUS generation's - which the client deliberately
-   * retains until a replacement chunk at index 0 arrives. Drop that first
-   * chunk when an existing file changed without changing
-   * `accumulatedFileChangeCount`, and the old array is still at the
-   * authoritative length: a later chunk's `fromIndex` is not greater than it,
-   * so it is accepted, and the panel ends up holding a prefix of the old set
-   * spliced to a suffix of the new one. The stale digests then make every
-   * content fetch return `stale`, and neither the gap check nor the
-   * count-based watchdog has anything left to notice it with.
-   */
-  generation: z.number().int().nonnegative(),
-  fromIndex: z.number().int().nonnegative(),
-  summaries: z.array(chatAccumulatedFileChangeSummarySchema),
-  isFinal: z.boolean(),
-});
+export const chatAccumulatedChangeChunkSchema = lazySchema(() =>
+  z.object({
+    epoch: z.number().int().nonnegative(),
+    /**
+     * Which RE-STREAM this chunk belongs to. Incremented by the host every time
+     * it starts the summary stream over, and unrelated to the transcript epoch.
+     *
+     * The client rebuilds from `fromIndex: 0` on every re-stream, so a chunk is
+     * only ever an extension of chunks from its OWN generation. Without this the
+     * client's only test is `fromIndex > assembled.length`, and the array it
+     * measures is the PREVIOUS generation's - which the client deliberately
+     * retains until a replacement chunk at index 0 arrives. Drop that first
+     * chunk when an existing file changed without changing
+     * `accumulatedFileChangeCount`, and the old array is still at the
+     * authoritative length: a later chunk's `fromIndex` is not greater than it,
+     * so it is accepted, and the panel ends up holding a prefix of the old set
+     * spliced to a suffix of the new one. The stale digests then make every
+     * content fetch return `stale`, and neither the gap check nor the
+     * count-based watchdog has anything left to notice it with.
+     */
+    generation: z.number().int().nonnegative(),
+    fromIndex: z.number().int().nonnegative(),
+    summaries: z.array(chatAccumulatedFileChangeSummarySchema),
+    isFinal: z.boolean(),
+  }),
+);
 export type ChatAccumulatedChangeChunk = z.infer<
   typeof chatAccumulatedChangeChunkSchema
 >;
@@ -1262,27 +1305,29 @@ export function windowedSnapshotFitsFrame(
   );
 }
 
-export const chatLoadRangeRequestSchema = z.object({
-  /**
-   * Bounded, because it is the one envelope field a CLIENT chooses and the
-   * host reserves a fixed number of bytes for the envelope when it budgets the
-   * response (`TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES`). An unbounded
-   * `requestId` would make that reserve a guess about a value the client
-   * controls - i.e. a way for a client to push the frame past the relay
-   * threshold from the outside. Bounded in BYTES via the charset, not merely
-   * in code units - see {@link RANGE_REQUEST_ID_PATTERN}.
-   */
-  requestId: rangeRequestIdSchema,
-  epoch: z.number().int().nonnegative(),
-  fromOrdinal: z.number().int().nonnegative(),
-  toOrdinal: z.number().int().nonnegative(),
-  /**
-   * The client's budget. The host CLAMPS this to
-   * `TRANSCRIPT_RANGE_MAX_BYTES` - a client asking for 10 MiB is not a reason
-   * to emit a 10 MiB frame. Positive rather than nonnegative because a zero
-   * budget is a request that can only be answered by the always-serve-one
-   * exception, which is a confusing thing to ask for deliberately.
-   */
-  maxBytes: z.number().int().positive(),
-});
+export const chatLoadRangeRequestSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Bounded, because it is the one envelope field a CLIENT chooses and the
+     * host reserves a fixed number of bytes for the envelope when it budgets the
+     * response (`TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES`). An unbounded
+     * `requestId` would make that reserve a guess about a value the client
+     * controls - i.e. a way for a client to push the frame past the relay
+     * threshold from the outside. Bounded in BYTES via the charset, not merely
+     * in code units - see {@link RANGE_REQUEST_ID_PATTERN}.
+     */
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    toOrdinal: z.number().int().nonnegative(),
+    /**
+     * The client's budget. The host CLAMPS this to
+     * `TRANSCRIPT_RANGE_MAX_BYTES` - a client asking for 10 MiB is not a reason
+     * to emit a 10 MiB frame. Positive rather than nonnegative because a zero
+     * budget is a request that can only be answered by the always-serve-one
+     * exception, which is a confusing thing to ask for deliberately.
+     */
+    maxBytes: z.number().int().positive(),
+  }),
+);
 export type ChatLoadRangeRequest = z.infer<typeof chatLoadRangeRequestSchema>;

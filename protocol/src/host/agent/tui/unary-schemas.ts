@@ -8,6 +8,7 @@ import {
   worktreeBindingWorkspaceModeSchema,
   worktreeIntentSchema,
 } from "@traycer/protocol/host/worktree-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ─── Catalog rows (per-surface) ───────────────────────────────────────────
 //
@@ -15,35 +16,39 @@ import {
 // installed/available for that surface. The id is narrowed to the surface's
 // enum so the renderer never has to widen.
 
-export const tuiHarnessOptionSchema = z.object({
-  id: tuiHarnessIdSchema,
-  label: z.string(),
-  // Controls whether the harness is included in downstream filtering and shown
-  // in the CLI. This is distinct from `available` and `availabilityPending`,
-  // which describe the current host-side availability probe state.
-  enabled: z.boolean().default(true),
-  available: z.boolean(),
-  error: z.string().nullable(),
-  // True while the host's availability probe for this harness is still running
-  // in the background (mirrors `guiHarnessOptionSchema`). A pending row carries
-  // the last settled verdict for `available` - `false` only when the host has
-  // never settled one; a TUI consumer should re-fetch until it flips false
-  // rather than treat the harness as unavailable. `.catch(false)` tolerates old
-  // host builds that omit the field.
-  availabilityPending: z.boolean().catch(false),
-});
+export const tuiHarnessOptionSchema = lazySchema(() =>
+  z.object({
+    id: tuiHarnessIdSchema,
+    label: z.string(),
+    // Controls whether the harness is included in downstream filtering and shown
+    // in the CLI. This is distinct from `available` and `availabilityPending`,
+    // which describe the current host-side availability probe state.
+    enabled: z.boolean().default(true),
+    available: z.boolean(),
+    error: z.string().nullable(),
+    // True while the host's availability probe for this harness is still running
+    // in the background (mirrors `guiHarnessOptionSchema`). A pending row carries
+    // the last settled verdict for `available` - `false` only when the host has
+    // never settled one; a TUI consumer should re-fetch until it flips false
+    // rather than treat the harness as unavailable. `.catch(false)` tolerates old
+    // host builds that omit the field.
+    availabilityPending: z.boolean().catch(false),
+  }),
+);
 export type TuiHarnessOption = z.infer<typeof tuiHarnessOptionSchema>;
 
 // ─── `agent.tui.listHarnesses` ───────────────────────────────────────────
 
-export const listTuiHarnessesRequestSchema = z.object({});
+export const listTuiHarnessesRequestSchema = lazySchema(() => z.object({}));
 export type ListTuiHarnessesRequest = z.infer<
   typeof listTuiHarnessesRequestSchema
 >;
 
-export const listTuiHarnessesResponseSchema = z.object({
-  harnesses: z.array(tuiHarnessOptionSchema),
-});
+export const listTuiHarnessesResponseSchema = lazySchema(() =>
+  z.object({
+    harnesses: z.array(tuiHarnessOptionSchema),
+  }),
+);
 export type ListTuiHarnessesResponse = z.infer<
   typeof listTuiHarnessesResponseSchema
 >;
@@ -77,34 +82,36 @@ export type ListTuiHarnessesResponse = z.infer<
 //         call therefore returns `harnessSessionId: null`; once the session id
 //         is observed it is back-filled onto the persisted record via the
 //         host-side `onProviderSessionStarted` callback.
-export const prepareTuiLaunchRequestSchema = z.object({
-  harnessId: tuiHarnessIdSchema,
-  epicId: z.string(),
-  model: z.string().nullable(),
-  reasoningEffort: z.string().nullable().default(null),
-  agentMode: agentModeSchema,
-  tuiAgentId: z.string().nullable(),
-  harnessSessionId: z.string().nullable(),
-  // Launch-time override for the extra CLI args appended to the spawned argv.
-  // A string (including "") is used verbatim for this launch; `null` tells the
-  // host to fall back to the provider's saved Settings default. Reopens pass
-  // the persisted per-agent value, which is either that durable override or
-  // `null` when no override was captured.
-  terminalAgentArgs: z.string().nullable().default(null),
-  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
-  // When non-null, prepare a fork from this upstream provider session and
-  // return/open the newly forked session. This is distinct from
-  // `harnessSessionId`: the source id must not be persisted on the new agent.
-  forkSourceHarnessSessionId: z.string().nullable().default(null),
-  // Which of the harness's logged-in profiles (subscriptions) to spawn this
-  // launch's adapter with. `null` = the ambient/host login, so older clients
-  // that predate profiles keep today's exact behavior. Carried here (rather
-  // than only read from the persisted `tuiAgents` record) because a brand-new
-  // agent's *first* prepareLaunch fires before `epic.createTuiAgent` persists
-  // that record - the resolver has nothing to look up yet. See the
-  // multi-profile decision log.
-  profileId: z.string().nullable().default(null),
-});
+export const prepareTuiLaunchRequestSchema = lazySchema(() =>
+  z.object({
+    harnessId: tuiHarnessIdSchema,
+    epicId: z.string(),
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    tuiAgentId: z.string().nullable(),
+    harnessSessionId: z.string().nullable(),
+    // Launch-time override for the extra CLI args appended to the spawned argv.
+    // A string (including "") is used verbatim for this launch; `null` tells the
+    // host to fall back to the provider's saved Settings default. Reopens pass
+    // the persisted per-agent value, which is either that durable override or
+    // `null` when no override was captured.
+    terminalAgentArgs: z.string().nullable().default(null),
+    workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+    // When non-null, prepare a fork from this upstream provider session and
+    // return/open the newly forked session. This is distinct from
+    // `harnessSessionId`: the source id must not be persisted on the new agent.
+    forkSourceHarnessSessionId: z.string().nullable().default(null),
+    // Which of the harness's logged-in profiles (subscriptions) to spawn this
+    // launch's adapter with. `null` = the ambient/host login, so older clients
+    // that predate profiles keep today's exact behavior. Carried here (rather
+    // than only read from the persisted `tuiAgents` record) because a brand-new
+    // agent's *first* prepareLaunch fires before `epic.createTuiAgent` persists
+    // that record - the resolver has nothing to look up yet. See the
+    // multi-profile decision log.
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type PrepareTuiLaunchRequest = z.infer<
   typeof prepareTuiLaunchRequestSchema
 >;
@@ -119,35 +126,38 @@ export type PrepareTuiLaunchRequest = z.infer<
 // userId)` match (`resolveForkSourceTuiAgentStrict`). `null` - the
 // v1.0-upgraded default - keeps that strict-scan fallback for old clients;
 // never the fail-open missing⇒ambient shape. The response is unchanged.
-export const prepareTuiLaunchRequestSchemaV11 =
+export const prepareTuiLaunchRequestSchemaV11 = lazySchema(() =>
   prepareTuiLaunchRequestSchema.extend({
     forkSourceTuiAgentId: z.string().nullable().default(null),
-  });
+  }),
+);
 export type PrepareTuiLaunchRequestV11 = z.infer<
   typeof prepareTuiLaunchRequestSchemaV11
 >;
 
-export const prepareTuiLaunchResponseSchema = z.object({
-  harnessId: tuiHarnessIdSchema,
-  // `null` when the harness hasn't allocated a CLI-resumable id yet (Codex
-  // first launch - back-filled async). Always non-null for Claude/OpenCode.
-  harnessSessionId: z.string().nullable(),
-  terminalShellCommand: z.string().nullable(),
-  terminalShellArgs: z.array(z.string()).nullable(),
-  hostId: z.string(),
-  workingDirectory: z.string(),
-  workspaceFolders: z.array(z.string()),
-  // Concrete worktree paths the harness will hold open for the lifetime of
-  // the visible PTY. Always populated from the binding's `worktreePath`
-  // entries (deduped, primary first); empty in Local mode and when no
-  // binding is in effect. The renderer threads this through `terminal.create`
-  // so the host-side active-run busy registry can refuse `worktree.delete`
-  // for any of these paths until the PTY exits - covering multi-repo
-  // worktree bindings where the sibling worktree paths would otherwise be
-  // missed by the single-cwd backstop. Local workspace rows and Traycer
-  // support directories are intentionally excluded.
-  worktreeBusyPaths: z.array(z.string()),
-});
+export const prepareTuiLaunchResponseSchema = lazySchema(() =>
+  z.object({
+    harnessId: tuiHarnessIdSchema,
+    // `null` when the harness hasn't allocated a CLI-resumable id yet (Codex
+    // first launch - back-filled async). Always non-null for Claude/OpenCode.
+    harnessSessionId: z.string().nullable(),
+    terminalShellCommand: z.string().nullable(),
+    terminalShellArgs: z.array(z.string()).nullable(),
+    hostId: z.string(),
+    workingDirectory: z.string(),
+    workspaceFolders: z.array(z.string()),
+    // Concrete worktree paths the harness will hold open for the lifetime of
+    // the visible PTY. Always populated from the binding's `worktreePath`
+    // entries (deduped, primary first); empty in Local mode and when no
+    // binding is in effect. The renderer threads this through `terminal.create`
+    // so the host-side active-run busy registry can refuse `worktree.delete`
+    // for any of these paths until the PTY exits - covering multi-repo
+    // worktree bindings where the sibling worktree paths would otherwise be
+    // missed by the single-cwd backstop. Local workspace rows and Traycer
+    // support directories are intentionally excluded.
+    worktreeBusyPaths: z.array(z.string()),
+  }),
+);
 export type PrepareTuiLaunchResponse = z.infer<
   typeof prepareTuiLaunchResponseSchema
 >;
@@ -168,11 +178,13 @@ export type PrepareTuiLaunchResponse = z.infer<
 // wants a verdict for in one round trip, so the SAME call serves both a
 // single pre-submit check (a one-element array) and the profile picker's
 // per-row admission (many elements) without a second wire method.
-export const validateTuiForkProfileRequestSchema = z.object({
-  epicId: z.string(),
-  sourceTuiAgentId: z.string(),
-  targetProfileIds: z.array(z.string().nullable()).min(1),
-});
+export const validateTuiForkProfileRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    sourceTuiAgentId: z.string(),
+    targetProfileIds: z.array(z.string().nullable()).min(1),
+  }),
+);
 export type ValidateTuiForkProfileRequest = z.infer<
   typeof validateTuiForkProfileRequestSchema
 >;
@@ -193,13 +205,15 @@ export type ValidateTuiForkProfileRequest = z.infer<
 // same-profile plain Fork is exactly the reachable repro), so it is asserted
 // ahead of the scope-equality check rather than folded into a "profiles
 // differ" branch.
-export const tuiForkProfileAdmissionSubcodeSchema = z.enum([
-  "SCOPE_MISMATCH",
-  "FORK_SOURCE_NOT_FOUND",
-  "FORK_SOURCE_AMBIGUOUS",
-  "TARGET_PROFILE_UNAVAILABLE",
-  "SOURCE_NOT_READY",
-]);
+export const tuiForkProfileAdmissionSubcodeSchema = lazySchema(() =>
+  z.enum([
+    "SCOPE_MISMATCH",
+    "FORK_SOURCE_NOT_FOUND",
+    "FORK_SOURCE_AMBIGUOUS",
+    "TARGET_PROFILE_UNAVAILABLE",
+    "SOURCE_NOT_READY",
+  ]),
+);
 export type TuiForkProfileAdmissionSubcode = z.infer<
   typeof tuiForkProfileAdmissionSubcodeSchema
 >;
@@ -209,19 +223,23 @@ export type TuiForkProfileAdmissionSubcode = z.infer<
 // subcode/message pair `TuiForkScopeGuardError` throws with, reshaped as data
 // instead of an exception since the bulk picker needs N independent verdicts
 // rather than a single throw.
-export const tuiForkProfileAdmissionVerdictSchema = z.object({
-  targetProfileId: z.string().nullable(),
-  admitted: z.boolean(),
-  subcode: tuiForkProfileAdmissionSubcodeSchema.nullable(),
-  message: z.string().nullable(),
-});
+export const tuiForkProfileAdmissionVerdictSchema = lazySchema(() =>
+  z.object({
+    targetProfileId: z.string().nullable(),
+    admitted: z.boolean(),
+    subcode: tuiForkProfileAdmissionSubcodeSchema.nullable(),
+    message: z.string().nullable(),
+  }),
+);
 export type TuiForkProfileAdmissionVerdict = z.infer<
   typeof tuiForkProfileAdmissionVerdictSchema
 >;
 
-export const validateTuiForkProfileResponseSchema = z.object({
-  verdicts: z.array(tuiForkProfileAdmissionVerdictSchema),
-});
+export const validateTuiForkProfileResponseSchema = lazySchema(() =>
+  z.object({
+    verdicts: z.array(tuiForkProfileAdmissionVerdictSchema),
+  }),
+);
 export type ValidateTuiForkProfileResponse = z.infer<
   typeof validateTuiForkProfileResponseSchema
 >;
@@ -238,26 +256,30 @@ export type ValidateTuiForkProfileResponse = z.infer<
 // mismatched-harness requests so a stale hook can't retitle an agent that
 // has since been replaced by a different harness on the same id.
 
-export const generateTuiAgentTitleRequestSchema = z.object({
-  epicId: z.string().nullable().default(null),
-  tuiAgentId: z.string().nullable().default(null),
-  // OpenCode plugin events run inside the singleton `opencode serve` process,
-  // not the per-agent attach PTY, so they identify the TUI agent by upstream
-  // sessionID instead of TRAYCER_EPIC_ID / TRAYCER_AGENT_ID.
-  harnessSessionId: z.string().nullable().default(null),
-  harnessId: tuiHarnessIdSchema,
-  promptText: z.string().min(1).max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
-});
+export const generateTuiAgentTitleRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().nullable().default(null),
+    tuiAgentId: z.string().nullable().default(null),
+    // OpenCode plugin events run inside the singleton `opencode serve` process,
+    // not the per-agent attach PTY, so they identify the TUI agent by upstream
+    // sessionID instead of TRAYCER_EPIC_ID / TRAYCER_AGENT_ID.
+    harnessSessionId: z.string().nullable().default(null),
+    harnessId: tuiHarnessIdSchema,
+    promptText: z.string().min(1).max(GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS),
+  }),
+);
 export type GenerateTuiAgentTitleRequest = z.infer<
   typeof generateTuiAgentTitleRequestSchema
 >;
 
-export const generateTuiAgentTitleResponseSchema = z.object({
-  // `accepted` is true when the resolver scheduled a title generation; it
-  // is false when the request was a no-op (e.g. the title has already been
-  // manually renamed or no longer matches the expected initial title).
-  accepted: z.boolean(),
-});
+export const generateTuiAgentTitleResponseSchema = lazySchema(() =>
+  z.object({
+    // `accepted` is true when the resolver scheduled a title generation; it
+    // is false when the request was a no-op (e.g. the title has already been
+    // manually renamed or no longer matches the expected initial title).
+    accepted: z.boolean(),
+  }),
+);
 export type GenerateTuiAgentTitleResponse = z.infer<
   typeof generateTuiAgentTitleResponseSchema
 >;
@@ -272,21 +294,25 @@ export type GenerateTuiAgentTitleResponse = z.infer<
 // signal - far better than waiting for raw PTY silence. `harnessId` lets
 // the resolver reject a stale hook firing against a since-replaced harness.
 
-export const tuiAgentTurnEndedRequestSchema = z.object({
-  epicId: z.string(),
-  tuiAgentId: z.string(),
-  harnessId: tuiHarnessIdSchema,
-});
+export const tuiAgentTurnEndedRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    tuiAgentId: z.string(),
+    harnessId: tuiHarnessIdSchema,
+  }),
+);
 export type TuiAgentTurnEndedRequest = z.infer<
   typeof tuiAgentTurnEndedRequestSchema
 >;
 
-export const tuiAgentTurnEndedResponseSchema = z.object({
-  // `accepted` is true when the resolver recorded the turn-end edge; false
-  // for a benign no-op (record missing, ownership/harness mismatch, broker
-  // unavailable).
-  accepted: z.boolean(),
-});
+export const tuiAgentTurnEndedResponseSchema = lazySchema(() =>
+  z.object({
+    // `accepted` is true when the resolver recorded the turn-end edge; false
+    // for a benign no-op (record missing, ownership/harness mismatch, broker
+    // unavailable).
+    accepted: z.boolean(),
+  }),
+);
 export type TuiAgentTurnEndedResponse = z.infer<
   typeof tuiAgentTurnEndedResponseSchema
 >;
@@ -298,23 +324,27 @@ export type TuiAgentTurnEndedResponse = z.infer<
 // before updating its in-memory activity oracle. This is intentionally a level
 // signal: `event: "start"` means working until a matching `"stop"` or PTY exit.
 
-export const recordTuiAgentActivityRequestSchema = z.object({
-  epicId: z.string().nullable().default(null),
-  tuiAgentId: z.string().nullable().default(null),
-  // OpenCode plugin events run inside the singleton `opencode serve` process,
-  // not the per-agent attach PTY, so they identify the TUI agent by upstream
-  // sessionID instead of TRAYCER_EPIC_ID / TRAYCER_AGENT_ID.
-  harnessSessionId: z.string().nullable().default(null),
-  harnessId: tuiHarnessIdSchema,
-  event: z.enum(["start", "stop"]),
-});
+export const recordTuiAgentActivityRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().nullable().default(null),
+    tuiAgentId: z.string().nullable().default(null),
+    // OpenCode plugin events run inside the singleton `opencode serve` process,
+    // not the per-agent attach PTY, so they identify the TUI agent by upstream
+    // sessionID instead of TRAYCER_EPIC_ID / TRAYCER_AGENT_ID.
+    harnessSessionId: z.string().nullable().default(null),
+    harnessId: tuiHarnessIdSchema,
+    event: z.enum(["start", "stop"]),
+  }),
+);
 export type RecordTuiAgentActivityRequest = z.infer<
   typeof recordTuiAgentActivityRequestSchema
 >;
 
-export const recordTuiAgentActivityResponseSchema = z.object({
-  accepted: z.boolean(),
-});
+export const recordTuiAgentActivityResponseSchema = lazySchema(() =>
+  z.object({
+    accepted: z.boolean(),
+  }),
+);
 export type RecordTuiAgentActivityResponse = z.infer<
   typeof recordTuiAgentActivityResponseSchema
 >;
@@ -347,11 +377,12 @@ export type RecordTuiAgentActivityResponse = z.infer<
 // additive-advisory growth: a v1.0 host only ever meets it via the new
 // SessionStart flow it does not have.
 
-export const recordTuiAgentActivityRequestSchemaV11 =
+export const recordTuiAgentActivityRequestSchemaV11 = lazySchema(() =>
   recordTuiAgentActivityRequestSchema.extend({
     event: z.enum(["start", "stop", "resync"]),
     observedHarnessSessionId: z.string().nullable().default(null),
-  });
+  }),
+);
 export type RecordTuiAgentActivityRequestV11 = z.infer<
   typeof recordTuiAgentActivityRequestSchemaV11
 >;
@@ -375,13 +406,15 @@ export type RecordTuiAgentActivityRequestV11 = z.infer<
 // newer host, both fall back to plain `recordActivity` - roles then only
 // reachable via the static prompt's `role list` instruction.
 
-export const tuiAgentPromptSubmittedRequestSchema = z.object({
-  epicId: z.string().nullable().default(null),
-  tuiAgentId: z.string().nullable().default(null),
-  harnessSessionId: z.string().nullable().default(null),
-  harnessId: tuiHarnessIdSchema,
-  observedHarnessSessionId: z.string().nullable().default(null),
-});
+export const tuiAgentPromptSubmittedRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().nullable().default(null),
+    tuiAgentId: z.string().nullable().default(null),
+    harnessSessionId: z.string().nullable().default(null),
+    harnessId: tuiHarnessIdSchema,
+    observedHarnessSessionId: z.string().nullable().default(null),
+  }),
+);
 export type TuiAgentPromptSubmittedRequest = z.infer<
   typeof tuiAgentPromptSubmittedRequestSchema
 >;
@@ -399,29 +432,32 @@ export type TuiAgentPromptSubmittedRequest = z.infer<
  * `degrade: unsupported` on the floor — absence of the method itself still
  * falls back to `recordActivity`.
  */
-export const tuiAgentPromptSubmittedRequestSchemaV11 =
+export const tuiAgentPromptSubmittedRequestSchemaV11 = lazySchema(() =>
   tuiAgentPromptSubmittedRequestSchema.extend({
     // Optional (not defaulted) so a 1.0-shaped constructor — the CLI hook
     // that predates this field — remains assignable to the latest request
     // type. Absent/undefined/`null` all mean binding-as-stored.
     worktreeIntent: worktreeIntentSchema.nullable().optional(),
-  });
+  }),
+);
 export type TuiAgentPromptSubmittedRequestV11 = z.infer<
   typeof tuiAgentPromptSubmittedRequestSchemaV11
 >;
 
-export const tuiAgentPromptSubmittedResponseSchema = z.object({
-  // Mirrors `recordActivity`'s `accepted` semantics: true when the resolver
-  // recorded the activity edge; false for a benign no-op (record missing,
-  // ownership/harness mismatch).
-  accepted: z.boolean(),
-  // Non-null only when the agent's `lastDeliveredRolesDigest` cursor was
-  // behind the current claims registry at call time: a rendered snapshot
-  // block for the CLI hook to emit as the `UserPromptSubmit`
-  // `additionalContext` envelope. `null` when current (nothing to deliver)
-  // or on a benign no-op.
-  pendingPromptContext: z.string().nullable(),
-});
+export const tuiAgentPromptSubmittedResponseSchema = lazySchema(() =>
+  z.object({
+    // Mirrors `recordActivity`'s `accepted` semantics: true when the resolver
+    // recorded the activity edge; false for a benign no-op (record missing,
+    // ownership/harness mismatch).
+    accepted: z.boolean(),
+    // Non-null only when the agent's `lastDeliveredRolesDigest` cursor was
+    // behind the current claims registry at call time: a rendered snapshot
+    // block for the CLI hook to emit as the `UserPromptSubmit`
+    // `additionalContext` envelope. `null` when current (nothing to deliver)
+    // or on a benign no-op.
+    pendingPromptContext: z.string().nullable(),
+  }),
+);
 export type TuiAgentPromptSubmittedResponse = z.infer<
   typeof tuiAgentPromptSubmittedResponseSchema
 >;

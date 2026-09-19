@@ -11,11 +11,16 @@
  */
 import { z } from "zod";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const terminalSessionStatusSchema = z.enum(["running", "exited"]);
+export const terminalSessionStatusSchema = lazySchema(() =>
+  z.enum(["running", "exited"]),
+);
 export type TerminalSessionStatus = z.infer<typeof terminalSessionStatusSchema>;
 
-export const terminalSessionKindSchema = z.enum(["terminal", "terminal-agent"]);
+export const terminalSessionKindSchema = lazySchema(() =>
+  z.enum(["terminal", "terminal-agent"]),
+);
 export type TerminalSessionKind = z.infer<typeof terminalSessionKindSchema>;
 
 // Why a session's PTY ended. `process-exit` is the process ending on its
@@ -23,11 +28,9 @@ export type TerminalSessionKind = z.infer<typeof terminalSessionKindSchema>;
 // `reaped` is the host's idle-reap of an unwatched `terminal-agent` -
 // clients treat a reaped exit as lifecycle (revive silently), never as a
 // crash to report.
-export const terminalSessionExitReasonSchema = z.enum([
-  "process-exit",
-  "killed",
-  "reaped",
-]);
+export const terminalSessionExitReasonSchema = lazySchema(() =>
+  z.enum(["process-exit", "killed", "reaped"]),
+);
 export type TerminalSessionExitReason = z.infer<
   typeof terminalSessionExitReasonSchema
 >;
@@ -43,10 +46,12 @@ export type TerminalSessionExitReason = z.infer<
 // shape - the unary framework's minor-additivity checker
 // (`assertSchemaCompatibility` in `versioned-rpc.ts`) rejects a field rename
 // within a minor line, so this rides a new major (`@2.0`), not a minor.
-export const terminalScopeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("epic"), epicId: z.string() }),
-  z.object({ kind: z.literal("independent") }),
-]);
+export const terminalScopeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("epic"), epicId: z.string() }),
+    z.object({ kind: z.literal("independent") }),
+  ]),
+);
 export type TerminalScope = z.infer<typeof terminalScopeSchema>;
 
 // Frozen `epicId: string` session-info shape, shared by every RELEASED
@@ -55,32 +60,34 @@ export type TerminalScope = z.infer<typeof terminalScopeSchema>;
 // union would change an already-shipped host->client slot, which the compat
 // checker blocks. The major-2 unary lines (`create@2.0`, `list@2.0`) and
 // `subscribe@1.4` use `canonicalTerminalSessionInfoSchema` below instead.
-export const terminalSessionInfoSchema = z.object({
-  sessionId: z.string(),
-  epicId: z.string(),
-  sessionKind: terminalSessionKindSchema,
-  cwd: z.string(),
-  shellCommand: z.string(),
-  shellArgs: z.array(z.string()),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-  status: terminalSessionStatusSchema,
-  exitCode: z.number().int().nullable(),
-  // `null` while running; set alongside `exitCode` when the session exits.
-  // Optional so payloads from hosts predating the field still parse -
-  // absent is equivalent to `process-exit` (the only pre-field behavior a
-  // client could assume).
-  exitReason: terminalSessionExitReasonSchema.nullable().optional(),
-  createdAt: z.number(),
-  // User-supplied display title. `null` means "use the default derived
-  // label (basename of cwd / shellCommand)". Lifetime is the session's -
-  // PTYs don't survive host restarts, so neither does the title.
-  title: z.string().nullable(),
-  // Host-observed foreground process name for the PTY. `null` means the
-  // terminal is idle or the host cannot determine a foreground process.
-  // Optional so clients remain compatible with already-shipped hosts.
-  activeProcessName: z.string().nullable().optional(),
-});
+export const terminalSessionInfoSchema = lazySchema(() =>
+  z.object({
+    sessionId: z.string(),
+    epicId: z.string(),
+    sessionKind: terminalSessionKindSchema,
+    cwd: z.string(),
+    shellCommand: z.string(),
+    shellArgs: z.array(z.string()),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+    status: terminalSessionStatusSchema,
+    exitCode: z.number().int().nullable(),
+    // `null` while running; set alongside `exitCode` when the session exits.
+    // Optional so payloads from hosts predating the field still parse -
+    // absent is equivalent to `process-exit` (the only pre-field behavior a
+    // client could assume).
+    exitReason: terminalSessionExitReasonSchema.nullable().optional(),
+    createdAt: z.number(),
+    // User-supplied display title. `null` means "use the default derived
+    // label (basename of cwd / shellCommand)". Lifetime is the session's -
+    // PTYs don't survive host restarts, so neither does the title.
+    title: z.string().nullable(),
+    // Host-observed foreground process name for the PTY. `null` means the
+    // terminal is idle or the host cannot determine a foreground process.
+    // Optional so clients remain compatible with already-shipped hosts.
+    activeProcessName: z.string().nullable().optional(),
+  }),
+);
 export type TerminalSessionInfo = z.infer<typeof terminalSessionInfoSchema>;
 
 // Canonical session-info shape for the scope-bearing terminal lines: `scope`
@@ -89,22 +96,24 @@ export type TerminalSessionInfo = z.infer<typeof terminalSessionInfoSchema>;
 // `terminalSessionInfoSchema` above - this is a parallel export, not a
 // replacement, so released contracts keep parsing the frozen shape
 // untouched.
-export const canonicalTerminalSessionInfoSchema = z.object({
-  sessionId: z.string(),
-  scope: terminalScopeSchema,
-  sessionKind: terminalSessionKindSchema,
-  cwd: z.string(),
-  shellCommand: z.string(),
-  shellArgs: z.array(z.string()),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-  status: terminalSessionStatusSchema,
-  exitCode: z.number().int().nullable(),
-  exitReason: terminalSessionExitReasonSchema.nullable().optional(),
-  createdAt: z.number(),
-  title: z.string().nullable(),
-  activeProcessName: z.string().nullable().optional(),
-});
+export const canonicalTerminalSessionInfoSchema = lazySchema(() =>
+  z.object({
+    sessionId: z.string(),
+    scope: terminalScopeSchema,
+    sessionKind: terminalSessionKindSchema,
+    cwd: z.string(),
+    shellCommand: z.string(),
+    shellArgs: z.array(z.string()),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+    status: terminalSessionStatusSchema,
+    exitCode: z.number().int().nullable(),
+    exitReason: terminalSessionExitReasonSchema.nullable().optional(),
+    createdAt: z.number(),
+    title: z.string().nullable(),
+    activeProcessName: z.string().nullable().optional(),
+  }),
+);
 export type CanonicalTerminalSessionInfo = z.infer<
   typeof canonicalTerminalSessionInfoSchema
 >;
@@ -120,10 +129,11 @@ export type CanonicalTerminalSessionInfo = z.infer<
 // `canonicalTerminalSessionInfoSchema`: the latter already shipped in
 // `terminal.list@2.0`/`@2.1`, `terminal.create@2.0`, and
 // `terminal.subscribe@1.4` and must remain frozen.
-export const canonicalTerminalSessionInfoWithCurrentCwdSchema =
+export const canonicalTerminalSessionInfoWithCurrentCwdSchema = lazySchema(() =>
   canonicalTerminalSessionInfoSchema.extend({
     currentCwd: z.string(),
-  });
+  }),
+);
 export type CanonicalTerminalSessionInfoWithCurrentCwd = z.infer<
   typeof canonicalTerminalSessionInfoWithCurrentCwdSchema
 >;
@@ -134,15 +144,19 @@ export type CanonicalTerminalSessionInfoWithCurrentCwd = z.infer<
 // hosts tag every `terminal.list@2.3` row from the actual list composition,
 // not from title, cwd, or session kind. This is a parallel schema: the v2.2
 // currentCwd shape already shipped and stays frozen.
-export const terminalLifecycleOwnerSchema = z.enum(["registry", "manager"]);
+export const terminalLifecycleOwnerSchema = lazySchema(() =>
+  z.enum(["registry", "manager"]),
+);
 export type TerminalLifecycleOwner = z.infer<
   typeof terminalLifecycleOwnerSchema
 >;
 
-export const canonicalTerminalSessionInfoWithLifecycleOwnerSchema =
-  canonicalTerminalSessionInfoWithCurrentCwdSchema.extend({
-    lifecycleOwner: terminalLifecycleOwnerSchema,
-  });
+export const canonicalTerminalSessionInfoWithLifecycleOwnerSchema = lazySchema(
+  () =>
+    canonicalTerminalSessionInfoWithCurrentCwdSchema.extend({
+      lifecycleOwner: terminalLifecycleOwnerSchema,
+    }),
+);
 export type CanonicalTerminalSessionInfoWithLifecycleOwner = z.infer<
   typeof canonicalTerminalSessionInfoWithLifecycleOwnerSchema
 >;
@@ -154,31 +168,35 @@ export type CanonicalTerminalSessionInfoWithLifecycleOwner = z.infer<
 // nullable so interactive terminals can use the host's configured shell.
 // `desiredSessionId` is the renderer-authoritative id (typically the canvas
 // node id), kept stable across reconnect attempts within one tile lifetime.
-export const createTerminalRequestSchema = z.object({
-  epicId: z.string(),
-  sessionKind: terminalSessionKindSchema,
-  // Present for terminal-agent sessions so the host can apply
-  // harness-specific activity semantics. Plain terminal tabs pass null.
-  tuiHarnessId: tuiHarnessIdSchema.nullable().default(null),
-  cwd: z.string().min(1),
-  shellCommand: z.string().nullable(),
-  shellArgs: z.array(z.string()).nullable(),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-  desiredSessionId: z.string(),
-  // Worktree paths the launching caller is committing the PTY to using for
-  // its lifetime. Forwarded verbatim to the host-side active-run busy
-  // registry so a multi-repo terminal-agent launch can hold the busy mark
-  // for every bound worktree path, not just `cwd`. Plain `terminal` shells
-  // (and terminal-agent launches with no worktree binding) pass an empty
-  // array.
-  worktreeBusyPaths: z.array(z.string()),
-});
+export const createTerminalRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    sessionKind: terminalSessionKindSchema,
+    // Present for terminal-agent sessions so the host can apply
+    // harness-specific activity semantics. Plain terminal tabs pass null.
+    tuiHarnessId: tuiHarnessIdSchema.nullable().default(null),
+    cwd: z.string().min(1),
+    shellCommand: z.string().nullable(),
+    shellArgs: z.array(z.string()).nullable(),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+    desiredSessionId: z.string(),
+    // Worktree paths the launching caller is committing the PTY to using for
+    // its lifetime. Forwarded verbatim to the host-side active-run busy
+    // registry so a multi-repo terminal-agent launch can hold the busy mark
+    // for every bound worktree path, not just `cwd`. Plain `terminal` shells
+    // (and terminal-agent launches with no worktree binding) pass an empty
+    // array.
+    worktreeBusyPaths: z.array(z.string()),
+  }),
+);
 export type CreateTerminalRequest = z.infer<typeof createTerminalRequestSchema>;
 
-export const createTerminalResponseSchema = z.object({
-  session: terminalSessionInfoSchema,
-});
+export const createTerminalResponseSchema = lazySchema(() =>
+  z.object({
+    session: terminalSessionInfoSchema,
+  }),
+);
 export type CreateTerminalResponse = z.infer<
   typeof createTerminalResponseSchema
 >;
@@ -187,25 +205,29 @@ export type CreateTerminalResponse = z.infer<
 // landing-scope (epic-less) session; every other field is unchanged from
 // `@1.0`. The response's `session` carries the canonical (scope-bearing)
 // session info instead of the frozen `@1.0` shape.
-export const createTerminalRequestSchemaV20 = z.object({
-  scope: terminalScopeSchema,
-  sessionKind: terminalSessionKindSchema,
-  tuiHarnessId: tuiHarnessIdSchema.nullable().default(null),
-  cwd: z.string().min(1),
-  shellCommand: z.string().nullable(),
-  shellArgs: z.array(z.string()).nullable(),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-  desiredSessionId: z.string(),
-  worktreeBusyPaths: z.array(z.string()),
-});
+export const createTerminalRequestSchemaV20 = lazySchema(() =>
+  z.object({
+    scope: terminalScopeSchema,
+    sessionKind: terminalSessionKindSchema,
+    tuiHarnessId: tuiHarnessIdSchema.nullable().default(null),
+    cwd: z.string().min(1),
+    shellCommand: z.string().nullable(),
+    shellArgs: z.array(z.string()).nullable(),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+    desiredSessionId: z.string(),
+    worktreeBusyPaths: z.array(z.string()),
+  }),
+);
 export type CreateTerminalRequestV20 = z.infer<
   typeof createTerminalRequestSchemaV20
 >;
 
-export const createTerminalResponseSchemaV20 = z.object({
-  session: canonicalTerminalSessionInfoSchema,
-});
+export const createTerminalResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    session: canonicalTerminalSessionInfoSchema,
+  }),
+);
 export type CreateTerminalResponseV20 = z.infer<
   typeof createTerminalResponseSchemaV20
 >;
@@ -221,24 +243,27 @@ export type CreateTerminalResponseV20 = z.infer<
 // readability). Colors are strict lowercase-or-uppercase `#rrggbb` because
 // the host interpolates them into an escape sequence written to the PTY -
 // nothing wider than a hex literal may cross this boundary.
-export const terminalThemeHintColorSchema = z
-  .string()
-  .regex(/^#[0-9a-fA-F]{6}$/);
-export const terminalThemeHintSchema = z.object({
-  appearance: z.enum(["light", "dark"]),
-  foreground: terminalThemeHintColorSchema,
-  background: terminalThemeHintColorSchema,
-});
+export const terminalThemeHintColorSchema = lazySchema(() =>
+  z.string().regex(/^#[0-9a-fA-F]{6}$/),
+);
+export const terminalThemeHintSchema = lazySchema(() =>
+  z.object({
+    appearance: z.enum(["light", "dark"]),
+    foreground: terminalThemeHintColorSchema,
+    background: terminalThemeHintColorSchema,
+  }),
+);
 export type TerminalThemeHint = z.infer<typeof terminalThemeHintSchema>;
 
 // `terminal.create@2.1` - additive request-side `themeHint`. `null` - the
 // v2.0-upgraded default - means "no spawner theme known" and the host falls
 // back to a fixed dark answer (what a TUI assumes on query timeout anyway).
 // The response is unchanged from `@2.0`.
-export const createTerminalRequestSchemaV21 =
+export const createTerminalRequestSchemaV21 = lazySchema(() =>
   createTerminalRequestSchemaV20.extend({
     themeHint: terminalThemeHintSchema.nullable().default(null),
-  });
+  }),
+);
 export type CreateTerminalRequestV21 = z.infer<
   typeof createTerminalRequestSchemaV21
 >;
@@ -246,43 +271,55 @@ export type CreateTerminalRequestV21 = z.infer<
 // `terminal.kill@1.0` - terminates a session and evicts it from the host's
 // in-memory map. Returns `killed: false` only if the session was already
 // missing or had completed its grace period.
-export const killTerminalRequestSchema = z.object({
-  sessionId: z.string(),
-});
+export const killTerminalRequestSchema = lazySchema(() =>
+  z.object({
+    sessionId: z.string(),
+  }),
+);
 export type KillTerminalRequest = z.infer<typeof killTerminalRequestSchema>;
 
-export const killTerminalResponseSchema = z.object({
-  killed: z.boolean(),
-});
+export const killTerminalResponseSchema = lazySchema(() =>
+  z.object({
+    killed: z.boolean(),
+  }),
+);
 export type KillTerminalResponse = z.infer<typeof killTerminalResponseSchema>;
 
 // `terminal.list@1.0` - lists sessions the host currently knows about for
 // the given epic, including ones in the post-exit grace window (so the
 // renderer can show "Process exited (code N) - Restart" instead of silently
 // reattaching to a fresh shell).
-export const listTerminalsRequestSchema = z.object({
-  epicId: z.string(),
-});
+export const listTerminalsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+  }),
+);
 export type ListTerminalsRequest = z.infer<typeof listTerminalsRequestSchema>;
 
-export const listTerminalsResponseSchema = z.object({
-  sessions: z.array(terminalSessionInfoSchema),
-});
+export const listTerminalsResponseSchema = lazySchema(() =>
+  z.object({
+    sessions: z.array(terminalSessionInfoSchema),
+  }),
+);
 export type ListTerminalsResponse = z.infer<typeof listTerminalsResponseSchema>;
 
 // `terminal.list@2.0` - `scope: { kind: "independent" }` lists landing-scope
 // (epic-less) sessions instead of an epic's. Sessions carry the canonical
 // (scope-bearing) session info instead of the frozen `@1.0` shape.
-export const listTerminalsRequestSchemaV20 = z.object({
-  scope: terminalScopeSchema,
-});
+export const listTerminalsRequestSchemaV20 = lazySchema(() =>
+  z.object({
+    scope: terminalScopeSchema,
+  }),
+);
 export type ListTerminalsRequestV20 = z.infer<
   typeof listTerminalsRequestSchemaV20
 >;
 
-export const listTerminalsResponseSchemaV20 = z.object({
-  sessions: z.array(canonicalTerminalSessionInfoSchema),
-});
+export const listTerminalsResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    sessions: z.array(canonicalTerminalSessionInfoSchema),
+  }),
+);
 export type ListTerminalsResponseV20 = z.infer<
   typeof listTerminalsResponseSchemaV20
 >;
@@ -292,10 +329,12 @@ export type ListTerminalsResponseV20 = z.infer<
 // reserved for compatibility: the v2.0 → v2.1 response upgrade supplies
 // `homeCwd: null` because an older host cannot authoritatively provide it.
 // Request shape is unchanged from `@2.0`.
-export const listTerminalsResponseSchemaV21 = z.object({
-  sessions: z.array(canonicalTerminalSessionInfoSchema),
-  homeCwd: z.string().min(1).nullable(),
-});
+export const listTerminalsResponseSchemaV21 = lazySchema(() =>
+  z.object({
+    sessions: z.array(canonicalTerminalSessionInfoSchema),
+    homeCwd: z.string().min(1).nullable(),
+  }),
+);
 export type ListTerminalsResponseV21 = z.infer<
   typeof listTerminalsResponseSchemaV21
 >;
@@ -304,10 +343,12 @@ export type ListTerminalsResponseV21 = z.infer<
 // host upgraded from v2.1 fills it from the immutable launch `cwd`. That frozen
 // field allowed an empty compatibility value, which current clients interpret
 // as "directory unavailable" rather than inventing a path.
-export const listTerminalsResponseSchemaV22 = z.object({
-  sessions: z.array(canonicalTerminalSessionInfoWithCurrentCwdSchema),
-  homeCwd: z.string().min(1).nullable(),
-});
+export const listTerminalsResponseSchemaV22 = lazySchema(() =>
+  z.object({
+    sessions: z.array(canonicalTerminalSessionInfoWithCurrentCwdSchema),
+    homeCwd: z.string().min(1).nullable(),
+  }),
+);
 export type ListTerminalsResponseV22 = z.infer<
   typeof listTerminalsResponseSchemaV22
 >;
@@ -317,10 +358,12 @@ export type ListTerminalsResponseV22 = z.infer<
 // so a capable client fail-closes missing origin as a durable shadow rather
 // than promoting it. Genuinely older hosts remain full `terminal.list`
 // after positive legacy negotiation and do not consult the field.
-export const listTerminalsResponseSchemaV23 = z.object({
-  sessions: z.array(canonicalTerminalSessionInfoWithLifecycleOwnerSchema),
-  homeCwd: z.string().min(1).nullable(),
-});
+export const listTerminalsResponseSchemaV23 = lazySchema(() =>
+  z.object({
+    sessions: z.array(canonicalTerminalSessionInfoWithLifecycleOwnerSchema),
+    homeCwd: z.string().min(1).nullable(),
+  }),
+);
 export type ListTerminalsResponseV23 = z.infer<
   typeof listTerminalsResponseSchemaV23
 >;
@@ -343,19 +386,23 @@ export type ListTerminalsResponseV23 = z.infer<
 // what an agent can read is exactly what `terminal.list` shows it for the
 // same epic. A session in another epic is not readable here even for its
 // owner.
-export const readTerminalOutputRequestSchema = z.object({
-  epicId: z.string(),
-  // An unambiguous session-id prefix of at least 4 characters is accepted,
-  // matching the abbreviation rule the agent-facing id surfaces share.
-  sessionId: z.string().min(1),
-});
+export const readTerminalOutputRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    // An unambiguous session-id prefix of at least 4 characters is accepted,
+    // matching the abbreviation rule the agent-facing id surfaces share.
+    sessionId: z.string().min(1),
+  }),
+);
 export type ReadTerminalOutputRequest = z.infer<
   typeof readTerminalOutputRequestSchema
 >;
 
-export const readTerminalOutputResponseSchema = z.object({
-  path: z.string().min(1),
-});
+export const readTerminalOutputResponseSchema = lazySchema(() =>
+  z.object({
+    path: z.string().min(1),
+  }),
+);
 export type ReadTerminalOutputResponse = z.infer<
   typeof readTerminalOutputResponseSchema
 >;
@@ -364,15 +411,19 @@ export type ReadTerminalOutputResponse = z.infer<
 // durably persist it for registry-owned plain terminals; manager-owned legacy
 // sessions retain the released in-memory lifetime. The wire schema and
 // `updated` response semantics remain frozen.
-export const renameTerminalRequestSchema = z.object({
-  sessionId: z.string(),
-  title: z.string(),
-});
+export const renameTerminalRequestSchema = lazySchema(() =>
+  z.object({
+    sessionId: z.string(),
+    title: z.string(),
+  }),
+);
 export type RenameTerminalRequest = z.infer<typeof renameTerminalRequestSchema>;
 
-export const renameTerminalResponseSchema = z.object({
-  updated: z.boolean(),
-});
+export const renameTerminalResponseSchema = lazySchema(() =>
+  z.object({
+    updated: z.boolean(),
+  }),
+);
 export type RenameTerminalResponse = z.infer<
   typeof renameTerminalResponseSchema
 >;

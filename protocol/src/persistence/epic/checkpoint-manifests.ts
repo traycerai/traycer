@@ -1,12 +1,11 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const checkpointFileOperationSchema = z.enum([
-  "edit",
-  "create",
-  "delete",
-]);
+export const checkpointFileOperationSchema = lazySchema(() =>
+  z.enum(["edit", "create", "delete"]),
+);
 export type CheckpointFileOperation = z.infer<
   typeof checkpointFileOperationSchema
 >;
@@ -29,27 +28,31 @@ const checkpointArtifactKindSchema = getRecordSchema(
  * resolves. The GUI re-resolves the live title from the open-epic projection by
  * `artifactId`; `title` here is only the fallback.
  */
-export const checkpointArtifactTagSchema = z.object({
-  artifactId: z.string().nullable(),
-  kind: checkpointArtifactKindSchema.nullable(),
-  title: z.string().nullable(),
-});
+export const checkpointArtifactTagSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string().nullable(),
+    kind: checkpointArtifactKindSchema.nullable(),
+    title: z.string().nullable(),
+  }),
+);
 export type CheckpointArtifactTag = z.infer<typeof checkpointArtifactTagSchema>;
 
-export const turnCheckpointManifestEntrySchema = z.object({
-  filePath: z.string(),
-  operation: checkpointFileOperationSchema,
-  beforeHash: z.string().nullable(),
-  afterHash: z.string().nullable(),
-  undoable: z.boolean(),
-  reason: z.string().nullable(),
-  // Present + non-null ⇒ this entry is an artifact `index.md` change. Optional
-  // (`.nullish()`) so manifests persisted before artifacts entered the
-  // checkpoint flow parse cleanly (the field is absent → undefined → "not an
-  // artifact"), and so the many manifest-entry constructors don't each have to
-  // spell out `artifact: null`. Read it with a falsy check (`!entry.artifact`).
-  artifact: checkpointArtifactTagSchema.nullish(),
-});
+export const turnCheckpointManifestEntrySchema = lazySchema(() =>
+  z.object({
+    filePath: z.string(),
+    operation: checkpointFileOperationSchema,
+    beforeHash: z.string().nullable(),
+    afterHash: z.string().nullable(),
+    undoable: z.boolean(),
+    reason: z.string().nullable(),
+    // Present + non-null ⇒ this entry is an artifact `index.md` change. Optional
+    // (`.nullish()`) so manifests persisted before artifacts entered the
+    // checkpoint flow parse cleanly (the field is absent → undefined → "not an
+    // artifact"), and so the many manifest-entry constructors don't each have to
+    // spell out `artifact: null`. Read it with a falsy check (`!entry.artifact`).
+    artifact: checkpointArtifactTagSchema.nullish(),
+  }),
+);
 export type TurnCheckpointManifestEntry = z.infer<
   typeof turnCheckpointManifestEntrySchema
 >;
@@ -146,41 +149,49 @@ export function overlappingCheckpointIds(
  */
 export const TURN_CHECKPOINT_MANIFEST_SCHEMA_VERSION = 1;
 
-export const turnCheckpointManifestSchema = z.object({
-  schemaVersion: z.literal(TURN_CHECKPOINT_MANIFEST_SCHEMA_VERSION),
-  checkpointId: z.string(),
-  capturingUserId: z.string(),
-  capturingHostId: z.string(),
-  allowedRoots: z.array(z.string()),
-  workingDirectory: z.string(),
-  capturedAt: z.number(),
-  entries: z.array(turnCheckpointManifestEntrySchema),
-});
+export const turnCheckpointManifestSchema = lazySchema(() =>
+  z.object({
+    schemaVersion: z.literal(TURN_CHECKPOINT_MANIFEST_SCHEMA_VERSION),
+    checkpointId: z.string(),
+    capturingUserId: z.string(),
+    capturingHostId: z.string(),
+    allowedRoots: z.array(z.string()),
+    workingDirectory: z.string(),
+    capturedAt: z.number(),
+    entries: z.array(turnCheckpointManifestEntrySchema),
+  }),
+);
 export type TurnCheckpointManifest = z.infer<
   typeof turnCheckpointManifestSchema
 >;
 
-export const restoreStartedManifestSchema = z.object({
-  checkpointId: z.string(),
-  restoringUserId: z.string(),
-  restoringHostId: z.string(),
-  startedAt: z.number(),
-});
+export const restoreStartedManifestSchema = lazySchema(() =>
+  z.object({
+    checkpointId: z.string(),
+    restoringUserId: z.string(),
+    restoringHostId: z.string(),
+    startedAt: z.number(),
+  }),
+);
 export type RestoreStartedManifest = z.infer<
   typeof restoreStartedManifestSchema
 >;
 
-export const restoreResultEntrySchema = z.object({
-  filePath: z.string(),
-  status: z.enum(["restored", "skipped", "failed"]),
-  operation: checkpointFileOperationSchema,
-  reason: z.string().nullable(),
-});
+export const restoreResultEntrySchema = lazySchema(() =>
+  z.object({
+    filePath: z.string(),
+    status: z.enum(["restored", "skipped", "failed"]),
+    operation: checkpointFileOperationSchema,
+    reason: z.string().nullable(),
+  }),
+);
 export type RestoreResultEntry = z.infer<typeof restoreResultEntrySchema>;
 
-export const restoreResultManifestSchema = z.object({
-  checkpointId: z.string(),
-  restoredAt: z.number(),
-  results: z.array(restoreResultEntrySchema),
-});
+export const restoreResultManifestSchema = lazySchema(() =>
+  z.object({
+    checkpointId: z.string(),
+    restoredAt: z.number(),
+    results: z.array(restoreResultEntrySchema),
+  }),
+);
 export type RestoreResultManifest = z.infer<typeof restoreResultManifestSchema>;

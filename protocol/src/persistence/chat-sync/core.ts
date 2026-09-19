@@ -4,6 +4,7 @@ import {
   withResidualCapture,
 } from "@traycer/protocol/persistence/chat-sync/residual";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Presentation core of a `chat-head`: everything a cloud renderer or a clone
@@ -34,24 +35,21 @@ import { z } from "zod";
  * record - a reader that only ever sees "the row vanished" cannot distinguish
  * a deletion from a fetch failure.
  */
-export const chatLifecycleStateSchema = z.enum([
-  "active",
-  "archived",
-  "deleted",
-]);
+export const chatLifecycleStateSchema = lazySchema(() =>
+  z.enum(["active", "archived", "deleted"]),
+);
 export type ChatLifecycleState = z.infer<typeof chatLifecycleStateSchema>;
 
 export const chatLifecycleShape = {
   state: chatLifecycleStateSchema,
   /** Wall-clock ms the chat was archived, or `null` while unarchived. */
-  archivedAt: z.number().nullable(),
+  archivedAt: lazySchema(() => z.number().nullable()),
   /** Wall-clock ms the chat was deleted, or `null` while live. */
-  deletedAt: z.number().nullable(),
+  deletedAt: lazySchema(() => z.number().nullable()),
 } as const;
 
-export const chatLifecycleSchema = withResidualCapture(
-  "core.lifecycle",
-  chatLifecycleShape,
+export const chatLifecycleSchema = lazySchema(() =>
+  withResidualCapture("core.lifecycle", chatLifecycleShape),
 );
 export type ChatLifecycle = z.infer<typeof chatLifecycleSchema>;
 
@@ -62,37 +60,35 @@ export type ChatLifecycle = z.infer<typeof chatLifecycleSchema>;
  * run-settings schema has grown twice already (`serviceTier`, `profileId`), so
  * a v1.0 reader meeting a v1.1 chat is exactly the case the bag exists for.
  */
-export const chatSyncRunSettingsSchema = withResidualCapture(
-  "core.settings",
-  snapshotChatRunSettingsSchema.shape,
+export const chatSyncRunSettingsSchema = lazySchema(() =>
+  withResidualCapture("core.settings", snapshotChatRunSettingsSchema.shape),
 );
 export type ChatSyncRunSettings = z.infer<typeof chatSyncRunSettingsSchema>;
 
 // ---- Core -------------------------------------------------------------- //
 
 export const chatHeadCoreShape = {
-  chatId: z.string().min(1),
+  chatId: lazySchema(() => z.string().min(1)),
   /** Parent chat in the chat tree, or `null` for a root chat. */
-  parentChatId: z.string().nullable(),
-  ownerUserId: z.string().min(1),
+  parentChatId: lazySchema(() => z.string().nullable()),
+  ownerUserId: lazySchema(() => z.string().min(1)),
   /**
    * Host that owned the chat when the head was published. A clone target
    * mints a NEW chat id under its own host (clone-not-migrate); this stays
    * the provenance of the source.
    */
-  originHostId: z.string().min(1),
-  title: z.string(),
-  isTitleEditedByUser: z.boolean(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
+  originHostId: lazySchema(() => z.string().min(1)),
+  title: lazySchema(() => z.string()),
+  isTitleEditedByUser: lazySchema(() => z.boolean()),
+  createdAt: lazySchema(() => z.number()),
+  updatedAt: lazySchema(() => z.number()),
   lifecycle: chatLifecycleSchema,
   /** Run settings the chat was last configured with; `null` before first run. */
-  settings: chatSyncRunSettingsSchema.nullable(),
+  settings: lazySchema(() => chatSyncRunSettingsSchema.nullable()),
 } as const;
 
-export const chatHeadCoreSchema = withResidualCapture(
-  "core",
-  chatHeadCoreShape,
+export const chatHeadCoreSchema = lazySchema(() =>
+  withResidualCapture("core", chatHeadCoreShape),
 );
 export type ChatHeadCore = z.infer<typeof chatHeadCoreSchema>;
 
@@ -102,14 +98,18 @@ export type ChatHeadCore = z.infer<typeof chatHeadCoreSchema>;
 // substituted. A capturing schema cannot describe the wire itself - see
 // `storageProjection` for why - so the frozen storage surface comes from here.
 
-export const chatLifecycleStorageSchema = storageProjection(chatLifecycleShape);
-
-export const chatSyncRunSettingsStorageSchema = storageProjection(
-  snapshotChatRunSettingsSchema.shape,
+export const chatLifecycleStorageSchema = lazySchema(() =>
+  storageProjection(chatLifecycleShape),
 );
 
-export const chatHeadCoreStorageSchema = storageProjection({
-  ...chatHeadCoreShape,
-  lifecycle: chatLifecycleStorageSchema,
-  settings: chatSyncRunSettingsStorageSchema.nullable(),
-});
+export const chatSyncRunSettingsStorageSchema = lazySchema(() =>
+  storageProjection(snapshotChatRunSettingsSchema.shape),
+);
+
+export const chatHeadCoreStorageSchema = lazySchema(() =>
+  storageProjection({
+    ...chatHeadCoreShape,
+    lifecycle: chatLifecycleStorageSchema,
+    settings: chatSyncRunSettingsStorageSchema.nullable(),
+  }),
+);

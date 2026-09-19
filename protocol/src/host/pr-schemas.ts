@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 import { worktreeBindingOwnerKindSchema } from "./worktree-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ---- Shared building blocks ---------------------------------------------- //
 
@@ -25,13 +26,9 @@ import { worktreeBindingOwnerKindSchema } from "./worktree-schemas";
  * the host's emission fingerprint so an `error`/`gh-unavailable` recovery to
  * `ok` always emits, even when the underlying facts are unchanged.
  */
-export const prSourceStatusSchema = z.enum([
-  "ok",
-  "partial",
-  "gh-unavailable",
-  "error",
-  "cached",
-]);
+export const prSourceStatusSchema = lazySchema(() =>
+  z.enum(["ok", "partial", "gh-unavailable", "error", "cached"]),
+);
 export type PrSourceStatus = z.infer<typeof prSourceStatusSchema>;
 
 /**
@@ -47,10 +44,12 @@ export type PrSourceStatus = z.infer<typeof prSourceStatusSchema>;
  * host has not learned a reset time yet (a fresh restart mid-limit). Copy is
  * built CLIENT-SIDE from `kind` + `retryAt`; the host never sends prose.
  */
-export const prSourceNoticeSchema = z.object({
-  kind: z.enum(["rate-limited", "backing-off"]),
-  retryAt: z.number().nullable(),
-});
+export const prSourceNoticeSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["rate-limited", "backing-off"]),
+    retryAt: z.number().nullable(),
+  }),
+);
 export type PrSourceNotice = z.infer<typeof prSourceNoticeSchema>;
 
 /**
@@ -59,25 +58,29 @@ export type PrSourceNotice = z.infer<typeof prSourceNoticeSchema>;
  * that simply hasn't been swept yet is still `live` (its frames carry
  * `sourceStatus: "cached"` until the first sweep lands).
  */
-export const prLivenessSchema = z.enum(["live", "cache-only"]);
+export const prLivenessSchema = lazySchema(() =>
+  z.enum(["live", "cache-only"]),
+);
 export type PrLiveness = z.infer<typeof prLivenessSchema>;
 
-export const prStateSchema = z.enum(["open", "merged", "closed"]);
+export const prStateSchema = lazySchema(() =>
+  z.enum(["open", "merged", "closed"]),
+);
 export type PrState = z.infer<typeof prStateSchema>;
 
-export const prReviewDecisionSchema = z.enum([
-  "approved",
-  "changes_requested",
-  "review_required",
-]);
+export const prReviewDecisionSchema = lazySchema(() =>
+  z.enum(["approved", "changes_requested", "review_required"]),
+);
 export type PrReviewDecision = z.infer<typeof prReviewDecisionSchema>;
 
-export const prChecksRollupSchema = z.object({
-  success: z.number().int().nonnegative(),
-  failure: z.number().int().nonnegative(),
-  pending: z.number().int().nonnegative(),
-  total: z.number().int().nonnegative(),
-});
+export const prChecksRollupSchema = lazySchema(() =>
+  z.object({
+    success: z.number().int().nonnegative(),
+    failure: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+  }),
+);
 export type PrChecksRollup = z.infer<typeof prChecksRollupSchema>;
 
 /**
@@ -87,11 +90,13 @@ export type PrChecksRollup = z.infer<typeof prChecksRollupSchema>;
  * when discovery only proved head identity (absent/unparseable `prUrl`), and
  * substituting head owner/repo would misidentify a fork PR.
  */
-export const prBaseCoordinatesSchema = z.object({
-  owner: z.string().min(1),
-  repo: z.string().min(1),
-  prNumber: z.number().int().positive(),
-});
+export const prBaseCoordinatesSchema = lazySchema(() =>
+  z.object({
+    owner: z.string().min(1),
+    repo: z.string().min(1),
+    prNumber: z.number().int().positive(),
+  }),
+);
 export type PrBaseCoordinates = z.infer<typeof prBaseCoordinatesSchema>;
 
 /**
@@ -100,10 +105,12 @@ export type PrBaseCoordinates = z.infer<typeof prBaseCoordinatesSchema>;
  * owning chat's worktree binding, independent of the PR's own base
  * coordinates (which may point at an upstream fork owner).
  */
-export const prRepoIdentifierSchema = z.object({
-  owner: z.string(),
-  repo: z.string(),
-});
+export const prRepoIdentifierSchema = lazySchema(() =>
+  z.object({
+    owner: z.string(),
+    repo: z.string(),
+  }),
+);
 export type PrRepoIdentifier = z.infer<typeof prRepoIdentifierSchema>;
 
 /**
@@ -118,7 +125,9 @@ export type PrRepoIdentifier = z.infer<typeof prRepoIdentifierSchema>;
  * directly as its own workspace enumerates as `superproject`. When one PR is
  * reachable both ways, `superproject` wins so the row keeps its own group.
  */
-export const prRepoRoleSchema = z.enum(["superproject", "submodule"]);
+export const prRepoRoleSchema = lazySchema(() =>
+  z.enum(["superproject", "submodule"]),
+);
 export type PrRepoRole = z.infer<typeof prRepoRoleSchema>;
 
 /**
@@ -128,39 +137,46 @@ export type PrRepoRole = z.infer<typeof prRepoRoleSchema>;
  * client groups on it and never renders it. `null` when the entry has no
  * stable local path, which only suppresses nesting - both rows still list.
  */
-export const prLinkGroupKeySchema = z.string();
+export const prLinkGroupKeySchema = lazySchema(() => z.string());
 
-export const prOwnerRefSchema = z.object({
-  ownerId: z.string(),
-  ownerKind: worktreeBindingOwnerKindSchema,
-});
+export const prOwnerRefSchema = lazySchema(() =>
+  z.object({
+    ownerId: z.string(),
+    ownerKind: worktreeBindingOwnerKindSchema,
+  }),
+);
 export type PrOwnerRef = z.infer<typeof prOwnerRefSchema>;
 
-export const prActorSchema = z.object({
-  login: z.string(),
-  avatarUrl: z.string().nullable(),
-});
+export const prActorSchema = lazySchema(() =>
+  z.object({
+    login: z.string(),
+    avatarUrl: z.string().nullable(),
+  }),
+);
 export type PrActor = z.infer<typeof prActorSchema>;
 
-export const prReviewRequestSchema = prActorSchema.extend({
-  kind: z.enum(["user", "team"]),
-});
+export const prReviewRequestSchema = lazySchema(() =>
+  prActorSchema.extend({
+    kind: z.enum(["user", "team"]),
+  }),
+);
 export type PrReviewRequest = z.infer<typeof prReviewRequestSchema>;
 
 // ---- pr.subscribeListForEpic ---------------------------------------------- //
 
-export const prSubscribeListForEpicModeSchema = z.enum([
-  "foreground",
-  "background",
-]);
+export const prSubscribeListForEpicModeSchema = lazySchema(() =>
+  z.enum(["foreground", "background"]),
+);
 export type PrSubscribeListForEpicMode = z.infer<
   typeof prSubscribeListForEpicModeSchema
 >;
 
-export const prSubscribeListForEpicOpenRequestSchema = z.object({
-  epicId: z.string(),
-  mode: prSubscribeListForEpicModeSchema,
-});
+export const prSubscribeListForEpicOpenRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    mode: prSubscribeListForEpicModeSchema,
+  }),
+);
 export type PrSubscribeListForEpicOpenRequest = z.infer<
   typeof prSubscribeListForEpicOpenRequestSchema
 >;
@@ -172,43 +188,44 @@ export type PrSubscribeListForEpicOpenRequest = z.infer<
  * Every enrichment field below `liveness` is independently nullable so a
  * cache-only or never-swept item still renders from identity + state alone.
  */
-export const prLightItemSchema = z.object({
-  githubHost: z.string().nullable(),
-  base: prBaseCoordinatesSchema.nullable(),
-  prUrl: z.string().nullable(),
-  state: prStateSchema,
-  liveness: prLivenessSchema,
-  observedAt: z.number().nullable(),
-  isDraft: z.boolean().nullable(),
-  title: z.string().nullable(),
-  baseRefName: z.string().nullable(),
-  headRefName: z.string().nullable(),
-  additions: z.number().int().nonnegative().nullable(),
-  deletions: z.number().int().nonnegative().nullable(),
-  checksRollup: prChecksRollupSchema.nullable(),
-  reviewDecision: prReviewDecisionSchema.nullable(),
-  commentCount: z.number().int().nonnegative().nullable(),
-  updatedAt: z.number().nullable(),
-  repoIdentifier: prRepoIdentifierSchema,
-  repoRole: prRepoRoleSchema,
-  linkGroupKey: prLinkGroupKeySchema.nullable(),
-  owners: z.array(prOwnerRefSchema),
-});
+export const prLightItemSchema = lazySchema(() =>
+  z.object({
+    githubHost: z.string().nullable(),
+    base: prBaseCoordinatesSchema.nullable(),
+    prUrl: z.string().nullable(),
+    state: prStateSchema,
+    liveness: prLivenessSchema,
+    observedAt: z.number().nullable(),
+    isDraft: z.boolean().nullable(),
+    title: z.string().nullable(),
+    baseRefName: z.string().nullable(),
+    headRefName: z.string().nullable(),
+    additions: z.number().int().nonnegative().nullable(),
+    deletions: z.number().int().nonnegative().nullable(),
+    checksRollup: prChecksRollupSchema.nullable(),
+    reviewDecision: prReviewDecisionSchema.nullable(),
+    commentCount: z.number().int().nonnegative().nullable(),
+    updatedAt: z.number().nullable(),
+    repoIdentifier: prRepoIdentifierSchema,
+    repoRole: prRepoRoleSchema,
+    linkGroupKey: prLinkGroupKeySchema.nullable(),
+    owners: z.array(prOwnerRefSchema),
+  }),
+);
 export type PrLightItem = z.infer<typeof prLightItemSchema>;
 
 const PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
   sourceStatus: prSourceStatusSchema,
   // Present on HYDRATION snapshots too, not just sweep-driven updates: a
   // panel opened while the host is already paused must say so on its first
   // frame rather than looking merely stale.
-  notice: prSourceNoticeSchema.nullable(),
-  items: z.array(prLightItemSchema),
+  notice: lazySchema(() => prSourceNoticeSchema.nullable()),
+  items: lazySchema(() => z.array(prLightItemSchema)),
 } as const;
 
-export const prSubscribeListForEpicServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const prSubscribeListForEpicServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       ...PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS,
@@ -223,7 +240,7 @@ export const prSubscribeListForEpicServerFrameSchema = z.discriminatedUnion(
       message: z.string(),
       isFatal: z.boolean(),
     }),
-  ],
+  ]),
 );
 export type PrSubscribeListForEpicServerFrame = z.infer<
   typeof prSubscribeListForEpicServerFrameSchema
@@ -231,76 +248,84 @@ export type PrSubscribeListForEpicServerFrame = z.infer<
 
 // ---- pr.subscribeDetail --------------------------------------------------- //
 
-export const prSubscribeDetailOpenRequestSchema = z.object({
-  epicId: z.string(),
-  githubHost: z.string().min(1),
-  owner: z.string().min(1),
-  repo: z.string().min(1),
-  prNumber: z.number().int().positive(),
-});
+export const prSubscribeDetailOpenRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    githubHost: z.string().min(1),
+    owner: z.string().min(1),
+    repo: z.string().min(1),
+    prNumber: z.number().int().positive(),
+  }),
+);
 export type PrSubscribeDetailOpenRequest = z.infer<
   typeof prSubscribeDetailOpenRequestSchema
 >;
 
-export const prCheckStatusSchema = z.enum([
-  "queued",
-  "in_progress",
-  "completed",
-  "pending",
-  "requested",
-  "waiting",
-]);
+export const prCheckStatusSchema = lazySchema(() =>
+  z.enum([
+    "queued",
+    "in_progress",
+    "completed",
+    "pending",
+    "requested",
+    "waiting",
+  ]),
+);
 export type PrCheckStatus = z.infer<typeof prCheckStatusSchema>;
 
-export const prCheckConclusionSchema = z.enum([
-  "success",
-  "failure",
-  "neutral",
-  "cancelled",
-  "skipped",
-  "timed_out",
-  "action_required",
-  "stale",
-  "startup_failure",
-]);
+export const prCheckConclusionSchema = lazySchema(() =>
+  z.enum([
+    "success",
+    "failure",
+    "neutral",
+    "cancelled",
+    "skipped",
+    "timed_out",
+    "action_required",
+    "stale",
+    "startup_failure",
+  ]),
+);
 export type PrCheckConclusion = z.infer<typeof prCheckConclusionSchema>;
 
-export const prCheckContextSchema = z.object({
-  /**
-   * The JOB name alone (`build`, `pre-commit`) - which is not unique. A repo
-   * running one reusable workflow across five packages reports `build` five
-   * times, and a list keyed on this shows five identical rows. See
-   * {@link prCheckContextSchema.workflowName}.
-   */
-  name: z.string(),
-  /**
-   * The workflow the job belongs to (`Run Pre-commit`), or `null` for a check
-   * that did not come from a workflow run at all - a third-party app's check,
-   * or a commit status. Together with `name` and `event` this reconstructs the
-   * identity GitHub displays, and is what makes five `build` rows tellable
-   * apart.
-   */
-  workflowName: z.string().nullable(),
-  /** What triggered the run (`pull_request`). `null` outside a workflow run. */
-  event: z.string().nullable(),
-  /** The app that reported it - "GitHub Actions", "Mintlify", "CodeRabbit". */
-  appName: z.string().nullable(),
-  /**
-   * The reporting app's icon. A check list is scanned, not read: the app mark
-   * is what lets a reader find the one CodeRabbit row among fourteen Actions
-   * rows without parsing any text.
-   */
-  appLogoUrl: z.string().nullable(),
-  /**
-   * The one-line reason a commit status carries ("Review completed",
-   * "Skipping deployment"). Only `StatusContext` has this; a `CheckRun` has no
-   * equivalent field and reports `null`.
-   */
-  description: z.string().nullable(),
-  status: prCheckStatusSchema,
-  conclusion: prCheckConclusionSchema.nullable(),
-  detailsUrl: z.string().nullable(),
-});
+export const prCheckContextSchema = lazySchema(() =>
+  z.object({
+    /**
+     * The JOB name alone (`build`, `pre-commit`) - which is not unique. A repo
+     * running one reusable workflow across five packages reports `build` five
+     * times, and a list keyed on this shows five identical rows. See
+     * {@link prCheckContextSchema.workflowName}.
+     */
+    name: z.string(),
+    /**
+     * The workflow the job belongs to (`Run Pre-commit`), or `null` for a check
+     * that did not come from a workflow run at all - a third-party app's check,
+     * or a commit status. Together with `name` and `event` this reconstructs the
+     * identity GitHub displays, and is what makes five `build` rows tellable
+     * apart.
+     */
+    workflowName: z.string().nullable(),
+    /** What triggered the run (`pull_request`). `null` outside a workflow run. */
+    event: z.string().nullable(),
+    /** The app that reported it - "GitHub Actions", "Mintlify", "CodeRabbit". */
+    appName: z.string().nullable(),
+    /**
+     * The reporting app's icon. A check list is scanned, not read: the app mark
+     * is what lets a reader find the one CodeRabbit row among fourteen Actions
+     * rows without parsing any text.
+     */
+    appLogoUrl: z.string().nullable(),
+    /**
+     * The one-line reason a commit status carries ("Review completed",
+     * "Skipping deployment"). Only `StatusContext` has this; a `CheckRun` has no
+     * equivalent field and reports `null`.
+     */
+    description: z.string().nullable(),
+    status: prCheckStatusSchema,
+    conclusion: prCheckConclusionSchema.nullable(),
+    detailsUrl: z.string().nullable(),
+  }),
+);
 export type PrCheckContext = z.infer<typeof prCheckContextSchema>;
 
 /**
@@ -308,84 +333,98 @@ export type PrCheckContext = z.infer<typeof prCheckContextSchema>;
  * truncation marker. `observedAt` is `null` for a row that has never been
  * swept (cache-only or not-yet-observed).
  */
-export const prChecksSectionSchema = z.object({
-  observedAt: z.number().nullable(),
-  contexts: z.array(prCheckContextSchema).max(50),
-  isTruncated: z.boolean(),
-});
+export const prChecksSectionSchema = lazySchema(() =>
+  z.object({
+    observedAt: z.number().nullable(),
+    contexts: z.array(prCheckContextSchema).max(50),
+    isTruncated: z.boolean(),
+  }),
+);
 export type PrChecksSection = z.infer<typeof prChecksSectionSchema>;
 
-export const prReviewStateSchema = z.enum([
-  "approved",
-  "changes_requested",
-  "commented",
-  "dismissed",
-  "pending",
-]);
+export const prReviewStateSchema = lazySchema(() =>
+  z.enum([
+    "approved",
+    "changes_requested",
+    "commented",
+    "dismissed",
+    "pending",
+  ]),
+);
 export type PrReviewState = z.infer<typeof prReviewStateSchema>;
 
 /**
  * One entry in the chronological activity feed - an issue comment or a
  * submitted review, interleaved by `createdAt`.
  */
-export const prActivityItemSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("comment"),
-    id: z.string(),
-    author: prActorSchema.nullable(),
-    body: z.string(),
-    createdAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("review"),
-    /**
-     * GitHub's review node id where one is known, so a
-     * {@link prReviewThreadSchema} can name the review that submitted it.
-     * Falls back to the review's url, then to a synthetic key, for facts
-     * persisted before the id was captured - a thread then simply fails to
-     * match and renders un-nested.
-     */
-    id: z.string(),
-    author: prActorSchema.nullable(),
-    body: z.string(),
-    state: prReviewStateSchema,
-    createdAt: z.number(),
-  }),
-]);
+export const prActivityItemSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("comment"),
+      id: z.string(),
+      author: prActorSchema.nullable(),
+      body: z.string(),
+      createdAt: z.number(),
+    }),
+    z.object({
+      kind: z.literal("review"),
+      /**
+       * GitHub's review node id where one is known, so a
+       * {@link prReviewThreadSchema} can name the review that submitted it.
+       * Falls back to the review's url, then to a synthetic key, for facts
+       * persisted before the id was captured - a thread then simply fails to
+       * match and renders un-nested.
+       */
+      id: z.string(),
+      author: prActorSchema.nullable(),
+      body: z.string(),
+      state: prReviewStateSchema,
+      createdAt: z.number(),
+    }),
+  ]),
+);
 export type PrActivityItem = z.infer<typeof prActivityItemSchema>;
 
 /**
  * `activity` section of a detail frame - the last ~20 comments and reviews,
  * chronological, full bodies (decision #11).
  */
-export const prActivitySectionSchema = z.object({
-  observedAt: z.number().nullable(),
-  items: z.array(prActivityItemSchema).max(20),
-  isTruncated: z.boolean(),
-});
+export const prActivitySectionSchema = lazySchema(() =>
+  z.object({
+    observedAt: z.number().nullable(),
+    items: z.array(prActivityItemSchema).max(20),
+    isTruncated: z.boolean(),
+  }),
+);
 export type PrActivitySection = z.infer<typeof prActivitySectionSchema>;
 
 // ---- review threads (inline comments) ------------------------------------ //
 
 /** Which side of the diff a thread is anchored to. */
-export const prReviewThreadSideSchema = z.enum(["left", "right"]);
+export const prReviewThreadSideSchema = lazySchema(() =>
+  z.enum(["left", "right"]),
+);
 export type PrReviewThreadSide = z.infer<typeof prReviewThreadSideSchema>;
 
 /**
  * What a thread is attached to. `line` is the ordinary case; `file` is a
  * comment on the file as a whole, which carries no line at all.
  */
-export const prReviewThreadSubjectSchema = z.enum(["line", "file"]);
+export const prReviewThreadSubjectSchema = lazySchema(() =>
+  z.enum(["line", "file"]),
+);
 export type PrReviewThreadSubject = z.infer<typeof prReviewThreadSubjectSchema>;
 
 /** One message in a thread. Threads are replies, so there are usually several. */
-export const prReviewThreadCommentSchema = z.object({
-  id: z.string(),
-  author: prActorSchema.nullable(),
-  body: z.string(),
-  createdAt: z.number(),
-  url: z.string().nullable(),
-});
+export const prReviewThreadCommentSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    author: prActorSchema.nullable(),
+    body: z.string(),
+    createdAt: z.number(),
+    url: z.string().nullable(),
+  }),
+);
 export type PrReviewThreadComment = z.infer<typeof prReviewThreadCommentSchema>;
 
 /**
@@ -402,36 +441,38 @@ export type PrReviewThreadComment = z.infer<typeof prReviewThreadCommentSchema>;
  * field existed has no review id to match - both cases render the thread
  * un-nested rather than dropping it.
  */
-export const prReviewThreadSchema = z.object({
-  id: z.string(),
-  reviewId: z.string().nullable(),
-  path: z.string(),
-  /**
-   * The line in the CURRENT head. GitHub returns `null` for an outdated
-   * thread - the code it referred to has since moved or gone - which is
-   * exactly when {@link originalLine} is the only anchor left.
-   */
-  line: z.number().int().nullable(),
-  /** The line as of the commit reviewed. Present even when `line` is not. */
-  originalLine: z.number().int().nullable(),
-  side: prReviewThreadSideSchema,
-  subject: prReviewThreadSubjectSchema,
-  isResolved: z.boolean(),
-  isOutdated: z.boolean(),
-  /**
-   * The tail of the diff hunk the thread is anchored to, or `null`.
-   *
-   * Carried ONCE per thread and truncated to its last few lines. GitHub
-   * repeats the full hunk verbatim on every comment in the thread, and for a
-   * comment on a new file that hunk is the entire file: measured over one real
-   * PR it was 2.7x the weight of every comment body combined, and two thirds
-   * of the whole payload.
-   */
-  diffHunk: z.string().nullable(),
-  comments: z.array(prReviewThreadCommentSchema).max(10),
-  /** True count, so a clipped thread can say how many replies it is hiding. */
-  totalCommentCount: z.number().int().nonnegative(),
-});
+export const prReviewThreadSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    reviewId: z.string().nullable(),
+    path: z.string(),
+    /**
+     * The line in the CURRENT head. GitHub returns `null` for an outdated
+     * thread - the code it referred to has since moved or gone - which is
+     * exactly when {@link originalLine} is the only anchor left.
+     */
+    line: z.number().int().nullable(),
+    /** The line as of the commit reviewed. Present even when `line` is not. */
+    originalLine: z.number().int().nullable(),
+    side: prReviewThreadSideSchema,
+    subject: prReviewThreadSubjectSchema,
+    isResolved: z.boolean(),
+    isOutdated: z.boolean(),
+    /**
+     * The tail of the diff hunk the thread is anchored to, or `null`.
+     *
+     * Carried ONCE per thread and truncated to its last few lines. GitHub
+     * repeats the full hunk verbatim on every comment in the thread, and for a
+     * comment on a new file that hunk is the entire file: measured over one real
+     * PR it was 2.7x the weight of every comment body combined, and two thirds
+     * of the whole payload.
+     */
+    diffHunk: z.string().nullable(),
+    comments: z.array(prReviewThreadCommentSchema).max(10),
+    /** True count, so a clipped thread can say how many replies it is hiding. */
+    totalCommentCount: z.number().int().nonnegative(),
+  }),
+);
 export type PrReviewThread = z.infer<typeof prReviewThreadSchema>;
 
 /**
@@ -445,66 +486,71 @@ export type PrReviewThread = z.infer<typeof prReviewThreadSchema>;
  * `activity.items` (the attention queue, the reviewer roll-up) to learn a
  * third kind it has no use for.
  */
-export const prReviewThreadsSectionSchema = z.object({
-  observedAt: z.number().nullable(),
-  threads: z.array(prReviewThreadSchema).max(20),
-  isTruncated: z.boolean(),
-});
+export const prReviewThreadsSectionSchema = lazySchema(() =>
+  z.object({
+    observedAt: z.number().nullable(),
+    threads: z.array(prReviewThreadSchema).max(20),
+    isTruncated: z.boolean(),
+  }),
+);
 export type PrReviewThreadsSection = z.infer<
   typeof prReviewThreadsSectionSchema
 >;
 
 /** GraphQL `PullRequestChangedFile.changeType`, lowercased. */
-export const prFileChangeTypeSchema = z.enum([
-  "added",
-  "deleted",
-  "modified",
-  "renamed",
-  "copied",
-  "changed",
-]);
+export const prFileChangeTypeSchema = lazySchema(() =>
+  z.enum(["added", "deleted", "modified", "renamed", "copied", "changed"]),
+);
 export type PrFileChangeType = z.infer<typeof prFileChangeTypeSchema>;
 
-export const prChangedFileSchema = z.object({
-  path: z.string(),
-  additions: z.number().int().nonnegative().nullable(),
-  deletions: z.number().int().nonnegative().nullable(),
-  changeType: prFileChangeTypeSchema.nullable(),
-});
+export const prChangedFileSchema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    additions: z.number().int().nonnegative().nullable(),
+    deletions: z.number().int().nonnegative().nullable(),
+    changeType: prFileChangeTypeSchema.nullable(),
+  }),
+);
 export type PrChangedFile = z.infer<typeof prChangedFileSchema>;
 
 /**
  * `files` section of a detail frame - the first 100 changed files (names and
  * per-file counts only; patch content is deliberately not carried in v1).
  */
-export const prFilesSectionSchema = z.object({
-  observedAt: z.number().nullable(),
-  files: z.array(prChangedFileSchema).max(100),
-  totalCount: z.number().int().nonnegative().nullable(),
-  isTruncated: z.boolean(),
-});
+export const prFilesSectionSchema = lazySchema(() =>
+  z.object({
+    observedAt: z.number().nullable(),
+    files: z.array(prChangedFileSchema).max(100),
+    totalCount: z.number().int().nonnegative().nullable(),
+    isTruncated: z.boolean(),
+  }),
+);
 export type PrFilesSection = z.infer<typeof prFilesSectionSchema>;
 
 /**
  * One commit on the PR. `author` is the GitHub user when resolvable;
  * `authorName` falls back to the git author string for unlinked commits.
  */
-export const prCommitSchema = z.object({
-  oid: z.string(),
-  messageHeadline: z.string().nullable(),
-  author: prActorSchema.nullable(),
-  authorName: z.string().nullable(),
-  committedAt: z.number().nullable(),
-});
+export const prCommitSchema = lazySchema(() =>
+  z.object({
+    oid: z.string(),
+    messageHeadline: z.string().nullable(),
+    author: prActorSchema.nullable(),
+    authorName: z.string().nullable(),
+    committedAt: z.number().nullable(),
+  }),
+);
 export type PrCommit = z.infer<typeof prCommitSchema>;
 
 /** `commits` section of a detail frame - the last 30 commits, chronological. */
-export const prCommitsSectionSchema = z.object({
-  observedAt: z.number().nullable(),
-  commits: z.array(prCommitSchema).max(30),
-  totalCount: z.number().int().nonnegative().nullable(),
-  isTruncated: z.boolean(),
-});
+export const prCommitsSectionSchema = lazySchema(() =>
+  z.object({
+    observedAt: z.number().nullable(),
+    commits: z.array(prCommitSchema).max(30),
+    totalCount: z.number().int().nonnegative().nullable(),
+    isTruncated: z.boolean(),
+  }),
+);
 export type PrCommitsSection = z.infer<typeof prCommitsSectionSchema>;
 
 /**
@@ -515,42 +561,44 @@ export type PrCommitsSection = z.infer<typeof prCommitsSectionSchema>;
  * identified PR (its base coordinates are the subscription's own open-request
  * key).
  */
-export const prDetailCoreSchema = z.object({
-  observedAt: z.number().nullable(),
-  githubHost: z.string(),
-  base: prBaseCoordinatesSchema,
-  prUrl: z.string().nullable(),
-  state: prStateSchema,
-  isDraft: z.boolean().nullable(),
-  title: z.string().nullable(),
-  body: z.string().nullable(),
-  author: prActorSchema.nullable(),
-  baseRefName: z.string().nullable(),
-  headRefName: z.string().nullable(),
-  headRefOid: z.string().nullable(),
-  additions: z.number().int().nonnegative().nullable(),
-  deletions: z.number().int().nonnegative().nullable(),
-  checksRollup: prChecksRollupSchema.nullable(),
-  reviewDecision: prReviewDecisionSchema.nullable(),
-  reviewRequests: z.array(prReviewRequestSchema),
-  commentCount: z.number().int().nonnegative().nullable(),
-  updatedAt: z.number().nullable(),
-  mergedAt: z.number().nullable(),
-  repoIdentifier: prRepoIdentifierSchema,
-  // Carried for `pr.getLocalDiff`, which needs to name WHICH checkout and
-  // which repo under it. Both were already on the light item; the detail
-  // stream re-states them so a tile opened straight from a deep link (with no
-  // list frame ever received) can still ask for the local diff.
-  repoRole: prRepoRoleSchema,
-  linkGroupKey: prLinkGroupKeySchema.nullable(),
-  owners: z.array(prOwnerRefSchema),
-});
+export const prDetailCoreSchema = lazySchema(() =>
+  z.object({
+    observedAt: z.number().nullable(),
+    githubHost: z.string(),
+    base: prBaseCoordinatesSchema,
+    prUrl: z.string().nullable(),
+    state: prStateSchema,
+    isDraft: z.boolean().nullable(),
+    title: z.string().nullable(),
+    body: z.string().nullable(),
+    author: prActorSchema.nullable(),
+    baseRefName: z.string().nullable(),
+    headRefName: z.string().nullable(),
+    headRefOid: z.string().nullable(),
+    additions: z.number().int().nonnegative().nullable(),
+    deletions: z.number().int().nonnegative().nullable(),
+    checksRollup: prChecksRollupSchema.nullable(),
+    reviewDecision: prReviewDecisionSchema.nullable(),
+    reviewRequests: z.array(prReviewRequestSchema),
+    commentCount: z.number().int().nonnegative().nullable(),
+    updatedAt: z.number().nullable(),
+    mergedAt: z.number().nullable(),
+    repoIdentifier: prRepoIdentifierSchema,
+    // Carried for `pr.getLocalDiff`, which needs to name WHICH checkout and
+    // which repo under it. Both were already on the light item; the detail
+    // stream re-states them so a tile opened straight from a deep link (with no
+    // list frame ever received) can still ask for the local diff.
+    repoRole: prRepoRoleSchema,
+    linkGroupKey: prLinkGroupKeySchema.nullable(),
+    owners: z.array(prOwnerRefSchema),
+  }),
+);
 export type PrDetailCore = z.infer<typeof prDetailCoreSchema>;
 
 const PR_SUBSCRIBE_DETAIL_FRAME_FIELDS = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
   sourceStatus: prSourceStatusSchema,
-  notice: prSourceNoticeSchema.nullable(),
+  notice: lazySchema(() => prSourceNoticeSchema.nullable()),
   liveness: prLivenessSchema,
   core: prDetailCoreSchema,
   checks: prChecksSectionSchema,
@@ -560,22 +608,24 @@ const PR_SUBSCRIBE_DETAIL_FRAME_FIELDS = {
   commits: prCommitsSectionSchema,
 } as const;
 
-export const prSubscribeDetailServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("snapshot"),
-    ...PR_SUBSCRIBE_DETAIL_FRAME_FIELDS,
-  }),
-  z.object({
-    kind: z.literal("updated"),
-    ...PR_SUBSCRIBE_DETAIL_FRAME_FIELDS,
-  }),
-  z.object({
-    kind: z.literal("error"),
-    hasBinaryPayload: z.literal(false),
-    message: z.string(),
-    isFatal: z.boolean(),
-  }),
-]);
+export const prSubscribeDetailServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...PR_SUBSCRIBE_DETAIL_FRAME_FIELDS,
+    }),
+    z.object({
+      kind: z.literal("updated"),
+      ...PR_SUBSCRIBE_DETAIL_FRAME_FIELDS,
+    }),
+    z.object({
+      kind: z.literal("error"),
+      hasBinaryPayload: z.literal(false),
+      message: z.string(),
+      isFatal: z.boolean(),
+    }),
+  ]),
+);
 export type PrSubscribeDetailServerFrame = z.infer<
   typeof prSubscribeDetailServerFrameSchema
 >;
@@ -587,12 +637,14 @@ export type PrSubscribeDetailServerFrame = z.infer<
  * Concurrent refreshes coalesce single-flight into at most one trailing
  * sweep (host-side); the wire shape is identical on both methods.
  */
-export const prSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("refresh"),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const prSubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("refresh"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 export type PrSubscribeClientFrame = z.infer<
   typeof prSubscribeClientFrameSchema
 >;
@@ -613,24 +665,26 @@ export const DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET = 2 * 1_048_576;
  * checkout of this PR" and "your checkout never fetched the base branch" want
  * different next actions.
  */
-export const prLocalDiffUnavailableReasonSchema = z.enum([
-  // The `linkGroupKey` matches no worktree binding on this host, or the
-  // directory it named is gone. Includes the case of a client that made the
-  // key up: keys are only ever honoured when a persisted binding vouches for
-  // them (they are local paths, so an unchecked key would be a read primitive).
-  "no-local-checkout",
-  // A checkout was found but it isn't this PR's repo - a submodule that was
-  // never initialized, or a binding whose remote has since been re-pointed.
-  "repo-mismatch",
-  // The checkout exists but one of the two endpoints isn't in it: an
-  // un-fetched base branch, or a head branch that was deleted after merge.
-  "ref-unavailable",
-  // Endpoints resolve but share no history, so there is no merge base to
-  // diff from - a force-pushed rewrite, or a branch grafted from elsewhere.
-  "no-merge-base",
-  // git itself is unusable here (absent, or the repo is refused as too large).
-  "git-unavailable",
-]);
+export const prLocalDiffUnavailableReasonSchema = lazySchema(() =>
+  z.enum([
+    // The `linkGroupKey` matches no worktree binding on this host, or the
+    // directory it named is gone. Includes the case of a client that made the
+    // key up: keys are only ever honoured when a persisted binding vouches for
+    // them (they are local paths, so an unchecked key would be a read primitive).
+    "no-local-checkout",
+    // A checkout was found but it isn't this PR's repo - a submodule that was
+    // never initialized, or a binding whose remote has since been re-pointed.
+    "repo-mismatch",
+    // The checkout exists but one of the two endpoints isn't in it: an
+    // un-fetched base branch, or a head branch that was deleted after merge.
+    "ref-unavailable",
+    // Endpoints resolve but share no history, so there is no merge base to
+    // diff from - a force-pushed rewrite, or a branch grafted from elsewhere.
+    "no-merge-base",
+    // git itself is unusable here (absent, or the repo is refused as too large).
+    "git-unavailable",
+  ]),
+);
 export type PrLocalDiffUnavailableReason = z.infer<
   typeof prLocalDiffUnavailableReasonSchema
 >;
@@ -656,34 +710,36 @@ export type PrLocalDiffUnavailableReason = z.infer<
  * N commits from what GitHub is showing" instead of quietly rendering a diff
  * of something else.
  */
-export const prGetLocalDiffRequestSchema = z.object({
-  // No `hostId`: like the two `pr.*` streams, and unlike `git.*`, the host it
-  // runs on is the only host it could mean - taking one as an argument would
-  // invite a caller to believe it selects something.
-  epicId: z.string().min(1),
-  // `.min(1)` on the REQUEST fields, not on the shared schemas: the host
-  // resolves `linkGroupKey` to a directory and matches `repoIdentifier`
-  // against a binding, so an empty value reaches that resolution and only
-  // fails later as `no-local-checkout`/`repo-mismatch` - a wrong answer
-  // dressed as a real one. The same fields are nullable on the stream frames
-  // (`prLightItemSchema`, `prDetailCoreSchema`), which may legitimately carry
-  // an identifier this request could never be made with.
-  linkGroupKey: prLinkGroupKeySchema.min(1),
-  repoIdentifier: prRepoIdentifierSchema.extend({
-    owner: z.string().min(1),
-    repo: z.string().min(1),
+export const prGetLocalDiffRequestSchema = lazySchema(() =>
+  z.object({
+    // No `hostId`: like the two `pr.*` streams, and unlike `git.*`, the host it
+    // runs on is the only host it could mean - taking one as an argument would
+    // invite a caller to believe it selects something.
+    epicId: z.string().min(1),
+    // `.min(1)` on the REQUEST fields, not on the shared schemas: the host
+    // resolves `linkGroupKey` to a directory and matches `repoIdentifier`
+    // against a binding, so an empty value reaches that resolution and only
+    // fails later as `no-local-checkout`/`repo-mismatch` - a wrong answer
+    // dressed as a real one. The same fields are nullable on the stream frames
+    // (`prLightItemSchema`, `prDetailCoreSchema`), which may legitimately carry
+    // an identifier this request could never be made with.
+    linkGroupKey: prLinkGroupKeySchema.min(1),
+    repoIdentifier: prRepoIdentifierSchema.extend({
+      owner: z.string().min(1),
+      repo: z.string().min(1),
+    }),
+    repoRole: prRepoRoleSchema,
+    baseRefName: z.string().min(1),
+    headRefName: z.string().min(1),
+    expectedHeadOid: z.string().nullable(),
+    ignoreWhitespace: z.boolean(),
+    byteBudget: z
+      .number()
+      .int()
+      .positive()
+      .default(DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET),
   }),
-  repoRole: prRepoRoleSchema,
-  baseRefName: z.string().min(1),
-  headRefName: z.string().min(1),
-  expectedHeadOid: z.string().nullable(),
-  ignoreWhitespace: z.boolean(),
-  byteBudget: z
-    .number()
-    .int()
-    .positive()
-    .default(DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET),
-});
+);
 export type PrGetLocalDiffRequest = z.infer<typeof prGetLocalDiffRequestSchema>;
 
 /**
@@ -693,15 +749,17 @@ export type PrGetLocalDiffRequest = z.infer<typeof prGetLocalDiffRequestSchema>;
  * is deliberate: a truncated response still knows the true file count and
  * per-file line counts, so the UI can say what it is not showing.
  */
-export const prLocalDiffFileSchema = z.object({
-  path: z.string(),
-  previousPath: z.string().nullable(),
-  status: prFileChangeTypeSchema,
-  insertions: z.number().int().nonnegative().nullable(),
-  deletions: z.number().int().nonnegative().nullable(),
-  isBinary: z.boolean(),
-  patch: z.string().nullable(),
-});
+export const prLocalDiffFileSchema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    previousPath: z.string().nullable(),
+    status: prFileChangeTypeSchema,
+    insertions: z.number().int().nonnegative().nullable(),
+    deletions: z.number().int().nonnegative().nullable(),
+    isBinary: z.boolean(),
+    patch: z.string().nullable(),
+  }),
+);
 export type PrLocalDiffFile = z.infer<typeof prLocalDiffFileSchema>;
 
 /**
@@ -709,32 +767,34 @@ export type PrLocalDiffFile = z.infer<typeof prLocalDiffFileSchema>;
  * most PRs in a list have no checkout on this machine, and the caller renders
  * the GitHub-sourced file list instead.
  */
-export const prGetLocalDiffResponseSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("unavailable"),
-    reason: prLocalDiffUnavailableReasonSchema,
-  }),
-  z.object({
-    kind: z.literal("diff"),
-    /** Canonical absolute repo root the diff was taken in. */
-    runningDir: z.string(),
-    /** The ref that actually resolved as base, e.g. `origin/development`. */
-    resolvedBaseRef: z.string(),
-    baseOid: z.string(),
-    mergeBaseOid: z.string(),
-    localHeadOid: z.string(),
-    /**
-     * `localHeadOid !== expectedHeadOid`. Computed host-side so every client
-     * draws the same conclusion from the same two strings; a `null`
-     * `expectedHeadOid` (GitHub never told us) is NOT stale, it is unknown,
-     * and reports `false`.
-     */
-    isStale: z.boolean(),
-    files: z.array(prLocalDiffFileSchema),
-    /** The patch sweep hit `byteBudget`; later `files[].patch` are `null`. */
-    isTruncated: z.boolean(),
-  }),
-]);
+export const prGetLocalDiffResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("unavailable"),
+      reason: prLocalDiffUnavailableReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("diff"),
+      /** Canonical absolute repo root the diff was taken in. */
+      runningDir: z.string(),
+      /** The ref that actually resolved as base, e.g. `origin/development`. */
+      resolvedBaseRef: z.string(),
+      baseOid: z.string(),
+      mergeBaseOid: z.string(),
+      localHeadOid: z.string(),
+      /**
+       * `localHeadOid !== expectedHeadOid`. Computed host-side so every client
+       * draws the same conclusion from the same two strings; a `null`
+       * `expectedHeadOid` (GitHub never told us) is NOT stale, it is unknown,
+       * and reports `false`.
+       */
+      isStale: z.boolean(),
+      files: z.array(prLocalDiffFileSchema),
+      /** The patch sweep hit `byteBudget`; later `files[].patch` are `null`. */
+      isTruncated: z.boolean(),
+    }),
+  ]),
+);
 export type PrGetLocalDiffResponse = z.infer<
   typeof prGetLocalDiffResponseSchema
 >;
@@ -762,17 +822,18 @@ export const DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET = 256 * 1024;
  * request whose host-side handler splices it into git argv; the host
  * revalidates independently.
  */
-export const prLocalDiffOidSchema = z
-  .string()
-  .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u);
+export const prLocalDiffOidSchema = lazySchema(() =>
+  z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u),
+);
 
 /**
  * `pr.getLocalDiffSummary` request - `pr.getLocalDiff`'s request minus
  * `byteBudget`, because metadata is never byte-capped: `--name-status` and
  * `--numstat` cover every file in the range at a few dozen bytes each.
  */
-export const prGetLocalDiffSummaryRequestSchema =
-  prGetLocalDiffRequestSchema.omit({ byteBudget: true });
+export const prGetLocalDiffSummaryRequestSchema = lazySchema(() =>
+  prGetLocalDiffRequestSchema.omit({ byteBudget: true }),
+);
 export type PrGetLocalDiffSummaryRequest = z.infer<
   typeof prGetLocalDiffSummaryRequestSchema
 >;
@@ -787,14 +848,16 @@ export type PrGetLocalDiffSummaryRequest = z.infer<
  * released monolith file schema stays untouched - its files never feed a
  * request.
  */
-export const prLocalDiffSummaryFileSchema = prLocalDiffFileSchema
-  .omit({
-    patch: true,
-  })
-  .extend({
-    path: z.string().min(1),
-    previousPath: z.string().min(1).nullable(),
-  });
+export const prLocalDiffSummaryFileSchema = lazySchema(() =>
+  prLocalDiffFileSchema
+    .omit({
+      patch: true,
+    })
+    .extend({
+      path: z.string().min(1),
+      previousPath: z.string().min(1).nullable(),
+    }),
+);
 export type PrLocalDiffSummaryFile = z.infer<
   typeof prLocalDiffSummaryFileSchema
 >;
@@ -814,12 +877,11 @@ export type PrLocalDiffSummaryFile = z.infer<
  * companion-path equality) - because it cannot know its caller parsed a
  * request at all.
  */
-export const prPathBytesTokenSchema = z
-  .string()
-  .min(1)
-  .refine(isCanonicalBase64, {
+export const prPathBytesTokenSchema = lazySchema(() =>
+  z.string().min(1).refine(isCanonicalBase64, {
     message: "byte-path token must be canonical base64",
-  });
+  }),
+);
 
 function isCanonicalBase64(value: string): boolean {
   try {
@@ -847,11 +909,12 @@ function isCanonicalBase64(value: string): boolean {
  * tokens as opaque: never decoded, only echoed into `pr.getLocalFileDiff`
  * and used as identity keys.
  */
-export const prLocalDiffSummaryFileV11Schema =
+export const prLocalDiffSummaryFileV11Schema = lazySchema(() =>
   prLocalDiffSummaryFileSchema.extend({
     pathBytes: prPathBytesTokenSchema.nullable(),
     previousPathBytes: prPathBytesTokenSchema.nullable(),
-  });
+  }),
+);
 export type PrLocalDiffSummaryFileV11 = z.infer<
   typeof prLocalDiffSummaryFileV11Schema
 >;
@@ -864,9 +927,8 @@ export type PrLocalDiffSummaryFileV11 = z.infer<
  * so a per-file answer fetched later can never disagree with the summary
  * that named them, even if the checkout moves in between.
  */
-export const prGetLocalDiffSummaryResponseSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const prGetLocalDiffSummaryResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("unavailable"),
       reason: prLocalDiffUnavailableReasonSchema,
@@ -884,7 +946,7 @@ export const prGetLocalDiffSummaryResponseSchema = z.discriminatedUnion(
       isStale: z.boolean(),
       files: z.array(prLocalDiffSummaryFileSchema),
     }),
-  ],
+  ]),
 );
 export type PrGetLocalDiffSummaryResponse = z.infer<
   typeof prGetLocalDiffSummaryResponseSchema
@@ -916,9 +978,8 @@ export type PrGetLocalDiffSummaryResponse = z.infer<
  * (`pr.getLocalDiff`, a separate released method, still folds; that fold is
  * unrelated to this line.)
  */
-export const prGetLocalDiffSummaryResponseV11Schema = z.discriminatedUnion(
-  "kind",
-  [
+export const prGetLocalDiffSummaryResponseV11Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("unavailable"),
       reason: prLocalDiffUnavailableReasonSchema,
@@ -933,7 +994,7 @@ export const prGetLocalDiffSummaryResponseV11Schema = z.discriminatedUnion(
       isStale: z.boolean(),
       files: z.array(prLocalDiffSummaryFileV11Schema),
     }),
-  ],
+  ]),
 );
 export type PrGetLocalDiffSummaryResponseV11 = z.infer<
   typeof prGetLocalDiffSummaryResponseV11Schema
@@ -953,30 +1014,32 @@ export type PrGetLocalDiffSummaryResponseV11 = z.infer<
  * fails to pair a rename whose source is outside the pathspec and reports a
  * pure add instead, so the host puts BOTH sides into the pathspec.
  */
-export const prGetLocalFileDiffRequestSchema = z.object({
-  epicId: z.string().min(1),
-  // `.min(1)` for the same reason as `prGetLocalDiffRequestSchema`: an empty
-  // token would reach binding resolution and fail later as a wrong answer
-  // dressed as a real one.
-  linkGroupKey: prLinkGroupKeySchema.min(1),
-  repoIdentifier: prRepoIdentifierSchema.extend({
-    owner: z.string().min(1),
-    repo: z.string().min(1),
+export const prGetLocalFileDiffRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    // `.min(1)` for the same reason as `prGetLocalDiffRequestSchema`: an empty
+    // token would reach binding resolution and fail later as a wrong answer
+    // dressed as a real one.
+    linkGroupKey: prLinkGroupKeySchema.min(1),
+    repoIdentifier: prRepoIdentifierSchema.extend({
+      owner: z.string().min(1),
+      repo: z.string().min(1),
+    }),
+    repoRole: prRepoRoleSchema,
+    mergeBaseOid: prLocalDiffOidSchema,
+    headOid: prLocalDiffOidSchema,
+    path: z.string().min(1),
+    previousPath: z.string().min(1).nullable(),
+    ignoreWhitespace: z.boolean(),
+    /** `null` requests the full patch - the "Load Full" ask. */
+    byteBudget: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .default(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET),
   }),
-  repoRole: prRepoRoleSchema,
-  mergeBaseOid: prLocalDiffOidSchema,
-  headOid: prLocalDiffOidSchema,
-  path: z.string().min(1),
-  previousPath: z.string().min(1).nullable(),
-  ignoreWhitespace: z.boolean(),
-  /** `null` requests the full patch - the "Load Full" ask. */
-  byteBudget: z
-    .number()
-    .int()
-    .positive()
-    .nullable()
-    .default(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET),
-});
+);
 export type PrGetLocalFileDiffRequest = z.infer<
   typeof prGetLocalFileDiffRequestSchema
 >;
@@ -992,11 +1055,12 @@ export type PrGetLocalFileDiffRequest = z.infer<
  * byte-validity fact rather than an absence. It still resolves both cases to
  * the plain string pathspec today; that is now a choice, not a requirement.
  */
-export const prGetLocalFileDiffRequestV11Schema =
+export const prGetLocalFileDiffRequestV11Schema = lazySchema(() =>
   prGetLocalFileDiffRequestSchema.extend({
     pathBytes: prPathBytesTokenSchema.nullable(),
     previousPathBytes: prPathBytesTokenSchema.nullable(),
-  });
+  }),
+);
 export type PrGetLocalFileDiffRequestV11 = z.infer<
   typeof prGetLocalFileDiffRequestV11Schema
 >;
@@ -1013,19 +1077,21 @@ export type PrGetLocalFileDiffRequestV11 = z.infer<
  * range pruned by `git gc` after the summary named it. The client's recovery
  * for that is ONE summary refetch (fresh OIDs), not a retry of this call.
  */
-export const prGetLocalFileDiffResponseSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("unavailable"),
-    reason: prLocalDiffUnavailableReasonSchema,
-  }),
-  z.object({
-    kind: z.literal("diff"),
-    patch: z.string(),
-    isBinary: z.boolean(),
-    isTruncated: z.boolean(),
-    truncatedAfterBytes: z.number().int().nonnegative().nullable(),
-  }),
-]);
+export const prGetLocalFileDiffResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("unavailable"),
+      reason: prLocalDiffUnavailableReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("diff"),
+      patch: z.string(),
+      isBinary: z.boolean(),
+      isTruncated: z.boolean(),
+      truncatedAfterBytes: z.number().int().nonnegative().nullable(),
+    }),
+  ]),
+);
 export type PrGetLocalFileDiffResponse = z.infer<
   typeof prGetLocalFileDiffResponseSchema
 >;

@@ -33,6 +33,7 @@
  */
 import { z } from "zod";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Why a promotion has not finished, coarsened to the four states a user is
@@ -52,12 +53,9 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
  * A host value with no bucket here must map to `failed` rather than be
  * dropped: silence is what the pending state already suffered from.
  */
-export const epicSharePromotionPendingReasonSchema = z.enum([
-  "recent-attempt",
-  "busy",
-  "offline",
-  "failed",
-]);
+export const epicSharePromotionPendingReasonSchema = lazySchema(() =>
+  z.enum(["recent-attempt", "busy", "offline", "failed"]),
+);
 export type EpicSharePromotionPendingReason = z.infer<
   typeof epicSharePromotionPendingReasonSchema
 >;
@@ -68,19 +66,21 @@ export type EpicSharePromotionPendingReason = z.infer<
  * again be typeless - `refused` is where an unmapped or newly-added refusal
  * lands instead of falling through to a resolver-fault 500.
  */
-export const epicShareRefusalSchema = z.discriminatedUnion("kind", [
-  /** The epic lives only on this machine and the caller has no cloud sync. */
-  z.object({ kind: z.literal("needs-cloud-sync") }),
-  /** A local-homed epic created by a different account on this machine. */
-  z.object({ kind: z.literal("not-owned") }),
-  /** Entitled and owned, but the epic has not finished reaching the cloud. */
-  z.object({
-    kind: z.literal("promotion-pending"),
-    reason: epicSharePromotionPendingReasonSchema,
-  }),
-  /** Refused for a reason this line does not model. */
-  z.object({ kind: z.literal("refused") }),
-]);
+export const epicShareRefusalSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    /** The epic lives only on this machine and the caller has no cloud sync. */
+    z.object({ kind: z.literal("needs-cloud-sync") }),
+    /** A local-homed epic created by a different account on this machine. */
+    z.object({ kind: z.literal("not-owned") }),
+    /** Entitled and owned, but the epic has not finished reaching the cloud. */
+    z.object({
+      kind: z.literal("promotion-pending"),
+      reason: epicSharePromotionPendingReasonSchema,
+    }),
+    /** Refused for a reason this line does not model. */
+    z.object({ kind: z.literal("refused") }),
+  ]),
+);
 export type EpicShareRefusal = z.infer<typeof epicShareRefusalSchema>;
 
 type EpicShareRefusalKind = EpicShareRefusal["kind"];

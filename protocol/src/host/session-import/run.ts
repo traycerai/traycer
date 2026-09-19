@@ -53,6 +53,7 @@ import {
   sessionImportFailureReasonSchema,
   sessionImportSelectionSchema,
 } from "@traycer/protocol/host/session-import/candidate";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // The failure vocabulary lives with the candidate shapes, so the scan's
 // `unreadable` state and a run's `failed` outcome name the same causes.
@@ -61,16 +62,18 @@ export {
   type SessionImportFailureReason,
 } from "@traycer/protocol/host/session-import/candidate";
 
-export const sessionImportRunOpenRequestSchema = z.object({
-  selections: z.array(sessionImportSelectionSchema),
-  // The permission mode every imported chat continues under: the client's
-  // default for a NEW chat, so an imported task starts exactly as one the
-  // user created would. The host has no default of its own to fall back on -
-  // that setting lives in the client - and the source CLI's permission model
-  // is not a signal, so nothing is inferred from the session. Ignored by a
-  // subscribe that attaches to a run already in flight, like `selections`.
-  permissionMode: permissionModeSchema,
-});
+export const sessionImportRunOpenRequestSchema = lazySchema(() =>
+  z.object({
+    selections: z.array(sessionImportSelectionSchema),
+    // The permission mode every imported chat continues under: the client's
+    // default for a NEW chat, so an imported task starts exactly as one the
+    // user created would. The host has no default of its own to fall back on -
+    // that setting lives in the client - and the source CLI's permission model
+    // is not a signal, so nothing is inferred from the session. Ignored by a
+    // subscribe that attaches to a run already in flight, like `selections`.
+    permissionMode: permissionModeSchema,
+  }),
+);
 export type SessionImportRunOpenRequest = z.infer<
   typeof sessionImportRunOpenRequestSchema
 >;
@@ -92,35 +95,41 @@ export type SessionImportRunOpenRequest = z.infer<
  * the value becomes sayable, which is exactly what makes that minor a
  * negotiable fact rather than a convention.
  */
-export const sessionImportRunOpenRequestSchemaPreAuto = z.object({
-  selections: z.array(sessionImportSelectionSchema),
-  permissionMode: permissionModeSchemaPreAuto,
-});
+export const sessionImportRunOpenRequestSchemaPreAuto = lazySchema(() =>
+  z.object({
+    selections: z.array(sessionImportSelectionSchema),
+    permissionMode: permissionModeSchemaPreAuto,
+  }),
+);
 
-export const sessionImportOutcomeSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("imported"),
-    epicId: z.string().min(1),
-    chatId: z.string().min(1),
-  }),
-  z.object({
-    kind: z.literal("skipped_already_imported"),
-    epicId: z.string().min(1),
-    chatId: z.string().min(1),
-  }),
-  z.object({
-    kind: z.literal("failed"),
-    reason: sessionImportFailureReasonSchema,
-    detail: z.string(),
-  }),
-]);
+export const sessionImportOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("imported"),
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("skipped_already_imported"),
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("failed"),
+      reason: sessionImportFailureReasonSchema,
+      detail: z.string(),
+    }),
+  ]),
+);
 export type SessionImportOutcome = z.infer<typeof sessionImportOutcomeSchema>;
 
-export const sessionImportRunCountsSchema = z.object({
-  imported: z.number().int().nonnegative(),
-  skippedAlreadyImported: z.number().int().nonnegative(),
-  failed: z.number().int().nonnegative(),
-});
+export const sessionImportRunCountsSchema = lazySchema(() =>
+  z.object({
+    imported: z.number().int().nonnegative(),
+    skippedAlreadyImported: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+  }),
+);
 export type SessionImportRunCounts = z.infer<
   typeof sessionImportRunCountsSchema
 >;
@@ -129,48 +138,58 @@ export type SessionImportRunCounts = z.infer<
 // and the frozen @1.0 copy below - only the `progress` arm's enum differs
 // between them, so naming these keeps the two unions from drifting in any
 // other respect.
-const sessionImportRunStartedFrameSchema = z.object({
-  kind: z.literal("started"),
-  runId: z.string().min(1),
-  total: z.number().int().nonnegative(),
-  // False when this subscription STARTED the run, true when it attached to
-  // one already in flight (see the module doc). The wizard needs the
-  // difference: an attach ignores the `selections` it just submitted, and the
-  // `progress` frames that follow are a replay of work already done, not
-  // live progress on this client's request.
-  attached: z.boolean(),
-  hasBinaryPayload: z.literal(false),
-});
+const sessionImportRunStartedFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("started"),
+    runId: z.string().min(1),
+    total: z.number().int().nonnegative(),
+    // False when this subscription STARTED the run, true when it attached to
+    // one already in flight (see the module doc). The wizard needs the
+    // difference: an attach ignores the `selections` it just submitted, and the
+    // `progress` frames that follow are a replay of work already done, not
+    // live progress on this client's request.
+    attached: z.boolean(),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-const sessionImportRunCompleteFrameSchema = z.object({
-  kind: z.literal("complete"),
-  runId: z.string().min(1),
-  counts: sessionImportRunCountsSchema,
-  hasBinaryPayload: z.literal(false),
-});
+const sessionImportRunCompleteFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("complete"),
+    runId: z.string().min(1),
+    counts: sessionImportRunCountsSchema,
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-const sessionImportRunPongFrameSchema = z.object({
-  kind: z.literal("pong"),
-  hasBinaryPayload: z.literal(false),
-});
+const sessionImportRunPongFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("pong"),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-const sessionImportRunProgressFrameSchema = z.object({
-  kind: z.literal("progress"),
-  runId: z.string().min(1),
-  index: z.number().int().nonnegative(),
-  total: z.number().int().nonnegative(),
-  harness: guiHarnessIdSchema,
-  nativeSessionId: z.string().min(1),
-  outcome: sessionImportOutcomeSchema,
-  hasBinaryPayload: z.literal(false),
-});
+const sessionImportRunProgressFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("progress"),
+    runId: z.string().min(1),
+    index: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    harness: guiHarnessIdSchema,
+    nativeSessionId: z.string().min(1),
+    outcome: sessionImportOutcomeSchema,
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-export const sessionImportRunServerFrameSchema = z.discriminatedUnion("kind", [
-  sessionImportRunStartedFrameSchema,
-  sessionImportRunProgressFrameSchema,
-  sessionImportRunCompleteFrameSchema,
-  sessionImportRunPongFrameSchema,
-]);
+export const sessionImportRunServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    sessionImportRunStartedFrameSchema,
+    sessionImportRunProgressFrameSchema,
+    sessionImportRunCompleteFrameSchema,
+    sessionImportRunPongFrameSchema,
+  ]),
+);
 export type SessionImportRunServerFrame = z.infer<
   typeof sessionImportRunServerFrameSchema
 >;
@@ -181,7 +200,7 @@ export type SessionImportRunServerFrame = z.infer<
  * decode. Streams carry no downgrade bridge, so a host must GATE EMISSION on
  * the negotiated minor rather than expecting a projection to save it.
  */
-export const sessionImportRunServerFrameSchemaPreAntigravity =
+export const sessionImportRunServerFrameSchemaPreAntigravity = lazySchema(() =>
   z.discriminatedUnion("kind", [
     sessionImportRunStartedFrameSchema,
     sessionImportRunProgressFrameSchema.extend({
@@ -189,14 +208,17 @@ export const sessionImportRunServerFrameSchemaPreAntigravity =
     }),
     sessionImportRunCompleteFrameSchema,
     sessionImportRunPongFrameSchema,
-  ]);
+  ]),
+);
 
-export const sessionImportRunClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("ping"),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const sessionImportRunClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 export type SessionImportRunClientFrame = z.infer<
   typeof sessionImportRunClientFrameSchema
 >;
