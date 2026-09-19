@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DIORAMA_CHAPTERS,
+  PHONE_SCENES,
   dioramaBeatAt,
   dioramaChapterStarts,
   dioramaElapsedMs,
+  phoneTurnReached,
   setDioramaPaused,
   stepDioramaChapter,
+  type PhoneTurnStage,
 } from "@/components/onboarding/onboarding-diorama-chapters";
 
 describe("diorama chapters", () => {
@@ -29,10 +32,89 @@ describe("diorama chapters", () => {
     ]);
   });
 
-  it("loops the strip at both ends", () => {
-    expect(stepDioramaChapter(0, 1)).toBe(1);
-    expect(stepDioramaChapter(DIORAMA_CHAPTERS.length - 1, 1)).toBe(0);
-    expect(stepDioramaChapter(0, -1)).toBe(DIORAMA_CHAPTERS.length - 1);
+  it("loops the strip at both ends, at whatever length it is given", () => {
+    const count = DIORAMA_CHAPTERS.length;
+    expect(stepDioramaChapter(0, 1, count)).toBe(1);
+    expect(stepDioramaChapter(count - 1, 1, count)).toBe(0);
+    expect(stepDioramaChapter(0, -1, count)).toBe(count - 1);
+    // The phone's page control runs the same wrap over its own three scenes.
+    const scenes = PHONE_SCENES.length;
+    expect(stepDioramaChapter(scenes - 1, 1, scenes)).toBe(0);
+    expect(stepDioramaChapter(0, -1, scenes)).toBe(scenes - 1);
+  });
+
+  it("plays three phone scenes of about four seconds each", () => {
+    expect(PHONE_SCENES.map((scene) => scene.id)).toEqual([
+      "menu",
+      "task",
+      "tabs",
+    ]);
+    expect(PHONE_SCENES.map((scene) => scene.label)).toEqual([
+      "Menu",
+      "Task",
+      "Tabs",
+    ]);
+    for (const scene of PHONE_SCENES) {
+      expect(scene.durationMs).toBe(4000);
+      expect(scene.caption).not.toBe("");
+      expect(scene.beats.at(0)?.atMs).toBe(0);
+      // Every scene opens on the task: the two that open a surface show the
+      // control being pressed first, and the conversation is the room that
+      // surface arrives over.
+      expect(scene.beats.at(0)?.surface).toBe("task");
+      let previous = -1;
+      for (const beat of scene.beats) {
+        expect(beat.atMs).toBeGreaterThan(previous);
+        expect(beat.atMs).toBeLessThan(scene.durationMs);
+        previous = beat.atMs;
+      }
+    }
+    // Every surface the phone has is reached by the end of some scene.
+    expect(PHONE_SCENES.map((scene) => scene.beats.at(-1)?.surface)).toEqual([
+      "drawer",
+      "task",
+      "sheet",
+    ]);
+    expect(dioramaBeatAt(PHONE_SCENES[0], 759)).toBe(0);
+    expect(dioramaBeatAt(PHONE_SCENES[0], 760)).toBe(1);
+  });
+
+  it("plays the Task scene as a turn rather than holding one frame", () => {
+    const [menu, task, tabs] = PHONE_SCENES;
+    // The regression this pins: Task used to be a single beat, so a third of
+    // act 1 was four seconds on a frame that never changed.
+    expect(task.beats.length).toBeGreaterThan(1);
+    expect(task.beats.map((beat) => beat.turn)).toEqual([
+      "asked",
+      "answering",
+      "reading",
+      "answered",
+    ]);
+    // Never a spotlight: the scene's subject is the conversation, and there is
+    // no control to point at.
+    expect(task.beats.every((beat) => beat.spotlight === null)).toBe(true);
+    // The other two open over a finished turn, so nothing is mid-stream behind
+    // a drawer or a sheet.
+    for (const scene of [menu, tabs]) {
+      expect(scene.beats.every((beat) => beat.turn === "answered")).toBe(true);
+      expect(scene.beats.map((beat) => beat.spotlight)).not.toContain(null);
+    }
+  });
+
+  it("reads the turn as a rising stage, so a block never arrives early", () => {
+    const order: readonly PhoneTurnStage[] = [
+      "asked",
+      "answering",
+      "reading",
+      "answered",
+    ];
+    for (const [reachedIndex, reached] of order.entries()) {
+      for (const [stageIndex, stage] of order.entries()) {
+        expect(phoneTurnReached(reached, stage)).toBe(
+          reachedIndex >= stageIndex,
+        );
+      }
+    }
   });
 
   it("opens every chapter on its first beat and ends every beat inside it", () => {

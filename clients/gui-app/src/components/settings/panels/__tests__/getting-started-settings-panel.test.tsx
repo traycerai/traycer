@@ -2,8 +2,24 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
 const navigateMock = vi.hoisted(() => vi.fn());
+const mobileApp = vi.hoisted(() => ({ value: false }));
+
+const activateTabIntentMock = vi.hoisted(() =>
+  vi.fn((_navigate: unknown, _intent: unknown, _options: unknown) => true),
+);
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return { ...actual, activateTabIntent: activateTabIntentMock };
+});
+
+vi.mock("@/lib/mobile-app", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/mobile-app")>();
+  return { ...actual, isMobileApp: () => mobileApp.value };
+});
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
@@ -32,6 +48,7 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
 describe("GettingStartedSettingsPanel", () => {
   beforeEach(() => {
     navigateMock.mockReset();
+    activateTabIntentMock.mockClear();
     setSectionMock.mockReset();
     useOnboardingStore.setState({
       completedAt: null,
@@ -43,6 +60,40 @@ describe("GettingStartedSettingsPanel", () => {
 
   afterEach(() => {
     cleanup();
+    mobileApp.value = false;
+  });
+
+  it("leaves the guide unarmed when the tab activation is refused", () => {
+    mobileApp.value = true;
+    activateTabIntentMock.mockReturnValueOnce(false);
+    useOnboardingStore.setState({ completedAt: 123 });
+    render(<GettingStartedSettingsPanel />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Guided tour, Complete" }),
+    );
+
+    expect(useFirstTaskGuideStore.getState().status).not.toBe("active");
+  });
+
+  it("starts the guided tour from the card on the mobile app", () => {
+    mobileApp.value = true;
+    useOnboardingStore.setState({ completedAt: 123 });
+    useFirstTaskGuideStore.getState().dismiss();
+    render(<GettingStartedSettingsPanel />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Guided tour, Complete" }),
+    );
+
+    // Not the welcome replay: the phone's tour is the guided one on the start
+    // page, so the card arms it and goes there.
+    expect(useFirstTaskGuideStore.getState().status).toBe("active");
+    // Through the tab controller: Settings is a tab on the phone, and a route
+    // navigation alone left the user sitting on it.
+    expect(activateTabIntentMock).toHaveBeenCalledOnce();
+    expect(activateTabIntentMock.mock.calls[0]?.[0]).toBe(navigateMock);
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("shows initial tour progress and replays a completed tour", () => {
@@ -104,5 +155,47 @@ describe("GettingStartedSettingsPanel", () => {
       id: "appearance",
       step: 3,
     });
+  });
+
+  // This suite's `useRunnerHostOrNull` stub returns null, so the browser
+  // sign-ins guide is one this shell cannot offer at all - which is exactly the
+  // case the phone collapses.
+  it("collapses a guide this shell cannot offer into one footnote on a phone", () => {
+    const desktopWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 393,
+    });
+    try {
+      render(<GettingStartedSettingsPanel />);
+
+      expect(
+        screen.queryByRole("button", { name: /Browser sign-ins/ }),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("getting-started-unavailable-note").textContent,
+      ).toBe("Browser sign-ins: available in the desktop app.");
+      // The denominator never counted it, so collapsing the card changes
+      // nothing the panel reports.
+      expect(screen.getByRole("status").textContent).toBe("0 of 3 complete");
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: desktopWidth,
+      });
+    }
+  });
+
+  it("keeps the disabled card on a pointer viewport", () => {
+    render(<GettingStartedSettingsPanel />);
+
+    expect(
+      screen.getByRole("button", {
+        name: /Browser sign-ins.*Available in the desktop app/,
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("getting-started-unavailable-note")).toBeNull();
   });
 });

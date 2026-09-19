@@ -7,8 +7,10 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
-import { useReducedMotion } from "motion/react";
+import { useReducedMotion, type MotionValue } from "motion/react";
+import * as m from "motion/react-m";
 import {
   ArrowLeft,
   ArrowRight,
@@ -49,11 +51,15 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TabChromeBackground } from "@/components/layout/tabs/tab-chrome-background";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { OnboardingBrowserPreview } from "@/components/onboarding/onboarding-browser-preview";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
+import { useOnboardingHorizontalDrag } from "@/components/onboarding/use-onboarding-swipe";
 import {
   DIORAMA_CHAPTERS,
+  PHONE_SCENES,
   dioramaBeatAt,
   dioramaElapsedMs,
+  phoneTurnReached,
   setDioramaPaused,
   stepDioramaChapter,
   type DioramaBeat,
@@ -61,26 +67,54 @@ import {
   type DioramaClock,
   type DioramaPanelId,
   type DioramaRegionId,
+  type PhoneSceneBeat,
+  type PhoneSpotlightId,
+  type PhoneTurnStage,
 } from "@/components/onboarding/onboarding-diorama-chapters";
 import "./onboarding-diorama.css";
 
 export function OnboardingWorkspaceIllustration(props: {
-  readonly mobile: boolean;
+  /**
+   * A forward throw on the last scene: the pager has nowhere left to go, so the
+   * gesture belongs to the act above it.
+   */
+  readonly onPassLastScene: () => void;
 }) {
-  if (props.mobile) {
-    return (
-      <figure className="onboarding-workspace onboarding-workspace--mobile">
-        <MobileWorkspace />
-        <figcaption className="sr-only">
-          Tasks in the menu, conversations in the task switcher.
-        </figcaption>
-      </figure>
-    );
-  }
+  // Two different pictures, not one picture at two sizes. The phone shows the
+  // real mobile app full-bleed at 1:1; the desktop shows its window on a stage.
+  // VIEWPORT, not the installed app: a narrow window is a phone layout.
+  const phone = useIsMobileViewport();
+  if (phone)
+    return <PhoneWalkthrough onPassLastScene={props.onPassLastScene} />;
   return <WorkspaceDiorama />;
 }
 
-function WorkspaceDiorama() {
+/**
+ * The clock both walkthroughs run on: one chapter at a time, advanced by a rAF
+ * loop that reads elapsed time off `DioramaClock` rather than counting frames.
+ * Typed to the two fields a chapter needs to be played, so the desktop
+ * diorama's chapters and the phone's share it.
+ */
+interface DioramaTimeline {
+  readonly durationMs: number;
+  readonly beats: readonly { readonly atMs: number }[];
+}
+
+interface DioramaPlayback {
+  /** The chapter's position, and the run counter that replays a re-pick. */
+  readonly chapter: { readonly index: number; readonly run: number };
+  readonly beatIndex: number;
+  /** The viewer's preference: while it is on, nothing advances on its own. */
+  readonly reducedMotion: boolean;
+  readonly select: (index: number) => void;
+  /** The strip's per-segment fill and button nodes, written by the loop. */
+  readonly fills: RefObject<(HTMLSpanElement | null)[]>;
+  readonly segments: RefObject<(HTMLButtonElement | null)[]>;
+}
+
+function useDioramaPlayback(
+  chapters: readonly DioramaTimeline[],
+): DioramaPlayback {
   const reducedMotion = useReducedMotion() === true;
   // One value so a segment click restarts the timer even when it names the
   // chapter that is already playing (a new object is a new dependency).
@@ -92,8 +126,7 @@ function WorkspaceDiorama() {
   const [playhead, setPlayhead] = useState({ chapter, beat: 0 });
   const beatIndex = playhead.chapter === chapter ? playhead.beat : 0;
   const beatRef = useRef(0);
-  const active = DIORAMA_CHAPTERS[chapter.index] ?? DIORAMA_CHAPTERS[0];
-  const beat = active.beats[beatIndex] ?? active.beats[0];
+  const active = chapters[chapter.index] ?? chapters[0];
   const clock = useRef<DioramaClock>({ startedAt: 0, pausedAt: null });
   const fills = useRef<(HTMLSpanElement | null)[]>([]);
   const segments = useRef<(HTMLButtonElement | null)[]>([]);
@@ -158,7 +191,7 @@ function WorkspaceDiorama() {
       }
       if (ratio === 1) {
         setChapter((current) => ({
-          index: stepDioramaChapter(current.index, 1),
+          index: stepDioramaChapter(current.index, 1, chapters.length),
           run: current.run,
         }));
         return;
@@ -169,7 +202,81 @@ function WorkspaceDiorama() {
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [chapter, active, reducedMotion, paint]);
+  }, [chapter, active, chapters, reducedMotion, paint]);
+
+  return { chapter, beatIndex, reducedMotion, select, fills, segments };
+}
+
+/**
+ * The labelled strip under the scene: one segment per chapter, click to jump,
+ * arrow keys to walk. The fill is written per frame by the playback loop.
+ */
+function DioramaChapterStrip(props: {
+  readonly chapters: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly caption: string;
+  }[];
+  readonly activeIndex: number;
+  readonly playback: DioramaPlayback;
+  /** The group's accessible name. */
+  readonly label: string;
+}) {
+  const { chapters, activeIndex, playback, label } = props;
+  return (
+    <div className="diorama-chapters" role="group" aria-label={label}>
+      {chapters.map((entry, index) => {
+        const current = index === activeIndex;
+        return (
+          <button
+            key={entry.id}
+            ref={(node) => {
+              playback.segments.current[index] = node;
+            }}
+            type="button"
+            className="diorama-chapter"
+            data-active={current}
+            aria-pressed={current}
+            aria-current={current ? "step" : undefined}
+            tabIndex={current ? 0 : -1}
+            onClick={() => {
+              playback.select(index);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                return;
+              event.preventDefault();
+              const next = stepDioramaChapter(
+                index,
+                event.key === "ArrowRight" ? 1 : -1,
+                chapters.length,
+              );
+              playback.select(next);
+              playback.segments.current[next]?.focus();
+            }}
+          >
+            <span className="diorama-chapter-track">
+              <span
+                ref={(node) => {
+                  playback.fills.current[index] = node;
+                }}
+                className="diorama-chapter-fill"
+              />
+            </span>
+            <span className="diorama-chapter-label">{entry.label}</span>
+            <span className="diorama-chapter-caption">{entry.caption}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function WorkspaceDiorama() {
+  const playback = useDioramaPlayback(DIORAMA_CHAPTERS);
+  const chapter = playback.chapter;
+  const active = DIORAMA_CHAPTERS[chapter.index] ?? DIORAMA_CHAPTERS[0];
+  const beat = active.beats[playback.beatIndex] ?? active.beats[0];
 
   return (
     <figure className="onboarding-workspace">
@@ -191,54 +298,16 @@ function WorkspaceDiorama() {
             ))}
           </div>
         </div>
-        <div
-          className="diorama-chapters"
-          role="group"
-          aria-label="Workspace chapters"
-        >
-          {DIORAMA_CHAPTERS.map((entry, index) => {
-            const current = index === chapter.index;
-            return (
-              <button
-                key={entry.id}
-                ref={(node) => {
-                  segments.current[index] = node;
-                }}
-                type="button"
-                className="diorama-chapter"
-                data-active={current}
-                aria-pressed={current}
-                aria-current={current ? "step" : undefined}
-                tabIndex={current ? 0 : -1}
-                onClick={() => {
-                  select(index);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-                    return;
-                  event.preventDefault();
-                  const next = stepDioramaChapter(
-                    index,
-                    event.key === "ArrowRight" ? 1 : -1,
-                  );
-                  select(next);
-                  segments.current[next]?.focus();
-                }}
-              >
-                <span className="diorama-chapter-track">
-                  <span
-                    ref={(node) => {
-                      fills.current[index] = node;
-                    }}
-                    className="diorama-chapter-fill"
-                  />
-                </span>
-                <span className="diorama-chapter-label">{entry.label}</span>
-                <span className="diorama-chapter-caption">{entry.title}</span>
-              </button>
-            );
-          })}
-        </div>
+        <DioramaChapterStrip
+          chapters={DIORAMA_CHAPTERS.map((entry) => ({
+            id: entry.id,
+            label: entry.label,
+            caption: entry.title,
+          }))}
+          activeIndex={chapter.index}
+          playback={playback}
+          label="Workspace chapters"
+        />
       </div>
       <figcaption className="sr-only">
         Tasks live in horizontal tabs. Drag sidebar items onto the canvas to
@@ -660,49 +729,324 @@ function DioramaWindow(props: {
   );
 }
 
-function MobileWorkspace() {
+/** The phone's spotlight, on the same attribute contract as the diorama's. */
+function phoneRingOf(
+  beat: PhoneSceneBeat,
+  id: PhoneSpotlightId,
+): "true" | undefined {
+  return beat.spotlight === id ? "true" : undefined;
+}
+
+/** A revealed block's attribute, so the CSS selector stays one flat rule. */
+function shownAt(
+  turn: PhoneTurnStage,
+  stage: PhoneTurnStage,
+): "true" | "false" {
+  return phoneTurnReached(turn, stage) ? "true" : "false";
+}
+
+/** The tasks the drawer lists. Real strings: this is life-size type now. */
+const PHONE_DRAWER_TASKS: readonly string[] = [
+  "Launch website",
+  "Mobile app",
+  "API cleanup",
+];
+
+/** The reply, one clause per streamed block. */
+const PHONE_REPLY_CLAUSES: readonly string[] = [
+  "I read the plan first,",
+  "then build the page",
+  "section by section.",
+];
+
+/**
+ * Act 1 on a phone: three full-bleed scenes of the real mobile app at 1:1.
+ *
+ * NOT A PHONE INSIDE THE PHONE. The version this replaced drew a 222pt-wide
+ * bezel in the middle of a 393pt screen, so a quarter of the act was a picture
+ * of the device the viewer was already holding and the app inside it was too
+ * small to read. Here the scene IS the app's own geometry - a real 40pt header,
+ * real 44pt rows, real 16pt type - cropped by the region it has rather than
+ * scaled down to fit it.
+ *
+ * All three surfaces stay mounted and the beat says which is on top, so a scene
+ * change is a surface travelling rather than a subtree mounting. Nothing is
+ * keyed on the scene either: every reveal is an attribute transition, which is
+ * what lets a dot tapped mid-reply retarget instead of restarting from frame
+ * one.
+ */
+function PhoneWalkthrough(props: { readonly onPassLastScene: () => void }) {
+  const playback = useDioramaPlayback(PHONE_SCENES);
+  const chapter = playback.chapter;
+  const scene = PHONE_SCENES[chapter.index] ?? PHONE_SCENES[0];
+  // A still frame shows the scene's LAST beat: nothing advances under reduced
+  // motion, and two of the three scenes open on the control being pressed
+  // rather than on what pressing it does - a Menu scene frozen on its first
+  // beat would never show the drawer at all.
+  const beatIndex = playback.reducedMotion
+    ? scene.beats.length - 1
+    : playback.beatIndex;
+  const beat = scene.beats[beatIndex] ?? scene.beats[0];
+  const pagerRef = useRef<HTMLDivElement | null>(null);
+  const sceneOffset = useOnboardingHorizontalDrag(pagerRef, {
+    enabled: true,
+    canCommit: (direction) =>
+      direction === "forward"
+        ? chapter.index < PHONE_SCENES.length - 1
+        : chapter.index > 0,
+    onCommit: (direction) => {
+      playback.select(
+        stepDioramaChapter(
+          chapter.index,
+          direction === "forward" ? 1 : -1,
+          PHONE_SCENES.length,
+        ),
+      );
+    },
+    // Thrown forward off the last scene: the pager is done, the act is not.
+    onRefused: (direction) => {
+      if (direction === "forward") props.onPassLastScene();
+    },
+    respectsEdgeZones: false,
+    yieldsToNestedPager: false,
+  });
+
   return (
-    <div
-      className="diorama-mobile relative flex flex-col overflow-hidden rounded-2xl border border-border bg-background font-sans text-foreground"
-      aria-hidden="true"
-    >
-      <header
-        className={cn(
-          APP_HEADER_HEIGHT_CLASS,
-          "flex shrink-0 items-center gap-3 border-b border-border px-3",
-        )}
+    <figure className="onboarding-workspace onboarding-workspace--phone">
+      {/* The gesture surface is the whole act, the moving part is the scene:
+          a caption that slid with the finger would be chrome pretending to be
+          content. `data-onboarding-pager` is what makes the act layer above
+          stand aside for this one. */}
+      <div
+        ref={pagerRef}
+        data-onboarding-pager="scenes"
+        className="diorama-phone-pager"
       >
-        <Menu className="size-4 text-muted-foreground" />
-        <span className="flex-1 text-sm font-medium">Launch website</span>
-        <History className="size-4 text-muted-foreground" />
-        <Bell className="size-4 text-muted-foreground" />
-        <SquareStack className="size-4" />
-      </header>
-      <div className="min-h-0 flex-1">
-        <DioramaPane kind="chat" />
+        <PhoneScene beat={beat} offset={sceneOffset} />
       </div>
-      <div className="diorama-mobile-sheet absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-popover p-4 text-popover-foreground shadow-2xl">
-        <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-foreground/20" />
-        <h2 className="mb-4 text-base font-medium">Tabs</h2>
-        <div className="mb-4 flex items-center gap-5 border-b border-border pb-3 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">Agents</span>
-          <span>Terminals</span>
-          <span>Browsers</span>
-          <span>Artifacts</span>
+      <figcaption className="diorama-phone-caption">
+        <p key={scene.id} className="diorama-phone-caption-line">
+          {scene.caption}
+        </p>
+        <div
+          className="diorama-phone-dots"
+          role="group"
+          aria-label="Phone walkthrough scenes"
+        >
+          {PHONE_SCENES.map((entry, index) => {
+            const current = index === chapter.index;
+            return (
+              <button
+                key={entry.id}
+                ref={(node) => {
+                  playback.segments.current[index] = node;
+                }}
+                type="button"
+                className="diorama-phone-dot"
+                data-active={current}
+                aria-current={current ? "true" : undefined}
+                aria-label={`${entry.label}, scene ${index + 1} of ${PHONE_SCENES.length}`}
+                onClick={() => {
+                  playback.select(index);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+                    return;
+                  event.preventDefault();
+                  const next = stepDioramaChapter(
+                    index,
+                    event.key === "ArrowRight" ? 1 : -1,
+                    PHONE_SCENES.length,
+                  );
+                  playback.select(next);
+                  playback.segments.current[next]?.focus();
+                }}
+              >
+                <span aria-hidden="true" className="diorama-phone-dot-mark" />
+              </button>
+            );
+          })}
         </div>
-        <div className="flex items-center gap-3 rounded-lg bg-foreground/8 p-3 text-sm">
-          <MessageSquare className="size-4 text-info-foreground" />
-          <span className="flex-1">Build the page</span>
-          <HarnessIcon harnessId="claude" className="size-4" />
+      </figcaption>
+    </figure>
+  );
+}
+
+/**
+ * The app, life-size. One page element carries both the surface and the turn,
+ * so every reveal below is a transition off an attribute this element already
+ * has - no keyframe chain to rewind, nothing to remount.
+ */
+function PhoneScene(props: {
+  readonly beat: PhoneSceneBeat;
+  readonly offset: MotionValue<number>;
+}) {
+  const beat = props.beat;
+  return (
+    <m.div
+      aria-hidden="true"
+      className="diorama-phone"
+      style={{ x: props.offset }}
+    >
+      <div
+        className="diorama-phone-page font-sans text-foreground"
+        data-surface={beat.surface}
+      >
+        <header
+          className={cn(
+            APP_HEADER_HEIGHT_CLASS,
+            "flex shrink-0 items-center gap-0.5 border-b border-border bg-background px-1.5",
+          )}
+        >
+          <span
+            className="diorama-phone-glyph"
+            data-ring={phoneRingOf(beat, "menu-trigger")}
+          >
+            <Menu className="size-5" />
+          </span>
+          <span className="min-w-0 flex-1 truncate px-1 text-ui-sm font-medium">
+            Launch website
+          </span>
+          <span className="diorama-phone-glyph">
+            <Bell className="size-5 text-muted-foreground" />
+          </span>
+          <span
+            className="diorama-phone-glyph"
+            data-ring={phoneRingOf(beat, "tab-trigger")}
+          >
+            <SquareStack className="size-5" />
+          </span>
+        </header>
+        <PhoneThread turn={beat.turn} />
+        <PhoneComposer />
+        {/* One scrim for both surfaces: whichever is up dims the task behind
+            it, exactly as the app's own drawer and sheet do. */}
+        <span className="diorama-phone-scrim" />
+        <div
+          className="diorama-phone-drawer absolute inset-y-0 left-0 z-10 flex w-[78%] flex-col border-r border-border bg-popover text-popover-foreground shadow-2xl"
+          data-ring={phoneRingOf(beat, "drawer")}
+        >
+          <div className="flex h-11 shrink-0 items-center px-4 text-ui-sm font-medium text-muted-foreground">
+            Tasks
+          </div>
+          {PHONE_DRAWER_TASKS.map((task, index) => (
+            <div
+              key={task}
+              className={cn(
+                "mx-2 flex min-h-11 items-center gap-3 rounded-xl px-3 text-ui",
+                index === 0 && "bg-foreground/8",
+              )}
+            >
+              <MessageSquare className="size-5 shrink-0 text-info-foreground" />
+              <span className="min-w-0 flex-1 truncate">{task}</span>
+            </div>
+          ))}
+          <div className="mx-2 mt-1 flex min-h-11 items-center gap-3 px-3 text-ui text-muted-foreground">
+            <Plus className="size-5 shrink-0" />
+            New task
+          </div>
         </div>
-        <div className="mt-1 flex items-center gap-3 rounded-lg p-3 text-sm">
-          <MessageSquare className="size-4 text-info-foreground" />
-          <span className="flex-1">Review changes</span>
-          <HarnessIcon harnessId="codex" className="size-4" />
+        <div
+          className="diorama-phone-sheet absolute inset-x-0 bottom-0 z-10 rounded-t-2xl border-t border-border bg-popover pb-9 text-popover-foreground shadow-2xl"
+          data-ring={phoneRingOf(beat, "switcher")}
+        >
+          <div className="mx-auto mb-3 mt-2.5 h-1 w-9 rounded-full bg-foreground/20" />
+          <div className="mb-2 flex items-center gap-4 border-b border-border px-4 pb-2.5 text-ui-sm text-muted-foreground">
+            <span className="font-medium text-foreground">Agents</span>
+            <span>Terminals</span>
+            <span>Browsers</span>
+            <span>Artifacts</span>
+          </div>
+          <div className="mx-2 flex min-h-11 items-center gap-3 rounded-xl bg-foreground/8 px-3 text-ui">
+            <MessageSquare className="size-5 shrink-0 text-info-foreground" />
+            <span className="min-w-0 flex-1 truncate">Build the page</span>
+            <HarnessIcon harnessId="claude" className="size-5" />
+          </div>
+          <div className="mx-2 flex min-h-11 items-center gap-3 rounded-xl px-3 text-ui">
+            <MessageSquare className="size-5 shrink-0 text-info-foreground" />
+            <span className="min-w-0 flex-1 truncate">Review changes</span>
+            <HarnessIcon harnessId="codex" className="size-5" />
+          </div>
         </div>
-        <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-          <Plus className="size-4" />
-          New agent
+      </div>
+    </m.div>
+  );
+}
+
+/**
+ * The turn. The ask is there from the first beat; the reply's clauses, the tool
+ * row and the closing line each appear once the turn has reached their stage,
+ * which is what makes the Task scene a sequence instead of a four-second hold
+ * on a frame nothing happens in.
+ */
+function PhoneThread(props: { readonly turn: PhoneTurnStage }) {
+  const turn = props.turn;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 px-4 pb-2 pt-4">
+      <p className="ml-auto max-w-[82%] rounded-2xl rounded-br-md bg-foreground/8 px-3.5 py-2 text-ui">
+        Build the page from the launch plan.
+      </p>
+      <div className="flex items-center gap-2 text-ui-sm">
+        <HarnessIcon harnessId="claude" className="size-4" />
+        <span className="font-medium">Claude Code</span>
+      </div>
+      <p className="text-ui leading-relaxed">
+        {PHONE_REPLY_CLAUSES.map((clause, index) => (
+          // Curated copy; a clause is unique within one reply.
+          <Fragment key={clause}>
+            {index === 0 ? null : " "}
+            <span
+              className="diorama-phone-reveal inline-block"
+              data-shown={shownAt(turn, "answering")}
+              data-stagger={index}
+            >
+              {clause}
+            </span>
+          </Fragment>
+        ))}
+      </p>
+      <div
+        className="diorama-phone-reveal flex items-center gap-2 self-start rounded-xl border border-border px-3 py-2 text-ui-sm text-muted-foreground"
+        data-shown={shownAt(turn, "reading")}
+      >
+        <FileText className="size-4 shrink-0" />
+        Read launch plan
+        {phoneTurnReached(turn, "answered") ? (
+          <Check className="size-4 shrink-0 text-success-foreground" />
+        ) : null}
+      </div>
+      <p
+        className="diorama-phone-reveal text-ui leading-relaxed"
+        data-shown={shownAt(turn, "answered")}
+      >
+        The page is ready to preview.
+      </p>
+    </div>
+  );
+}
+
+/** The composer, pinned where it is pinned in the app. */
+function PhoneComposer() {
+  return (
+    <div className="shrink-0 px-3 pb-3 pt-1">
+      <div className="rounded-2xl bg-foreground/3 ring-1 ring-inset ring-border">
+        <p className="px-4 pb-1 pt-3 text-ui text-muted-foreground">
+          Ask anything
+        </p>
+        <div className="flex items-center gap-1 px-2 pb-2 text-muted-foreground">
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-full">
+            <ImagePlus className="size-5" />
+          </span>
+          <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-ui-sm">
+            <HarnessIcon harnessId="claude" className="size-4 shrink-0" />
+            <span className="min-w-0 truncate">Sonnet 4.5</span>
+          </span>
+          <span className="ml-auto inline-flex size-9 shrink-0 items-center justify-center rounded-full">
+            <Mic className="size-5" />
+          </span>
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground/8">
+            <ArrowUp className="size-5" />
+          </span>
         </div>
       </div>
     </div>
@@ -923,12 +1267,17 @@ const DioramaPane = memo(function DioramaPane(props: {
             <p className="diorama-chat-reply">
               I’ll build the portfolio from the plan.
             </p>
-            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-ui-xs text-muted-foreground">
+            {/* The turn's supporting detail, dropped by the shortest panes
+                (`@container diorama-window (height < 480px)`): a bottom-anchored
+                pane pushes the user's own message out of the top before it
+                drops anything else, and the message is half of what the chapter
+                is showing. */}
+            <div className="diorama-chat-aside flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-ui-xs text-muted-foreground">
               <ChevronDown className="size-3" />
               <FileText className="size-3" />
               Read Launch plan
             </div>
-            <p>The page is ready to preview.</p>
+            <p className="diorama-chat-aside">The page is ready to preview.</p>
           </div>
           <DioramaComposer />
         </>
