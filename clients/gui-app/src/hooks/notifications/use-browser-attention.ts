@@ -44,9 +44,11 @@ export function useConsumeBrowserAttention(
   const { markAsRead } = useMergedNotificationsActions();
   const { epicId, hostId, sessionId, tabId } = target;
   const consumed = useRef(new Set<string>());
+  const foreground = useRef(false);
   useEffect(() => {
     if (!active) {
       consumed.current.clear();
+      foreground.current = false;
       return;
     }
     const consume = () => {
@@ -64,17 +66,25 @@ export function useConsumeBrowserAttention(
       }
     };
     const consumeOnForeground = () => {
-      // The action is fire-and-forget: an attempted host read can fail and
-      // leave the row unread. A new foreground gesture retries those rows,
-      // while ordinary mutation-driven renders still deduplicate attempts.
-      consumed.current.clear();
+      const nextForeground =
+        document.visibilityState === "visible" && document.hasFocus();
+      // Retry unread rows on a new foreground transition after a failed read.
+      // Focus and visibility events can describe the same transition, so only
+      // the first one clears attempted reads; ordinary rerenders also dedupe.
+      if (nextForeground && !foreground.current) consumed.current.clear();
+      foreground.current = nextForeground;
       consume();
     };
-    consume();
+    const leaveForeground = () => {
+      foreground.current = false;
+    };
+    consumeOnForeground();
     window.addEventListener("focus", consumeOnForeground);
+    window.addEventListener("blur", leaveForeground);
     document.addEventListener("visibilitychange", consumeOnForeground);
     return () => {
       window.removeEventListener("focus", consumeOnForeground);
+      window.removeEventListener("blur", leaveForeground);
       document.removeEventListener("visibilitychange", consumeOnForeground);
     };
   }, [active, rows, markAsRead, epicId, hostId, sessionId, tabId]);

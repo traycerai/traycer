@@ -172,8 +172,43 @@ describe("useConsumeBrowserAttention", () => {
   it("retries a still-unread row on the next window focus without going inactive", () => {
     renderHook(() => useConsumeBrowserAttention(TARGET, true));
     expect(markAsRead).toHaveBeenCalledTimes(1);
+    setFocus(true, false);
+    window.dispatchEvent(new Event("blur"));
+    setFocus(true, true);
     window.dispatchEvent(new Event("focus"));
     expect(markAsRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries once, not twice, when focus and visibilitychange both fire on return", () => {
+    renderHook(() => useConsumeBrowserAttention(TARGET, true));
+    expect(markAsRead).toHaveBeenCalledTimes(1);
+    setFocus(true, false);
+    window.dispatchEvent(new Event("blur"));
+    setFocus(true, true);
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(markAsRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries once when visibilitychange fires before focus on return", () => {
+    renderHook(() => useConsumeBrowserAttention(TARGET, true));
+    expect(markAsRead).toHaveBeenCalledTimes(1);
+    setFocus(false, false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("blur"));
+    setFocus(true, true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    expect(markAsRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes its blur listener on unmount", () => {
+    const remove = vi.spyOn(window, "removeEventListener");
+    const { unmount } = renderHook(() =>
+      useConsumeBrowserAttention(TARGET, true),
+    );
+    unmount();
+    expect(remove).toHaveBeenCalledWith("blur", expect.any(Function));
   });
 
   it("retries a still-unread row when the document goes hidden then visible", () => {
@@ -194,6 +229,9 @@ describe("useConsumeBrowserAttention", () => {
     expect(markAsRead).toHaveBeenCalledTimes(1);
     rowsState.current = [row({ readAt: 5 })];
     rerender();
+    setFocus(true, false);
+    window.dispatchEvent(new Event("blur"));
+    setFocus(true, true);
     window.dispatchEvent(new Event("focus"));
     document.dispatchEvent(new Event("visibilitychange"));
     expect(markAsRead).toHaveBeenCalledTimes(1);
