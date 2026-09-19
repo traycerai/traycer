@@ -26,13 +26,24 @@
  */
 
 /**
- * Ceiling on ONE line, for a caller with no budget of its own to refuse
- * against (the JSON-RPC clients; the metered readers refuse far earlier). Two
- * orders of magnitude above the largest
- * line measured on a real store - a 100-row `thread/list` page is ~503 KB,
- * the turn-end readback that wedged a chat was ~1.3 MB - and above a
- * `thread/read` of a large thread, which ticket 7 measured in tens of MiB.
- * An import read is bounded by its own metered budget long before this.
+ * The framer's own figure for one line: 64 MiB. Two orders of magnitude above
+ * the largest line measured on a real store - a 100-row `thread/list` page is
+ * ~503 KB, the turn-end readback that wedged a chat was ~1.3 MB - and above a
+ * `thread/read` of a large thread, measured in tens of MiB (72 MiB for a 160
+ * MiB rollout).
+ *
+ * It is what a caller with nothing better to say takes, and the two repos now
+ * differ in whether they have something better:
+ *
+ *  - the host derives a ceiling per stream instead - from a job's remaining
+ *    budget for a metered read, and from the heap the process can still grow
+ *    into for an unmetered one - and passes that in. There this constant is the
+ *    FLOOR under the unmetered figure, not the figure: a single Codex turn
+ *    measures 70 MiB and a single tool-output item 42 MiB, so refusing at 64 MiB
+ *    would end chats the release before it carried, and a bound added for
+ *    memory safety must not do that;
+ *  - the CLI's lease reader keeps this figure as its ceiling: it reads its own
+ *    small records, and has no budget and no heap bound of its own.
  */
 export const MAX_JSONL_LINE_BYTES = 64 * 1024 * 1024;
 
