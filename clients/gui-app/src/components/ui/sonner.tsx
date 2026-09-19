@@ -22,6 +22,10 @@ import {
   type ToasterAnchor,
   type ToasterSize,
 } from "@/components/ui/toaster-anchor";
+// Where the close button sits on a touch device. A stylesheet, not classes:
+// sonner injects its own CSS unlayered, which outranks every Tailwind utility
+// (see the file).
+import "./sonner.css";
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
 // Sonner itself always shows the close button. Hiding it until hover only
@@ -80,10 +84,11 @@ const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
 // The toaster is `fixed` and paints above everything, so it is offset past
 // the app header rather than over it - the header row sits directly under
 // `#root`'s top inset and never scrolls. The extra 1.5rem keeps the close
-// button's touch hit area clear of the header's: sonner pulls the 20px button
-// 6px above the toast's outer edge, so its 44px hit area reaches 18px above
-// the toast, and the header's own 44px hit areas overhang its 40px row by
-// 2px. 1.25rem would make the two touch exactly; 1.5rem leaves 4px.
+// button's touch hit area clear of the header's, with room to spare: the
+// button now sits INSIDE the card on a coarse pointer (`sonner.css`), so its
+// 44px hit area reaches 4px above the toast rather than the 18px sonner's own
+// off-corner placement produced, and the header's own 44px hit areas overhang
+// its 40px row by 2px.
 const MOBILE_APP_TOASTER_ANCHOR: ToasterAnchor = "top-center";
 const MOBILE_APP_TOASTER_TOP = `calc(var(--safe-area-inset-top) + ${APP_HEADER_HEIGHT} + 1.5rem)`;
 // Both offsets: sonner reads `mobileOffset` at <=600px and `offset` above

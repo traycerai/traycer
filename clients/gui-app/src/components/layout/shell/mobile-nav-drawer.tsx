@@ -46,6 +46,7 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 const ROW_CLASS = "h-11 w-full justify-start gap-3 px-3";
@@ -382,6 +383,12 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
 
   const openItem = (item: HistoryItem) => {
     props.onNavigate();
+    // The end of the mobile "your tasks" branch of the first-task guide: it
+    // asked the user to pick up where they left off, and this is them doing
+    // it. Read imperatively - the drawer has no reason to re-render on the
+    // guide's state, and every other row in this list is a task too.
+    const guide = useFirstTaskGuideStore.getState();
+    if (guide.status === "active") guide.dismiss();
     if (item.taskType === "phase") {
       activateTabIntent(
         navigate,

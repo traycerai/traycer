@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
@@ -11,7 +12,7 @@ const toastState = vi.hoisted(() => {
       (
         _message: string,
         options: {
-          readonly description?: string;
+          readonly description?: ReactNode;
           readonly action?: { readonly label: string };
           readonly onDismiss?: () => void;
         },
@@ -69,8 +70,8 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     expect(toastState).toHaveBeenCalledOnce();
     const [message, options] = toastState.mock.calls[0];
     expect(message).toBe("You're all set");
-    expect(options.description).toBe(
-      "Optional setup lives in Settings › Getting started.",
+    expect(render(options.description).container.textContent).toBe(
+      "More setup is in Settings.",
     );
     expect(options.action?.label).toBe("Open");
     act(() => toastState.invokeDismiss());
