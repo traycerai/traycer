@@ -1,3 +1,4 @@
+import { prepareHistoryScopeForPromotion } from "@/lib/history-scope-handoff";
 import { History } from "lucide-react";
 import { HistoryModalContent } from "@/components/epics/history-modal-content";
 import { resolveHistoryTabIntent } from "@/lib/commands/actions/open-system-tab";
@@ -14,5 +15,5 @@ export const historyOverlayModule: SystemOverlayModule<"history"> = {
   promotionIntent: () => resolveHistoryTabIntent(),
   isOverlayPath: (pathname) => isHistoryPath(pathname),
   consumeEscape: () => false,
-  prepareForPromotion: () => undefined,
+  prepareForPromotion: prepareHistoryScopeForPromotion,
 };

@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
+import type { HistoryScope } from "@/lib/history-scope";
+import { registerHistoryModalScope } from "@/lib/history-scope-handoff";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 
@@ -15,6 +17,10 @@ export interface HistoryModalContentProps {
 export function HistoryModalContent(
   props: HistoryModalContentProps,
 ): ReactNode {
+  const [scope, onScopeChange] = useState<HistoryScope>("all");
+  useLayoutEffect(() => registerHistoryModalScope(scope), [scope]);
+  // TODO(T7): pass scope/onScopeChange to EpicsListPanel here and in HistorySurface.
+  void onScopeChange;
   // No autofocus on a touch pointer: focusing the search input raises the
   // on-screen keyboard over half the just-opened sheet. The pointer is what
   // decides, not the width - a desktop window snapped narrow still types with

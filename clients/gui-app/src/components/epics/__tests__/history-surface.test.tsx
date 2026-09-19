@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 
 interface HistoryRouteMatch {
-  readonly search: { readonly historyQuery: string };
+  readonly search: Readonly<Record<string, string>>;
   readonly loaderData: { readonly historyNowMs: number };
 }
 
@@ -14,6 +14,7 @@ const testState = vi.hoisted<{ match: HistoryRouteMatch | null }>(() => ({
 }));
 
 vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
   useMatch: ({ select }: { select: (match: HistoryRouteMatch) => unknown }) =>
     testState.match === null ? undefined : select(testState.match),
 }));
@@ -35,6 +36,7 @@ import { HistorySurface } from "@/components/epics/history-surface";
 
 describe("<HistorySurface />", () => {
   afterEach(() => {
+    cleanup();
     testState.match = {
       search: { historyQuery: "api" },
       loaderData: { historyNowMs: 123 },
@@ -53,5 +55,17 @@ describe("<HistorySurface />", () => {
 
     expect(probe.dataset.historyQuery).toBe("api");
     expect(probe.dataset.historyNow).toBe("123");
+  });
+
+  it("keeps the History filters when the route also carries a scope", () => {
+    testState.match = {
+      search: { historyQuery: "api", historyScope: "messages" },
+      loaderData: { historyNowMs: 123 },
+    };
+    render(<HistorySurface />);
+
+    expect(screen.getByTestId("history-list-probe").dataset.historyQuery).toBe(
+      "api",
+    );
   });
 });
