@@ -1,11 +1,9 @@
 import {
   memo,
-  type FocusEvent,
   type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -20,18 +18,12 @@ import {
   ListChecks,
   Paintbrush,
   Pencil,
-  Pin,
   Search,
   Trash2,
   X,
 } from "lucide-react";
 import { RefreshIcon } from "@/components/refresh-icon";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import { openEpicInBackground } from "@/lib/commands/actions/open-epic-in-background";
 import {
   useHistoryOpenInNewWindowFlow,
@@ -39,7 +31,6 @@ import {
 } from "@/components/epics/use-history-open-in-new-window";
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
@@ -57,7 +48,6 @@ import {
 } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
-import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
@@ -91,13 +81,8 @@ import {
   EpicsListLoading,
   EpicsListNoRows,
   EpicsListShowMore,
-  HistoryRowLeadingIcon,
 } from "@/components/epics/epics-list-shared";
-import {
-  historyPinControlLabel,
-  historyPinUnavailableReason,
-  historyPinUnavailableTooltip,
-} from "@/components/epics/history-pin-availability";
+import { HistoryTaskRow } from "@/components/epics/history-task-row";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { MobileHistoryList } from "@/components/epics/mobile/mobile-history-list";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
@@ -108,22 +93,8 @@ import {
   HistoryMessageHits,
   type HistoryMessageHitsProps,
 } from "@/components/epics/history-message-hits";
-import {
-  ROW_TARGET_SELECTOR,
-  useHistoryListKeyboardNav,
-} from "@/components/epics/use-history-list-keyboard-nav";
-import {
-  closeOpenTooltips,
-  StatusGlyphFocusContext,
-  useStatusGlyphFocusHold,
-} from "@/components/notifications/status-glyph-focus";
+import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
-import {
-  historyRowProvenance,
-  historyRowProvenanceLabel,
-  type HistoryRowProvenance,
-} from "@/components/epics/history-row-provenance";
-import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   useHistoryQuery,
@@ -148,8 +119,6 @@ import {
   type HistorySearchState,
 } from "@/lib/history-search";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
-import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
-import { worktreePrReferences } from "@/components/worktree/worktree-pr-metadata-model";
 
 const EMPTY_REPOS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACES: ReadonlyArray<HistoryWorkspaceRef> = [];
@@ -1592,86 +1561,6 @@ interface EpicsListRowProps {
 }
 
 /**
- * The row's trailing line: "updated …", the PR pills, and - for a coarse
- * pointer only - the provenance label the phone row always shows.
- *
- * The responsive switch to the phone list is WIDTH-only
- * (`use-mobile-viewport.ts`), so a landscape tablet or a touch-only laptop at
- * md+ gets this desktop row, where the status glyph's sentence is a hover
- * tooltip and a tap on the glyph forwards to the row target and opens the
- * task. `pointer-coarse:` is the input-modality half the width switch lacks:
- * such a person sees "Not synced" / "Deleted, edits kept" beside the
- * timestamp, exactly as on the phone, and a fine pointer keeps the tooltip.
- */
-function HistoryRowTrailingMetadata(props: {
-  readonly epicId: string;
-  readonly selectionMode: boolean;
-  readonly updatedLabel: string;
-  readonly worktrees: readonly WorktreeHostEntryV12[];
-  readonly provenance: HistoryRowProvenance | null;
-}): ReactNode {
-  const hasPrPills =
-    !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
-  // Desktop (md+): label and pills share one grid cell and swap on
-  // hover/focus. Below md there is no hover, so the cell flattens into a
-  // flex line - label and pills sit side by side, pills persistently
-  // visible and tappable - on the row's wrapped second line (`pl-6` aligns
-  // it under the title, past the leading icon).
-  return (
-    <span className="grid shrink-0 items-center justify-items-end text-ui-xs max-md:flex max-md:min-w-0 max-md:gap-2 max-md:pl-6">
-      <span
-        className={cn(
-          "col-start-1 row-start-1 text-muted-foreground",
-          hasPrPills &&
-            "transition-opacity md:group-hover/list-row:opacity-0 md:group-focus-within/list-row:opacity-0",
-        )}
-      >
-        updated {props.updatedLabel}
-        {props.provenance === null ? null : (
-          <span
-            data-testid={`epics-list-row-coarse-provenance-label-${props.provenance}`}
-            className={cn(
-              "hidden pointer-coarse:inline",
-              props.provenance === "preserved-orphan" && "text-destructive",
-            )}
-          >
-            {" · "}
-            {historyRowProvenanceLabel(props.provenance)}
-          </span>
-        )}
-      </span>
-      {hasPrPills ? (
-        <WorktreePrPills
-          worktrees={props.worktrees}
-          detailOnHover
-          maximumVisible={2}
-          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
-          testId={`task-history-prs-${props.epicId}`}
-          openPrInApp={null}
-        />
-      ) : null}
-    </span>
-  );
-}
-
-function HistoryOpenBadge(props: {
-  readonly epicId: string;
-  readonly isOpen: boolean;
-}): ReactNode {
-  if (!props.isOpen) return null;
-  return (
-    <Badge
-      variant="secondary"
-      data-testid={`task-history-open-${props.epicId}`}
-      className="h-4"
-      size="sm"
-    >
-      Open
-    </Badge>
-  );
-}
-
-/**
  * Marks a row activation target that opens a tooltip of its own on focus (the
  * selection-mode toggle of a row that cannot be selected). `onRowFocus` does
  * not hold a status mark's tooltip open beside it - see `HistoryRowStatusSlot`.
@@ -1805,81 +1694,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
   };
-  // Names the leading status slot so both row targets can be described by
-  // whatever status mark is showing - see `HistoryRowStatusSlot`.
-  const statusDescriptionId = useId();
-  const importedDescriptionId = useId();
-  // Both status slots describe the row targets; only the leading one holds
-  // its tooltip open on keyboard focus (see `HistoryRowStatusSlot`).
-  const rowDescribedBy = `${statusDescriptionId} ${importedDescriptionId}`;
-  // Keyboard focus on the row's activation target holds the leading status
-  // glyph's tooltip open (`StatusGlyphFocusContext`): the target is an
-  // overlay, the glyphs are deliberately not tab stops, and `aria-describedby`
-  // puts the sentence in the accessibility tree and nowhere on screen. "Keyboard" is
-  // the decision `:focus-visible` makes, taken here by the same rule - a focus
-  // that arrives during a pointer press is pointer focus, any other is
-  // keyboard - because jsdom matches nothing for `:focus-visible` and the
-  // behaviour would otherwise be untestable.
-  const pointerPressRef = useRef(false);
-  // A fresh id per keyboard-focus session, `null` while there is none: the
-  // slot remembers an Escape against the id, so the hold stays dismissed
-  // until focus leaves and returns (`StatusGlyphFocusContext`).
-  const focusSessionRef = useRef(0);
-  const [rowFocusSession, setRowFocusSession] = useState<number | null>(null);
-  // The press is forgotten on release ANYWHERE, not only over the row: a
-  // press that starts here and ends outside fires no row handler, and a ref
-  // left `true` would classify the next keyboard focus as a click. The focus
-  // that reads the ref also consumes it, for the release that never arrives
-  // at the document either (a pointer let go over a webview guest). The
-  // pending release listeners are the row's, so they leave with it: a row
-  // unmounted mid-press (the list re-sorting under a drag) must not leave a
-  // one-shot listener on the document to fire at some later release.
-  const forgetPointerPressRef = useRef<(() => void) | null>(null);
-  const rememberPointerPress = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      forgetPointerPressRef.current?.();
-      pointerPressRef.current = true;
-      const ownerDocument = event.currentTarget.ownerDocument;
-      const forgetPointerPress = () => {
-        pointerPressRef.current = false;
-        forgetPointerPressRef.current = null;
-        ownerDocument.removeEventListener("pointerup", forgetPointerPress);
-        ownerDocument.removeEventListener("pointercancel", forgetPointerPress);
-      };
-      forgetPointerPressRef.current = forgetPointerPress;
-      ownerDocument.addEventListener("pointerup", forgetPointerPress);
-      ownerDocument.addEventListener("pointercancel", forgetPointerPress);
-    },
-    [],
-  );
-  useEffect(
-    () => () => {
-      forgetPointerPressRef.current?.();
-    },
-    [],
-  );
-  const onRowFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
-    const byPointer = pointerPressRef.current;
-    pointerPressRef.current = false;
-    // A target that carries its own tooltip (the selection-mode toggle of a
-    // row that cannot be selected) explains itself on focus, and a second
-    // held-open tooltip beside it would overlap it.
-    const keyboardFocused =
-      !byPointer &&
-      event.target.matches(ROW_TARGET_SELECTOR) &&
-      !event.target.hasAttribute(ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE);
-    focusSessionRef.current += 1;
-    // A hold opens its tooltip through a controlled `open`, which Radix does
-    // not count as an opening, so a tooltip still up from a hover (a row
-    // control's, or a glyph's in another row) would stay beside the held
-    // one. Send Radix's own exclusivity signal first, so the hold arrives
-    // alone - the same rule a hover-opened tooltip applies to the others.
-    if (keyboardFocused) closeOpenTooltips(event.currentTarget.ownerDocument);
-    setRowFocusSession(keyboardFocused ? focusSessionRef.current : null);
-  }, []);
-  const onRowBlur = useCallback(() => {
-    setRowFocusSession(null);
-  }, []);
   const openEpicRow = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
@@ -1958,45 +1772,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       <TooltipContent>{deleteDisabledTooltip}</TooltipContent>
     </Tooltip>
   );
-  const pinControl = (
-    <HistoryPinControl
-      item={item}
-      isPending={isPinPending}
-      selectionMode={selectionMode}
-      onSetPinned={onSetPinned}
-    />
-  );
-  const rowInteractionLayer = selectionMode ? (
-    <HistorySelectionOverlay
-      item={item}
-      canDeleteItem={canDeleteItem}
-      deleteDisabledTooltip={deleteDisabledTooltip}
-      describedById={rowDescribedBy}
-      onToggleSelection={toggleEpicSelection}
-      onBlockUnavailableDelete={blockUnavailableDeleteAction}
-      onRowKeyDown={onRowKeyDown}
-    />
-  ) : (
-    <Link
-      aria-describedby={rowDescribedBy}
-      to="/epics/$epicId/$tabId"
-      params={{ epicId: item.epicId, tabId: linkTabId }}
-      search={{
-        focusedAt: undefined,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        migrationSource: isPhase ? "phase" : undefined,
-        focusPaneId: undefined,
-        focusTileInstanceId: undefined,
-      }}
-      onClick={openEpicRow}
-      onAuxClick={onMiddleClick(openEpicRowInBackground)}
-      onKeyDown={onRowKeyDown}
-      aria-label={`Open task ${displayTitle}`}
-      data-history-row-target=""
-      className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-    />
-  );
   const deleteControl = selectionMode ? null : (
     <HistoryRowDeleteControl
       item={item}
@@ -2005,72 +1780,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       onRequestDelete={onRequestDelete}
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
     />
-  );
-  const rowCard = (
-    <div
-      data-testid="epics-list-row-card"
-      data-selection-disabled={selectionDisabled ? "true" : undefined}
-      onPointerDown={rememberPointerPress}
-      onFocus={onRowFocus}
-      onBlur={onRowBlur}
-      className={historyRowCardClassName({
-        selectionDisabled,
-        selectedForDelete: historySelectedForDelete({
-          selectionMode,
-          isSelected,
-          canDeleteItem,
-        }),
-      })}
-    >
-      {rowInteractionLayer}
-      {/* Below md the row wraps to two lines - title spans the full first
-          line (`basis-full` beats flex-1's 0% basis inside the media query)
-          and the metadata drops underneath - otherwise the shrink-0
-          "updated ..." label squeezes the title to nothing at phone width. */}
-      <div className={historyRowContentClassName(rowSweep.isVisible)}>
-        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
-          <HistoryRowStatusSlot
-            id={statusDescriptionId}
-            rowFocusSession={rowFocusSession}
-          >
-            <HistoryRowLeadingIcon item={item} />
-          </HistoryRowStatusSlot>
-          {isRenaming ? (
-            <input
-              {...renameInputProps}
-              type="text"
-              aria-label={`Rename ${displayTitle}`}
-              data-testid="epics-list-row-title-input"
-              className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
-            />
-          ) : (
-            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-              <span className="truncate font-medium text-foreground">
-                {displayTitle}
-              </span>
-              <HistoryRowStatusSlot
-                id={importedDescriptionId}
-                rowFocusSession={null}
-              >
-                <ImportedUnseenDot epicId={item.epicId} />
-              </HistoryRowStatusSlot>
-              <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
-              {pinControl}
-              {titleEditControl}
-            </span>
-          )}
-        </span>
-        <HistoryRowTrailingMetadata
-          epicId={item.epicId}
-          selectionMode={selectionMode}
-          updatedLabel={item.updatedLabel}
-          worktrees={worktrees}
-          provenance={historyRowProvenance(item)}
-        />
-      </div>
-      <HistoryRowSweepControl sweep={rowSweep} displayTitle={displayTitle} />
-      {deleteControl}
-    </div>
   );
   // Phases have no background-open: a phase only opens through its migration
   // route (migrationSource=phase), which a plain canvas tab can't carry, so it
@@ -2101,151 +1810,80 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     </ContextMenuItem>
   ) : null;
   return (
-    <li
-      data-testid="epics-list-row"
-      data-pinned={item.isPinned}
-      className="group/list-row flex items-stretch gap-1.5"
-    >
-      <div className="flex w-5 shrink-0 items-center justify-center">
-        {selectionControl}
-      </div>
-      {/* Skip the context menu entirely when no action qualifies (e.g. a phase
-          row in the browser build with no windows bridge) so right-click never
-          opens an empty popover. */}
-      {/* `canSweep` never holds when both are null: sweep requires a
-          non-phase row, and epic rows always qualify for background-open, so
-          the sweep menu item can never be the lone reason to mount a menu. */}
-      {backgroundMenuItem === null && newWindowMenuItem === null ? (
-        rowCard
-      ) : (
-        <ContextMenu>
-          <ContextMenuTrigger asChild>{rowCard}</ContextMenuTrigger>
-          <ContextMenuContent
-            onCloseAutoFocus={(event) => event.preventDefault()}
-          >
-            {backgroundMenuItem}
-            {newWindowMenuItem}
-            <HistorySweepMenuItem sweep={rowSweep} />
-          </ContextMenuContent>
-        </ContextMenu>
-      )}
-    </li>
+    <HistoryTaskRow
+      item={item}
+      selectionMode={selectionMode}
+      selectionDisabled={selectionDisabled}
+      selectedForDelete={historySelectedForDelete({
+        selectionMode,
+        isSelected,
+        canDeleteItem,
+      })}
+      selectionControl={selectionControl}
+      renderInteractionTarget={(describedBy) =>
+        selectionMode ? (
+          <HistorySelectionOverlay
+            item={item}
+            canDeleteItem={canDeleteItem}
+            deleteDisabledTooltip={deleteDisabledTooltip}
+            describedById={describedBy}
+            onToggleSelection={toggleEpicSelection}
+            onBlockUnavailableDelete={blockUnavailableDeleteAction}
+            onRowKeyDown={onRowKeyDown}
+          />
+        ) : (
+          <Link
+            aria-describedby={describedBy}
+            to="/epics/$epicId/$tabId"
+            params={{ epicId: item.epicId, tabId: linkTabId }}
+            search={{
+              focusedAt: undefined,
+              focusArtifactId: undefined,
+              focusThreadId: undefined,
+              migrationSource: isPhase ? "phase" : undefined,
+              focusPaneId: undefined,
+              focusTileInstanceId: undefined,
+            }}
+            onClick={openEpicRow}
+            onAuxClick={onMiddleClick(openEpicRowInBackground)}
+            onKeyDown={onRowKeyDown}
+            aria-label={`Open task ${displayTitle}`}
+            data-history-row-target=""
+            className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          />
+        )
+      }
+      renameEditor={
+        isRenaming ? (
+          <input
+            {...renameInputProps}
+            type="text"
+            aria-label={`Rename ${displayTitle}`}
+            data-testid="epics-list-row-title-input"
+            className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
+          />
+        ) : null
+      }
+      renameControl={titleEditControl}
+      deleteControl={deleteControl}
+      sweepControl={
+        <HistoryRowSweepControl sweep={rowSweep} displayTitle={displayTitle} />
+      }
+      sweepMenuItem={
+        rowSweep.canSweep ? <HistorySweepMenuItem sweep={rowSweep} /> : null
+      }
+      hasSweepControl={rowSweep.isVisible}
+      contextMenuItems={backgroundMenuItem}
+      openInNewWindowControl={newWindowMenuItem}
+      onSetPinned={onSetPinned}
+      isPinPending={isPinPending}
+      pinAlwaysVisible={false}
+      showOpenBadge
+      isOpen={isOpen}
+      worktrees={worktrees}
+    />
   );
 });
-
-/** Three visual states: permanently unavailable, pinned, and the
- * hover-revealed default. */
-/**
- * The three states composed rather than concatenated.
- *
- * Unavailable is deliberately the arm that gets NEITHER of main's touch
- * affordances: no `active:press-scrim`, because press feedback tells the user
- * the tap landed on something that acts, and no `pointer-coarse:opacity-100`,
- * because permanently revealing a control that only ever refuses is an
- * invitation to tap it. It reads as muted-and-inert, which is what it is; the
- * tooltip carries the reason.
- */
-function historyPinClassName(
-  pinUnavailable: boolean,
-  isPinned: boolean,
-): string {
-  if (pinUnavailable) return "cursor-default text-muted-foreground opacity-40";
-  if (isPinned) return "text-primary opacity-100 active:press-scrim";
-  // Touch has no hover to reveal the control, and tapping the row navigates -
-  // so on coarse pointers an ACTIONABLE pin stays visible.
-  return "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100 pointer-coarse:opacity-100 active:press-scrim";
-}
-
-function HistoryPinControl(props: {
-  readonly item: HistoryItem;
-  readonly isPending: boolean;
-  readonly selectionMode: boolean;
-  readonly onSetPinned: (epicId: string, pinned: boolean) => void;
-}): ReactNode {
-  // Ahead of the early return: this is a hook, and the return below is
-  // conditional on props.
-  const cloudAuthorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  // Also ahead of the early return, and for the same reason.
-  //
-  // `null` - the window's host - which is the host this surface's local-home
-  // readings come from in the first place; see the dispatch handler above for
-  // why that makes gate and dispatch name the same machine here.
-  const localHomePinSupported = useEpicPinLocalHomeSupported(null);
-  if (props.selectionMode || props.item.taskType === "phase") return null;
-  const displayTitle = historyItemDisplayTitle(props.item);
-  const unavailableReason = historyPinUnavailableReason(
-    props.item,
-    cloudAuthorized,
-    localHomePinSupported,
-  );
-  const pinUnavailable = unavailableReason !== null;
-  // "…is available after cloud sync" promised a sync that, for a free-tier
-  // account, never comes - and `s5-status-truthfulness` folds
-  // `s4-promotion-task-list-invalidation` in here for the sharper version of
-  // the same problem: a STALE `home: "local"` row keeps making that promise
-  // about an epic that is already in the cloud, and pin is one of the three
-  // mutations that would have cleared the cache, so it cannot self-heal by
-  // being used. The copy now states the CONDITION (this epic is on this
-  // device) rather than predicting an event, so it is true in both cases.
-  //
-  // The staleness itself is the list-invalidation fix and is not repaired
-  // here; this stops the copy from lying while it lasts.
-  const label = historyPinControlLabel({
-    displayTitle,
-    unavailableReason,
-    isPinned: props.item.isPinned,
-  });
-  const unavailableTooltip =
-    unavailableReason === null
-      ? null
-      : historyPinUnavailableTooltip(unavailableReason);
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          aria-pressed={props.item.isPinned}
-          data-testid="epics-list-row-pin"
-          data-local-home-pin-unavailable={pinUnavailable || undefined}
-          // `aria-disabled`, NOT `disabled`, for the PERMANENT unavailability:
-          // a natively disabled control is unfocusable and fires no pointer
-          // events, so the tooltip that carries the only explanation of why
-          // pinning is off could be reached with a mouse hover and by nothing
-          // else. `disabled` is kept for the transient in-flight window, where
-          // there is nothing to explain. The mutation stays blocked by the
-          // shared admission guard in `onClick`, which keyboard activation also
-          // routes through.
-          aria-disabled={pinUnavailable || undefined}
-          disabled={props.isPending}
-          className={cn(
-            // `active:press-scrim` is NOT here, though main had it in this
-            // static string: press feedback is a promise that the tap does
-            // something, and on the unavailable control it does not. It moves
-            // into the two actionable arms of `historyPinClassName` instead,
-            // which is the composition this merge owes both sides.
-            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-foreground/5 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
-            historyPinClassName(pinUnavailable, props.item.isPinned),
-          )}
-          onClick={() => {
-            if (pinUnavailable) return;
-            props.onSetPinned(props.item.epicId, !props.item.isPinned);
-          }}
-        >
-          {/* The pin state is optimistic - it flips at click time - so the
-              icon always shows the row's current state; the brief disabled
-              window only serializes rapid re-toggles, with no spinner. */}
-          <Pin
-            className={cn("size-3.5", props.item.isPinned && "fill-current")}
-          />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>{unavailableTooltip ?? label}</TooltipContent>
-    </Tooltip>
-  );
-}
 
 function historySelectionDisabled(
   selectionMode: boolean,
@@ -2444,146 +2082,6 @@ function HistorySweepMenuItem(props: {
       <Paintbrush />
       Sweep Worktrees…
     </ContextMenuItem>
-  );
-}
-
-/**
- * The hover target for the row's status glyph.
- *
- * `historyRowContentClassName` makes the whole content layer
- * `pointer-events-none` so the row's overlay link underneath receives every
- * click, and each control that wants the pointer opts back in with
- * `pointer-events-auto` (pin, title edit, delete, PR pills). The status
- * marks never did, so none of their tooltips - the running spinner's, the
- * attention tones', the imported-unseen dot's, and now the provenance dot's -
- * could open on desktop: the pointer fell straight through to the link.
- * Opting in restores the hover for the whole class at once; every status mark
- * on the row renders inside one of these.
- *
- * Opting in also means a click on the glyph would stop at the glyph, and the
- * glyph is not a control - it is a 14px status mark that used to be part of
- * the row's click surface. So the click is handed on to the row's activation
- * target with its modifiers intact, which is what keeps ctrl/cmd-click on the
- * spinner toggling selection exactly as it did through the overlay. Dispatched
- * as a real DOM event of the same type (`click`, or `auxclick` for a middle
- * button, which the row link turns into a background open) rather than
- * calling the row's handler directly, so this slot needs to know nothing
- * about what activation means - the overlay link and the selection-mode
- * toggle both carry `data-history-row-target`.
- *
- * The marks stay non-focusable - a tab stop on every row for a
- * non-interactive mark would cost keyboard users a keypress per row - and
- * keyboard users reach the sentence through the row instead: the leading
- * slot carries an `id`, and both row activation targets (the overlay link and
- * the selection-mode toggle) name it in `aria-describedby`. The description
- * is computed from the slot's contents, so it is whatever status mark is
- * showing - the running spinner's title, an attention tone's, or the
- * provenance dot's - and empty for the plain layers glyph, which is
- * `aria-hidden`. Both slots carry an id: the imported-unseen slot is described
- * too, so its sentence is heard even though it is never held open on screen.
- *
- * That description is heard, not seen. For a sighted keyboard user the row
- * also holds ONE tooltip open (`StatusGlyphFocusContext`, see the row's
- * `onRowFocus`): while either activation target has keyboard focus, the mark
- * in the slot given the row's `rowFocusSession` shows its sentence over the
- * glyph without the glyph becoming a tab stop, until Escape dismisses it for
- * that focus session. The dismissal is the SLOT's state
- * (`useStatusGlyphFocusHold`), not the mark's: the mark under the slot is
- * swapped as the task's state moves (a running spinner becomes a completion
- * mark), and a dismissal kept in the mark would leave with it, so the next
- * mark would open uninvited in the same focus session. One slot per row, on
- * purpose - Radix keeps hover tooltips to one at a time through a signal a
- * controlled open never sends (the row sends it itself before starting a
- * hold, see `onRowFocus`), so two held-open marks would be two overlapping
- * portals. The leading slot is the one; the imported-unseen slot is heard
- * through `aria-describedby` like the rest and stays a quiet dot on screen,
- * which is the unread idiom.
- */
-function HistoryRowStatusSlot(props: {
-  readonly id: string;
-  /**
-   * The row's keyboard-focus session, for the one slot per row that holds
-   * its tooltip open on it; `null` for a slot that never does.
-   */
-  readonly rowFocusSession: number | null;
-  readonly children: ReactNode;
-}): ReactNode {
-  const focusHold = useStatusGlyphFocusHold(props.rowFocusSession);
-  const forwardClickToRow = useCallback(
-    (event: React.MouseEvent<HTMLSpanElement>) => {
-      // `auxclick` is forwarded for the middle button only: the right button
-      // belongs to the context menu, which opens on `contextmenu` and needs
-      // no forwarding.
-      if (event.type === "auxclick" && event.button !== 1) return;
-      const target = event.currentTarget
-        .closest("li")
-        ?.querySelector<HTMLElement>(ROW_TARGET_SELECTOR);
-      if (target === null || target === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      target.dispatchEvent(
-        new MouseEvent(event.type, {
-          bubbles: true,
-          cancelable: true,
-          button: event.button,
-          ctrlKey: event.ctrlKey,
-          metaKey: event.metaKey,
-          shiftKey: event.shiftKey,
-          altKey: event.altKey,
-        }),
-      );
-    },
-    [],
-  );
-  return (
-    // The handler is click FORWARDING, not an interaction of its own, which
-    // is why this is a presentational span and not a button: a button would
-    // announce itself and take focus, and the thing it activates already has
-    // both. `role="presentation"` states exactly that - the span contributes
-    // no semantics of its own; the status child keeps its `role="status"`.
-    // `empty:hidden`: a mark that renders nothing (the imported-unseen dot on
-    // a task with no unseen import) must not leave an empty flex item behind,
-    // or the parent's `gap` puts a stray space between the title and the next
-    // control. Decided by the DOM rather than by re-reading each mark's
-    // condition here, so a new mark cannot get the gap wrong.
-    <StatusGlyphFocusContext.Provider value={focusHold}>
-      <span
-        id={props.id}
-        role="presentation"
-        className="pointer-events-auto inline-flex shrink-0 items-center empty:hidden"
-        data-testid="epics-list-row-status-slot"
-        onClick={forwardClickToRow}
-        onAuxClick={forwardClickToRow}
-      >
-        {props.children}
-      </span>
-    </StatusGlyphFocusContext.Provider>
-  );
-}
-
-function historyRowContentClassName(hasSweepControl: boolean): string {
-  return cn(
-    "pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm",
-    // Below md the row wraps to two lines rather than letting the shrink-0
-    // "updated ..." label squeeze the title to nothing at phone width.
-    "max-md:flex-wrap max-md:gap-y-1",
-    // Reserve room for the second hover control so the sweep button never
-    // overlaps the trailing metadata / PR pills.
-    hasSweepControl && "pr-20",
-  );
-}
-
-function historyRowCardClassName(args: {
-  readonly selectionDisabled: boolean;
-  readonly selectedForDelete: boolean;
-}): string {
-  return cn(
-    // The row is a plain container rather than a Button, so it opts into the
-    // shared press scrim itself - without it a tap on touch (where `hover:`
-    // never fires) leaves the row inert until the navigation lands.
-    "group relative min-w-0 flex-1 rounded-md transition-colors hover:bg-accent/40 active:press-scrim pointer-coarse:touch-chrome",
-    args.selectionDisabled && "opacity-50",
-    args.selectedForDelete && "bg-accent/40 ring-1 ring-inset ring-primary/40",
   );
 }
 
