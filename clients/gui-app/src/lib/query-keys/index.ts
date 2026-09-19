@@ -5,6 +5,7 @@ import { uiQueryKeys } from "@/lib/query-keys/ui-query-keys";
 export {
   cloudQueryKeys,
   isCloudEpicTasksQueryKey,
+  isCurrentTasksPinTailQueryKey,
   isEpicPinReadingQueryKey,
 } from "@/lib/query-keys/cloud-query-keys";
 export {

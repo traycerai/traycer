@@ -18,7 +18,7 @@ import {
   epicPinReadingQueryKeyMatchesScope,
   setEpicPinnedInCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
-import { epicMutationKeys } from "@/lib/query-keys";
+import { cloudQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import {
   resetCloudEpicTasksPagesForScope,
   setCloudEpicTasksPagePinned,
@@ -195,6 +195,14 @@ export function useEpicSetPinned() {
       ) => {
         if (ctx.hostId === null || ctx.userId === null) return;
         const scope = { hostId: ctx.hostId, userId: ctx.userId };
+        const pinTailScope = cloudQueryKeys.currentTasksPinTailScope(
+          ctx.hostId,
+          ctx.userId,
+        );
+        await queryClient.cancelQueries(
+          { queryKey: pinTailScope },
+          { revert: false },
+        );
         resetCloudEpicTasksPagesForScope(ctx.hostId, ctx.userId);
         // Both predicates also match the per-host PIN READING cache, which for
         // a local-homed row is where the RENDERED pin state comes from. The
@@ -214,6 +222,9 @@ export function useEpicSetPinned() {
           predicate: (query) =>
             cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
             epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
+        });
+        await queryClient.invalidateQueries({
+          queryKey: pinTailScope,
         });
       },
       onError: (
@@ -339,6 +350,38 @@ export function usePendingSetPinnedEpicIds(): ReadonlySet<string> {
         ),
       ),
     [pendingVariables],
+  );
+}
+
+export function useHasPendingSetPinnedForScope(
+  hostId: string | null,
+  userId: string | null,
+): boolean {
+  const pendingContexts = useMutationState({
+    filters: {
+      mutationKey: epicMutationKeys.setPinned(),
+      status: "pending",
+    },
+    select: (mutation) => mutation.state.context,
+  });
+  if (hostId === null || userId === null) return false;
+  return pendingContexts.some(
+    (context) =>
+      isSetEpicPinnedMutationContext(context) &&
+      context.hostId === hostId &&
+      context.userId === userId,
+  );
+}
+
+function isSetEpicPinnedMutationContext(
+  value: unknown,
+): value is SetEpicPinnedMutationContext {
+  if (value === null || typeof value !== "object") return false;
+  return (
+    "hostId" in value &&
+    (typeof value.hostId === "string" || value.hostId === null) &&
+    "userId" in value &&
+    (typeof value.userId === "string" || value.userId === null)
   );
 }
 
