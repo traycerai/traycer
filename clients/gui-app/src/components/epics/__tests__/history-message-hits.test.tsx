@@ -347,6 +347,23 @@ describe("HistoryMessageHits: the header", () => {
     expect(band.parentElement).toBe(container);
     expect(region.parentElement).toBe(container);
     expect(band.nextElementSibling).toBe(region);
+    // The region is its own stacking context, so row content stays under
+    // the sticky header; the header itself carries no margin or focus escape.
+    expect(region.classList.contains("isolate")).toBe(true);
+    expect(band.className).not.toMatch(/(^|\s)-?m[trblxys]?-/);
+    expect(band.className).not.toContain("z-30");
+    expect(band.className).not.toContain("focus-visible:z");
+  });
+
+  it("owns the one top border, and no margin, in both placements", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    for (const standalone of [false, true]) {
+      renderSection({ standalone });
+      expect(headerBand().className).toContain("border-t");
+      expect(headerBand().className).not.toMatch(/(^|\s)-?m[trblxys]?-/);
+      cleanup();
+    }
   });
 
   it("draws no visible count line and no Tasks-style badge", () => {

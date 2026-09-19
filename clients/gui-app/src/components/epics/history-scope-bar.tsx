@@ -73,7 +73,8 @@ export function HistoryScopedResults(props: {
       <TabsContent value={scope} asChild>
         <div
           ref={rowsScopeRef}
-          className="min-h-0 flex-1 overflow-y-auto border-t border-border [--history-header-clearance:max(var(--history-tasks-header-height,3rem),var(--history-messages-header-height,3rem))] [&_[data-history-row-target]]:scroll-my-(--history-header-clearance) [&_[data-chat-search-nav]]:scroll-my-(--history-header-clearance)"
+          data-history-scroll=""
+          className="min-h-0 flex-1 overflow-y-auto [--history-header-clearance:max(var(--history-tasks-header-height,3rem),var(--history-messages-header-height,3rem))] [&_[data-history-row-target]]:scroll-my-(--history-header-clearance) [&_[data-chat-search-nav]]:scroll-my-(--history-header-clearance)"
         >
           <p role="status" className="sr-only">
             {scope !== "messages"
@@ -145,7 +146,11 @@ function TasksGroup(props: {
   const headingId = useId();
   const groupRef = useRef<HTMLElement>(null);
   return (
-    <>
+    <section
+      ref={groupRef}
+      aria-labelledby={headingId}
+      className="isolate pb-6"
+    >
       <HistoryGroupHeader
         kind="tasks"
         id={headingId}
@@ -154,18 +159,16 @@ function TasksGroup(props: {
         pinBottom={false}
         actions={<HistoryTaskControls {...props.controls} />}
       />
-      <section
-        ref={groupRef}
-        aria-labelledby={headingId}
-        className="scroll-mt-[var(--history-tasks-header-height,3rem)]"
-      >
+      {/* Row content has its own z-10 controls. Contain those beneath this
+          group's sticky header, as well as beneath the Messages header. */}
+      <div className="isolate">
         {props.controls.filters.active ? (
           <div className="px-3.5 pb-2">
             <ClearFiltersButton onClick={props.controls.filters.onClear} />
           </div>
         ) : null}
         {props.taskList}
-      </section>
-    </>
+      </div>
+    </section>
   );
 }

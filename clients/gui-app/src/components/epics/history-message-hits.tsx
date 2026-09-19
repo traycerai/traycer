@@ -227,7 +227,7 @@ function HistoryMessageHitsSection(
         ref={groupRef}
         aria-labelledby={headingId}
         className={cn(
-          "flex scroll-mt-[var(--history-messages-header-height,3rem)] flex-col",
+          "isolate flex scroll-mt-[var(--history-messages-header-height,3rem)] flex-col",
           animateArrival &&
             !standalone &&
             "transition-[opacity,translate] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0",

@@ -995,7 +995,7 @@ describe("History scope bar: the group headers", () => {
     }
   });
 
-  it("puts each header directly before its region, inside the one scroller", async () => {
+  it("nests the Tasks header in its isolated region; the Messages header is a direct sibling before its own", async () => {
     testState.hostEntry = TANVEER_HOST;
     seedSearch(readyHits(["chat-hit"], false));
     renderScoped("all");
@@ -1003,17 +1003,58 @@ describe("History scope bar: the group headers", () => {
 
     const tasksHeader = tasksHeading()?.parentElement;
     const messagesHeader = messagesHeading()?.parentElement;
-    expect(tasksHeader?.nextElementSibling).toBe(tasksRegion());
-    expect(messagesHeader?.nextElementSibling).toBe(messageRegion());
-    expect(tasksHeader?.parentElement).toBe(scroller());
-    expect(messagesHeader?.parentElement).toBe(scroller());
+    // Tasks: header INSIDE the labelled section, so it is bounded by it.
+    expect(tasksHeader?.parentElement).toBe(tasksRegion());
+    expect(tasksRegion()?.firstElementChild).toBe(tasksHeader);
     expect(tasksRegion()?.parentElement).toBe(scroller());
+    // Messages: header is a direct child of the scroller, then its region.
+    expect(messagesHeader?.parentElement).toBe(scroller());
+    expect(messagesHeader?.nextElementSibling).toBe(messageRegion());
     expect(messageRegion()?.parentElement).toBe(scroller());
     // Tasks first, then Messages, in reading order.
     expect(
       tasksRegion()?.compareDocumentPosition(messagesHeader as HTMLElement) ??
         0,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("isolates the Tasks region, its row content and the Messages region separately", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    // Outer layer: the group cannot outstack the Messages header.
+    expect(tasksRegion()?.classList.contains("isolate")).toBe(true);
+    expect(tasksRegion()?.className).toContain("pb-6");
+    expect(messageRegion()?.classList.contains("isolate")).toBe(true);
+    // Inner layer: row z-10 descendants cannot outstack the Tasks header.
+    const rowLayer = (taskLink() as HTMLElement).closest(".isolate");
+    expect(rowLayer).not.toBeNull();
+    expect(rowLayer).not.toBe(tasksRegion());
+    expect(rowLayer?.parentElement).toBe(tasksRegion());
+    expect(rowLayer?.previousElementSibling).toBe(
+      tasksHeading()?.parentElement,
+    );
+    expect(rowLayer?.contains(tasksHeading() as HTMLElement)).toBe(false);
+    // The Tasks target includes its own header: no scroll offset.
+    expect(tasksRegion()?.className).not.toContain("scroll-m");
+  });
+
+  it("draws one divider: no scroller border, and only the Messages header owns a top border", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    expect(scroller().className).not.toMatch(/(^|\s)border(-|\s|$)/);
+    expect(scroller().className).not.toContain("border-t");
+    expect(messagesHeading()?.parentElement?.className).toContain("border-t");
+    expect(tasksHeading()?.parentElement?.className).not.toContain("border-t");
+    cleanup();
+
+    renderScoped("messages");
+    await screen.findByRole("tablist");
+    expect(scroller().className).not.toContain("border-t");
+    expect(messagesHeading()?.parentElement?.className).toContain("border-t");
   });
 
   it("labels each region by its heading, and the Messages heading names the host", async () => {
@@ -1056,6 +1097,26 @@ describe("History scope bar: the group headers", () => {
     expect(messagesHeading()?.parentElement?.className).not.toContain(
       "bottom-0",
     );
+  });
+
+  it("gives sticky headers no margin and no focus z-index escape", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+
+    const assertClean = (): void => {
+      for (const heading of [tasksHeading(), messagesHeading()]) {
+        const className = heading?.parentElement?.className;
+        if (className === undefined) continue;
+        expect(className).not.toMatch(/(^|\s)-?m[trblxys]?-/);
+        expect(className).not.toContain("z-30");
+        expect(className).not.toContain("focus-visible:z");
+      }
+    };
+    assertClean();
+    await user.click(scopeTab("messages"));
+    assertClean();
   });
 
   it("scrolls the Messages region to its start when its label is pressed", async () => {
@@ -1182,6 +1243,36 @@ describe("History scope bar: the group headers", () => {
     expect(
       scroller().style.getPropertyValue("--history-tasks-header-height"),
     ).toBe("48px");
+
+    // Both headers clean up on unmount, the nested Tasks header included.
+    const mounted = scroller();
+    expect(mounted.hasAttribute("data-history-scroll")).toBe(true);
+    cleanup();
+    expect(
+      mounted.style.getPropertyValue("--history-tasks-header-height"),
+    ).toBe("");
+    expect(
+      mounted.style.getPropertyValue("--history-messages-header-height"),
+    ).toBe("");
+  });
+
+  it("marks the one scroller, and the nested Tasks header still writes to it", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("tasks");
+    await screen.findByRole("tablist");
+
+    const marked = document.querySelectorAll("[data-history-scroll]");
+    expect(marked).toHaveLength(1);
+    expect(marked[0]).toBe(scroller());
+    // The Tasks header is not a direct child of the scroller.
+    expect(tasksHeading()?.parentElement?.parentElement).not.toBe(scroller());
+    act(() => {
+      headerHeights.box.height = 52;
+      for (const listener of headerHeights.listeners) listener();
+    });
+    expect(
+      scroller().style.getPropertyValue("--history-tasks-header-height"),
+    ).toBe("52px");
   });
 
   it("re-renders neither the panel body nor the task rows when a header resizes", async () => {
