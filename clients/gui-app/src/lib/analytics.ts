@@ -2294,7 +2294,10 @@ function analyticsOutcomeBlockerPairIsValid(
   );
 }
 
-const DRAFTS_LIST_ENTRY_POINTS_BY_SURFACE = new Map<string, ReadonlySet<string>>([
+const DRAFTS_LIST_ENTRY_POINTS_BY_SURFACE = new Map<
+  string,
+  ReadonlySet<string>
+>([
   ["start_page", new Set(["button", "shortcut", "palette"])],
   ["avatar_menu", new Set(["menu", "palette"])],
 ]);
