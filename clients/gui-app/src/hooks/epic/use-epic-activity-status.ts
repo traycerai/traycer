@@ -149,8 +149,10 @@ function subscribeChatSessionActivity(
   };
 }
 
-/** Projects the chat session's indicator tier for aggregation. */
-function chatSessionActivity(state: ChatSessionState): ChatActivityIndicator {
+/** The row-level and list-level definition of activity for a warm chat. */
+export function chatSessionActivity(
+  state: ChatSessionState,
+): ChatActivityIndicator {
   return chatActivityIndicator(state);
 }
 

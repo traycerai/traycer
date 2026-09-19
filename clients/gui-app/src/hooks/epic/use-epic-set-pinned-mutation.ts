@@ -18,7 +18,7 @@ import {
   epicPinReadingQueryKeyMatchesScope,
   setEpicPinnedInCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
-import { epicMutationKeys } from "@/lib/query-keys";
+import { cloudQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import {
   resetCloudEpicTasksPagesForScope,
   setCloudEpicTasksPagePinned,
@@ -214,6 +214,12 @@ export function useEpicSetPinned() {
           predicate: (query) =>
             cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
             epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
+        });
+        await queryClient.invalidateQueries({
+          queryKey: cloudQueryKeys.currentTasksPinTailScope(
+            ctx.hostId,
+            ctx.userId,
+          ),
         });
       },
       onError: (
