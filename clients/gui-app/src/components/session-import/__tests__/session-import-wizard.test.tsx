@@ -1781,10 +1781,17 @@ describe("<SessionImportWizard /> on a phone", () => {
     expect(screen.queryByTestId("session-import-show-imported")).toBeNull();
     expect(screen.queryByRole("radio", { name: "By project" })).toBeNull();
 
-    // Search is an icon until it is asked for.
+    // Search is an icon until it is asked for. Both of its names count the
+    // things being imported, so they say "sessions" (`importedCountNoun`).
     expect(screen.queryByTestId("session-import-search")).toBeNull();
-    fireEvent.click(screen.getByTestId("session-import-search-toggle"));
-    expect(screen.getByTestId("session-import-search")).toBeTruthy();
+    const searchToggle = screen.getByTestId("session-import-search-toggle");
+    expect(screen.getByRole("button", { name: "Search sessions" })).toBe(
+      searchToggle,
+    );
+    fireEvent.click(searchToggle);
+    expect(
+      screen.getByTestId("session-import-search").getAttribute("placeholder"),
+    ).toBe("Search sessions or folders");
 
     // The selection line still heads the list, and the button carries the count
     // so the standalone label does not repeat it.
