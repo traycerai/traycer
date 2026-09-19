@@ -217,20 +217,147 @@ export function formatMatchCount(count: number): string {
   return count === 1 ? "1 match" : `${count} matches`;
 }
 
-/** Who wrote a row, in the words the result metadata uses. */
+export interface CollapsedChatSearchSnippet {
+  readonly representative: ChatSearchMessageHit;
+  readonly count: number;
+  readonly members: ReadonlyArray<
+    Pick<ChatSearchMessageHit, "messageId" | "tier">
+  >;
+}
+
+/**
+ * Pass `[best, ...allFetchedHits]` for one chat, across all fetched pages.
+ * Document identity is deduplicated first, keeping the first occurrence, so
+ * best stays first and remains the highest-ranked representative. Then rows
+ * with the same role and whitespace-normalised visible snippet collapse.
+ */
+export function collapseIdenticalSnippets(
+  hits: ReadonlyArray<ChatSearchMessageHit>,
+): ReadonlyArray<CollapsedChatSearchSnippet> {
+  const seen = new Set<string>();
+  const groups = new Map<
+    string,
+    {
+      representative: ChatSearchMessageHit;
+      count: number;
+      members: Array<Pick<ChatSearchMessageHit, "messageId" | "tier">>;
+    }
+  >();
+  for (const hit of hits) {
+    const identity = JSON.stringify([hit.messageId, hit.tier]);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const key = JSON.stringify([
+      chatSearchRoleLabels(hit).short,
+      hit.snippet.text.replace(/\s+/g, " ").trim(),
+    ]);
+    const member = { messageId: hit.messageId, tier: hit.tier };
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, { representative: hit, count: 1, members: [member] });
+    } else {
+      group.count += 1;
+      group.members.push(member);
+    }
+  }
+  return [...groups.values()];
+}
+
+export interface ChatSearchRoleLabels {
+  readonly short: string;
+  readonly full: string;
+}
+
+/** Who wrote a row, with compact and accessible vocabulary. */
+export function chatSearchRoleLabels(hit: {
+  readonly tier: ChatSearchMessageHit["tier"];
+  readonly interAgent: boolean;
+}): ChatSearchRoleLabels {
+  switch (hit.tier) {
+    case "user":
+      return hit.interAgent
+        ? { short: "Other agent", full: "From another agent" }
+        : { short: "You", full: "You" };
+    case "assistant":
+      return { short: "Agent", full: "Agent reply" };
+    case "notice":
+      return { short: "Notice", full: "System notice" };
+    case "card":
+      return { short: "Action", full: "Action" };
+  }
+}
+
+/** Compatibility for rows that have not migrated to the two role labels. */
 export function chatSearchTierLabel(hit: {
   readonly tier: ChatSearchMessageHit["tier"];
   readonly interAgent: boolean;
 }): string {
-  switch (hit.tier) {
-    case "user":
-      return hit.interAgent ? "agent message" : "you";
-    case "assistant":
-      return "assistant";
-    case "notice":
-      return "notice";
-    case "card":
-      return "action";
+  return chatSearchRoleLabels(hit).short;
+}
+
+export interface ChatSearchSnippetWindow {
+  readonly text: string;
+  readonly highlights: ReadonlyArray<ChatSearchRange>;
+  /** UTF-16 bounds in the original text; callers can mark omitted context. */
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Centre on the first highlight, or use the leading text when none exists. */
+export function chatSearchSnippetWindow(
+  text: string,
+  ranges: ReadonlyArray<ChatSearchRange>,
+  maxLength: number,
+): ChatSearchSnippetWindow {
+  const length = Number.isFinite(maxLength)
+    ? Math.max(0, Math.floor(maxLength))
+    : text.length;
+  const highlights = highlightSegments(text, ranges).filter(
+    (segment) => segment.highlighted,
+  );
+  const first = highlights.at(0);
+  let start = 0;
+  if (first !== undefined) {
+    const context = Math.max(0, length - first.text.length);
+    start = Math.max(
+      0,
+      Math.min(first.start - Math.floor(context / 2), text.length - length),
+    );
+  }
+  const end = Math.min(text.length, start + length);
+  return {
+    text: text.slice(start, end),
+    highlights: highlights.flatMap((segment) => {
+      const from = Math.max(start, segment.start);
+      const to = Math.min(end, segment.start + segment.text.length);
+      return to > from ? [{ start: from - start, end: to - start }] : [];
+    }),
+    start,
+    end,
+  };
+}
+
+export type SearchCountProjection =
+  | { readonly kind: "count"; readonly value: number; readonly more: boolean }
+  | { readonly kind: "pending" }
+  | { readonly kind: "none" };
+
+export type SearchCountSource =
+  | { readonly kind: "absent" | "error" | "loading" }
+  | { readonly kind: "ready"; readonly count: number; readonly more: boolean };
+
+/** Loaded counts only: unavailable sources never masquerade as zero results. */
+export function projectSearchCount(
+  source: SearchCountSource,
+): SearchCountProjection {
+  switch (source.kind) {
+    case "absent":
+    case "error":
+      return { kind: "none" };
+    case "loading":
+      return { kind: "pending" };
+    case "ready":
+      return { kind: "count", value: source.count, more: source.more };
   }
 }
 
