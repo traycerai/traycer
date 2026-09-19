@@ -1,12 +1,27 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { z } from "zod";
+import { BROWSER_VIEWPORT_MAX_PIXELS } from "../../host/browser/viewport";
+import {
+  PROVIDER_AUTH_STATUS_SCHEMA,
+  PROVIDER_AUTH_STATUS_SCHEMA_V20,
+} from "../../host/provider-schemas";
+import { hostStatusV13, hostStatusV14 } from "../../host/status/contracts";
+import {
+  worktreeListAllForHostRequestSchemaV11,
+  worktreeListAllForHostRequestSchemaV12,
+} from "../../host/worktree-schemas";
 import {
   formatHit,
   gitListedFiles,
   hitsOf,
+  allowListMismatches,
   isUnanalysedHit,
   scanThunkRules,
+  unanalysedCountsOf,
   unanalysedLabelsOf,
   UNANALYSED_KIND,
   type ThunkScanResult,
@@ -40,79 +55,144 @@ const COMMON_SRC = path.join(REPO_ROOT, "packages/common/src");
 const SCAN_PREFIXES = ["protocol/src/", "clients/"] as const;
 
 /**
- * The unanalysed calls production holds today, one label each, with the
- * reason it is pure. The production scan must produce EXACTLY these labels: a
- * new label is a call the scan cannot follow and someone must judge, and a
- * label that no longer appears is stale and must go.
+ * The unanalysed calls production holds today, one entry per label, with the
+ * number of source sites that carry it and the reason it is pure. The
+ * production scan must produce EXACTLY these labels AND counts: a new label is
+ * a call the scan cannot follow, a higher count is a further call under a
+ * judged label, and a label that no longer appears is stale; each must be
+ * judged. An entry's reason can also go false with its label unchanged, so
+ * the "allow-list premises" tests below assert the premise itself.
  */
-const ALLOWED_UNANALYSED: ReadonlyMap<string, string> = new Map([
+const ALLOWED_UNANALYSED: ReadonlyMap<
+  string,
+  { readonly count: number; readonly reason: string }
+> = new Map([
   [
     "method-on-unknown-provenance keys.at (protocol/src/framework/versioned-record.ts)",
-    "getSortedNumberKeys returns Object.keys(values).map(Number).sort(..), a fresh array, and `.at(-1)` only reads it",
+    {
+      count: 1,
+      reason:
+        "getSortedNumberKeys returns Object.keys(values).map(Number).sort(..), a fresh array, and `.at(-1)` only reads it",
+    },
   ],
   [
-    "parse-runs-callbacks absoluteHostPathSchema.safeParse",
-    "the schema is z.string().min(1).regex(ABSOLUTE_HOST_PATH, ..) with no refine or transform callback and a regex with no g or y flag; the call sits in a superRefine callback, so it runs at parse time, not at build (host/workspace/unary-schemas.ts:721)",
+    "parse-runs-callbacks absoluteHostPathSchema.safeParse (protocol/src/host/workspace/unary-schemas.ts)",
+    {
+      count: 1,
+      reason:
+        "the schema is z.string().min(1).regex(ABSOLUTE_HOST_PATH, ..) with no refine or transform callback and a regex with no g or y flag; the call sits in a superRefine callback, so it runs at parse time, not at build (host/workspace/unary-schemas.ts:721)",
+    },
   ],
   [
     "method-on-non-schema SEMVER_PATTERN.test (protocol/src/config/installation-records.ts)",
-    "a regex literal with no g or y flag, so `.test` keeps no lastIndex",
+    {
+      count: 1,
+      reason:
+        "a regex literal with no g or y flag, so `.test` keeps no lastIndex",
+    },
   ],
   [
     "method-on-non-schema queueSteerNowClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
-    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    {
+      count: 1,
+      reason:
+        "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    },
   ],
   [
     "method-on-non-schema queueSettingsUpdateClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
-    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    {
+      count: 1,
+      reason:
+        "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    },
   ],
   [
     "method-on-non-schema queueSettingsRestampClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
-    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    {
+      count: 1,
+      reason:
+        "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    },
   ],
   [
     "method-on-non-schema activePermissionModeUpdateClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
-    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    {
+      count: 1,
+      reason:
+        "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+    },
   ],
   [
     "method-on-non-schema chatSubscribeClientFrameSchemaOptionsBeforeInterview.extend (protocol/src/host/agent/gui/subscribe.ts)",
-    "an array of stand-ins; `.extend` clones the element",
+    {
+      count: 4,
+      reason: "an array of stand-ins; `.extend` clones the element",
+    },
   ],
   [
     "method-on-non-schema chatSubscribeClientFrameSchemaV17ToV19Options.extend (protocol/src/host/agent/gui/subscribe.ts)",
-    "an array of stand-ins; `.extend` clones the element",
+    {
+      count: 2,
+      reason: "an array of stand-ins; `.extend` clones the element",
+    },
   ],
   [
     "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.catch (protocol/src/host/provider-schemas.ts)",
-    "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.catch` clones",
+    {
+      count: 2,
+      reason: "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.catch` clones",
+    },
   ],
   [
     "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.optional (protocol/src/host/provider-schemas.ts)",
-    "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.optional` clones",
+    {
+      count: 2,
+      reason: "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.optional` clones",
+    },
   ],
   [
     "method-on-non-schema SHA256_HEX.test (protocol/src/config/installation-records.ts)",
-    "/^[a-f0-9]{64}$/ has no g or y flag, so `.test` keeps no lastIndex",
+    {
+      count: 1,
+      reason:
+        "/^[a-f0-9]{64}$/ has no g or y flag, so `.test` keeps no lastIndex",
+    },
   ],
   [
     "method-on-non-schema SURVIVING_CONTROL_CHARACTER.test (protocol/src/persistence/epic/role-claims.ts)",
-    "the regex has the u flag only, so `.test` keeps no lastIndex",
+    {
+      count: 1,
+      reason: "the regex has the u flag only, so `.test` keeps no lastIndex",
+    },
   ],
   [
     "method-on-non-schema BROWSER_VIEWPORT_MAX_PIXELS.toLocaleString (protocol/src/host/browser/viewport.ts)",
-    "a number; `toLocaleString` reads it",
+    {
+      count: 1,
+      reason: "a number; `toLocaleString` reads it",
+    },
   ],
   [
     "method-on-non-schema hostStatusV13.extend (protocol/src/host/status/contracts.ts)",
-    "a contract object; `.responseSchema.extend` clones",
+    {
+      count: 1,
+      reason: "a contract object; `.responseSchema.extend` clones",
+    },
   ],
   [
     "method-on-non-schema hostStatusV14.extend (protocol/src/host/status/contracts.ts)",
-    "a contract object; `.responseSchema.extend` clones",
+    {
+      count: 1,
+      reason: "a contract object; `.responseSchema.extend` clones",
+    },
   ],
   [
     "method-on-non-schema worktreeListAllForHostRequestSchemaV12.extend (protocol/src/host/worktree-schemas.ts)",
-    "an alias of an earlier schema; `.extend` clones",
+    {
+      count: 1,
+      reason: "an alias of an earlier schema; `.extend` clones",
+    },
   ],
 ]);
 
@@ -797,10 +877,14 @@ describe("lazySchema thunk rules scan", () => {
       "mutation-on-unknown-provenance x (protocol/src/sweepctl/shapes.ts)",
     ]);
     expect(label("P_D_parse_module")).toEqual([
-      "parse-runs-callbacks shapeSchema.parse",
+      "parse-runs-callbacks shapeSchema.parse (protocol/src/sweepctl/shapes.ts)",
     ]);
-    expect(label("P_D_z_parse")).toEqual(["parse-runs-callbacks z.parse"]);
-    expect(label("P_D_param_parse")).toEqual(["parse-runs-callbacks s.parse"]);
+    expect(label("P_D_z_parse")).toEqual([
+      "parse-runs-callbacks z.parse (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_D_param_parse")).toEqual([
+      "parse-runs-callbacks s.parse (protocol/src/sweepctl/shapes.ts)",
+    ]);
     expect(label("P_C_console")).toEqual([
       "method-on-unresolved console.log (protocol/src/sweepctl/shapes.ts)",
     ]);
@@ -820,7 +904,7 @@ describe("lazySchema thunk rules scan", () => {
       "method-on-unresolved Reflect.construct (protocol/src/sweepctl/shapes.ts)",
     ]);
     expect(label("P_Ua_external_call")).toEqual([
-      "external external-pkg:extCall",
+      "external external-pkg:extCall (protocol/src/sweepctl/shapes.ts)",
     ]);
     expect(label("P_B6_unresolvable_base")).toEqual([
       "class-base ExternalBase (protocol/src/sweepctl/shapes.ts)",
@@ -861,14 +945,355 @@ describe("lazySchema thunk rules scan", () => {
     expect(
       result.hits.filter((hit) => !isUnanalysedHit(hit)).map(formatHit),
     ).toEqual([]);
-    const labels = unanalysedLabelsOf(result);
     expect(
-      labels.filter((label) => !ALLOWED_UNANALYSED.has(label)),
-      "an unanalysed call the scan cannot follow: judge it, and add it to ALLOWED_UNANALYSED with a reason only if it is pure",
-    ).toEqual([]);
-    expect(
-      [...ALLOWED_UNANALYSED.keys()].filter((label) => !labels.includes(label)),
-      "stale ALLOWED_UNANALYSED entry: remove it",
+      allowListMismatches(
+        unanalysedCountsOf(result),
+        new Map(
+          [...ALLOWED_UNANALYSED].map(([label, entry]) => [label, entry.count]),
+        ),
+      ),
     ).toEqual([]);
   }, 60_000);
+
+  it("allow-list mismatches name the label, in both directions", () => {
+    const actual = new Map([
+      ["a", 2],
+      ["b", 1],
+    ]);
+    expect(
+      allowListMismatches(
+        actual,
+        new Map([
+          ["a", 1],
+          ["c", 1],
+        ]),
+      ),
+    ).toEqual([
+      "a: allow-list says 1 occurrence(s), found 2; judge the difference and update the count",
+      "b: 1 occurrence(s), not in the allow-list; judge each and add it with a reason only if it is pure",
+      "c: stale allow-list entry (1 occurrence(s)), found none; remove it",
+    ]);
+    expect(allowListMismatches(actual, new Map(actual))).toEqual([]);
+  });
+
+  it("a further call under an allow-listed label is a second occurrence", () => {
+    const plant = (source: string): ThunkScanResult =>
+      scanOverlay(
+        [PLANTED_SHAPES_ABS],
+        new Map([
+          [PLANTED_SHAPES_ABS, source],
+          [PLANTED_HELPER_ABS, PLANTED_HELPER_SOURCE],
+        ]),
+      );
+    const label =
+      "method-on-non-schema registrar.note (protocol/src/sweepctl/shapes.ts)";
+    const before = plant(PLANTED_SHAPES_SOURCE);
+    const after = plant(
+      PLANTED_SHAPES_SOURCE.replace(
+        "export const P_B2_unresolvable =",
+        'export const P_B2_unresolvable_again = lazySchema(() => { registrar.note("b"); return z.string(); });\nexport const P_B2_unresolvable =',
+      ),
+    );
+    const beforeCount = unanalysedCountsOf(before).get(label);
+    expect(beforeCount).toBeGreaterThan(0);
+    expect(unanalysedCountsOf(after).get(label)).toBe((beforeCount ?? 0) + 1);
+    expect(
+      unanalysedLabelsOf(after).filter((entry) => entry === label),
+    ).toEqual([label]);
+  });
+});
+
+/**
+ * The premises the allow-list reasons rest on. An entry's label can stay the
+ * same while its reason goes false (a `g` flag on a module-scope regex, an
+ * alias retargeted, a callback added to a schema), so the premise is asserted
+ * here, next to the list, from the source itself.
+ */
+function sourceFileOf(relative: string): ts.SourceFile {
+  const abs = path.join(TRAYCER_ROOT, relative);
+  return ts.createSourceFile(
+    abs,
+    readFileSync(abs, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function topLevelDeclaration(
+  sf: ts.SourceFile,
+  name: string,
+): ts.VariableDeclaration | undefined {
+  for (const statement of sf.statements) {
+    if (!ts.isVariableStatement(statement)) {
+      continue;
+    }
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === name) {
+        return declaration;
+      }
+    }
+  }
+  return undefined;
+}
+
+function topLevelInitializer(relative: string, name: string): ts.Expression {
+  const declaration = topLevelDeclaration(sourceFileOf(relative), name);
+  const initializer = declaration?.initializer;
+  if (initializer === undefined) {
+    throw new Error(`${name} has no top-level initializer in ${relative}`);
+  }
+  return unwrapExpression(initializer);
+}
+
+/** The callee names of every call inside `node`: `.transform(` gives "transform". */
+function calleeNamesIn(node: ts.Node): string[] {
+  const names: string[] = [];
+  const visit = (child: ts.Node): void => {
+    if (ts.isCallExpression(child)) {
+      const callee = unwrapExpression(child.expression);
+      if (ts.isPropertyAccessExpression(callee)) {
+        names.push(callee.name.text);
+      } else if (ts.isIdentifier(callee)) {
+        names.push(callee.text);
+      }
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return names;
+}
+
+function isLazySchemaCall(expression: ts.Expression): boolean {
+  const inner = unwrapExpression(expression);
+  return (
+    ts.isCallExpression(inner) &&
+    ts.isIdentifier(inner.expression) &&
+    inner.expression.text === "lazySchema"
+  );
+}
+
+/**
+ * Whether every element of the top-level array `name` is a zod schema: a
+ * `lazySchema(` call, an identifier declared as one or destructured out of
+ * another such array, or a spread of another such array.
+ */
+function isArrayOfSchemas(
+  sf: ts.SourceFile,
+  name: string,
+  depth: number,
+): boolean {
+  if (depth > 6) {
+    return false;
+  }
+  const declaration = topLevelDeclaration(sf, name);
+  if (declaration !== undefined && declaration.initializer !== undefined) {
+    const initializer = unwrapExpression(declaration.initializer);
+    if (ts.isArrayLiteralExpression(initializer)) {
+      return initializer.elements.every((element) =>
+        isSchemaElement(sf, element, depth + 1),
+      );
+    }
+    return false;
+  }
+  return destructuredFromSchemaArray(sf, name, depth + 1);
+}
+
+function isSchemaElement(
+  sf: ts.SourceFile,
+  element: ts.Expression,
+  depth: number,
+): boolean {
+  if (ts.isSpreadElement(element)) {
+    const spread = unwrapExpression(element.expression);
+    return (
+      ts.isIdentifier(spread) && isArrayOfSchemas(sf, spread.text, depth + 1)
+    );
+  }
+  const inner = unwrapExpression(element);
+  if (isLazySchemaCall(inner)) {
+    return true;
+  }
+  if (ts.isIdentifier(inner)) {
+    const declaration = topLevelDeclaration(sf, inner.text);
+    if (declaration !== undefined && declaration.initializer !== undefined) {
+      return isLazySchemaCall(declaration.initializer);
+    }
+    return destructuredFromSchemaArray(sf, inner.text, depth + 1);
+  }
+  return false;
+}
+
+/** `name` is a binding of `const [..] = other` where `other` is an array of schemas. */
+function destructuredFromSchemaArray(
+  sf: ts.SourceFile,
+  name: string,
+  depth: number,
+): boolean {
+  for (const statement of sf.statements) {
+    if (!ts.isVariableStatement(statement)) {
+      continue;
+    }
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !ts.isArrayBindingPattern(declaration.name) ||
+        declaration.initializer === undefined
+      ) {
+        continue;
+      }
+      const source = unwrapExpression(declaration.initializer);
+      const bindsName = declaration.name.elements.some(
+        (element) =>
+          ts.isBindingElement(element) &&
+          ts.isIdentifier(element.name) &&
+          element.name.text === name,
+      );
+      if (bindsName && ts.isIdentifier(source)) {
+        return isArrayOfSchemas(sf, source.text, depth);
+      }
+    }
+  }
+  return false;
+}
+
+const SUBSCRIBE_SOURCE = "protocol/src/host/agent/gui/subscribe.ts";
+const REGEX_PREMISES: readonly {
+  readonly file: string;
+  readonly name: string;
+}[] = [
+  {
+    file: "protocol/src/config/installation-records.ts",
+    name: "SEMVER_PATTERN",
+  },
+  { file: "protocol/src/config/installation-records.ts", name: "SHA256_HEX" },
+  {
+    file: "protocol/src/persistence/epic/role-claims.ts",
+    name: "SURVIVING_CONTROL_CHARACTER",
+  },
+  {
+    file: "protocol/src/host/workspace/unary-schemas.ts",
+    name: "ABSOLUTE_HOST_PATH",
+  },
+];
+const CALLBACK_METHODS = [
+  "refine",
+  "superRefine",
+  "transform",
+  "preprocess",
+  "check",
+  "custom",
+  "pipe",
+  "with",
+  "codec",
+  "lazy",
+  "overwrite",
+];
+
+describe("allow-list premises", () => {
+  it("each module-scope regex the allow-list calls `.test` on is a literal with neither a g nor a y flag", () => {
+    for (const { file, name } of REGEX_PREMISES) {
+      const initializer = topLevelInitializer(file, name);
+      expect(ts.isRegularExpressionLiteral(initializer), name).toBe(true);
+      if (ts.isRegularExpressionLiteral(initializer)) {
+        const flags = initializer.text.slice(
+          initializer.text.lastIndexOf("/") + 1,
+        );
+        expect(flags, `${name} flags`).not.toMatch(/[gy]/);
+      }
+    }
+  });
+
+  it("PROVIDER_AUTH_STATUS_SCHEMA and worktreeListAllForHostRequestSchemaV12 are aliases of their targets", () => {
+    expect(PROVIDER_AUTH_STATUS_SCHEMA).toBe(PROVIDER_AUTH_STATUS_SCHEMA_V20);
+    expect(worktreeListAllForHostRequestSchemaV12).toBe(
+      worktreeListAllForHostRequestSchemaV11,
+    );
+  });
+
+  it("absoluteHostPathSchema is a lazySchema with no callback-running method in its initialiser", () => {
+    const initializer = topLevelInitializer(
+      "protocol/src/host/workspace/unary-schemas.ts",
+      "absoluteHostPathSchema",
+    );
+    expect(isLazySchemaCall(initializer)).toBe(true);
+    const callbacks = calleeNamesIn(initializer).filter((name) =>
+      CALLBACK_METHODS.includes(name),
+    );
+    expect(callbacks).toEqual([]);
+  });
+
+  it("BROWSER_VIEWPORT_MAX_PIXELS is a number and the hostStatus response schemas are z.ZodObject", () => {
+    expect(typeof BROWSER_VIEWPORT_MAX_PIXELS).toBe("number");
+    expect(hostStatusV13.responseSchema instanceof z.ZodObject).toBe(true);
+    expect(hostStatusV14.responseSchema instanceof z.ZodObject).toBe(true);
+  });
+
+  it("every element of the chat-subscribe option arrays, and the four destructured PreAuto frames, is a zod schema", () => {
+    const sf = sourceFileOf(SUBSCRIBE_SOURCE);
+    expect(
+      isArrayOfSchemas(
+        sf,
+        "chatSubscribeClientFrameSchemaOptionsBeforeInterview",
+        0,
+      ),
+    ).toBe(true);
+    expect(
+      isArrayOfSchemas(sf, "chatSubscribeClientFrameSchemaV17ToV19Options", 0),
+    ).toBe(true);
+    for (const name of [
+      "queueSteerNowClientFrameSchemaPreAuto",
+      "queueSettingsUpdateClientFrameSchemaPreAuto",
+      "queueSettingsRestampClientFrameSchemaPreAuto",
+      "activePermissionModeUpdateClientFrameSchemaPreAuto",
+    ]) {
+      expect(destructuredFromSchemaArray(sf, name, 0), name).toBe(true);
+    }
+  });
+
+  it("getSortedNumberKeys returns a sort of a map of Object.keys, a fresh array (the premise of the keys.at entry)", () => {
+    const sf = sourceFileOf("protocol/src/framework/versioned-record.ts");
+    let returned: ts.Expression | undefined = undefined;
+    for (const statement of sf.statements) {
+      if (
+        ts.isFunctionDeclaration(statement) &&
+        statement.name?.text === "getSortedNumberKeys"
+      ) {
+        for (const inner of statement.body?.statements ?? []) {
+          if (ts.isReturnStatement(inner) && inner.expression !== undefined) {
+            returned = unwrapExpression(inner.expression);
+          }
+        }
+      }
+    }
+    expect(returned).not.toBeUndefined();
+    const chain: string[] = [];
+    let current = returned;
+    while (current !== undefined && ts.isCallExpression(current)) {
+      const callee = unwrapExpression(current.expression);
+      if (!ts.isPropertyAccessExpression(callee)) {
+        break;
+      }
+      const receiver = unwrapExpression(callee.expression);
+      if (ts.isIdentifier(receiver) && receiver.text === "Object") {
+        chain.push(`Object.${callee.name.text}`);
+        break;
+      }
+      chain.push(callee.name.text);
+      current = receiver;
+    }
+    expect(chain).toEqual(["sort", "map", "Object.keys"]);
+  });
 });

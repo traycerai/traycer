@@ -173,6 +173,10 @@ export function countModuleScopeLazySchemaCalls(fileAbs: string): number {
   return count;
 }
 
+function siteNamesFile(site: string, filePath: string): boolean {
+  return site.includes(`${filePath}:`);
+}
+
 export function recordedCountForFile(
   recorded: readonly { readonly site: string }[],
   fileAbs: string,
@@ -180,7 +184,10 @@ export function recordedCountForFile(
 ): number {
   let count = 0;
   for (const entry of recorded) {
-    if (entry.site.includes(fileAbs) || entry.site.includes(posix)) {
+    if (
+      siteNamesFile(entry.site, fileAbs) ||
+      siteNamesFile(entry.site, posix)
+    ) {
       count += 1;
     }
   }

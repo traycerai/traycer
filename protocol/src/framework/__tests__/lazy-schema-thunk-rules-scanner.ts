@@ -242,6 +242,11 @@ export type ThunkRuleHit = {
   readonly bindingName: string | undefined;
   readonly kind: string;
   readonly detail: string;
+  /**
+   * Where the finding itself sits (file:line:column), for an R5 finding. Two
+   * hits with the same label and the same `at` are one occurrence.
+   */
+  readonly at: string | undefined;
 };
 
 export type ThunkScanResult = {
@@ -1081,6 +1086,17 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
     );
   };
 
+  const columnOf = (abs: string, node: ts.Node): number => {
+    const loaded = load(abs);
+    if (loaded === undefined) {
+      return 0;
+    }
+    return (
+      loaded.sf.getLineAndCharacterOfPosition(node.getStart(loaded.sf))
+        .character + 1
+    );
+  };
+
   const rel = (abs: string): string => {
     const relative = path.relative(input.contentRoot, abs);
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -1106,7 +1122,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
     detail: string,
   ): SideEffectFinding => ({
     kind,
-    at: `${rel(abs)}:${String(lineOf(abs, node))}`,
+    at: `${rel(abs)}:${String(lineOf(abs, node))}:${String(columnOf(abs, node))}`,
     detail,
     via: undefined,
   });
@@ -1550,7 +1566,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       add(UNANALYSED_KIND, node, label);
     };
     const site = (node: ts.Node): string =>
-      `${rel(abs)}:${String(lineOf(abs, node))}`;
+      `${rel(abs)}:${String(lineOf(abs, node))}:${String(columnOf(abs, node))}`;
     const localDeclaration = (name: string): ts.Node | undefined => {
       for (const scope of scopes) {
         const found = localDeclarationOf(scope, name);
@@ -1950,18 +1966,21 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           parseOf(
             node,
             firstArgument,
-            `parse-runs-callbacks ${name}`,
+            `parse-runs-callbacks ${name} (${rel(abs)})`,
             imported.orig,
           );
         }
         return;
       }
       if (resolved.kind === "external") {
-        unanalysed(node, `external ${resolved.spec}:${name}`);
+        unanalysed(node, `external ${resolved.spec}:${name} (${rel(abs)})`);
         return;
       }
       if (resolved.kind === "unresolved") {
-        unanalysed(node, `unresolved-module ${resolved.spec}:${name}`);
+        unanalysed(
+          node,
+          `unresolved-module ${resolved.spec}:${name} (${rel(abs)})`,
+        );
         return;
       }
       if (resolved.kind === "namespace") {
@@ -2020,7 +2039,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           parameterEffect(
             provenance,
             PARSE_FAMILY.has(method)
-              ? `parse-runs-callbacks ${provenance.name}.${method}`
+              ? `parse-runs-callbacks ${provenance.name}.${method} (${rel(abs)})`
               : `param-method ${provenance.name}.${method} (${rel(abs)})`,
             method,
           );
@@ -2071,7 +2090,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           parseOf(
             node,
             firstArgument,
-            `parse-runs-callbacks ${name}.${method}`,
+            `parse-runs-callbacks ${name}.${method} (${rel(abs)})`,
             method,
           );
         }
@@ -2080,14 +2099,14 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       if (resolved.kind === "external") {
         unanalysed(
           node,
-          `method-on-external ${resolved.spec}:${name}.${method}`,
+          `method-on-external ${resolved.spec}:${name}.${method} (${rel(abs)})`,
         );
         return;
       }
       if (resolved.kind === "unresolved") {
         unanalysed(
           node,
-          `method-on-unresolved-module ${resolved.spec}:${name}.${method}`,
+          `method-on-unresolved-module ${resolved.spec}:${name}.${method} (${rel(abs)})`,
         );
         return;
       }
@@ -2118,7 +2137,10 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
             (member.kind === "local" && isSchemaLike(member.node)))
         ) {
           if (member.kind === "local" && PARSE_FAMILY.has(method)) {
-            unanalysed(node, `parse-runs-callbacks ${first ?? name}.${method}`);
+            unanalysed(
+              node,
+              `parse-runs-callbacks ${first ?? name}.${method} (${rel(abs)})`,
+            );
           }
           return;
         }
@@ -2130,7 +2152,10 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       }
       if (isSchemaLike(resolved.node)) {
         if (PARSE_FAMILY.has(method)) {
-          unanalysed(node, `parse-runs-callbacks ${name}.${method}`);
+          unanalysed(
+            node,
+            `parse-runs-callbacks ${name}.${method} (${rel(abs)})`,
+          );
         }
         return;
       }
@@ -2284,7 +2309,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
         const resolved = resolveName(abs, name, new Set());
         if (resolved === undefined) {
           if (!PURE_CONSTRUCTORS.has(name)) {
-            unanalysed(node, `new ${name} (unresolved)`);
+            unanalysed(node, `new ${name} (unresolved) (${rel(abs)})`);
           }
           return;
         }
@@ -2292,7 +2317,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           return;
         }
         if (resolved.kind !== "local") {
-          unanalysed(node, `new ${name} (${resolved.kind})`);
+          unanalysed(node, `new ${name} (${resolved.kind}) (${rel(abs)})`);
           return;
         }
         const cls = classOfNode(resolved.node);
@@ -2305,7 +2330,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           enterWith(`new ${name}`, node, resolved.abs, target, [], args);
           return;
         }
-        unanalysed(node, `new ${name} (not-a-class)`);
+        unanalysed(node, `new ${name} (not-a-class) (${rel(abs)})`);
         return;
       }
       if (ts.isPropertyAccessExpression(ce)) {
@@ -2578,6 +2603,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
     bindingName: string | undefined,
     kind: string,
     detail: string,
+    at: string | undefined,
   ): void => {
     hits.push({
       rule,
@@ -2586,6 +2612,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       bindingName,
       kind,
       detail,
+      at,
     });
   };
 
@@ -2606,6 +2633,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           thunk.bindingName,
           registry,
           snippet(strip(returned), 80),
+          undefined,
         );
       }
       const factory = outermostZodFactory(returned);
@@ -2617,6 +2645,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           thunk.bindingName,
           factory,
           snippet(strip(returned), 80),
+          undefined,
         );
       }
       if (factory === "json") {
@@ -2627,6 +2656,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           thunk.bindingName,
           factory,
           snippet(strip(returned), 80),
+          undefined,
         );
       }
       const inner = strip(returned);
@@ -2643,6 +2673,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
             thunk.bindingName,
             "self-ref",
             inner.text,
+            undefined,
           );
         }
       }
@@ -2659,6 +2690,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
           thunk.bindingName,
           "alias",
           snippet(inner, 80),
+          undefined,
         );
       }
     }
@@ -2670,6 +2702,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
         thunk.bindingName,
         finding.kind,
         finding.detail,
+        finding.at,
       );
     }
   }
@@ -2694,6 +2727,66 @@ export function formatHit(hit: ThunkRuleHit): string {
 
 export function isUnanalysedHit(hit: ThunkRuleHit): boolean {
   return hit.rule === "R5" && hit.kind === UNANALYSED_KIND;
+}
+
+/**
+ * Occurrences per unanalysed label: the number of distinct source sites
+ * (file:line:column of the call) that carry it. A call reached from several
+ * thunks is one occurrence; a further call under the same label is another.
+ */
+export function unanalysedCountsOf(
+  result: ThunkScanResult,
+): ReadonlyMap<string, number> {
+  const sites = new Map<string, Set<string>>();
+  for (const hit of result.hits) {
+    if (!isUnanalysedHit(hit)) {
+      continue;
+    }
+    const at = hit.at ?? `${hit.file}:${String(hit.line)}`;
+    const known = sites.get(hit.detail);
+    if (known === undefined) {
+      sites.set(hit.detail, new Set([at]));
+    } else {
+      known.add(at);
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const [label, at] of sites) {
+    counts.set(label, at.size);
+  }
+  return counts;
+}
+
+/**
+ * One line per label whose production occurrence count differs from the
+ * allow-list's, in either direction: a label nobody judged, a further call
+ * under a judged label, or a stale entry. Empty means the two are equal.
+ */
+export function allowListMismatches(
+  actual: ReadonlyMap<string, number>,
+  allowed: ReadonlyMap<string, number>,
+): string[] {
+  const out: string[] = [];
+  for (const [label, found] of actual) {
+    const expected = allowed.get(label);
+    if (expected === undefined) {
+      out.push(
+        `${label}: ${String(found)} occurrence(s), not in the allow-list; judge each and add it with a reason only if it is pure`,
+      );
+    } else if (expected !== found) {
+      out.push(
+        `${label}: allow-list says ${String(expected)} occurrence(s), found ${String(found)}; judge the difference and update the count`,
+      );
+    }
+  }
+  for (const [label, expected] of allowed) {
+    if (!actual.has(label)) {
+      out.push(
+        `${label}: stale allow-list entry (${String(expected)} occurrence(s)), found none; remove it`,
+      );
+    }
+  }
+  return out.sort();
 }
 
 /** The distinct labels of the unanalysed findings, sorted. */

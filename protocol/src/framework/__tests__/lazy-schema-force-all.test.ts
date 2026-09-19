@@ -70,6 +70,16 @@ const ZERO_MODULE_SCOPE_LAZY_SCHEMA: readonly ZeroCountFile[] = [
 ];
 
 describe("lazySchema force-all protocol stand-ins", () => {
+  it("recordedCountForFile matches a path followed by colon, not a .tsx prefix of .ts", () => {
+    const tsxSite = [{ site: "/abs/dir/x.tsx:3:1" }];
+    expect(recordedCountForFile(tsxSite, "/abs/dir/x.ts", "dir/x.ts")).toBe(0);
+    expect(recordedCountForFile(tsxSite, "/abs/dir/x.tsx", "dir/x.tsx")).toBe(
+      1,
+    );
+    const tsSite = [{ site: "/abs/dir/x.ts:3:1" }];
+    expect(recordedCountForFile(tsSite, "/abs/dir/x.ts", "dir/x.ts")).toBe(1);
+  });
+
   it("planted outermost .describe is a refusal and an extra _zod key is a key difference", () => {
     const describedCheck = checkForcedStandIn(
       lazySchema(() => z.string().describe("planted-force-all")),
