@@ -1,7 +1,7 @@
 import { snapshotChatRunSettingsSchema } from "@traycer/protocol/persistence/chat-sync/open-harness";
 import {
+  declareResidualCapture,
   storageProjection,
-  withResidualCapture,
 } from "@traycer/protocol/persistence/chat-sync/residual";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -48,8 +48,8 @@ export const chatLifecycleShape = {
   deletedAt: lazySchema(() => z.number().nullable()),
 } as const;
 
-export const chatLifecycleSchema = lazySchema(() =>
-  withResidualCapture("core.lifecycle", chatLifecycleShape),
+export const chatLifecycleSchema = lazySchema(
+  declareResidualCapture("core.lifecycle", () => chatLifecycleShape),
 );
 export type ChatLifecycle = z.infer<typeof chatLifecycleSchema>;
 
@@ -60,8 +60,11 @@ export type ChatLifecycle = z.infer<typeof chatLifecycleSchema>;
  * run-settings schema has grown twice already (`serviceTier`, `profileId`), so
  * a v1.0 reader meeting a v1.1 chat is exactly the case the bag exists for.
  */
-export const chatSyncRunSettingsSchema = lazySchema(() =>
-  withResidualCapture("core.settings", snapshotChatRunSettingsSchema.shape),
+export const chatSyncRunSettingsSchema = lazySchema(
+  declareResidualCapture(
+    "core.settings",
+    () => snapshotChatRunSettingsSchema.shape,
+  ),
 );
 export type ChatSyncRunSettings = z.infer<typeof chatSyncRunSettingsSchema>;
 
@@ -87,8 +90,8 @@ export const chatHeadCoreShape = {
   settings: lazySchema(() => chatSyncRunSettingsSchema.nullable()),
 } as const;
 
-export const chatHeadCoreSchema = lazySchema(() =>
-  withResidualCapture("core", chatHeadCoreShape),
+export const chatHeadCoreSchema = lazySchema(
+  declareResidualCapture("core", () => chatHeadCoreShape),
 );
 export type ChatHeadCore = z.infer<typeof chatHeadCoreSchema>;
 

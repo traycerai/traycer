@@ -1,7 +1,7 @@
 import { jsonObjectSchema } from "@traycer/protocol/persistence/chat-sync/json";
 import {
+  declareResidualCapture,
   storageProjection,
-  withResidualCapture,
 } from "@traycer/protocol/persistence/chat-sync/residual";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -51,8 +51,8 @@ export const chatSyncHostPrivateShape = {
 // The envelope itself captures residuals too: `data` is already opaque, but a
 // future minor could add a sibling of `revision`, and an older reader must not
 // drop it on re-publication (see `residual.ts`).
-export const chatSyncHostPrivateSchema = lazySchema(() =>
-  withResidualCapture("hostPrivate", chatSyncHostPrivateShape),
+export const chatSyncHostPrivateSchema = lazySchema(
+  declareResidualCapture("hostPrivate", () => chatSyncHostPrivateShape),
 );
 export type ChatSyncHostPrivate = z.infer<typeof chatSyncHostPrivateSchema>;
 
