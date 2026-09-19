@@ -51,17 +51,19 @@
  * (`.check(z.describe(...))`, `.with(z.meta(...))`, and every schema that
  * inherits such a check) register during construction, so the stand-in gets
  * them too. Once the stand-in is built, the first read REFUSES a
- * global-registry entry that differs from the discarded instance's, and any
- * `_zod` or `_zod.bag` key the stand-in did not get (that is `z.instanceof`),
- * with an error naming the rule; the rest has no runtime trace, and
- * `lazy-schema-thunk-rules-scan.test.ts` rejects all of them in source. Put
- * the metadata on an inner schema, use its check form, or declare that
- * schema eagerly.
+ * global-registry entry of the discarded instance that the stand-in does not
+ * carry in full, and any `_zod` or `_zod.bag` key the stand-in did not get
+ * (that is `z.instanceof`), with an error naming the rule; the rest has no
+ * runtime trace, and `lazy-schema-thunk-rules-scan.test.ts` rejects all of
+ * them in source. Put the metadata on an inner schema, use its check form,
+ * or declare that schema eagerly.
  *
  * `build` must have no effect beyond the value it returns. It runs on the
  * first read, not at import, so a registration or counter inside it happens
  * late or never; register at module scope and build inside the thunk. An
  * `id` in zod metadata is such a registration: the registry lists ids.
+ * `z.globalRegistry.add(standIn, { id })` at module scope registers the
+ * stand-in without building it.
  *
  * A read that fails leaves no half-built schema. A throw from `build` happens
  * before the stand-in is touched: it stays pending, and the next read runs
@@ -201,21 +203,18 @@ function refuseLostInternals(built: object, own: object): void {
   }
 }
 
-function sameEntry(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) {
+/** Every key of `entry` is on `into`, with the same value. */
+function carriesEntry(entry: unknown, into: unknown): boolean {
+  if (entry === undefined || Object.is(entry, into)) {
     return true;
   }
-  if (!isObject(a) || !isObject(b)) {
+  if (!isObject(entry) || !isObject(into)) {
     return false;
   }
-  const keys = Reflect.ownKeys(a);
-  return (
-    keys.length === Reflect.ownKeys(b).length &&
-    keys.every(
-      (key) =>
-        Reflect.getOwnPropertyDescriptor(b, key) !== undefined &&
-        Object.is(Reflect.get(a, key), Reflect.get(b, key)),
-    )
+  return Reflect.ownKeys(entry).every(
+    (key) =>
+      Reflect.getOwnPropertyDescriptor(into, key) !== undefined &&
+      Object.is(Reflect.get(entry, key), Reflect.get(into, key)),
   );
 }
 
@@ -223,10 +222,15 @@ function sameEntry(a: unknown, b: unknown): boolean {
  * zod's global registry holds `.describe`, `.meta` and `.register` metadata;
  * every zod copy shares it through this global, so the helper reads it
  * without importing zod. The check forms register during construction, so
- * the stand-in's entry equals the discarded instance's; the method forms
+ * the stand-in gets the discarded instance's entry; the method forms
  * register the instance a method returns after construction, and the
- * stand-in's entry lacks it. `get` merges the `parent` entry (the method
- * forms clone with a parent), so it runs once `parent` is copied.
+ * stand-in lacks it. So this refuses only when the discarded instance has an
+ * entry of its own that the stand-in is not registered with in full. An
+ * entry the stand-in has beyond it is not a loss: a module-scope
+ * `z.globalRegistry.add(standIn, …)` registers the pending stand-in, and a
+ * check form then merges into that entry (`onattach` reads `get(inst)`).
+ * Without an own entry, what `get` merges from `parent` the stand-in shares.
+ * `get` merges `parent`, so this runs once `parent` is copied.
  */
 function refuseLostMetadata(built: object, standIn: object): void {
   const registry: unknown = Reflect.get(globalThis, "__zod_globalRegistry");
@@ -238,10 +242,12 @@ function refuseLostMetadata(built: object, standIn: object): void {
   if (typeof has !== "function" || typeof get !== "function") {
     return;
   }
+  if (Reflect.apply(has, registry, [built]) !== true) {
+    return;
+  }
   if (
-    Reflect.apply(has, registry, [built]) !==
-      Reflect.apply(has, registry, [standIn]) ||
-    !sameEntry(
+    Reflect.apply(has, registry, [standIn]) !== true ||
+    !carriesEntry(
       Reflect.apply(get, registry, [built]),
       Reflect.apply(get, registry, [standIn]),
     )

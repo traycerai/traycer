@@ -379,6 +379,74 @@ describe("lazySchema describe parent", () => {
     );
   });
 
+  function expectAddParity(
+    init: () => z.ZodType,
+    meta: { readonly id: string } | { readonly description: string },
+  ): void {
+    const standIn = lazySchema(init);
+    z.globalRegistry.add(standIn, meta);
+    void standIn.parse;
+    const id = Reflect.get(meta, "id");
+    if (typeof id === "string") {
+      expect(z.globalRegistry._idmap.get(id)).toBe(standIn);
+    }
+    const twin = init();
+    z.globalRegistry.add(twin, meta);
+    expect(z.toJSONSchema(standIn)).toEqual(z.toJSONSchema(twin));
+    expect(z.globalRegistry.get(standIn)).toEqual(z.globalRegistry.get(twin));
+    if (typeof id === "string") {
+      expect(z.globalRegistry._idmap.get(id)).toBe(twin);
+    }
+  }
+
+  it("module-scope add of a pending object stand-in is accepted and matches the eager twin", () => {
+    expectAddParity(() => z.object({ a: z.string() }), { id: "LastLookA" });
+  });
+
+  it("module-scope add plus a check-describe thunk merges {id, description}", () => {
+    const standIn = lazySchema(() => z.string().check(z.describe("d")));
+    z.globalRegistry.add(standIn, { id: "LastLookB" });
+    expect(standIn.parse("ok")).toBe("ok");
+    expect(z.globalRegistry.get(standIn)).toEqual({
+      id: "LastLookB",
+      description: "d",
+    });
+    expect(z.globalRegistry._idmap.get("LastLookB")).toBe(standIn);
+    const twin = z.string().check(z.describe("d"));
+    z.globalRegistry.add(twin, { id: "LastLookBTwin" });
+    expect(z.globalRegistry._idmap.get("LastLookBTwin")).toBe(twin);
+  });
+
+  it("module-scope add of a matching description plus outermost describe is accepted", () => {
+    expectAddParity(() => z.string().describe("same"), {
+      description: "same",
+    });
+  });
+
+  it("module-scope add of an id plus a thunk that describes is refused fail-closed because the description is lost", () => {
+    let runs = 0;
+    const pending = lazySchema(() => {
+      runs += 1;
+      return z.string().describe("lost");
+    });
+    z.globalRegistry.add(pending, { id: "LastLookD" });
+    const first = thrown(() => {
+      void pending.parse;
+    });
+    expect(errorMessage(first)).toMatch(/global-registry metadata/);
+    const second = thrown(() => {
+      void pending.parse;
+    });
+    expect(second).toBe(first);
+    expect(runs).toBe(1);
+  });
+
+  it("an outermost .register whose merged entry the stand-in shares through parent is refused fail-closed: membership would be lost", () => {
+    expectGlobalRegistryRefusal(() =>
+      z.string().describe("p").clone().register(z.globalRegistry, {}),
+    );
+  });
+
   it("custom-registry .register is not refused; the stand-in is absent from the registry (documented limit the static scan covers)", () => {
     const reg = z.registry<{ n: number }>();
     const standIn = lazySchema(() => z.string().register(reg, { n: 1 }));
