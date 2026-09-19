@@ -2327,6 +2327,21 @@ function analyticsPropertiesAreRelationallyValid(
         properties.has_more === null)
     );
   }
+  if (event === AnalyticsEvent.DraftsListOpened) {
+    const surface = properties.surface;
+    const entryPoint = properties.entry_point;
+    if (surface === "start_page") {
+      return (
+        entryPoint === "button" ||
+        entryPoint === "shortcut" ||
+        entryPoint === "palette"
+      );
+    }
+    if (surface === "avatar_menu") {
+      return entryPoint === "menu" || entryPoint === "palette";
+    }
+    return false;
+  }
   return true;
 }
 

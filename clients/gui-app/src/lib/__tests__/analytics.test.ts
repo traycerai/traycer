@@ -1210,6 +1210,33 @@ describe("analytics", () => {
       }
     });
 
+    it("rejects drafts_list_opened surface and entry_point pairs the UI cannot emit", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "avatar_menu",
+          entry_point: "shortcut",
+          draft_count: "0",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "avatar_menu",
+          entry_point: "button",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "menu",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+    });
+
     it("rejects an out-of-set value for each draft event's enum keys", async () => {
       const { AnalyticsEvent, sanitizeAnalyticsProperties } =
         await import("@/lib/analytics");
