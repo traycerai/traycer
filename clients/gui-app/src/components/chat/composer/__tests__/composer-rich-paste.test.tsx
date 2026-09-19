@@ -176,6 +176,7 @@ describe("composer rich clipboard paste", () => {
                 hash: null,
                 mimeType: "image/png",
                 size: 3,
+                byHashEligible: null,
               },
             },
             { type: "text", text: "describe it" },
@@ -910,6 +911,7 @@ function imageAttrs(id: string) {
     b64content: id,
     mimeType: "image/png",
     size: id.length,
+    byHashEligible: true,
   };
 }
 

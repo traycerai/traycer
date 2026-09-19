@@ -4,6 +4,10 @@ import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-sc
 import type { ChatSearchMessageMatch } from "@traycer/protocol/host/chat-search/schemas";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
 
+vi.mock("next-themes", () => ({
+  useTheme: () => ({ theme: "dark" }),
+}));
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -29,9 +33,11 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import {
   EpicsListPanel,
   type EpicsListPanelVariant,
@@ -39,6 +45,7 @@ import {
 import { EpicsListHostRequiresCloudToList } from "@/components/epics/epics-list-shared";
 import { historyRowProvenanceLabel } from "@/components/epics/history-row-provenance";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -485,6 +492,7 @@ function RootOutlet(): ReactNode {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Outlet />
+        <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
   );
@@ -642,6 +650,10 @@ describe("<EpicsListPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    // Sonner's queue is module scope, same as the Zustand stores below - a
+    // toast left showing here would still be queued for the next test's
+    // fresh <Toaster />.
+    toast.dismiss();
     // Zustand stores are module scope, so an auth status staged here outlives
     // this file inside the same worker.
     useAuthStore.setState({ status: "signed-out" });
@@ -1629,6 +1641,50 @@ describe("<EpicsListPanel />", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
+  it("shows a neutral toast instead of opening a duplicate tab when middle-clicking an already-open task", async () => {
+    // Foreground-open first, exactly like a real "already open" task: this
+    // also pins down the tab as the active one so the assertions below can
+    // prove the guard leaves it untouched.
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-from-history", "Open from landing");
+    const { activeTabId, openTabOrder, tabsById } =
+      useEpicCanvasStore.getState();
+    const openInBackgroundSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "openEpicTabInBackground",
+    );
+
+    const router = renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+
+    fireEvent(
+      link,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    const toastEl = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-sonner-toast]");
+      if (el === null) throw new Error("expected a toast");
+      return el;
+    });
+    expect(within(toastEl).getByText("Task already open")).not.toBeNull();
+    expect(within(toastEl).getByText("Open from landing")).not.toBeNull();
+
+    expect(openInBackgroundSpy).not.toHaveBeenCalled();
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual(openTabOrder);
+    expect(useEpicCanvasStore.getState().tabsById).toEqual(tabsById);
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(activeTabId);
+    expect(router.state.location.pathname).toBe("/");
+  });
+
   it("hides the imported-unseen status slot when there is nothing to show, so the title keeps no stray gap", async () => {
     renderPanel("embedded", "/");
 
@@ -2401,6 +2457,26 @@ describe("<EpicsListPanel />", () => {
     expect(
       await screen.findByTestId("epics-list-row-open-background"),
     ).toBeDefined();
+    expect(
+      screen.queryByTestId("epics-list-row-open-new-window"),
+    ).not.toBeNull();
+  });
+
+  it("disables Open in Background with an 'Already open' hint for an already-open task, keeping Open in New Window available", async () => {
+    enableDesktopBridge();
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-from-history", "Open from landing");
+
+    renderPanel("embedded", "/");
+
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+
+    const backgroundItem = await screen.findByTestId(
+      "epics-list-row-open-background",
+    );
+    expect(backgroundItem.hasAttribute("data-disabled")).toBe(true);
+    expect(within(backgroundItem).getByText("Already open")).not.toBeNull();
     expect(
       screen.queryByTestId("epics-list-row-open-new-window"),
     ).not.toBeNull();

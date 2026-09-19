@@ -37,6 +37,7 @@ import {
 } from "./fallback-identity";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useOpenFallbackSettings } from "./open-fallback-settings";
+import { FallbackGraceRungActions } from "./fallback-manual-rungs";
 import type { FallbackActionOutcome } from "@traycer/protocol/host/chat-fallback";
 import { useFallbackCancel } from "./use-fallback-actions";
 import {
@@ -367,6 +368,30 @@ export function FallbackGraceCard({
         ) : null}
         {menu}
       </div>
+
+      {/*
+       * "I already fixed it" - the answer the card could not express.
+       *
+       * Below the button row rather than inside it, and that placement is the
+       * point: this band is host-offered and can be empty, so folding it into
+       * the row above would make the row's own layout depend on whether the
+       * host happened to admit a rung this frame. The component brings its own
+       * top margin and renders nothing when there is nothing to offer.
+       *
+       * `hold` only. `choosing` and `switching` also render this card, and the
+       * host withholds the attempt for both - but gating here as well keeps the
+       * card's intent legible rather than resting on a predicate two repos
+       * away, and a countdown that has already been spent must not grow a
+       * Retry button as it commits.
+       */}
+      {pending.state === "hold" ? (
+        <FallbackGraceRungActions
+          epicId={epicId}
+          chatId={chatId}
+          hostId={hostId}
+          client={client}
+        />
+      ) : null}
 
       <div className="text-ui-xs text-muted-foreground/80">
         {signedOut

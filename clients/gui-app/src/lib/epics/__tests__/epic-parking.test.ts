@@ -117,6 +117,11 @@ function HandoffAndToasts(props: {
     nodeId: props.handle.store.getState().chatId,
     scope: props.scope,
     profileUserId: "user-1",
+    // Never consulted here: this file registers no handoff, so the driver's
+    // resend never runs and the getter is not called. `false` is the
+    // conservative answer for a mount that is only present to own the
+    // restore/state decision these cases are about.
+    getDraftBlobBridgeSupported: () => false,
   });
   return createElement(ChatTileErrorNoticeToasts, { handle: props.handle });
 }
@@ -275,6 +280,7 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
     },
     restoreWorktreeIntent: null,
     displayWorktreeIntent: null,
+    sentContentHashes: null,
     messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,

@@ -105,6 +105,7 @@ import type { Modifier } from "@dnd-kit/core";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useHostBinding } from "@/lib/host";
 import {
   insertionIndexForTarget,
   insertionIndexFromPointer,
@@ -1346,6 +1347,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
   // invalidate the moved node's record query on success - this provider is
   // the nearest hook context to that commit.
   const queryClient = useQueryClient();
+  const hostBinding = useHostBinding();
 
   /**
    * THE single teardown for a gesture. Every exit from drag-end and drag-cancel
@@ -1451,6 +1453,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
           // failure" per the comment above. Cleanup stays synchronous; only
           // the logging waits.
           void commitSidebarReparentDrop({
+            hostBinding,
             epicId: reparent.epicId,
             sourceNodeId: reparent.sourceNodeId,
             newParentId: reparent.newParentId,
@@ -1498,7 +1501,14 @@ export function RootDndProvider(props: RootDndProviderProps) {
       if (!committed) restorePromotedPreview();
       endGesture();
     },
-    [endGesture, navigate, navigateNested, queryClient, updateDropPreview],
+    [
+      endGesture,
+      hostBinding,
+      navigate,
+      navigateNested,
+      queryClient,
+      updateDropPreview,
+    ],
   );
 
   const handleDragCancel = useCallback(() => {

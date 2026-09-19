@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { Link } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import {
   ArrowDownToLine,
@@ -1730,8 +1731,15 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
   );
   const openInBackground = useCallback(() => {
+    if (isOpen) {
+      toast("Task already open", {
+        id: "history-task-already-open",
+        description: displayTitle,
+      });
+      return;
+    }
     openEpicInBackground(item.epicId, item.title);
-  }, [item.epicId, item.title]);
+  }, [isOpen, displayTitle, item.epicId, item.title]);
   const openInNewWindow = useCallback(() => {
     onOpenInNewWindow(item);
   }, [onOpenInNewWindow, item]);
@@ -2071,10 +2079,16 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const backgroundMenuItem = isPhase ? null : (
     <ContextMenuItem
       onSelect={openInBackground}
+      disabled={isOpen}
       data-testid="epics-list-row-open-background"
     >
-      <ArrowDownToLine />
-      Open in Background
+      <ArrowDownToLine className="mt-0.5 self-start" />
+      <span className="flex flex-col">
+        <span>Open in Background</span>
+        <span hidden={!isOpen} className="text-ui-xs">
+          Already open
+        </span>
+      </span>
     </ContextMenuItem>
   );
   const newWindowMenuItem = openInNewWindowAvailable ? (

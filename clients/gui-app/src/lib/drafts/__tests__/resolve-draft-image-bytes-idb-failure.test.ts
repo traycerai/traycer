@@ -86,7 +86,10 @@ describe("resolveDraftImageBytes with a persistently failing local store", () =>
         bytesBase64: btoa(String.fromCharCode(...bytes)),
       });
     }) as FakeRequest;
-    const target: DraftImageByteTarget = { hostId: HOST, client: { request } };
+    const target: DraftImageByteTarget = {
+      hostId: HOST,
+      client: { request, requestWithOptions: request },
+    };
 
     await expect(resolveDraftImageBytes(hash, target)).resolves.toEqual(bytes);
     // The host leg actually ran - the failure mode this guards against is the
@@ -101,7 +104,10 @@ describe("resolveDraftImageBytes with a persistently failing local store", () =>
         ok: false as const,
         reason: "missing" as const,
       })) as FakeRequest;
-    const target: DraftImageByteTarget = { hostId: HOST, client: { request } };
+    const target: DraftImageByteTarget = {
+      hostId: HOST,
+      client: { request, requestWithOptions: request },
+    };
 
     await expect(resolveDraftImageBytes(hash, target)).resolves.toBeNull();
   });

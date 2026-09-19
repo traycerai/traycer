@@ -130,6 +130,11 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => ({
     request: homeMocks.request,
+    // `epic.create` is dispatched with an idempotency key, which only the
+    // combined entry point can carry, so a client stub that stops at `request`
+    // fails at RUN time on the first create this suite drives.
+    requestWithOptions: (method: string, payload: unknown): Promise<unknown> =>
+      homeMocks.request(method, payload),
     getActiveHostId: homeMocks.getActiveHostId,
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
@@ -154,6 +159,8 @@ function useTestPlacementTarget(): LandingPlacementTarget {
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({
     request: homeMocks.request,
+    requestWithOptions: (method: string, payload: unknown): Promise<unknown> =>
+      homeMocks.request(method, payload),
     getActiveHostId: homeMocks.getActiveHostId,
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
@@ -173,6 +180,10 @@ vi.mock("@/lib/host/runtime", () => ({
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
+      requestWithOptions: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => homeMocks.request(method, payload),
       getActiveHostId: homeMocks.getActiveHostId,
       getActiveHost: homeMocks.getActiveHost,
       getRequestContextUserId: homeMocks.getRequestContextUserId,

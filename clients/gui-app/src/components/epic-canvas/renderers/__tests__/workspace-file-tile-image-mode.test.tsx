@@ -474,6 +474,37 @@ describe("<WorkspaceFileTile /> image mode", () => {
     },
   );
 
+  it("copies the resolved absolute path from the fallback media toolbar's path disclosure", () => {
+    const node = nodeFor("assets/photo.png");
+    state.asset = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This image could not be loaded.",
+      totalBytes: 42,
+      servedFromCache: false,
+    };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      renderTile(node);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Show full file path" }),
+      );
+      expect(screen.getByText("/work/repo/assets/photo.png")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+      expect(writeText).toHaveBeenCalledWith("/work/repo/assets/photo.png");
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("reports a decode error through the hook and recovers once a new asset request resolves ready", () => {
     const rendered = renderTile(nodeFor("assets/photo.png"));
 

@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { ReactNode } from "react";
 import { createElement } from "react";
 
@@ -115,6 +123,7 @@ import type {
   CreateChatMutationInput,
   DeleteChatMutationInput,
   DeleteChatMutationOptions,
+  RenameChatMutationInput,
 } from "@/hooks/epic/use-epic-chat-mutations";
 
 interface CapturedMutationArgs {
@@ -160,6 +169,12 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  EPIC_CREATE_SEED_HOLD_TIMEOUT_MS,
+  clearEpicCreateSeedPending,
+  markEpicCreateSeedPending,
+  readEpicCreateSeed,
+} from "@/lib/worktree/pending-epic-create-seeds";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -231,6 +246,12 @@ beforeEach(() => {
 });
 
 describe("useEpicCreateChatForHostClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    clearEpicCreateSeedPending("e2", "c2");
+    clearEpicCreateSeedPending("e-none", "c-none");
+  });
+
   it("retains the created chat on success", () => {
     renderHook(() => useEpicCreateChatForHostClient(null), {
       wrapper: makeWrapper(),
@@ -282,6 +303,108 @@ describe("useEpicCreateChatForHostClient", () => {
 
     expect(clearPendingChatCreation).toHaveBeenCalledWith("e2", "c2");
   });
+
+  it("onSuccess arms its own pair's timer and is a no-op for a surface that registered nothing", () => {
+    vi.useFakeTimers();
+    const released: string[] = [];
+    markEpicCreateSeedPending("e2", "c2", {
+      hostId: "host-test",
+      seededMessageId: "msg-1",
+      seedRows: false,
+      heldForDeferredCreate: false,
+      release: () => {
+        released.push("c2");
+      },
+    });
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onSuccess: (
+        data: CreateChatResponse,
+        params: CreateChatMutationInput,
+        ctx: { hostId: string | null; ownerUserId: string | null },
+      ) => void;
+    };
+
+    opts.onSuccess(
+      { chatId: "c-none" },
+      {
+        hostId: "host-test",
+        epicId: "e-none",
+        chatId: "c-none",
+        parentId: null,
+        title: "",
+      },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+    vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+    expect(released).toEqual([]);
+    expect(readEpicCreateSeed("e2", "c2")).not.toBeNull();
+
+    opts.onSuccess(
+      { chatId: "c2" },
+      {
+        hostId: "host-test",
+        epicId: "e2",
+        chatId: "c2",
+        parentId: null,
+        title: "",
+      },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+    vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+    expect(released).toEqual(["c2"]);
+    expect(readEpicCreateSeed("e2", "c2")).toBeNull();
+  });
+
+  it("onError clears the pair, including an armed timer", () => {
+    vi.useFakeTimers();
+    const released: string[] = [];
+    markEpicCreateSeedPending("e2", "c2", {
+      hostId: "host-test",
+      seededMessageId: "msg-1",
+      seedRows: false,
+      heldForDeferredCreate: false,
+      release: () => {
+        released.push("c2");
+      },
+    });
+    renderHook(() => useEpicCreateChatForHostClient(null), {
+      wrapper: makeWrapper(),
+    });
+    const successOpts = getCapturedMutation("epic.createChat").options as {
+      onSuccess: (
+        data: CreateChatResponse,
+        params: CreateChatMutationInput,
+        ctx: { hostId: string | null; ownerUserId: string | null },
+      ) => void;
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+    successOpts.onSuccess(
+      { chatId: "c2" },
+      {
+        hostId: "host-test",
+        epicId: "e2",
+        chatId: "c2",
+        parentId: null,
+        title: "",
+      },
+      { hostId: "host-test", ownerUserId: "user-at-submit" },
+    );
+    expect(readEpicCreateSeed("e2", "c2")).not.toBeNull();
+
+    successOpts.onError(makeError("RPC_ERROR"), {
+      hostId: "host-test",
+      epicId: "e2",
+      chatId: "c2",
+      parentId: null,
+      title: "",
+    });
+    expect(readEpicCreateSeed("e2", "c2")).toBeNull();
+    vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+    expect(released).toEqual([]);
+  });
 });
 
 describe("useEpicRenameChat", () => {
@@ -294,20 +417,91 @@ describe("useEpicRenameChat", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename agent.");
   });
 
-  it("addresses the Epic session's host, not the app-wide one", () => {
-    // Both call sites (the sidebar chat tree, the canvas tab rename) live
-    // inside an Epic and outside every tile `TabHostProvider`. The ambient
-    // client this used to read is the EFFECTIVE host, which diverges from the
-    // session host for the whole of a re-point - a window in which the sidebar
-    // stays interactive because only the canvas is made inert.
-    //
-    // Identity, not "a client was passed": `useHostClient()` is mocked to
-    // return a fresh object per call, so a regression fails here on the
-    // object rather than on an absence.
+  // The caller names the record's owning host on the mutation input
+  // (`RenameChatMutationInput.hostId`), like archive/delete above - a rename
+  // is a write to that row's owning host, not to whatever the Epic session
+  // happens to be bound to. `useEpicRecordMutationClient()` still prefers the
+  // session client when it already addresses the named host (avoids minting
+  // a second requester for the common case) and falls through to the binding
+  // otherwise.
+  it("uses the session client for the session host and the binding otherwise", () => {
     renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
-    expect(getCapturedMutation("epic.renameChat").client).toBe(
+    expect(resolveCapturedClient("epic.renameChat", "host-test")).toBe(
       epicSessionHostClient,
     );
+    expect(resolveCapturedClient("epic.renameChat", "remote-host")).toBe(
+      namedHostClients.get("remote-host"),
+    );
+  });
+
+  it("fails closed for a null host without dispatching anywhere", () => {
+    renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
+    expect(resolveCapturedClient("epic.renameChat", null)).toBeNull();
+  });
+
+  it("strips hostId from the wire request", () => {
+    renderHook(() => useEpicRenameChat(), { wrapper: makeWrapper() });
+    const mapVariables = getCapturedMutation("epic.renameChat").mapVariables;
+    if (mapVariables === undefined) {
+      throw new Error("expected renameChat mapVariables");
+    }
+    const variables: RenameChatMutationInput = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      title: "New title",
+      hostId: "remote-host",
+    };
+    expect(mapVariables(variables as never)).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      title: "New title",
+    });
+  });
+
+  it("refreshes both the target and viewer caches after a remote rename", () => {
+    const { wrapper, queryClient } = makeWrapperWithClient();
+    const invalidateQueries = vi
+      .spyOn(queryClient, "invalidateQueries")
+      .mockResolvedValue();
+    renderHook(() => useEpicRenameChat(), { wrapper });
+    const opts = getCapturedMutation("epic.renameChat").options as {
+      onMutate: (variables: RenameChatMutationInput) => {
+        readonly hostId: string | null;
+        readonly viewerHostId: string | null;
+      };
+      onSuccess: (
+        data: unknown,
+        variables: RenameChatMutationInput,
+        ctx: {
+          readonly hostId: string | null;
+          readonly viewerHostId: string | null;
+        },
+        mutationContext: MutationFunctionContext,
+      ) => void;
+    };
+
+    const variables: RenameChatMutationInput = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      title: "New title",
+      hostId: "remote-host",
+    };
+    const ctx = opts.onMutate(variables);
+    expect(ctx).toEqual({ hostId: "remote-host", viewerHostId: "host-test" });
+    opts.onSuccess(undefined, variables, ctx, {
+      client: queryClient,
+      meta: undefined,
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope(
+        "remote-host",
+        "epic.listChatRecords",
+      ),
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-test", "epic.listChatRecords"),
+    });
   });
 });
 

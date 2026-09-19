@@ -11,13 +11,13 @@ import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
 import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
-import {
-  tileRenameKind,
-  useSwitcherRename,
-} from "@/components/epic-canvas/mobile/use-switcher-rename";
+import { tileRenameKind } from "@/components/epic-canvas/mobile/use-switcher-rename";
+import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
+import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import {
   useEpicPermissionRole,
+  useEpicNodeHostId,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
 } from "@/lib/epic-selectors";
@@ -31,6 +31,7 @@ import type {
 
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
+  readonly tabId: string;
   readonly tile: EpicCanvasTileRef;
 }
 
@@ -78,7 +79,7 @@ function MobileCurrentTileBarBody(
     readonly browserPresentation: BrowserTabPresentation | null;
   },
 ) {
-  const { epicId, tile, browserPresentation } = props;
+  const { epicId, tabId, tile, browserPresentation } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
   // other kind (mirrors the tab strip). `useHostClientForHostId(null)` returns
@@ -92,7 +93,7 @@ function MobileCurrentTileBarBody(
       id: tile.id,
       name: tile.name,
       type: tile.type,
-      hostId: "hostId" in tile ? tile.hostId : null,
+      hostId: tile.hostId,
     },
     epicId,
     terminalHostClient,
@@ -108,16 +109,31 @@ function MobileCurrentTileBarBody(
   // would silently discard what the user typed; refusing to enter edit mode
   // tells them before they type, which is the same rule the sidebar's
   // disabled Rename entry follows.
-  const chatWriteRoute = useChatWriteRoute(tile.type === "chat", tile.id);
+  // A same-id row on another host cannot determine this tile's editability.
+  // Its owning host validates the rename, as in the commit handler.
+  const projectedHostId = useEpicNodeHostId(tile.id);
+  const matchesProjection =
+    projectedHostId === null || projectedHostId === tile.hostId;
+  const chatWriteRoute = useChatWriteRoute(
+    tile.type === "chat" && matchesProjection,
+    tile.id,
+  );
   const editable =
     renameKind !== null && canMutate && chatWriteRoute !== "unavailable";
-  const rename = useSwitcherRename(epicId);
+  const rename = useRenameCanvasTab(epicId, tabId);
+  const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const handleCommit = useCallback(
     (next: string) => {
       if (renameKind === null) return;
-      rename(renameKind, tile.id, next);
+      const trimmed = next.trim();
+      if (trimmed.length === 0) return;
+      if (tile.type === "terminal") {
+        renameTerminal.mutate({ sessionId: tile.id, title: trimmed });
+        return;
+      }
+      rename(tile, trimmed);
     },
-    [rename, renameKind, tile.id],
+    [rename, renameKind, renameTerminal, tile],
   );
   // A chat is the one tile kind whose own stream can be away while its content
   // stays on screen with nothing said about it. Terminals already overlay
@@ -128,7 +144,7 @@ function MobileCurrentTileBarBody(
   const chatSync = useChatStreamSyncState(
     epicId,
     tile.id,
-    isChat && "hostId" in tile ? tile.hostId : null,
+    isChat ? tile.hostId : null,
   );
   // Run the clock on THIS chat's outage whether or not the strip is drawn. The
   // suppression below hides the strip while the Epic's is speaking, and the
@@ -136,12 +152,12 @@ function MobileCurrentTileBarBody(
   // strip would start over at that hand-off, so one continuous chat outage
   // would read as a fresh "Syncing…" a minute in, and would set its animation
   // running again past the bound the escalation exists to impose. Keyed on the
-  // tile's id, so swiping to a different chat starts a new spell instead of
-  // inheriting this one's verdict.
+  // tile's host and id, so swiping to a different chat starts a new spell
+  // instead of inheriting this one's verdict.
   const chatSpell = useStreamSyncingSpell({
     status: chatSync.status,
     hasContent: chatSync.hasContent,
-    identity: tile.id,
+    identity: `chat:${tile.hostId}:${tile.id}`,
   });
   // REPORTED, not rendered. The one indicator lives in the app shell, which
   // orders this against the session and Epic legs by rank - so there is no
@@ -154,7 +170,7 @@ function MobileCurrentTileBarBody(
   usePublishSurfaceSync({
     // Host-scoped: a chat id is host-minted, so the same id names a different
     // conversation on another machine.
-    key: `chat:${"hostId" in tile ? tile.hostId : "unresolved"}:${tile.id}`,
+    key: `chat:${tile.hostId}:${tile.id}`,
     rank: SURFACE_SYNC_RANK.chat,
     label: "Chat",
     spell: isChat ? chatSpell : NO_STREAM_SYNCING_SPELL,

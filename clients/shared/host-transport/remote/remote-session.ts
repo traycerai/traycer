@@ -10,6 +10,7 @@ import {
 import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
+import { recordNegotiatedStreamMethodVersions } from "../negotiated-stream-version-registry";
 import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import { UNARY_RESPONSE_TIMEOUT_MS } from "./config";
 
@@ -44,6 +45,7 @@ export interface RemoteSessionOptions<
   ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>,
   | "auth"
   | "onNegotiatedMethods"
+  | "onNegotiatedStreamMethodVersions"
   | "evidence"
   | "servedStreamMajors"
   | "unaryResponseMs"
@@ -70,6 +72,12 @@ export class RemoteSession<
       ...coreOptions,
       auth: createClientRemoteSessionAuth(bearer, auth),
       onNegotiatedMethods: recordNegotiatedHostManifest,
+      // The stream sibling of the line above, and installed here for the same
+      // reason: BOTH transports must publish, or every per-host gate built on
+      // the registry fails closed forever for the hosts one of them serves -
+      // which for a stream-version gate means every remote host, i.e. the ones
+      // the gate exists for.
+      onNegotiatedStreamMethodVersions: recordNegotiatedStreamMethodVersions,
       servedStreamMajors: CLIENT_SERVED_STREAM_MAJORS,
       unaryResponseMs: UNARY_RESPONSE_TIMEOUT_MS,
     });
