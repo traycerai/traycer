@@ -420,6 +420,58 @@ describe("commGraphPeerTaskStubs", () => {
     expect(stubs).toEqual([]);
   });
 
+  it("stubs neither end when BOTH are missing from this task's agents", () => {
+    // The local end can be missing for ordinary reasons - the agent was
+    // deleted, or the record feed has not caught up with the event feed - and
+    // then both ends of a cross-task row look foreign. Stubbing them both drew
+    // the LOCAL agent as living in the other task, under that task's title and
+    // behind a button that opens it. With nothing to tell the two apart, the
+    // row contributes no stub at all.
+    const stubs = commGraphPeerTaskStubs(
+      [
+        a2a({
+          id: 1,
+          timestamp: 10,
+          senderAgentId: "foreign-1",
+          receiverAgentId: "deleted-local",
+          peerEpicId: "epic-x",
+        }),
+      ],
+      LOCAL_AGENT_IDS,
+    );
+
+    expect(stubs).toEqual([]);
+  });
+
+  it("still stubs the foreign end of a later row once the local end is known", () => {
+    // The lagging-feed case resolves itself: the row that could not be placed
+    // contributes nothing, and the next row naming a local end places its
+    // foreign partner normally. One unplaceable row does not poison the rest.
+    const stubs = commGraphPeerTaskStubs(
+      [
+        a2a({
+          id: 1,
+          timestamp: 10,
+          senderAgentId: "foreign-1",
+          receiverAgentId: "not-yet-known",
+          peerEpicId: "epic-x",
+        }),
+        a2a({
+          id: 2,
+          timestamp: 20,
+          senderAgentId: "foreign-1",
+          receiverAgentId: "a",
+          peerEpicId: "epic-x",
+        }),
+      ],
+      LOCAL_AGENT_IDS,
+    );
+
+    expect(stubs).toEqual([
+      { agentId: "foreign-1", peerEpicId: "epic-x", firstSeenAt: 20 },
+    ]);
+  });
+
   it("folds a cross-task row onto an edge once the stub id is added to the drawable set", () => {
     // The whole point of the stand-in: with its id added to the set
     // `aggregateCommGraphEdges` draws over, the cross-task row is no longer
