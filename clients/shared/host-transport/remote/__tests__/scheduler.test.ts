@@ -486,9 +486,13 @@ describe("PriorityScheduler.queuedBytesForStream / onFrameWritten", () => {
 
     const bulkOnStream1 = messageSource(1, QosClass.BULK);
     const interactiveOnStream1 = messageSource(1, QosClass.INTERACTIVE);
-    const onStream2 = messageSource(2, QosClass.INTERACTIVE);
+    // BULK, so with zero credits it provably stays queued; its size is captured
+    // up front so a drained source cannot make the comparison 0 === 0.
+    const onStream2 = messageSource(2, QosClass.BULK);
     const stream1Bytes =
       bulkOnStream1.remainingBytes + interactiveOnStream1.remainingBytes;
+    const stream2Bytes = onStream2.remainingBytes;
+    expect(stream2Bytes).toBeGreaterThan(0);
 
     // No credits at all, so nothing drains and every source stays queued -
     // the sum below is read against a known, held state.
@@ -497,12 +501,12 @@ describe("PriorityScheduler.queuedBytesForStream / onFrameWritten", () => {
     scheduler.enqueue(onStream2);
 
     expect(scheduler.queuedBytesForStream(1)).toBe(stream1Bytes);
-    expect(scheduler.queuedBytesForStream(2)).toBe(onStream2.remainingBytes);
+    expect(scheduler.queuedBytesForStream(2)).toBe(stream2Bytes);
     expect(scheduler.queuedBytesForStream(999)).toBe(0);
 
     scheduler.dropStreamOutbound(1);
     expect(scheduler.queuedBytesForStream(1)).toBe(0);
-    expect(scheduler.queuedBytesForStream(2)).toBe(onStream2.remainingBytes);
+    expect(scheduler.queuedBytesForStream(2)).toBe(stream2Bytes);
   });
 
   it("fires onFrameWritten once per written frame, with that frame's streamId, after the write resolves", async () => {
