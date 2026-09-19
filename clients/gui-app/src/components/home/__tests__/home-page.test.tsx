@@ -377,8 +377,8 @@ vi.mock("@/components/home/host-update-banner", () => ({
   HostUpdateBanner: () => <div data-testid="host-update-banner-slot" />,
 }));
 
-vi.mock("@/components/epics/epics-list-panel", () => ({
-  EpicsListPanel: () => <div data-testid="epics-list-panel" />,
+vi.mock("@/components/home/current-tasks-section", () => ({
+  CurrentTasksSection: () => <div data-testid="current-tasks-section" />,
 }));
 
 vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
@@ -562,7 +562,7 @@ describe("<HomePage />", () => {
     queryClient.clear();
   });
 
-  it("renders the embedded epics list normally, but unmounts it while a system modal occludes the home page", () => {
+  it("renders the Current tasks section normally, but unmounts it while a system modal occludes the home page", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
@@ -571,7 +571,7 @@ describe("<HomePage />", () => {
         <HomePage />
       </QueryClientProvider>,
     );
-    expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+    expect(screen.queryByTestId("current-tasks-section")).not.toBeNull();
     expect(screen.getByTestId("landing-composer").dataset.activityEnabled).toBe(
       "true",
     );
@@ -582,14 +582,14 @@ describe("<HomePage />", () => {
         <HomePage />
       </QueryClientProvider>,
     );
-    expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
     expect(screen.getByTestId("landing-composer").dataset.activityEnabled).toBe(
       "false",
     );
     queryClient.clear();
   });
 
-  it("drops the embedded epics list at phone width, keeping the hero and composer", () => {
+  it("drops the Current tasks section at phone width, keeping the hero and composer", () => {
     homeMocks.isMobile = true;
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -602,7 +602,7 @@ describe("<HomePage />", () => {
 
     // The hamburger drawer already carries "Recent tasks" + "View all" off the
     // same useHistoryQuery, so the inline copy is pure duplication here.
-    expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
     expect(screen.getByTestId("home-hero")).not.toBeNull();
     expect(screen.getByTestId("landing-composer")).not.toBeNull();
     queryClient.clear();
@@ -623,7 +623,7 @@ describe("<HomePage />", () => {
     fireEvent.click(screen.getByTestId("home-view-history"));
 
     // Same drawer the header hamburger opens - that is where "Recent tasks"
-    // lives once the embedded list is dropped at this width.
+    // lives once the Current tasks section is dropped at this width.
     expect(useMobileNavStore.getState().open).toBe(true);
     queryClient.clear();
   });
@@ -1241,7 +1241,7 @@ describe("<HomePage />", () => {
       );
       const composerInstanceId =
         screen.getByTestId("landing-composer").dataset.instanceId;
-      expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+      expect(screen.queryByTestId("current-tasks-section")).not.toBeNull();
       expect(
         screen.getByTestId("home-hero").parentElement?.className,
       ).not.toContain("invisible");
@@ -1268,7 +1268,7 @@ describe("<HomePage />", () => {
       // Nothing above or below the composer any more, so it centres itself in
       // the surface instead of staying anchored to the top of its row.
       expect(composerPlacement()).toBe("centered");
-      expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+      expect(screen.queryByTestId("current-tasks-section")).toBeNull();
       expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
         composerInstanceId,
       );
@@ -1286,7 +1286,7 @@ describe("<HomePage />", () => {
         screen.getByTestId("home-hero").parentElement?.className,
       ).not.toContain("invisible");
       expect(composerPlacement()).toBe("top");
-      expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+      expect(screen.queryByTestId("current-tasks-section")).not.toBeNull();
       expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
         composerInstanceId,
       );

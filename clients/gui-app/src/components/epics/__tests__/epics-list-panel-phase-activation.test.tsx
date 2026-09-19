@@ -175,7 +175,7 @@ function renderPanel() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <EpicsListPanel
-            variant="embedded"
+            variant="page"
             className={undefined}
             onSelectEpic={null}
             onOpenItem={null}

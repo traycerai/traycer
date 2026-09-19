@@ -115,6 +115,8 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import {
+  DEFAULT_HISTORY_SEARCH,
+  patchHistorySearch,
   type HistorySearchPatch,
   type HistorySearchState,
 } from "@/lib/history-search";
@@ -143,7 +145,7 @@ const UNVERIFIED_SESSION_DELETE_TOOLTIP =
   "Your sign-in couldn't be confirmed. Deleting this task will work again once it is.";
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
-export type EpicsListPanelVariant = "page" | "embedded" | "picker";
+export type EpicsListPanelVariant = "page" | "picker";
 
 interface EpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
@@ -154,7 +156,7 @@ interface EpicsListPanelProps {
    */
   readonly onSelectEpic: ((epicId: string) => void) | null;
   /**
-   * Replaces the row's normal navigation when this panel is embedded in a
+   * Replaces the row's normal navigation when this panel is used in a
    * destination picker. The complete item is provided so callers can preserve
    * the distinct Epic and legacy Phase activation paths.
    */
@@ -164,7 +166,7 @@ interface EpicsListPanelProps {
   /**
    * Focus the search input once on mount. Set by the history modal so
    * opening it drops the caret straight into search; left off for the
-   * `/epics` route and the embedded home list where a full-page focus
+   * `/epics` route where a full-page focus
    * grab would be unwelcome.
    */
   readonly autoFocusSearch: boolean;
@@ -199,17 +201,7 @@ interface EpicsListPanelBodyProps {
   readonly autoFocusSearch: boolean;
 }
 
-/**
- * Unified task-list panel rendered both inline on the home page
- * (`variant="embedded"`) and on the `/epics` route (`variant="page"`).
- *
- * Both variants share the same data source (`useHistoryQuery` →
- * `useCloudEpicTasksQuery`), filter / sort chrome, row visuals, and
- * "Show more" pagination. The page variant additionally renders the
- * route header (title + count) and the search input; the embedded
- * variant trims those to keep the landing page focused on the
- * composer.
- */
+/** History and destination-picker task list. */
 export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
   if (props.routeSearch === null) {
     return (
@@ -232,6 +224,24 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
       routeSearch={props.routeSearch}
       historyNowMs={props.historyNowMs}
       autoFocusSearch={props.autoFocusSearch}
+    />
+  );
+}
+
+export function PickerEpicsListPanel(
+  props: Omit<AmbientEpicsListPanelProps, "variant">,
+): ReactNode {
+  const [search, setSearch] = useState(DEFAULT_HISTORY_SEARCH);
+  const update = useCallback((patch: HistorySearchPatch) => {
+    setSearch((previous) => patchHistorySearch(previous, patch));
+  }, []);
+  const clear = useCallback(() => setSearch(DEFAULT_HISTORY_SEARCH), []);
+  const historySearch: HistorySearchController = { search, update, clear };
+  return (
+    <EpicsListPanelBody
+      {...props}
+      variant="picker"
+      historySearch={historySearch}
     />
   );
 }

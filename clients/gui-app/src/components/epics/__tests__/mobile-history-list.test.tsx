@@ -409,7 +409,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
   describe("swipe tray", () => {
     it("opens the tray on a leftward drag well past half the tray width", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       openTrayByDrag(card);
@@ -420,7 +420,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("stays closed on a leftward drag of only a few px", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 300, 100);
@@ -438,7 +438,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // outright at 10px, well before any commit distance is even evaluated -
     // this case is a pure distance check with no timing dependency.
     it("stays closed on a rightward drag of any distance", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 300, 100);
@@ -458,7 +458,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // against, so a regression that widened the guard to the closed state
     // would still be caught here.
     it("stays closed on a rightward drag starting inside the reserved edge zone", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 10, 100);
@@ -471,7 +471,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("stays closed on a vertical drag", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 300, 100);
@@ -492,7 +492,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
       expect(cards).toHaveLength(2);
 
@@ -508,7 +508,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("closes an open tray when the list scrolls", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -532,7 +532,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // contrasting case to the in-strip one below - the row is free to claim
     // this drag.
     it("closes an already-open tray on a rightward drag past half the tray width", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -556,7 +556,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // inset, is never tracked, so the tray stays open however far past its
     // commit distance the drag travels.
     it("leaves an open tray open on a rightward close-swipe starting inside the reserved edge zone", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -590,7 +590,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // half-tray commit distance, or the exploit this case pins would go
     // unnoticed even while it silently mis-captured the pointer.
     it("yields the drawer strip even when a prior undecided pointer left its tracker resident", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -618,7 +618,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // tray's open state is left exactly where it was - a pure distance check,
     // like the closed-state "few px" case above.
     it("leaves an already-open tray open on a rightward drag of only a few px", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -637,7 +637,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
   describe("tray actions", () => {
     it("opens the shared confirm dialog on delete, without deleting immediately", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       fireEvent.click(await screen.findByTestId("epics-list-row-tray-delete"));
 
@@ -646,7 +646,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("calls the set-pinned mutation with the flipped pin state", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       fireEvent.click(await screen.findByTestId("epics-list-row-tray-pin"));
 
@@ -665,7 +665,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isLocalHome: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const pin = await screen.findByRole("button", {
         name: "Pinning Local only epic needs a newer Traycer host",
@@ -684,7 +684,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isPreservedOrphan: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const pin = await screen.findByRole("button", {
         name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
@@ -697,7 +697,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("reveals the inline title input on rename", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       fireEvent.click(await screen.findByTestId("epics-list-row-tray-rename"));
 
@@ -716,7 +716,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         localRows: "present",
         sort: "loaded-union",
       };
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const unavailable = await screen.findByTestId("epics-list-unavailable");
       expect(unavailable).not.toBeNull();
@@ -733,7 +733,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         sort: "server",
       };
       useAuthStore.setState({ status: "unverified" });
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const unavailable = await screen.findByTestId("epics-list-unavailable");
       expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
@@ -753,7 +753,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         localRows: "present",
         sort: "loaded-union",
       };
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const rows = await screen.findByTestId("epics-list-rows");
       expect(rows.textContent).toContain("Local");
@@ -779,7 +779,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       useHistorySearchStore.setState({
         search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
       });
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(
         await screen.findByTestId("epics-list-unavailable"),
@@ -791,7 +791,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     it("shows the explicit cloud-pending state when local storage is empty", async () => {
       testState.items = [];
       testState.cloudPagePending = true;
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
       expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
@@ -801,7 +801,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
   describe("tap and long press", () => {
     it("opens the task on a plain tap", async () => {
       const onOpenItem = vi.fn();
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
 
       fireEvent.click(
         await screen.findByRole("link", {
@@ -828,7 +828,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Legacy phase row",
         }),
       ];
-      const router = renderPanel("embedded", "/");
+      const router = renderPanel("page", "/");
 
       fireEvent.click(
         await screen.findByRole("link", { name: "Open task Legacy phase row" }),
@@ -854,7 +854,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
     it("closes an open tray on tap instead of opening the task", async () => {
       const onOpenItem = vi.fn();
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -878,7 +878,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
     it("enters selection mode on a stationary 450ms hold, and swallows the trailing click", async () => {
       const onOpenItem = vi.fn();
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -902,7 +902,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not enter selection mode when the press moves past the hold's slop before 450ms", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -929,7 +929,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
       const cards = await screen.findAllByTestId("epics-list-row-card");
 
       // Long-press the second row to enter selection mode; the first row's
@@ -967,7 +967,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           permissionRole: "viewer",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
 
       // Long-press the first, deletable row to enter selection mode - a
@@ -1002,7 +1002,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // included because a hold rarely lands perfectly still, and it stays
     // under the hold's own 6px slop so the press still completes.
     it("enters selection mode from a long-press with slight drift, with the tray absent and the card untranslated", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -1027,7 +1027,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("hides an already-open tray when a long-press on the same row enters selection mode", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -1063,7 +1063,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
       openTrayByDrag(cards[0]);
       expect(
@@ -1091,7 +1091,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not open the tray on a leftward drag past the commit distance while in selection mode, and leaves the card untranslated", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -1117,7 +1117,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("restores the swipe once selection mode is cancelled", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -1162,7 +1162,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
 
       // The first row's pointer goes down and is left resting - no pointerup,
@@ -1215,7 +1215,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // classifier's 15px activation distance without yet reaching the
     // trigger, and the second lands raw travel exactly on it.
     it("refetches on a raw downward travel of 64px, the trigger threshold", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1227,7 +1227,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch a raw downward travel of 63px, just under the trigger threshold", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1239,7 +1239,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch on a downward drag that stops short of the trigger threshold", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1251,7 +1251,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch an armed pull ended by touchcancel", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1267,7 +1267,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // is what catches a surface left translated with nothing left to release
     // it.
     it("cancels an armed pull when a second finger touches down, stranding no translate", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1283,7 +1283,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch a downward drag when the list is scrolled away from its top", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
       scroller.scrollTop = 50;
 
@@ -1295,7 +1295,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch a downward drag while a text input is focused", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
       const input = document.createElement("input");
       document.body.appendChild(input);
@@ -1317,7 +1317,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isPreservedOrphan: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const glyph = await screen.findByTestId(
         "epics-list-row-provenance-preserved-orphan-epic-from-history",
@@ -1332,7 +1332,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isLocalHome: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(
         await screen.findByTestId(
@@ -1348,7 +1348,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isLocalHome: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const label = await screen.findByTestId(
         "epics-list-row-provenance-label-local-only",
@@ -1378,7 +1378,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isPreservedOrphan: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const label = await screen.findByTestId(
         "epics-list-row-provenance-label-preserved-orphan",
@@ -1403,7 +1403,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("renders neither provenance label for an ordinary row carrying no marker", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       await screen.findByTestId("epics-list-row-card");
       expect(
@@ -1420,7 +1420,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
   describe("desktop untouched", () => {
     it("keeps the desktop row chrome at a desktop viewport width", async () => {
       setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(await screen.findByTestId("epics-list-row-pin")).not.toBeNull();
       expect(screen.getByTestId("epics-list-row-delete")).not.toBeNull();
