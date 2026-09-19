@@ -274,8 +274,23 @@ export interface CommGraphPeerTaskStub {
 
 /**
  * Every foreign endpoint named by a cross-task row in `events`, first
- * appearance first. An endpoint that IS one of this task's agents is never a
- * stub, so a row whose both ends resolve here draws exactly as before.
+ * appearance first.
+ *
+ * A cross-task row has exactly one foreign end BY CONSTRUCTION - it sits in
+ * one task's feed, and `peerEpicId` names where the other end lives - so that
+ * is the shape this reads, rather than "every endpoint the agent list does not
+ * contain". The distinction is the whole correctness of the function: absence
+ * from `epicAgentIds` is not evidence of foreignness. A local agent that has
+ * since been deleted is missing from it, and so is one the record feed has not
+ * caught up on while the event feed already carries its messages. Treating
+ * every missing id as foreign drew a LOCAL agent as living in the other task,
+ * labelled with that task's title and wired to a button that opens it.
+ *
+ * So: exactly one end missing means that end is the stub; both ends missing
+ * means this row cannot say which is which, and it contributes no stub at all
+ * (the exchange is skipped as an edge to nowhere, as it was before stubs
+ * existed - the honest outcome for a row we cannot place). Both ends present
+ * is a row that draws locally and needs no stand-in.
  */
 export function commGraphPeerTaskStubs(
   events: ReadonlyArray<CommGraphEvent>,
@@ -284,15 +299,20 @@ export function commGraphPeerTaskStubs(
   const byAgentId = new Map<string, CommGraphPeerTaskStub>();
   for (const event of events) {
     if (event.peerEpicId === null) continue;
-    for (const endpoint of [event.senderAgentId, event.receiverAgentId]) {
-      if (endpoint === null) continue;
-      if (epicAgentIds.has(endpoint) || byAgentId.has(endpoint)) continue;
-      byAgentId.set(endpoint, {
-        agentId: endpoint,
-        peerEpicId: event.peerEpicId,
-        firstSeenAt: event.timestamp,
-      });
-    }
+    const { senderAgentId, receiverAgentId } = event;
+    // A row missing an endpoint entirely cannot establish which side is
+    // foreign either, so it is skipped for the same reason. No cross-task row
+    // has one: `peerEpicId` is only ever set on an a2a_message.
+    if (senderAgentId === null || receiverAgentId === null) continue;
+    const senderIsLocal = epicAgentIds.has(senderAgentId);
+    if (senderIsLocal === epicAgentIds.has(receiverAgentId)) continue;
+    const foreignAgentId = senderIsLocal ? receiverAgentId : senderAgentId;
+    if (byAgentId.has(foreignAgentId)) continue;
+    byAgentId.set(foreignAgentId, {
+      agentId: foreignAgentId,
+      peerEpicId: event.peerEpicId,
+      firstSeenAt: event.timestamp,
+    });
   }
   return Array.from(byAgentId.values());
 }
