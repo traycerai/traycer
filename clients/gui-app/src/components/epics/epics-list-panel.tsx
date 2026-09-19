@@ -370,6 +370,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     hasNextPage,
     isFetchingNextPage,
     cloudPagePending,
+    isCountPending,
   } = useHistoryQuery({
     search,
     nowMs: props.historyNowMs,
@@ -796,6 +797,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       >
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <HistoryListBody
+            isCountPending={isCountPending}
             scope={selectionMode ? "tasks" : props.scope}
             onScopeChange={selectionMode ? () => {} : props.onScopeChange}
             pageSearch={pageSearch}
@@ -1074,6 +1076,7 @@ function describeDeleteTitle(
 }
 
 interface HistoryListBodyProps extends EpicsListBodyProps {
+  readonly isCountPending: boolean;
   readonly scope: HistoryScope;
   readonly onScopeChange: (scope: HistoryScope) => void;
   readonly pageSearch: ReactNode;
@@ -1228,7 +1231,7 @@ function historyTaskCount(props: HistoryListBodyProps): HistoryCount {
     props.chatHostFilterUnsupported
   )
     return null;
-  if (props.isPending || props.cloudPagePending) return "pending";
+  if (props.isCountPending) return "pending";
   if (
     props.items.length === 0 &&
     props.completeness?.cloudPage === "unavailable"

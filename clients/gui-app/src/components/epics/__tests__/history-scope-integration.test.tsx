@@ -70,6 +70,9 @@ const testState = vi.hoisted(() => ({
   hostId: "host-test" as string | null,
   isPending: false,
   cloudPagePending: false,
+  // The projected-but-provisional state (debounce / placeholder handoff),
+  // where `isPending` is false yet the count is not yet the answer.
+  isCountPending: false,
   hasNextPage: false,
   error: null as Error | null,
   completeness: null as ListTasksCompleteness | null,
@@ -148,6 +151,11 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       isPending: testState.isPending,
       isFetching: false,
       cloudPagePending: testState.cloudPagePending,
+      // The real hook's count-pending is a superset of both flags.
+      isCountPending:
+        testState.isCountPending ||
+        testState.isPending ||
+        testState.cloudPagePending,
       error: testState.error,
       hostId: testState.hostId,
       refetch: testState.refetch,
@@ -379,6 +387,7 @@ beforeEach(() => {
   testState.hostId = "host-test";
   testState.isPending = false;
   testState.cloudPagePending = false;
+  testState.isCountPending = false;
   testState.hasNextPage = false;
   testState.error = null;
   testState.completeness = null;
@@ -793,6 +802,17 @@ describe("History scope bar: badges", () => {
 
     expect(badgeOf("tasks")).toBe("Searching");
     expect(badgeOf("messages")).toBe("Searching");
+  });
+
+  it("says searching, never a settled 0 or a complete N, while the projection is provisional", async () => {
+    testState.items = [];
+    testState.isCountPending = true;
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    expect(badgeOf("tasks")).toBe("Searching");
+    expect(badgeOf("tasks")).not.toBe("0");
   });
 
   it("shows a real zero when a source was asked and found nothing", async () => {
