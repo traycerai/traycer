@@ -145,3 +145,12 @@ export function isCloudEpicTasksQueryKey(
 ): boolean {
   return queryKey.includes(CLOUD_EPIC_TASKS_DISCRIMINATOR);
 }
+
+export function isCurrentTasksPinTailQueryKey(
+  queryKey: readonly unknown[],
+): boolean {
+  return (
+    queryKey[0] === "host" &&
+    queryKey[2] === CURRENT_TASKS_PIN_TAIL_DISCRIMINATOR
+  );
+}

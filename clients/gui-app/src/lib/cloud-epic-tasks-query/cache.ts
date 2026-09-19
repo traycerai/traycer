@@ -12,6 +12,7 @@ import {
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   isCloudEpicTasksQueryKey,
+  isCurrentTasksPinTailQueryKey,
   isEpicPinReadingQueryKey,
   isEpicTaskContextsQueryKey,
   queryKeys,
@@ -55,7 +56,8 @@ export function removeDeletedEpicsFromCloudTaskCaches(
   ] of queryClient.getQueriesData<ListTasksResponse>({
     predicate: (query) =>
       cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
-      cloudEpicTasksLastKnownQueryKeyMatchesScope(query.queryKey, scope),
+      cloudEpicTasksLastKnownQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
   })) {
     if (response === undefined) continue;
     const next = removeDeletedEpicsFromCloudTasksResponse(
@@ -108,7 +110,8 @@ export function readEpicTitlesFromCloudTaskCaches(
   const titles: Record<string, string> = {};
   for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
     predicate: (query) =>
-      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
   })) {
     if (response === undefined) continue;
     for (const task of response.tasks) {
@@ -137,7 +140,8 @@ export function updateEpicTitleInCloudTaskCaches(
     response,
   ] of queryClient.getQueriesData<ListTasksResponse>({
     predicate: (query) =>
-      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
   })) {
     if (response === undefined) continue;
     const next = updateEpicTitleInCloudTasksResponse(
@@ -205,7 +209,8 @@ export function setEpicPinnedInCloudTaskCaches(
     // SUCCESSFUL write, and `staleTime: Infinity` meant nothing refetched it.
     (query) =>
       cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
-      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
     (response: ListTasksResponse) =>
       setEpicPinnedInCloudTasksResponse(response, epicId, pinned),
   );
@@ -380,6 +385,17 @@ export function cloudEpicTasksQueryKeyMatchesScope(
     queryKey[0] === "host" &&
     (scope.hostId === null || queryKey[1] === scope.hostId) &&
     queryKey[5] === scope.userId
+  );
+}
+
+export function currentTasksPinTailQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isCurrentTasksPinTailQueryKey(queryKey) &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[3] === scope.userId
   );
 }
 

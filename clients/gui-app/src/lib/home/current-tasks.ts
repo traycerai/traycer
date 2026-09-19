@@ -1,8 +1,5 @@
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import type {
-  ListTaskLight,
-  ListTasksResponse,
-} from "@traycer/protocol/host/epic/unary-schemas";
+import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
 
 export const PIN_TAIL_PAGE_CAP = 10;
 
@@ -22,6 +19,7 @@ export interface CurrentTaskPinsStatusInput {
   readonly cloudPagePending: boolean;
   readonly firstPagePending: boolean;
   readonly firstPageUnavailable: boolean;
+  readonly firstPageLocalRowsIncomplete: boolean;
   readonly firstPageDecision: PinScanDecision | null;
   readonly tailEnabled: boolean;
   readonly tailPending: boolean;
@@ -35,6 +33,7 @@ export interface CurrentTaskPinsStatus {
 
 export interface CurrentTaskPinScanInput {
   readonly firstPage: ListTasksResponse | undefined;
+  readonly firstPagePlaceholder: boolean;
   readonly cloudPagePending: boolean;
   readonly hostId: string | null;
   readonly userId: string | null;
@@ -43,6 +42,7 @@ export interface CurrentTaskPinScanInput {
 export interface CurrentTaskPinScan {
   readonly firstPageDecision: PinScanDecision | null;
   readonly firstPageUnavailable: boolean;
+  readonly firstPageLocalRowsIncomplete: boolean;
   readonly tailEnabled: boolean;
   readonly tailScope: {
     readonly hostId: string;
@@ -54,16 +54,18 @@ export interface CurrentTaskPinScan {
 export function currentTaskPinScan(
   input: CurrentTaskPinScanInput,
 ): CurrentTaskPinScan {
+  const settledFirstPage = settledPage(
+    input.firstPage,
+    input.firstPagePlaceholder,
+  );
   const firstPageDecision =
-    input.firstPage === undefined
+    settledFirstPage === undefined
       ? null
-      : pinScanDecision(input.firstPage, "first", 0);
-  const firstPageCursor =
-    firstPageDecision?.shouldContinue === true
-      ? (input.firstPage?.nextCursor ?? null)
-      : null;
+      : pinScanDecision(settledFirstPage, "first", 0);
+  const firstPageCursor = continuingCursor(settledFirstPage, firstPageDecision);
   const firstPageUnavailable =
-    input.firstPage?.completeness?.cloudPage === "unavailable";
+    settledFirstPage?.completeness?.cloudPage === "unavailable";
+  const firstPageLocalRowsIncomplete = hasIncompleteLocalRows(settledFirstPage);
   const tailEnabled =
     !input.cloudPagePending &&
     !firstPageUnavailable &&
@@ -73,6 +75,7 @@ export function currentTaskPinScan(
   return {
     firstPageDecision,
     firstPageUnavailable,
+    firstPageLocalRowsIncomplete,
     tailEnabled,
     tailScope: {
       hostId: input.hostId ?? "",
@@ -82,6 +85,27 @@ export function currentTaskPinScan(
   };
 }
 
+function settledPage(
+  page: ListTasksResponse | undefined,
+  placeholder: boolean,
+): ListTasksResponse | undefined {
+  return placeholder ? undefined : page;
+}
+
+function continuingCursor(
+  page: ListTasksResponse | undefined,
+  decision: PinScanDecision | null,
+): string | null {
+  return decision?.shouldContinue === true ? (page?.nextCursor ?? null) : null;
+}
+
+function hasIncompleteLocalRows(page: ListTasksResponse | undefined): boolean {
+  const localRows = page?.completeness?.localRows;
+  return (
+    localRows === "truncated" || localRows === "suppressed-unprovable-filter"
+  );
+}
+
 export function currentTaskPinsStatus(
   input: CurrentTaskPinsStatusInput,
 ): CurrentTaskPinsStatus {
@@ -89,6 +113,7 @@ export function currentTaskPinsStatus(
     !input.initialLegRefused &&
     !input.cloudPagePending &&
     !input.firstPageUnavailable &&
+    !input.firstPageLocalRowsIncomplete &&
     input.firstPageDecision !== null &&
     (input.firstPageDecision.pinsComplete ||
       (input.tailEnabled && input.tailPinsComplete));
@@ -119,10 +144,6 @@ export function pinScanDecision(
     return { shouldContinue: false, pinsComplete: false };
   }
   return { shouldContinue: true, pinsComplete: false };
-}
-
-export function pinnedTasks(tasks: readonly ListTaskLight[]): ListTaskLight[] {
-  return tasks.filter((task) => task.pinned === true);
 }
 
 export function groupCurrentTasks(

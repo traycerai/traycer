@@ -1,11 +1,18 @@
 import { useSyncExternalStore } from "react";
-import { chatSessionActivity } from "@/hooks/epic/use-epic-activity-status";
+import { agentActivityTiers } from "@/lib/agent-activity";
+import { epicActivityStatusFromSources } from "@/hooks/epic/use-epic-activity-status";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
-import { useAgentActivityStore } from "@/stores/agent-activity-store";
+import {
+  getEpicAgentActivity,
+  useAgentActivityStore,
+} from "@/stores/agent-activity-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 const CHAT_REGISTRY = getChatSessionRegistry();
+const EPIC_REGISTRY = getOpenEpicRegistry();
 const EMPTY_WORKING_EPIC_IDS: ReadonlySet<string> = new Set<string>();
 let cachedWorkingEpicIds: {
   readonly key: string;
@@ -18,16 +25,24 @@ export function workingEpicIdsKey(ids: ReadonlySet<string>): string {
 }
 
 function getWorkingEpicIdsSnapshot(): ReadonlySet<string> {
-  const ids = new Set<string>();
+  const candidateEpicIds = new Set<string>();
   for (const host of useAgentActivityStore.getState().byHost.values()) {
-    for (const [epicId, activity] of host.byEpic) {
-      if (activity.working.size > 0) ids.add(epicId);
-    }
+    for (const epicId of host.byEpic.keys()) candidateEpicIds.add(epicId);
   }
   for (const handle of CHAT_REGISTRY.listHandles()) {
-    if (chatSessionActivity(handle.store.getState()) !== null) {
-      ids.add(handle.epicId);
-    }
+    candidateEpicIds.add(handle.epicId);
+  }
+  for (const handle of EPIC_REGISTRY.liveHandles()) {
+    candidateEpicIds.add(handle.epicId);
+  }
+  const ids = new Set<string>();
+  for (const epicId of candidateEpicIds) {
+    const activity = epicActivityStatusFromSources(
+      epicId,
+      agentActivityTiers(getEpicAgentActivity(epicId)),
+      liveAgentIdsForEpic(epicId),
+    );
+    if (activity !== "idle") ids.add(epicId);
   }
   const key = workingEpicIdsKey(ids);
   if (key === cachedWorkingEpicIds.key) return cachedWorkingEpicIds.ids;
@@ -37,7 +52,8 @@ function getWorkingEpicIdsSnapshot(): ReadonlySet<string> {
 
 function subscribeWorkingEpicIds(onChange: () => void): () => void {
   let previousKey = workingEpicIdsKey(getWorkingEpicIdsSnapshot());
-  const handleSubscriptions = new Map<ChatSessionStoreHandle, () => void>();
+  const chatSubscriptions = new Map<ChatSessionStoreHandle, () => void>();
+  const epicSubscriptions = new Map<OpenEpicStoreHandle, () => void>();
   const emitIfChanged = (): void => {
     const nextKey = workingEpicIdsKey(getWorkingEpicIdsSnapshot());
     if (nextKey === previousKey) return;
@@ -47,20 +63,44 @@ function subscribeWorkingEpicIds(onChange: () => void): () => void {
   const resyncChatSubscriptions = (): void => {
     reconcileStoreSubscriptions(
       CHAT_REGISTRY.listHandles(),
-      handleSubscriptions,
+      chatSubscriptions,
+      (handle) => handle.store.subscribe(emitIfChanged),
+    );
+    emitIfChanged();
+  };
+  const resyncEpicSubscriptions = (): void => {
+    reconcileStoreSubscriptions(
+      EPIC_REGISTRY.liveHandles(),
+      epicSubscriptions,
       (handle) => handle.store.subscribe(emitIfChanged),
     );
     emitIfChanged();
   };
   const unsubscribeActivity = useAgentActivityStore.subscribe(emitIfChanged);
-  const unsubscribeRegistry = CHAT_REGISTRY.subscribe(resyncChatSubscriptions);
+  const unsubscribeChatRegistry = CHAT_REGISTRY.subscribe(
+    resyncChatSubscriptions,
+  );
+  const unsubscribeEpicRegistry = EPIC_REGISTRY.subscribe(
+    resyncEpicSubscriptions,
+  );
   resyncChatSubscriptions();
+  resyncEpicSubscriptions();
   return () => {
     unsubscribeActivity();
-    unsubscribeRegistry();
-    for (const unsubscribe of handleSubscriptions.values()) unsubscribe();
-    handleSubscriptions.clear();
+    unsubscribeChatRegistry();
+    unsubscribeEpicRegistry();
+    for (const unsubscribe of chatSubscriptions.values()) unsubscribe();
+    for (const unsubscribe of epicSubscriptions.values()) unsubscribe();
+    chatSubscriptions.clear();
+    epicSubscriptions.clear();
   };
+}
+
+function liveAgentIdsForEpic(epicId: string): ReadonlySet<string> | null {
+  const handle = EPIC_REGISTRY.peek(epicId);
+  if (handle === null) return null;
+  const state = handle.store.getState();
+  return new Set([...state.chats.allIds, ...state.tuiAgents.allIds]);
 }
 
 /** Host-published working epics unioned with activity in warm chat sessions. */

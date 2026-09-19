@@ -41,7 +41,7 @@ export function useEpicActivityStatus(
     [epicId, liveAgentIds],
   );
   const getLocalChatActivity = useCallback(
-    () => getChatSessionActivity(epicId, activityTiers, liveAgentIds),
+    () => epicActivityStatusFromSources(epicId, activityTiers, liveAgentIds),
     [activityTiers, epicId, liveAgentIds],
   );
   return useSyncExternalStore(
@@ -80,7 +80,7 @@ export function useEpicActivityStatus(
  * empty set would put the original defect straight back. An empty SET is a
  * different statement: a live projection that authoritatively holds no agents.
  */
-function getChatSessionActivity(
+export function epicActivityStatusFromSources(
   epicId: string | null,
   activityTiers: ReadonlyMap<string, AgentActivityTier>,
   candidateIds: ReadonlySet<string> | null,

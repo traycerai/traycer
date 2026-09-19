@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import {
+  queryOptions,
+  replaceEqualDeep,
+  useQuery,
+} from "@tanstack/react-query";
 import type {
   ListTaskLight,
   ListTasksResponse,
@@ -16,6 +20,7 @@ import {
   fetchCloudEpicTasksCursorPageByHostId,
   LIST_CLOUD_TASKS_REQUEST,
 } from "@/lib/cloud-epic-tasks-query";
+import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
 import {
   currentTaskPinScan,
   currentTaskPinsStatus,
@@ -35,8 +40,7 @@ import {
 } from "@/stores/agent-activity-store";
 import { useWorkingEpicIds } from "@/stores/use-working-epic-ids";
 
-interface PinTailResult {
-  readonly tasks: readonly ListTaskLight[];
+interface PinTailResult extends ListTasksResponse {
   readonly pinsComplete: boolean;
 }
 
@@ -104,6 +108,7 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
   const firstPage = cloudTasks.query.data;
   const scan = currentTaskPinScan({
     firstPage,
+    firstPagePlaceholder: cloudTasks.query.isPlaceholderData,
     cloudPagePending: cloudTasks.isCloudPagePending,
     hostId: cloudTasks.hostId,
     userId: cloudTasks.currentUserId,
@@ -138,8 +143,10 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
   const status = currentTaskPinsStatus({
     initialLegRefused: cloudTasks.initialLegRefused,
     cloudPagePending: cloudTasks.isCloudPagePending,
-    firstPagePending: cloudTasks.query.isPending,
+    firstPagePending:
+      cloudTasks.query.isPending || cloudTasks.query.isPlaceholderData,
     firstPageUnavailable: scan.firstPageUnavailable,
+    firstPageLocalRowsIncomplete: scan.firstPageLocalRowsIncomplete,
     firstPageDecision: scan.firstPageDecision,
     tailEnabled: scan.tailEnabled,
     tailPending: tailQuery.isPending,
@@ -200,7 +207,31 @@ function currentTaskPinTailQueryOptions(scope: PinTailScope, enabled: boolean) {
     enabled,
     staleTime: Infinity,
     gcTime: Infinity,
+    structuralSharing: (previous, incoming) =>
+      replaceEqualDeep(previous, admitPinTailResult(incoming, scope)),
   });
+}
+
+function admitPinTailResult(result: unknown, scope: PinTailScope): unknown {
+  if (!isPinTailResult(result)) return result;
+  const admitted = admitCloudEpicTasksFirstPage(result, {
+    hostId: scope.hostId,
+    userId: scope.userId,
+  });
+  return admitted === result ? result : { ...result, tasks: admitted.tasks };
+}
+
+function isPinTailResult(value: unknown): value is PinTailResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "tasks" in value &&
+    Array.isArray(value.tasks) &&
+    "hasMore" in value &&
+    typeof value.hasMore === "boolean" &&
+    "pinsComplete" in value &&
+    typeof value.pinsComplete === "boolean"
+  );
 }
 
 async function fetchPinTail(
@@ -226,13 +257,17 @@ async function fetchPinTail(
     tasks.push(...page.tasks);
     const decision = pinScanDecision(page, "cursor", cursorPagesFetched);
     if (!decision.shouldContinue) {
-      return { tasks, pinsComplete: decision.pinsComplete };
+      return { tasks, hasMore: false, pinsComplete: decision.pinsComplete };
     }
     cursor = page.nextCursor ?? cursor;
   }
-  return { tasks, pinsComplete: false };
+  return { tasks, hasMore: false, pinsComplete: false };
 }
 
 function deduplicateItems(items: readonly HistoryItem[]): HistoryItem[] {
-  return [...new Map(items.map((item) => [item.id, item])).values()];
+  const byId = new Map<string, HistoryItem>();
+  for (const item of items) {
+    if (!byId.has(item.id)) byId.set(item.id, item);
+  }
+  return [...byId.values()];
 }

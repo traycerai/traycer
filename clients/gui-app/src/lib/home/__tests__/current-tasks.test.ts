@@ -125,6 +125,7 @@ describe("currentTaskPinsStatus", () => {
         cloudPagePending: true,
         firstPagePending: false,
         firstPageUnavailable: false,
+        firstPageLocalRowsIncomplete: false,
         firstPageDecision: completeFirstPage,
         tailEnabled: false,
         tailPending: false,
@@ -140,6 +141,7 @@ describe("currentTaskPinsStatus", () => {
         cloudPagePending: false,
         firstPagePending: true,
         firstPageUnavailable: false,
+        firstPageLocalRowsIncomplete: false,
         firstPageDecision: null,
         tailEnabled: false,
         tailPending: false,
@@ -154,6 +156,7 @@ describe("currentTaskPinScan", () => {
     expect(
       currentTaskPinScan({
         firstPage: page([task("pinned", true, undefined)], true),
+        firstPagePlaceholder: false,
         cloudPagePending: false,
         hostId: "host-1",
         userId: "user-1",
