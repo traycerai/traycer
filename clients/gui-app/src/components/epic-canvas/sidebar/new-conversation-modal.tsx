@@ -174,7 +174,6 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
 
 /** Nothing confirmed: below `epic.createChat@1.2`, or an upload that failed. */
 const NO_CONFIRMED_HASHES: ReadonlySet<string> = new Set<string>();
@@ -1796,20 +1795,7 @@ export function NewConversationModalBody(props: {
       // used to opt out and render the desktop row at any width, which made
       // one composer look like two depending on where it was opened from.
       toolbarLayout={isMobile ? "collapsed" : "full"}
-      draftsControl={
-        <ComposerDraftsControl
-          scope={{ surface: "new-chat", epicId }}
-          hostId={resolvedHostId}
-          pickerStore={pickerStore}
-          editorRef={editorRef}
-          // Owns Cmd+S for the modal's whole open lifetime, not just chat
-          // mode: unregistering on every chat<->terminal toggle would hand the
-          // top of the stack back to whatever composer sits beneath this modal
-          // (see `active-drafts-control-registry.ts`), and the drafts list is
-          // meaningful in either mode anyway.
-          active
-        />
-      }
+      draftsControl={null}
       attachmentsStrip={
         <NewConversationModalAttachmentStrip
           epicId={epicId}

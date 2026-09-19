@@ -141,6 +141,7 @@ import { TestRouterProvider } from "../../../../__tests__/with-test-router";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
@@ -215,6 +216,7 @@ describe("MobileNavDrawer", () => {
         avatarUrl: null,
       },
     });
+    useDesktopDialogStore.getState().close();
   });
   afterEach(() => {
     cleanup();
@@ -222,6 +224,7 @@ describe("MobileNavDrawer", () => {
     useMobileNavStore.setState({ open: false });
     useAuthStore.setState({ profile: null });
     setMobileApp(false);
+    useDesktopDialogStore.getState().close();
   });
 
   describe("platform branch", () => {
@@ -793,6 +796,19 @@ describe("MobileNavDrawer", () => {
 
       expect(screen.queryByTestId("mobile-nav-manage-subscription")).toBeNull();
       expect(screen.queryByTestId("mobile-nav-sign-out")).toBeNull();
+    });
+  });
+
+  // H10: the same avatar-menu Drafts item, mirrored here since this drawer
+  // mirrors the desktop menu's items.
+  describe("Drafts row", () => {
+    it("opens the Drafts dialog through the real store and closes the drawer", async () => {
+      renderDrawer();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Drafts" }));
+
+      expect(useDesktopDialogStore.getState().activeDialog).toBe("drafts");
+      expect(useMobileNavStore.getState().open).toBe(false);
     });
   });
 

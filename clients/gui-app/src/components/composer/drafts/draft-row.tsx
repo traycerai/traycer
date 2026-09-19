@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { CommandItem } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
+import type { AnalyticsDraftInput } from "@/lib/analytics";
 import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 
@@ -23,9 +24,9 @@ interface DraftRowProps {
   /** Phones swap the key hints for tappable trailing buttons (D22). */
   readonly mobile: boolean;
   readonly onHighlight: () => void;
-  readonly onOpen: () => void;
-  readonly onCopy: () => void;
-  readonly onDelete: () => void;
+  readonly onOpen: (input: AnalyticsDraftInput) => void;
+  readonly onCopy: (input: AnalyticsDraftInput) => void;
+  readonly onDelete: (input: AnalyticsDraftInput) => void;
 }
 
 /**
@@ -49,8 +50,34 @@ export function DraftRow(props: DraftRowProps) {
       // has to reach vaul's own pointer handling.
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
       onMouseMove={onHighlight}
-      onSelect={onOpen}
+      onSelect={() => onOpen("pointer")}
     >
+      <DraftRowBody
+        row={row}
+        sourceChip={sourceChip}
+        trailing={
+          <DraftRowTrailing
+            mobile={mobile}
+            relative={relative}
+            onOpen={onOpen}
+            onCopy={onCopy}
+            onDelete={onDelete}
+          />
+        }
+      />
+    </CommandItem>
+  );
+}
+
+/** Content and metadata shared by the start-page picker and avatar dialog. */
+export function DraftRowBody(props: {
+  readonly row: DraftInventoryRow;
+  readonly sourceChip: string | null;
+  readonly trailing: ReactNode;
+}) {
+  const { row, sourceChip, trailing } = props;
+  return (
+    <>
       {/* The same read-only renderer the queue and the sent message use, so
           mention, slash-command and image chips survive the round trip
           instead of flattening to `@epic:<id>`. `emptyLabel` is the per-kind
@@ -64,7 +91,7 @@ export function DraftRow(props: DraftRowProps) {
       <span className="flex w-full min-w-0 items-center gap-1.5 text-ui-xs leading-5 text-muted-foreground">
         <span className="min-w-0 flex-1" />
         {sourceChip === null ? null : (
-          <Badge variant="secondary" size="xs" className="shrink-0">
+          <Badge variant="secondary" size="xs" className="min-w-0">
             <span className="max-w-40 truncate">{sourceChip}</span>
           </Badge>
         )}
@@ -73,29 +100,23 @@ export function DraftRow(props: DraftRowProps) {
             Open
           </Badge>
         ) : null}
-        <DraftRowTrailing
-          mobile={mobile}
-          relative={relative}
-          onOpen={onOpen}
-          onCopy={onCopy}
-          onDelete={onDelete}
-        />
+        {trailing}
       </span>
-    </CommandItem>
+    </>
   );
 }
 
-function DraftRowTrailing(props: {
+export function DraftRowTrailing(props: {
   readonly mobile: boolean;
   readonly relative: string;
-  readonly onOpen: () => void;
-  readonly onCopy: () => void;
-  readonly onDelete: () => void;
+  readonly onOpen: (input: AnalyticsDraftInput) => void;
+  readonly onCopy: (input: AnalyticsDraftInput) => void;
+  readonly onDelete: (input: AnalyticsDraftInput) => void;
 }) {
   const { mobile, relative, onOpen, onCopy, onDelete } = props;
   if (mobile) {
     return (
-      <span className="flex shrink-0 items-center gap-0.5">
+      <span className="pointer-events-none relative flex shrink-0 items-center gap-0.5">
         <span className="tabular-nums">{relative}</span>
         <DraftRowIconButton label="Copy draft" onPress={onCopy}>
           <Copy className="size-3.5" aria-hidden />
@@ -154,7 +175,7 @@ function DraftRowKeyButton(props: {
   readonly word: string;
   readonly glyph: string;
   readonly shortcut: string;
-  readonly onPress: () => void;
+  readonly onPress: (input: AnalyticsDraftInput) => void;
 }) {
   const { label, word, glyph, shortcut, onPress } = props;
   return (
@@ -170,7 +191,7 @@ function DraftRowKeyButton(props: {
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        onPress();
+        onPress(event.detail === 0 ? "keyboard" : "pointer");
       }}
     >
       {/* D14: hover OR highlight. The cluster hover is the pointer's way in;
@@ -190,7 +211,7 @@ function DraftRowKeyButton(props: {
 
 function DraftRowIconButton(props: {
   readonly label: string;
-  readonly onPress: () => void;
+  readonly onPress: (input: AnalyticsDraftInput) => void;
   readonly children: ReactNode;
 }) {
   const { label, onPress, children } = props;
@@ -198,11 +219,14 @@ function DraftRowIconButton(props: {
     <button
       type="button"
       aria-label={label}
-      className="inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+      className="pointer-events-auto inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+      // cmdk selects the highlighted row on any Enter that bubbles to its root
+      // and cancels the native click; keep the key here so the button acts.
+      onKeyDown={(event) => event.stopPropagation()}
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        onPress();
+        onPress(event.detail === 0 ? "keyboard" : "pointer");
       }}
     >
       {children}

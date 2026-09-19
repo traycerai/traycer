@@ -114,7 +114,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
-  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 9,
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 8,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
   "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
