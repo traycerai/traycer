@@ -1133,6 +1133,7 @@ describe("analytics", () => {
           input: "pointer",
           already_open: false,
           draft_age: "under_1h",
+          used_search: true,
         }),
       ).toEqual({
         surface: "avatar_menu",
@@ -1140,6 +1141,20 @@ describe("analytics", () => {
         input: "pointer",
         already_open: false,
         draft_age: "under_1h",
+        used_search: true,
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: null,
+          other_tasks: true,
+          start_pages: false,
+        }),
+      ).toEqual({
+        surface: "avatar_menu",
+        this_task: null,
+        other_tasks: true,
+        start_pages: false,
       });
       expect(
         sanitizeAnalyticsProperties(AnalyticsEvent.DraftCopied, {
@@ -1232,6 +1247,45 @@ describe("analytics", () => {
           input: "pointer",
           already_open: false,
           draft_age: "under_1h",
+          used_search: false,
+        }),
+      ).toBeNull();
+      // `null` is only meaningful for the filter's `this_task`; a search flag
+      // is always a real boolean, and the search text has no key at all.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "avatar_menu",
+          draft_kind: "chat",
+          input: "pointer",
+          already_open: false,
+          draft_age: "under_1h",
+          used_search: null,
+        }),
+      ).toBeNull();
+      // The filter lives only in the avatar dialog.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "start_page",
+          this_task: true,
+          other_tasks: true,
+          start_pages: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: null,
+          other_tasks: null,
+          start_pages: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: true,
+          other_tasks: true,
+          start_pages: true,
+          query: "secret",
         }),
       ).toBeNull();
       expect(

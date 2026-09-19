@@ -221,7 +221,11 @@ export function analyticsCountBucket(
 
 export type AnalyticsDraftSurface = "start_page" | "avatar_menu";
 export type AnalyticsDraftInput = "keyboard" | "pointer";
-export type AnalyticsDraftEntryPoint = "button" | "shortcut" | "palette" | "menu";
+export type AnalyticsDraftEntryPoint =
+  | "button"
+  | "shortcut"
+  | "palette"
+  | "menu";
 export type AnalyticsDraftKind = "start_page" | "chat" | "new_agent";
 export type AnalyticsDraftAge = "under_1h" | "1h_24h" | "1d_7d" | "over_7d";
 
@@ -510,6 +514,7 @@ export enum AnalyticsEvent {
   ShareAccessRevoked = "share_access_revoked",
   DraftsListOpened = "drafts_list_opened",
   DraftOpened = "draft_opened",
+  DraftsFilterChanged = "drafts_filter_changed",
   DraftCopied = "draft_copied",
   DraftDeleted = "draft_deleted",
   DraftDeleteUndone = "draft_delete_undone",
@@ -905,6 +910,15 @@ export interface AnalyticsEventProperties {
     readonly input: AnalyticsDraftInput;
     readonly already_open: boolean;
     readonly draft_age: AnalyticsDraftAge;
+    /** Whether the search box held text; never the text itself. */
+    readonly used_search: boolean;
+  };
+  readonly [AnalyticsEvent.DraftsFilterChanged]: {
+    readonly surface: "avatar_menu";
+    /** `null` when the box is not offered (the dialog is not inside a task). */
+    readonly this_task: boolean | null;
+    readonly other_tasks: boolean;
+    readonly start_pages: boolean;
   };
   readonly [AnalyticsEvent.DraftCopied]: {
     readonly surface: AnalyticsDraftSurface;
@@ -1674,7 +1688,18 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
   ),
   ...eventKeyEntries(
     [AnalyticsEvent.DraftOpened],
-    ["surface", "draft_kind", "input", "already_open", "draft_age"],
+    [
+      "surface",
+      "draft_kind",
+      "input",
+      "already_open",
+      "draft_age",
+      "used_search",
+    ],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.DraftsFilterChanged],
+    ["surface", "this_task", "other_tasks", "start_pages"],
   ),
   ...eventKeyEntries(
     [AnalyticsEvent.DraftCopied],
@@ -1886,6 +1911,12 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     ],
     "surface",
     new Set(["start_page", "avatar_menu"]),
+  ),
+  // The filter only exists in the avatar dialog.
+  ...eventValueEntries(
+    [AnalyticsEvent.DraftsFilterChanged],
+    "surface",
+    new Set(["avatar_menu"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.DraftsListOpened],
@@ -2099,7 +2130,10 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
 
 const BOOLEAN_PROPERTY_KEYS = new Set<string>([
   "already_open",
+  "other_tasks",
+  "start_pages",
   "undo_offered",
+  "used_search",
   "cascade",
   "cleanup_worktrees",
   "customized",
@@ -2184,6 +2218,7 @@ const EVENT_SCOPED_PROPERTY_KEYS = new Set<string>([
   "has_more",
   "result_count_bucket",
   "status",
+  "this_task",
 ]);
 
 function isEventScopedPropertyValue(
@@ -2213,6 +2248,10 @@ function isEventScopedPropertyValue(
   }
   if (key === "has_more") {
     if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;
+    return typeof value === "boolean";
+  }
+  if (key === "this_task") {
+    if (value === null) return event === AnalyticsEvent.DraftsFilterChanged;
     return typeof value === "boolean";
   }
   if (key === "status") return isAnalyticsStatus(value);
@@ -2294,6 +2333,7 @@ function analyticsPropertiesAreRelationallyValid(
 const STRICT_EVENTS = new Set<AnalyticsEvent>([
   AnalyticsEvent.DraftsListOpened,
   AnalyticsEvent.DraftOpened,
+  AnalyticsEvent.DraftsFilterChanged,
   AnalyticsEvent.DraftCopied,
   AnalyticsEvent.DraftDeleted,
   AnalyticsEvent.DraftDeleteUndone,

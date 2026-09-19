@@ -3,6 +3,7 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useActiveEpicId } from "@/stores/epics/canvas/canvas-selectors";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useEpicOpenInNewWindowFlow } from "@/components/layout/hooks/use-epic-open-in-new-window";
@@ -17,6 +18,7 @@ import { OpenEpicInNewWindowDialog } from "./desktop/open-epic-in-new-window-dia
 export function DesktopDialogHost(): ReactNode {
   const runnerHost = useRunnerHost();
   const hostId = useEffectiveHostId();
+  const activeEpicId = useActiveEpicId();
   const support = useMemo(
     () => resolveDesktopSupportBridge(runnerHost),
     [runnerHost],
@@ -60,6 +62,7 @@ export function DesktopDialogHost(): ReactNode {
         <DraftsDialog
           hostId={hostId}
           entryPoint={draftsEntryPoint}
+          activeEpicId={activeEpicId}
           onClose={close}
         />
       ) : null}

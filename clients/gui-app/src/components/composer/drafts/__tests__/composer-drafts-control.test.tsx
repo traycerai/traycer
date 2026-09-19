@@ -1,4 +1,10 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RefObject } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -6,7 +12,11 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
-import { Analytics, AnalyticsEvent, type AnalyticsDraftInput } from "@/lib/analytics";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsDraftInput,
+} from "@/lib/analytics";
 import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
 import {
   acquireDraftMirrorSession,
@@ -33,9 +43,12 @@ import {
  * providers it would otherwise need only to render a list.
  */
 const actions = {
-  openRow: vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
-  copyRow: vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
-  deleteRow: vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
+  openRow:
+    vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
+  copyRow:
+    vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
+  deleteRow:
+    vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
 };
 vi.mock("@/hooks/drafts/use-draft-inventory-actions", () => ({
   useDraftInventoryActions: () => actions,
@@ -353,6 +366,17 @@ describe("ComposerDraftsControl", () => {
     );
     expect(content?.textContent).toContain("CODE_OF_CONDUCT.md");
     expect(content?.textContent).not.toContain("@CODE_OF_CONDUCT.md");
+  });
+
+  it("ignores an Enter that confirms an IME composition", () => {
+    renderLandingControl("landing-active");
+    openList();
+
+    fireEvent.keyDown(window, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(window, { key: "Enter", keyCode: 229 });
+
+    expect(actions.openRow).not.toHaveBeenCalled();
+    expect(listedRowIds()).not.toEqual([]);
   });
 
   it("opens the highlighted row on Enter and closes the list, with keyboard input", () => {

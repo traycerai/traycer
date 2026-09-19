@@ -154,7 +154,7 @@ describe("useDraftInventoryActions", () => {
     );
 
     act(() => {
-      result.current.openRow(row, "pointer");
+      result.current.openRow(row, "pointer", false);
     });
 
     expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftOpened, {
@@ -163,6 +163,7 @@ describe("useDraftInventoryActions", () => {
       input: "pointer",
       already_open: true,
       draft_age: "under_1h",
+      used_search: false,
     });
     expect(
       useLandingDraftStore.getState().drafts.find((d) => d.id === "d-landing")
@@ -180,7 +181,7 @@ describe("useDraftInventoryActions", () => {
     );
 
     act(() => {
-      result.current.openRow(row, "keyboard");
+      result.current.openRow(row, "keyboard", false);
     });
 
     expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftOpened, {
@@ -189,12 +190,17 @@ describe("useDraftInventoryActions", () => {
       input: "keyboard",
       already_open: true,
       draft_age: "under_1h",
+      used_search: false,
     });
     expect(activateTabIntentMock).toHaveBeenCalledTimes(1);
   });
 
   it("openRow fires draft_opened for a new-agent row and opens the new-conversation modal", () => {
-    const row = newChatRow({ id: "d-new-chat", open: false, epicId: "epic-open-test" });
+    const row = newChatRow({
+      id: "d-new-chat",
+      open: false,
+      epicId: "epic-open-test",
+    });
     const trackSpy = vi
       .spyOn(Analytics.getInstance(), "track")
       .mockImplementation(() => true);
@@ -203,7 +209,7 @@ describe("useDraftInventoryActions", () => {
     );
 
     act(() => {
-      result.current.openRow(row, "pointer");
+      result.current.openRow(row, "pointer", false);
     });
 
     expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftOpened, {
@@ -212,6 +218,7 @@ describe("useDraftInventoryActions", () => {
       input: "pointer",
       already_open: false,
       draft_age: "under_1h",
+      used_search: false,
     });
     expect(useNewConversationModalOpenStore.getState().request?.epicId).toBe(
       "epic-open-test",
@@ -247,7 +254,9 @@ describe("useDraftInventoryActions", () => {
   });
 
   it("does not fire draft_copied when the clipboard write rejects", async () => {
-    clipboardWriteText.mockImplementation(() => Promise.reject(new Error("denied")));
+    clipboardWriteText.mockImplementation(() =>
+      Promise.reject(new Error("denied")),
+    );
     const row = landingRow({ id: "d-copy-fail" });
     const trackSpy = vi
       .spyOn(Analytics.getInstance(), "track")
@@ -299,7 +308,7 @@ describe("useDraftInventoryActions", () => {
       );
 
       act(() => {
-        result.current.openRow(row, "pointer");
+        result.current.openRow(row, "pointer", false);
       });
 
       expect(trackSpy).toHaveBeenCalledWith(
@@ -369,7 +378,9 @@ describe("useDraftInventoryActions", () => {
   });
 
   it("shows a skip toast and fires no draft_delete_undone when Undo cannot apply", () => {
-    useComposerDraftStore.getState().bindTarget("chat-undo-skip", "epic-undo-skip");
+    useComposerDraftStore
+      .getState()
+      .bindTarget("chat-undo-skip", "epic-undo-skip");
     useComposerDraftStore
       .getState()
       .setSnapshot("chat-undo-skip", typed("original"), null);

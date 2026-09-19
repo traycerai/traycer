@@ -280,3 +280,28 @@ export function draftRowSourceChip(
   const name = row.kind === "chat" ? row.chatTitle : "New agent";
   return row.epicId === scopeEpicId ? name : `${row.epicTitle} · ${name}`;
 }
+
+/**
+ * The highlight, falling back to the first row. A highlight that no longer
+ * names a listed row (its draft was deleted) is dropped
+ * rather than left pointing at nothing.
+ */
+export function resolveSelectedId(
+  rows: ReadonlyArray<DraftInventoryRow>,
+  highlightedId: string | null,
+): string | null {
+  if (highlightedId !== null && rows.some((row) => row.id === highlightedId)) {
+    return highlightedId;
+  }
+  return rows.at(0)?.id ?? null;
+}
+
+/** The row a deletion should leave highlighted: the next one, else the previous. */
+export function neighbourRowId(
+  rows: ReadonlyArray<DraftInventoryRow>,
+  deletedId: string,
+): string | null {
+  const index = rows.findIndex((row) => row.id === deletedId);
+  if (index === -1) return null;
+  return rows.at(index + 1)?.id ?? rows.at(index - 1)?.id ?? null;
+}

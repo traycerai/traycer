@@ -31,9 +31,20 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 const UNDO_TOAST_MS = 6000;
 
 export interface DraftInventoryActions {
-  readonly openRow: (row: DraftInventoryRow, input: AnalyticsDraftInput) => void;
-  readonly copyRow: (row: DraftInventoryRow, input: AnalyticsDraftInput) => void;
-  readonly deleteRow: (row: DraftInventoryRow, input: AnalyticsDraftInput) => void;
+  /** `usedSearch`: the list's search box held text when the row was opened. */
+  readonly openRow: (
+    row: DraftInventoryRow,
+    input: AnalyticsDraftInput,
+    usedSearch: boolean,
+  ) => void;
+  readonly copyRow: (
+    row: DraftInventoryRow,
+    input: AnalyticsDraftInput,
+  ) => void;
+  readonly deleteRow: (
+    row: DraftInventoryRow,
+    input: AnalyticsDraftInput,
+  ) => void;
 }
 
 /**
@@ -66,13 +77,18 @@ export function useDraftInventoryActions(
   });
 
   const openRow = useCallback(
-    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
+    (
+      row: DraftInventoryRow,
+      input: AnalyticsDraftInput,
+      usedSearch: boolean,
+    ) => {
       Analytics.getInstance().track(AnalyticsEvent.DraftOpened, {
         surface,
         draft_kind: draftKind(row),
         input,
         already_open: row.open,
         draft_age: draftAge(row.lastTouchedAt),
+        used_search: usedSearch,
       });
       if (row.kind === "landing") {
         openLandingDraft(navigate, row.id);

@@ -44,6 +44,8 @@ import {
   type DraftsControlEntryPoint,
 } from "@/lib/commands/active-drafts-control-registry";
 import {
+  neighbourRowId,
+  resolveSelectedId,
   type DraftInventoryRow,
   type DraftInventoryScope,
 } from "@/lib/drafts/draft-inventory";
@@ -164,7 +166,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
     (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
       restoreEditorFocusRef.current = false;
       setOpenState(false);
-      openRow(row, input);
+      openRow(row, input, false);
     },
     [openRow],
   );
@@ -215,6 +217,11 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   useEffect(() => {
     if (!open || !active || mobile) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      // An IME confirming a candidate reports Enter too; it is the composer's
+      // to consume, not a request to open the highlighted row. 229 is the
+      // keyCode browsers report for a key an IME has swallowed.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -396,31 +403,6 @@ function DraftsTriggerRail(props: { readonly children: ReactNode }) {
 function draftsTriggerLabel(count: number): string {
   if (count === 0) return "Drafts";
   return `Drafts: ${String(count)}. Open drafts.`;
-}
-
-/**
- * The highlight, falling back to the first row. A highlight that no longer
- * names a listed row (its draft was deleted) is dropped
- * rather than left pointing at nothing.
- */
-function resolveSelectedId(
-  rows: ReadonlyArray<DraftInventoryRow>,
-  highlightedId: string | null,
-): string | null {
-  if (highlightedId !== null && rows.some((row) => row.id === highlightedId)) {
-    return highlightedId;
-  }
-  return rows.at(0)?.id ?? null;
-}
-
-/** The row a deletion should leave highlighted: the next one, else the previous. */
-function neighbourRowId(
-  rows: ReadonlyArray<DraftInventoryRow>,
-  deletedId: string,
-): string | null {
-  const index = rows.findIndex((row) => row.id === deletedId);
-  if (index === -1) return null;
-  return rows.at(index + 1)?.id ?? rows.at(index - 1)?.id ?? null;
 }
 
 function nextRowIndex(

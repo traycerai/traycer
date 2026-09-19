@@ -220,6 +220,9 @@ function DraftRowIconButton(props: {
       type="button"
       aria-label={label}
       className="pointer-events-auto inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+      // cmdk selects the highlighted row on any Enter that bubbles to its root
+      // and cancels the native click; keep the key here so the button acts.
+      onKeyDown={(event) => event.stopPropagation()}
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
