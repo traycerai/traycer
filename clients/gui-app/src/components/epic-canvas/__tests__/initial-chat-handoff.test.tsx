@@ -8,7 +8,7 @@ import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
@@ -326,11 +326,11 @@ describe("initial chat handoff route coordinator", () => {
   it("never fires epic.createChat - the first chat is folded into epic.create", async () => {
     registerPendingHandoff();
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     expect(testState.events).toEqual(["epic.subscribe"]);
@@ -372,11 +372,11 @@ describe("initial chat handoff route coordinator", () => {
   it("advances pending → waitingChat once the folded chat projects", async () => {
     registerPendingHandoff();
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
@@ -417,11 +417,11 @@ describe("initial chat handoff route coordinator", () => {
   it("does not advance while the epic is still loading / viewer-only", async () => {
     registerPendingHandoff();
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
@@ -445,11 +445,11 @@ describe("initial chat handoff route coordinator", () => {
   it("latches the active-tile open once per handoffChatId across multiple projection transitions", async () => {
     registerPendingHandoff();
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
@@ -518,11 +518,11 @@ describe("initial chat handoff route coordinator", () => {
       createdAt: Date.now(),
     });
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -546,11 +546,11 @@ describe("initial chat handoff route coordinator", () => {
     // permanent - blank forever, with nothing to load into it.
     registerPendingHandoffCreatedAt(Date.now() - 120_000);
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
@@ -598,11 +598,11 @@ describe("initial chat handoff route coordinator", () => {
     // block - before any effect cleanup can run.
     registerPendingHandoffCreatedAt(Date.now() - 120_000);
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
@@ -662,11 +662,11 @@ describe("initial chat handoff route coordinator", () => {
     // exempt from the sweep.
     registerPendingHandoff();
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
     const epicCallbacks = callbacks;
@@ -712,11 +712,11 @@ describe("initial chat handoff route coordinator", () => {
     registerPendingHandoff();
 
     const queryClient = renderWithProviders(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <EpicSessionGate fallback={null}>
           <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
         </EpicSessionGate>
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     if (callbacks === null) throw new Error("expected epic callbacks");
 

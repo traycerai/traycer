@@ -555,7 +555,9 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             // and Back is the route to change it - so the review case is
             // structural rather than a disabled control. What is left is the
             // census being unsettled underneath a chip that IS on screen.
-            disabled={refresh.refreshing || activeSweepCount > 0}
+            // Background sweeps already carry their original hostId; switching
+            // the census cannot redirect them, and their rows stay locked.
+            disabled={refresh.refreshing}
             hasSelectionOverrides={checkOverrides.size > 0}
             onSwitch={hostChoice.onSwitch}
             render={renderBody}

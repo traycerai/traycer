@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RefObject } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -6,6 +12,11 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsDraftInput,
+} from "@/lib/analytics";
 import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
 import {
   acquireDraftMirrorSession,
@@ -13,15 +24,10 @@ import {
   resetDraftMirrorCoordinatorForTests,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
-import { resetActiveDraftsControlForTests } from "@/lib/commands/active-drafts-control-registry";
 import {
-  useComposerDraftStore,
-  type DraftState,
-} from "@/stores/composer/composer-draft-store";
-import {
-  useNewConversationModalStore,
-  type NewConversationModalDraftPatch,
-} from "@/stores/epics/new-conversation-modal-store";
+  openActiveDraftsControl,
+  resetActiveDraftsControlForTests,
+} from "@/lib/commands/active-drafts-control-registry";
 import {
   useLandingDraftStore,
   type LandingDraftTab,
@@ -37,16 +43,18 @@ import {
  * providers it would otherwise need only to render a list.
  */
 const actions = {
-  openRow: vi.fn<(row: DraftInventoryRow) => void>(),
-  copyRow: vi.fn<(row: DraftInventoryRow) => void>(),
-  deleteRow: vi.fn<(row: DraftInventoryRow) => void>(),
+  openRow:
+    vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
+  copyRow:
+    vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
+  deleteRow:
+    vi.fn<(row: DraftInventoryRow, input: AnalyticsDraftInput) => void>(),
 };
 vi.mock("@/hooks/drafts/use-draft-inventory-actions", () => ({
   useDraftInventoryActions: () => actions,
 }));
 
 const HOST_ID = "host-drafts";
-const EPIC_ID = "epic-1";
 
 const EMPTY_WORKSPACE: LandingDraftWorkspaceSnapshot = {
   folders: [],
@@ -81,50 +89,6 @@ function landingTab(
     publication: null,
     confirmedHostBlobHashes: [],
     closed: true,
-    ...overrides,
-  };
-}
-
-function chatDraft(overrides: Partial<DraftState>): DraftState {
-  return {
-    content: typed("chat draft"),
-    selection: null,
-    browserAnnotations: [],
-    resetEpoch: 0,
-    revision: 1,
-    draftId: "draft-chat",
-    hostRevision: 1,
-    targetEpicId: EPIC_ID,
-    lastTouchedAt: 3_000,
-    generation: 1,
-    syncedGeneration: 1,
-    ownerHostId: HOST_ID,
-    origin: "own",
-    supersedes: null,
-    publication: null,
-    chatTitle: "Sibling chat",
-    epicTitle: "Payments",
-    ...overrides,
-  };
-}
-
-function newChatPatch(
-  overrides: Partial<NewConversationModalDraftPatch>,
-): NewConversationModalDraftPatch {
-  return {
-    content: typed("new agent draft"),
-    selection: null,
-    settings: null,
-    composerMode: "chat",
-    workspace: null,
-    revision: 1,
-    draftId: "draft-new-chat",
-    hostRevision: 1,
-    lastTouchedAt: 4_000,
-    generation: 1,
-    syncedGeneration: 1,
-    epicTitle: "Payments",
-    ownerHostId: HOST_ID,
     ...overrides,
   };
 }
@@ -204,13 +168,6 @@ function listedRowIds(): ReadonlyArray<string> {
   ).map((element) => element.dataset.draftRowId ?? "");
 }
 
-function rowText(rowId: string): string {
-  return (
-    document.querySelector<HTMLElement>(`[data-draft-row-id="${rowId}"]`)
-      ?.textContent ?? ""
-  );
-}
-
 describe("ComposerDraftsControl", () => {
   beforeEach(() => {
     window.innerWidth = 1024;
@@ -229,15 +186,6 @@ describe("ComposerDraftsControl", () => {
       ],
       activeDraftId: "landing-active",
     });
-    useComposerDraftStore.setState({
-      drafts: {
-        "chat-1": chatDraft({
-          draftId: "draft-chat-1",
-          content: typed("Half-written question"),
-        }),
-      },
-    });
-    useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
     mountSession();
   });
 
@@ -247,11 +195,10 @@ describe("ComposerDraftsControl", () => {
     resetDraftMirrorCoordinatorForTests();
     resetActiveDraftsControlForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-    useComposerDraftStore.setState({ drafts: {} });
-    useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
     actions.openRow.mockReset();
     actions.copyRow.mockReset();
     actions.deleteRow.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("lists the start page's other drafts and never the one being edited", () => {
@@ -266,6 +213,102 @@ describe("ComposerDraftsControl", () => {
     ).toBeGreaterThan(0);
   });
 
+  // H02: the start-page control has no filter any more - always `current`,
+  // so there is nothing left to toggle and no source chip to show.
+  it("never shows a filter toggle", () => {
+    renderLandingControl("landing-active");
+    openList();
+
+    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start page" })).toBeNull();
+  });
+
+  // T09: the pill click is the "button" entry point (H06's shortcut and the
+  // palette are the other two, threaded through the registry below).
+  it("fires drafts_list_opened with entry_point button when the pill opens the list", () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    renderLandingControl("landing-active");
+
+    openList();
+
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftsListOpened, {
+      surface: "start_page",
+      entry_point: "button",
+      draft_count: "1",
+    });
+  });
+
+  it("does not refire drafts_list_opened while the list stays open", () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    renderLandingControl("landing-active");
+    openList();
+    trackSpy.mockClear();
+
+    pressKey("ArrowDown");
+
+    expect(trackSpy).not.toHaveBeenCalled();
+  });
+
+  it("threads the registry's own entry point into drafts_list_opened for shortcut and palette, and never toggles the list closed (review finding 5)", () => {
+    const trackSpy = vi
+      .spyOn(Analytics.getInstance(), "track")
+      .mockImplementation(() => true);
+    renderLandingControl("landing-active");
+
+    let opened = false;
+    act(() => {
+      opened = openActiveDraftsControl("shortcut");
+    });
+    expect(opened).toBe(true);
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftsListOpened, {
+      surface: "start_page",
+      entry_point: "shortcut",
+      draft_count: "1",
+    });
+    expect(listedRowIds()).toEqual(["landing-a"]);
+
+    // Ensure-open, not toggle: a second shortcut fire while already open
+    // must leave the list open and fire no second event.
+    trackSpy.mockClear();
+    act(() => {
+      opened = openActiveDraftsControl("shortcut");
+    });
+    expect(opened).toBe(true);
+    expect(listedRowIds()).toEqual(["landing-a"]);
+    expect(trackSpy).not.toHaveBeenCalled();
+
+    // The regression this fix closes: choosing "Drafts" from an already-open
+    // palette must not close the list out from under it either.
+    trackSpy.mockClear();
+    act(() => {
+      opened = openActiveDraftsControl("palette");
+    });
+    expect(opened).toBe(true);
+    expect(listedRowIds()).toEqual(["landing-a"]);
+    expect(trackSpy).not.toHaveBeenCalled();
+
+    // Only an explicit dismissal closes it - a fresh entry point afterward
+    // opens it again and fires its own event.
+    pressKey("Escape");
+    expect(listedRowIds()).toEqual([]);
+
+    trackSpy.mockClear();
+    act(() => {
+      opened = openActiveDraftsControl("palette");
+    });
+    expect(opened).toBe(true);
+    expect(listedRowIds()).toEqual(["landing-a"]);
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.DraftsListOpened, {
+      surface: "start_page",
+      entry_point: "palette",
+      draft_count: "1",
+    });
+  });
+
   it("counts only the current-surface rows, and hides the badge at zero", () => {
     const { unmount } = renderLandingControl("landing-active");
     const trigger = screen.getByRole("button", { name: /drafts/i });
@@ -278,29 +321,6 @@ describe("ComposerDraftsControl", () => {
     const empty = screen.getByRole("button", { name: /drafts/i });
     expect(empty.getAttribute("aria-label")).toBe("Drafts");
     expect(empty.textContent).toBe("Drafts");
-  });
-
-  it("switches to All from the toggle and chips each row's source", () => {
-    useNewConversationModalStore.setState({
-      draftPatchesByEpicId: { [EPIC_ID]: newChatPatch({}) },
-    });
-    renderLandingControl("landing-active");
-    openList();
-
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
-
-    // Newest first (D12).
-    expect(listedRowIds()).toEqual([
-      "draft-new-chat",
-      "draft-chat-1",
-      "landing-a",
-    ]);
-    // The start page has no epic, so every in-epic row is outside the scope's
-    // and carries the epic prefix. Asserted on the ROW, not the document:
-    // "Start page" is also the filter toggle's own segment label.
-    expect(rowText("draft-chat-1")).toContain("Payments · Sibling chat");
-    expect(rowText("draft-new-chat")).toContain("Payments · New agent");
-    expect(rowText("landing-a")).toContain("Start page");
   });
 
   it("renders a mention as a chip in the row, not the raw @ serialised form", () => {
@@ -348,19 +368,18 @@ describe("ComposerDraftsControl", () => {
     expect(content?.textContent).not.toContain("@CODE_OF_CONDUCT.md");
   });
 
-  it("toggles the filter on Tab", () => {
+  it("ignores an Enter that confirms an IME composition", () => {
     renderLandingControl("landing-active");
     openList();
-    expect(listedRowIds()).toEqual(["landing-a"]);
 
-    pressKey("Tab");
-    expect(listedRowIds()).toEqual(["draft-chat-1", "landing-a"]);
+    fireEvent.keyDown(window, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(window, { key: "Enter", keyCode: 229 });
 
-    pressKey("Tab");
-    expect(listedRowIds()).toEqual(["landing-a"]);
+    expect(actions.openRow).not.toHaveBeenCalled();
+    expect(listedRowIds()).not.toEqual([]);
   });
 
-  it("opens the highlighted row on Enter and closes the list", () => {
+  it("opens the highlighted row on Enter and closes the list, with keyboard input", () => {
     renderLandingControl("landing-active");
     openList();
 
@@ -368,10 +387,11 @@ describe("ComposerDraftsControl", () => {
 
     expect(actions.openRow).toHaveBeenCalledTimes(1);
     expect(actions.openRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.openRow.mock.calls[0]?.[1]).toBe("keyboard");
     expect(listedRowIds()).toEqual([]);
   });
 
-  it("copies on C and keeps the list open", () => {
+  it("copies on C and keeps the list open, with keyboard input", () => {
     renderLandingControl("landing-active");
     openList();
 
@@ -379,10 +399,11 @@ describe("ComposerDraftsControl", () => {
 
     expect(actions.copyRow).toHaveBeenCalledTimes(1);
     expect(actions.copyRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.copyRow.mock.calls[0]?.[1]).toBe("keyboard");
     expect(listedRowIds()).toEqual(["landing-a"]);
   });
 
-  it("deletes on D and keeps the list open", () => {
+  it("deletes on D and keeps the list open, with keyboard input", () => {
     renderLandingControl("landing-active");
     openList();
 
@@ -390,7 +411,40 @@ describe("ComposerDraftsControl", () => {
 
     expect(actions.deleteRow).toHaveBeenCalledTimes(1);
     expect(actions.deleteRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.deleteRow.mock.calls[0]?.[1]).toBe("keyboard");
     expect(listedRowIds()).toEqual(["landing-a"]);
+  });
+
+  // The row's own key buttons read a real click's `event.detail` (nonzero)
+  // apart from a synthetic Enter/Space activation (`detail: 0`) - the same
+  // distinction `event.detail === 0` draws in production.
+  it("classifies a key button's activation by its event detail: 0 is keyboard, nonzero is pointer", () => {
+    renderLandingControl("landing-active");
+    openList();
+    const copyButton = screen.getByRole("button", { name: "Copy draft" });
+
+    fireEvent.click(copyButton);
+    expect(actions.copyRow.mock.calls[0]?.[1]).toBe("keyboard");
+
+    fireEvent.click(copyButton, { detail: 1 });
+    expect(actions.copyRow.mock.calls[1]?.[1]).toBe("pointer");
+  });
+
+  // cmdk's own row click (`onSelect`) never reaches a keyboard Enter - the
+  // control's window-level capture below answers that first - so it is
+  // hardcoded to pointer regardless of the click's `detail`.
+  it("opens with pointer input when the row itself is clicked", () => {
+    renderLandingControl("landing-active");
+    openList();
+    const row = document.querySelector<HTMLElement>(
+      '[data-draft-row-id="landing-a"]',
+    );
+    if (row === null) throw new Error("expected the landing-a row to render");
+
+    fireEvent.click(row);
+
+    expect(actions.openRow.mock.calls[0]?.[0].id).toBe("landing-a");
+    expect(actions.openRow.mock.calls[0]?.[1]).toBe("pointer");
   });
 
   it("closes on any other printable key, so typing reaches the editor", () => {
@@ -431,46 +485,6 @@ describe("ComposerDraftsControl", () => {
     // No key hints on a phone; copy and delete are tappable instead (D22).
     expect(screen.getByRole("button", { name: "Copy draft" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Delete draft" })).toBeTruthy();
-  });
-
-  it("chips every in-epic row on a chat surface, without the epic prefix", () => {
-    useComposerDraftStore.setState({
-      drafts: {
-        "chat-1": chatDraft({
-          draftId: "draft-chat-1",
-          content: typed("Half-written question"),
-        }),
-        "chat-2": chatDraft({
-          draftId: "draft-chat-2",
-          chatTitle: "Release checklist",
-          content: typed("A different thread"),
-        }),
-      },
-    });
-    useNewConversationModalStore.setState({
-      draftPatchesByEpicId: { [EPIC_ID]: newChatPatch({}) },
-    });
-    render(
-      <ComposerDraftsControl
-        scope={{ surface: "chat", epicId: EPIC_ID, chatId: "chat-1" }}
-        hostId={HOST_ID}
-        pickerStore={createComposerPickerStore()}
-        editorRef={editorRef}
-        active
-      />,
-    );
-    openList();
-
-    expect(screen.getByRole("button", { name: "This task" })).toBeTruthy();
-    // The scope's own chat is the live buffer, never a row; the start page's
-    // drafts belong to All.
-    expect(listedRowIds()).toEqual(["draft-new-chat", "draft-chat-2"]);
-    // Inside the scope's own epic the chip is the bare name - but it is still
-    // there, because a draft's text does not say which chat it belongs to.
-    expect(rowText("draft-chat-2")).toContain("Release checklist");
-    expect(rowText("draft-chat-2")).not.toContain("Payments ·");
-    expect(rowText("draft-new-chat")).toContain("New agent");
-    expect(rowText("draft-new-chat")).not.toContain("Payments ·");
   });
 
   // `PopoverContent` un-presents its portal on a pane switch while leaving the
@@ -524,22 +538,6 @@ describe("ComposerDraftsControl", () => {
     // send whatever is in the composer.
     expect(pressKeyPrevented("Enter")).toBe(true);
     expect(actions.openRow).not.toHaveBeenCalled();
-    expect(screen.getByText("No drafts here yet")).toBeTruthy();
-  });
-
-  it("says so when a chat surface's epic has no other drafts", () => {
-    render(
-      <ComposerDraftsControl
-        scope={{ surface: "chat", epicId: EPIC_ID, chatId: "chat-1" }}
-        hostId={HOST_ID}
-        pickerStore={createComposerPickerStore()}
-        editorRef={editorRef}
-        active
-      />,
-    );
-    openList();
-
-    expect(listedRowIds()).toEqual([]);
     expect(screen.getByText("No drafts here yet")).toBeTruthy();
   });
 });

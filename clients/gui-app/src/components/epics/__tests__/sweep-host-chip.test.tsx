@@ -48,8 +48,12 @@ const state = vi.hoisted(() => ({
     string,
     readonly string[]
   >,
-  /** Paths whose sweep is already streaming, from any surface. */
-  sweepingPaths: [] as readonly string[],
+  /**
+   * Paths whose sweep is already streaming, keyed by the host they stream on -
+   * a sweep is one machine's teardown, and the same path names a different
+   * directory on another host.
+   */
+  sweepingByHost: {} as Record<string, readonly string[]>,
   refreshing: false,
   /** Rows the classifier could not prove landed — the route to Review. */
   unproven: false,
@@ -143,7 +147,8 @@ vi.mock("@/hooks/epic/use-epic-sweep-host-worktree-count-query", () => ({
 
 vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
   useEpicSweepWorktrees: () => ({ isPending: false, mutate: () => undefined }),
-  useSweepingWorktreePaths: () => new Set(state.sweepingPaths),
+  useSweepingWorktreePaths: (hostId: string | null) =>
+    new Set(hostId === null ? [] : (state.sweepingByHost[hostId] ?? [])),
 }));
 
 vi.mock("@/components/settings/panels/use-worktree-task-titles", () => ({
@@ -303,7 +308,7 @@ describe("Sweep host chip", () => {
     state.connectableHostIds = ["host-a", "host-b"];
     state.unresolvableHostIds = [];
     state.pathsByHost = { "host-a": ["/wt/a"], "host-b": ["/wt/b"] };
-    state.sweepingPaths = [];
+    state.sweepingByHost = {};
     state.refreshing = false;
     state.unproven = false;
     state.fleetResolved = true;
@@ -477,13 +482,71 @@ describe("Sweep host chip", () => {
     expect(within(row).queryByTestId("sweep-host-count")).toBeNull();
   });
 
-  it("puts the chip out of reach while a sweep of these rows is streaming", () => {
-    state.sweepingPaths = ["/wt/a"];
+  it("keeps the chip reachable while a sweep is streaming on this host", () => {
+    state.sweepingByHost = { "host-a": ["/wt/a"] };
     renderSweep();
 
-    // The host is not a live question while this machine is mid-teardown.
+    // Mutations are already host-frozen, so a background sweep on Laptop is no
+    // reason to stop the person looking at Studio.
     expect(screen.getByTestId("sweep-host-chip").hasAttribute("disabled")).toBe(
-      true,
+      false,
+    );
+  });
+
+  it("switches A to B while A is sweeping, and B is fully actionable", () => {
+    // The SAME path on both hosts: only the host key tells them apart.
+    state.pathsByHost = { "host-a": ["/wt/x"], "host-b": ["/wt/x"] };
+    state.sweepingByHost = { "host-a": ["/wt/x"] };
+    renderSweep();
+    expect(
+      screen.getByTestId("sweep-worktrees-row-sweeping-spinner"),
+    ).toBeTruthy();
+
+    const popover = openHostPopover();
+    const studio = within(popover).getByRole("button", { name: /Studio/ });
+    expect(studio.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(studio);
+
+    expect(lastCensusHostId()).toBe("host-b");
+    expect(screen.getByTestId("sweep-host-chip").textContent).toContain(
+      "on Studio",
+    );
+    expect(
+      screen.queryByTestId("sweep-worktrees-row-sweeping-spinner"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("sweep-worktrees-checkbox").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).toContain(
+      "1 of 1",
+    );
+    expect(
+      screen.getByTestId("sweep-worktrees-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("returns to A and finds its row still locked by the sweep", () => {
+    state.pathsByHost = { "host-a": ["/wt/x"], "host-b": ["/wt/x"] };
+    state.sweepingByHost = { "host-a": ["/wt/x"] };
+    renderSweep();
+
+    fireEvent.click(
+      within(openHostPopover()).getByRole("button", { name: /Studio/ }),
+    );
+    expect(lastCensusHostId()).toBe("host-b");
+    fireEvent.click(
+      within(openHostPopover()).getByRole("button", { name: /Laptop/ }),
+    );
+
+    expect(lastCensusHostId()).toBe("host-a");
+    expect(
+      screen.getByTestId("sweep-worktrees-row-sweeping-spinner"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("sweep-worktrees-checkbox").hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).toContain(
+      "0 of 1",
     );
   });
 
@@ -562,27 +625,25 @@ describe("Sweep host chip", () => {
     );
   });
 
-  it("refuses a HELD confirmation once another surface starts sweeping these rows", () => {
+  it("lets a HELD confirmation proceed once a sweep starts on the current host", () => {
     const view = renderSweep();
     fireEvent.click(screen.getByTestId("sweep-worktrees-checkbox"));
     const popover = openHostPopover();
     fireEvent.click(within(popover).getByRole("button", { name: /Studio/ }));
     expect(screen.getByTestId("sweep-host-switch-confirm")).toBeTruthy();
 
-    // The question was admitted when switching was allowed and then SAT there.
-    // Another surface begins sweeping one of these rows underneath it.
-    state.sweepingPaths = ["/wt/a"];
+    // Another surface begins sweeping one of these rows while the question
+    // sits there. Leaving the host is exactly what the sweep does not block.
+    state.sweepingByHost = { "host-a": ["/wt/a"] };
     view.rerender(sweep(SURFACE_ON_A));
 
     const confirm = screen.getByTestId("sweep-host-switch-confirm-action");
-    expect(confirm.hasAttribute("disabled")).toBe(true);
+    expect(confirm.hasAttribute("disabled")).toBe(false);
     fireEvent.click(confirm);
-    // A check that ran at a moment which has since passed is not an admission.
-    expect(lastCensusHostId()).toBe("host-a");
-    // And it says why, rather than looking broken.
-    expect(
-      screen.getByTestId("sweep-host-switch-confirm").textContent,
-    ).toContain("Not while this host is busy");
+    expect(lastCensusHostId()).toBe("host-b");
+    expect(screen.getByTestId("sweep-host-chip").textContent).toContain(
+      "on Studio",
+    );
   });
 
   it("refuses a HELD confirmation once a refresh starts under it", () => {
