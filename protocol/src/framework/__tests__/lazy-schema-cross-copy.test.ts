@@ -5,9 +5,10 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
- * The host bundle carries three zod 4.4.3 copies. A stand-in reconstructed
- * from copy B must still `instanceof` copy A's classes (trait names) and
- * compose into copy-A `z.object` / `z.toJSONSchema`.
+ * Zod's `Symbol.hasInstance` answers by trait name, so a schema built by one
+ * 4.4.3 copy is still `instanceof` another copy's classes. The helper relies
+ * on that and has no copy-specific code; this file pins the zod behaviour for
+ * a stand-in, not a helper-owned reconstruction path.
  */
 
 const requireFromHere = createRequire(import.meta.url);
@@ -67,8 +68,8 @@ function loadSecondZodCopy(): ZodCopy {
   };
 }
 
-describe("lazySchema across distinct zod 4.4.3 copies", () => {
-  it("a stand-in built with copy B is instanceof copy A's class and composes", () => {
+describe("zod trait-based instanceof across distinct 4.4.3 copies", () => {
+  it("a stand-in built with copy B is instanceof copy A's class because traits match, which the helper relies on", () => {
     const copyB = loadSecondZodCopy();
     expect(copyB.ZodObject).not.toBe(z.ZodObject);
 

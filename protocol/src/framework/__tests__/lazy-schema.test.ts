@@ -22,6 +22,82 @@ function readZodField(schema: object, field: string): unknown {
   return Reflect.get(readZod(schema), field);
 }
 
+function thrown(run: () => unknown): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
+}
+
+function errorMessage(value: unknown): string {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  throw new Error(`expected an Error, got ${String(value)}`);
+}
+
+type IssueSnapshot = {
+  readonly code: string;
+  readonly message: string;
+  readonly path: ReadonlyArray<PropertyKey>;
+};
+
+type ParseSnapshot =
+  | { readonly success: true; readonly data: unknown }
+  | { readonly success: false; readonly issues: ReadonlyArray<IssueSnapshot> };
+
+function snapshotIssues(
+  issues: ReadonlyArray<{
+    readonly code: string;
+    readonly message: string;
+    readonly path: ReadonlyArray<PropertyKey>;
+  }>,
+): ReadonlyArray<IssueSnapshot> {
+  return issues.map((issue) => ({
+    code: issue.code,
+    message: issue.message,
+    path: [...issue.path],
+  }));
+}
+
+function snapshotParse(
+  result:
+    | { readonly success: true; readonly data: unknown }
+    | {
+        readonly success: false;
+        readonly error: {
+          readonly issues: ReadonlyArray<{
+            readonly code: string;
+            readonly message: string;
+            readonly path: ReadonlyArray<PropertyKey>;
+          }>;
+        };
+      },
+): ParseSnapshot {
+  if (result.success) {
+    return { success: true, data: result.data };
+  }
+  return { success: false, issues: snapshotIssues(result.error.issues) };
+}
+
+async function expectEagerTwinIssues(
+  init: () => z.ZodType,
+  inputs: ReadonlyArray<unknown>,
+): Promise<void> {
+  for (const input of inputs) {
+    const standIn = lazySchema(init);
+    const twin = init();
+    expect(snapshotParse(standIn.safeParse(input))).toEqual(
+      snapshotParse(twin.safeParse(input)),
+    );
+    expect(snapshotParse(await standIn.safeParseAsync(input))).toEqual(
+      snapshotParse(await twin.safeParseAsync(input)),
+    );
+  }
+}
+
 describe("lazySchema counting", () => {
   it("declared +1 per call; materialised waits for the first get / in / set", () => {
     const start = lazySchemaStats();
@@ -227,11 +303,46 @@ describe("lazySchema deferred hooks", () => {
 });
 
 describe("lazySchema describe parent", () => {
-  it("lazySchema(() => base.describe('x')) keeps the built instance's _zod.parent", () => {
+  function expectGlobalRegistryRefusal(init: () => z.ZodType): void {
+    let runs = 0;
+    const pending = lazySchema(() => {
+      runs += 1;
+      return init();
+    });
+    const first = thrown(() => {
+      void pending.parse;
+    });
+    expect(errorMessage(first)).toMatch(/global-registry metadata/);
+    const second = thrown(() => {
+      void pending.parse;
+    });
+    expect(errorMessage(second)).toMatch(/global-registry metadata/);
+    expect(runs).toBe(2);
+  }
+
+  it("refuses outermost .describe and retries the thunk while pending", () => {
     const base = z.string();
-    const pending = lazySchema(() => base.describe("x"));
-    void pending.parse;
-    expect(readZodField(pending, "parent")).toBe(base);
+    expectGlobalRegistryRefusal(() => base.describe("x"));
+  });
+
+  it("refuses outermost .meta and .register(z.globalRegistry) the same way", () => {
+    expectGlobalRegistryRefusal(() => z.string().meta({ id: "M" }));
+    expectGlobalRegistryRefusal(() =>
+      z.string().register(z.globalRegistry, {}),
+    );
+  });
+
+  it("custom-registry .register is not refused; the stand-in is absent from the registry (documented limit the static scan covers)", () => {
+    const reg = z.registry<{ n: number }>();
+    const standIn = lazySchema(() => z.string().register(reg, { n: 1 }));
+    expect(standIn.parse("ok")).toBe("ok");
+    expect(reg.has(standIn)).toBe(false);
+  });
+
+  it("inner .describe is fine and z.toJSONSchema equals the eager twin", () => {
+    const init = (): z.ZodObject => z.object({ a: z.string().describe("d") });
+    const pending = lazySchema(init);
+    expect(z.toJSONSchema(pending)).toEqual(z.toJSONSchema(init()));
   });
 });
 
@@ -261,10 +372,277 @@ describe("lazySchema error paths", () => {
   });
 
   it("a thunk returning a non-zod object throws", () => {
-    const pending = lazySchema(() => ({ not: "zod" }));
+    const pending = lazySchema(() => ({ _zod: {} }));
     expect(() => {
       void ("parse" in pending);
     }).toThrow(/did not return a zod 4 schema/);
+    // @ts-expect-error a thunk without `_zod` is not a zod 4 schema
+    lazySchema(() => ({ notZod: true }));
+  });
+
+  it("z.instanceof outermost refuses bag.Class; later get/has/set rethrow the same error", () => {
+    class Foo {}
+    let builds = 0;
+    const standIn = lazySchema(() => {
+      builds += 1;
+      return z.instanceof(Foo);
+    });
+    const before = lazySchemaStats();
+    const first = thrown(() => {
+      void standIn.parse;
+    });
+    expect(errorMessage(first)).toMatch(/_zod\.bag\.Class/);
+    expect(errorMessage(first)).toMatch(/z\.instanceof/);
+    const laterGet = thrown(() => {
+      void standIn.safeParse;
+    });
+    const laterHas = thrown(() => {
+      void ("parse" in standIn);
+    });
+    const laterSet = thrown(() => {
+      Reflect.set(standIn, "marker", 1);
+    });
+    expect(laterGet).toBe(first);
+    expect(laterHas).toBe(first);
+    expect(laterSet).toBe(first);
+    expect(builds).toBe(1);
+    expect(lazySchemaStats().materialised).toBe(before.materialised);
+    expect(Reflect.ownKeys(standIn)).toEqual(["_def"]);
+  });
+
+  it("a throw during in-place construction fail-closes with the same error and no leftover keys", () => {
+    type SyntheticSchema = {
+      readonly _zod: {
+        readonly def: object;
+        readonly constr: object;
+      };
+    };
+    function syntheticConstr(): object {
+      function constr(): void {}
+      Object.defineProperty(constr, "init", {
+        enumerable: false,
+        value: (inst: object) => {
+          Reflect.set(inst, "partial", 1);
+          throw new Error("init boom");
+        },
+      });
+      return constr;
+    }
+    let builds = 0;
+    const standIn = lazySchema((): SyntheticSchema => {
+      builds += 1;
+      return { _zod: { def: {}, constr: syntheticConstr() } };
+    });
+    const before = lazySchemaStats();
+    const first = thrown(() => {
+      void Reflect.get(standIn, "partial");
+    });
+    expect(errorMessage(first)).toBe("init boom");
+    const laterGet = thrown(() => {
+      void Reflect.get(standIn, "partial");
+    });
+    const laterIn = thrown(() => {
+      void ("x" in standIn);
+    });
+    const laterSet = thrown(() => {
+      Reflect.set(standIn, "x", 1);
+    });
+    expect(laterGet).toBe(first);
+    expect(laterIn).toBe(first);
+    expect(laterSet).toBe(first);
+    expect(Object.hasOwn(standIn, "partial")).toBe(false);
+    expect(Reflect.ownKeys(standIn)).toEqual([]);
+    expect(builds).toBe(1);
+    expect(lazySchemaStats().materialised).toBe(before.materialised);
+  });
+});
+
+describe("lazySchema receiver", () => {
+  it("Object.create(standIn).extend caches on the child, not the stand-in, same as the eager twin; assignment through a child lands on the child", () => {
+    const standIn = lazySchema(() => z.object({ a: z.string() }));
+    const child: object = Object.create(standIn);
+    void Reflect.get(child, "extend");
+    expect(Object.hasOwn(child, "extend")).toBe(true);
+    expect(Object.hasOwn(standIn, "extend")).toBe(false);
+
+    const eager = z.object({ a: z.string() });
+    const eagerChild: object = Object.create(eager);
+    void Reflect.get(eagerChild, "extend");
+    expect(Object.hasOwn(eagerChild, "extend")).toBe(true);
+    expect(Object.hasOwn(eager, "extend")).toBe(false);
+
+    const forAssign = lazySchema(() => z.object({ a: z.string() }));
+    const assignChild: { x: number } = Object.create(forAssign);
+    assignChild.x = 1;
+    expect(Object.hasOwn(assignChild, "x")).toBe(true);
+    expect(Object.hasOwn(forAssign, "x")).toBe(false);
+  });
+});
+
+describe("lazySchema _zod descriptor", () => {
+  it("after build, _zod is non-configurable, non-writable, non-enumerable, matching the eager twin", () => {
+    const pending = lazySchema(() => z.object({ a: z.number() }));
+    pending.parse({ a: 1 });
+    const lazyDesc = Object.getOwnPropertyDescriptor(pending, "_zod");
+    const eagerDesc = Object.getOwnPropertyDescriptor(
+      z.object({ a: z.number() }),
+      "_zod",
+    );
+    expect(lazyDesc).toBeDefined();
+    expect(eagerDesc).toBeDefined();
+    expect(lazyDesc?.configurable).toBe(false);
+    expect(lazyDesc?.writable).toBe(false);
+    expect(lazyDesc?.enumerable).toBe(false);
+    expect(eagerDesc?.configurable).toBe(false);
+    expect(eagerDesc?.writable).toBe(false);
+    expect(eagerDesc?.enumerable).toBe(false);
+  });
+});
+
+describe("lazySchema eager-twin failing inputs", () => {
+  it("object .strict() with checks", async () => {
+    await expectEagerTwinIssues(
+      () =>
+        z
+          .object({
+            a: z.string().min(2),
+            n: z.number().int().nonnegative(),
+          })
+          .strict(),
+      [
+        {},
+        { a: "x" },
+        { a: "xy" },
+        { a: "xy", n: -1 },
+        { a: "xy", n: 1.5 },
+        { a: "xy", n: 1, extra: true },
+        { a: 1, n: 1 },
+        null,
+        "nope",
+        [],
+      ],
+    );
+  });
+
+  it("discriminatedUnion", async () => {
+    await expectEagerTwinIssues(
+      () =>
+        z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("cat"), lives: z.number().int() }),
+          z.object({ kind: z.literal("dog"), good: z.boolean() }),
+        ]),
+      [
+        {},
+        { kind: "bird" },
+        { kind: "cat" },
+        { kind: "cat", lives: 1.5 },
+        { kind: "dog" },
+        { kind: "dog", good: "yes" },
+        null,
+        "nope",
+      ],
+    );
+  });
+
+  it("refine", async () => {
+    await expectEagerTwinIssues(
+      () =>
+        z
+          .number()
+          .refine((value) => value % 2 === 0, { error: "must be even" }),
+      [1, 3, "x", null, true, {}],
+    );
+  });
+
+  it("transform+default", async () => {
+    await expectEagerTwinIssues(
+      () =>
+        z
+          .string()
+          .transform((value) => value.toUpperCase())
+          .default("n/a"),
+      [1, null, true, {}, [], false],
+    );
+  });
+
+  it("custom error map", async () => {
+    await expectEagerTwinIssues(
+      () =>
+        z
+          .string({
+            error: (issue) => `mapped:${issue.code}`,
+          })
+          .min(4),
+      [1, null, true, "", "abc", {}, []],
+    );
+  });
+
+  it("array, record, and tuple", async () => {
+    await expectEagerTwinIssues(
+      () => z.array(z.number().int()),
+      [["x"], [1.5], [1, "x"], null, {}, true, "nope"],
+    );
+    await expectEagerTwinIssues(
+      () => z.record(z.string(), z.boolean()),
+      [{ a: 1 }, { a: true, b: "x" }, null, [], "nope", 1],
+    );
+    await expectEagerTwinIssues(
+      () => z.tuple([z.string(), z.number()]),
+      [[], ["a"], ["a", "b"], ["a", 1, true], null, {}, "nope"],
+    );
+  });
+
+  it("optional and nullable", async () => {
+    await expectEagerTwinIssues(
+      () =>
+        z.object({
+          opt: z.string().optional(),
+          nul: z.number().nullable(),
+        }),
+      [
+        {},
+        { opt: 1 },
+        { opt: null },
+        { nul: "x" },
+        { nul: undefined },
+        { opt: "ok", nul: "x" },
+        null,
+        "nope",
+      ],
+    );
+  });
+
+  it("union", async () => {
+    await expectEagerTwinIssues(
+      () => z.union([z.string().email(), z.number().gt(10)]),
+      ["", "not-email", 10, 0, true, null, {}, []],
+    );
+  });
+
+  it("z.instanceof stand-in throws the bag.Class refusal while the eager twin reports invalid_type (finding-1 control)", () => {
+    class Foo {}
+    const init = (): z.ZodType => z.instanceof(Foo);
+    const twin = init();
+    for (const input of [42, "x", null, {}]) {
+      const standIn = lazySchema(init);
+      const refusal = thrown(() => {
+        void standIn.safeParse(input);
+      });
+      expect(errorMessage(refusal)).toMatch(/_zod\.bag\.Class/);
+      expect(errorMessage(refusal)).toMatch(/z\.instanceof/);
+      const parsed = twin.safeParse(input);
+      expect(parsed.success).toBe(false);
+      if (parsed.success) {
+        throw new Error("eager z.instanceof twin accepted a failing input");
+      }
+      const issues = snapshotIssues(parsed.error.issues);
+      expect(issues.length).toBeGreaterThan(0);
+      const firstIssue = issues[0];
+      if (firstIssue === undefined) {
+        throw new Error("eager z.instanceof twin produced no issues");
+      }
+      expect(firstIssue.code).toBe("invalid_type");
+    }
   });
 });
 

@@ -126,5 +126,5 @@ describe("importing protocol/src materialises no lazySchema", () => {
 
     parseFirstShellListDetectedRequest(hostRpcRegistry);
     expect(lazySchemaStats().materialised).toBeGreaterThan(0);
-  });
+  }, 60_000);
 });

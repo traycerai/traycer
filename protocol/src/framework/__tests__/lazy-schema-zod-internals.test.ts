@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Canary for the zod 4.4.3 internals `lazySchema` reconstructs in place.
@@ -35,14 +36,6 @@ function readZod(schema: object): object {
 
 function readZodField(schema: object, field: string): unknown {
   return Reflect.get(readZod(schema), field);
-}
-
-function parseWith(schema: object, value: unknown): unknown {
-  const parse = Reflect.get(schema, "parse");
-  if (typeof parse !== "function") {
-    throw new Error(canaryMessage(readZodPackageVersion()));
-  }
-  return Reflect.apply(parse, schema, [value]);
 }
 
 const ZOD_CLASSES = [
@@ -118,11 +111,19 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
     expect(traits.has("ZodObject"), canaryMessage(version)).toBe(true);
   });
 
-  it("init + deferred on an empty object with the built prototype parses identically", () => {
+  it("a pending object stand-in parses identically to its eager twin", () => {
+    const version = readZodPackageVersion();
+    const init = (): z.ZodObject => z.object({ a: z.string() });
+    const pending = lazySchema(init);
+    const twin = init();
+    expect(pending.parse({ a: "x" }), canaryMessage(version)).toEqual(
+      twin.parse({ a: "x" }),
+    );
+  });
+
+  it("constr.init reuses an existing own _zod object and fills traits", () => {
     const version = readZodPackageVersion();
     const built = z.object({ a: z.string() });
-    const standIn: object = {};
-    Object.setPrototypeOf(standIn, Object.getPrototypeOf(built));
     const constr = readZodField(built, "constr");
     const def = readZodField(built, "def");
     if (typeof constr !== "function") {
@@ -132,23 +133,70 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
     if (typeof init !== "function") {
       throw new Error(canaryMessage(version));
     }
-    Reflect.apply(init, undefined, [standIn, def]);
-    let deferred: unknown = readZodField(standIn, "deferred");
-    if (deferred === undefined) {
-      deferred = [];
-      Reflect.set(readZod(standIn), "deferred", deferred);
-    }
-    if (!Array.isArray(deferred)) {
+    const traits = new Set<string>();
+    const internals = { def, constr, traits };
+    const inst: object = {};
+    Object.setPrototypeOf(inst, Object.getPrototypeOf(built));
+    Object.defineProperty(inst, "_zod", {
+      value: internals,
+      enumerable: false,
+      writable: false,
+      configurable: true,
+    });
+    Reflect.apply(init, undefined, [inst, def]);
+    expect(Reflect.get(inst, "_zod"), canaryMessage(version)).toBe(internals);
+    expect(traits.has("ZodObject"), canaryMessage(version)).toBe(true);
+    expect(traits.has("ZodType"), canaryMessage(version)).toBe(true);
+  });
+
+  it("eager _zod is non-configurable, non-writable, non-enumerable and _def is non-configurable", () => {
+    const version = readZodPackageVersion();
+    const built = z.object({ a: z.string() });
+    const zodDesc = Object.getOwnPropertyDescriptor(built, "_zod");
+    expect(zodDesc, canaryMessage(version)).toBeDefined();
+    expect(zodDesc?.configurable, canaryMessage(version)).toBe(false);
+    expect(zodDesc?.writable, canaryMessage(version)).toBe(false);
+    expect(zodDesc?.enumerable, canaryMessage(version)).toBe(false);
+    const defDesc = Object.getOwnPropertyDescriptor(built, "_def");
+    expect(defDesc, canaryMessage(version)).toBeDefined();
+    expect(defDesc?.configurable, canaryMessage(version)).toBe(false);
+  });
+
+  it("globalThis.__zod_globalRegistry exists with has, and .describe() adds the clone", () => {
+    const version = readZodPackageVersion();
+    const registry: unknown = Reflect.get(globalThis, "__zod_globalRegistry");
+    expect(typeof registry, canaryMessage(version)).toBe("object");
+    expect(registry, canaryMessage(version)).not.toBeNull();
+    if (typeof registry !== "object" || registry === null) {
       throw new Error(canaryMessage(version));
     }
-    for (const hook of deferred) {
-      if (typeof hook === "function") {
-        Reflect.apply(hook, undefined, []);
-      }
+    const has = Reflect.get(registry, "has");
+    expect(typeof has, canaryMessage(version)).toBe("function");
+    if (typeof has !== "function") {
+      throw new Error(canaryMessage(version));
     }
-    expect(parseWith(standIn, { a: "x" }), canaryMessage(version)).toEqual(
-      built.parse({ a: "x" }),
+    const base = z.string();
+    const described = base.describe("labelled");
+    expect(
+      Reflect.apply(has, registry, [described]),
+      canaryMessage(version),
+    ).toBe(true);
+    expect(Reflect.apply(has, registry, [base]), canaryMessage(version)).toBe(
+      false,
     );
+  });
+
+  it("z.instanceof sets _zod.bag.Class", () => {
+    const version = readZodPackageVersion();
+    class Foo {}
+    const schema = z.instanceof(Foo);
+    const bag: unknown = readZodField(schema, "bag");
+    expect(typeof bag, canaryMessage(version)).toBe("object");
+    expect(bag, canaryMessage(version)).not.toBeNull();
+    if (typeof bag !== "object" || bag === null) {
+      throw new Error(canaryMessage(version));
+    }
+    expect(Reflect.get(bag, "Class"), canaryMessage(version)).toBe(Foo);
   });
 
   it(".describe() sets _zod.parent", () => {
