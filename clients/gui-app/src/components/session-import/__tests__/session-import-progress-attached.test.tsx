@@ -207,7 +207,7 @@ describe("SessionImportProgress", () => {
       />,
     );
 
-    expect(screen.getByText("Imported 1 task")).toBeTruthy();
+    expect(screen.getByText("Imported 1 session")).toBeTruthy();
     expect(screen.getByTestId("session-import-not-imported").textContent).toBe(
       "2 not imported",
     );
@@ -295,7 +295,7 @@ describe("SessionImportProgress", () => {
 
     // One line, one toggle; the reasons are sections behind it.
     expect(screen.getByTestId("session-import-not-imported").textContent).toBe(
-      "Not imported: 3 tasks",
+      "Not imported: 3 sessions",
     );
     expect(screen.queryByTestId("session-import-failure-group")).toBeNull();
     expect(screen.queryByText("Broken session one")).toBeNull();
