@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 import {
+  latestCheckpointPerTurn,
   overlappingCheckpointIds,
   turnCheckpointManifestSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
@@ -784,6 +785,9 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
  *
  * Order is load-bearing - "later" means later in the event log - so this walks
  * `events` in its given order and never sorts.
+ *
+ * Only each turn's last checkpoint counts (`latestCheckpointPerTurn`). A turn
+ * whose checkpoint was rewritten must not be flagged by its own rewrite.
  */
 export function turnKeysWithLaterOverlappingChanges(
   events: readonly ChatEvent[],
@@ -800,11 +804,12 @@ export function turnKeysWithLaterOverlappingChanges(
     return [{ turnId: event.turnId, manifest: manifest.data }];
   });
   if (parsed.length === 0) return EMPTY_TURN_KEYS;
+  const current = latestCheckpointPerTurn(parsed, (entry) => entry.turnId);
   const overlapping = overlappingCheckpointIds(
-    parsed.map((entry) => entry.manifest),
+    current.map((entry) => entry.manifest),
   );
   return new Set(
-    parsed.flatMap((entry) =>
+    current.flatMap((entry) =>
       overlapping.has(entry.manifest.checkpointId) ? [entry.turnId] : [],
     ),
   );
