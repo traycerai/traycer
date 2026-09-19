@@ -94,13 +94,13 @@ function Proxy({
           type="button"
           tabIndex={tabIndex}
           data-customize-proxy={instance.key}
+          data-customize-ghost={instance.ghost || undefined}
           aria-label={`Customize ${label}, ${state}`}
           aria-describedby={
             instance.condition ? `${instance.key}-condition` : undefined
           }
           className={cn(
             "pointer-events-auto fixed min-h-6 min-w-6 rounded-sm border border-dashed border-foreground bg-transparent outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring forced-colors:outline",
-            instance.ghost && "border-foreground/60",
             active && "border-solid ring-2 ring-ring",
             options?.drag && "touch-none",
           )}

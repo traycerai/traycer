@@ -80,6 +80,7 @@ export function DropLine() {
   return (
     <div
       aria-hidden
+      data-customize-drop-line
       className="pointer-events-none fixed bg-ring"
       style={{
         left: over.rect.left,
@@ -97,13 +98,13 @@ export function CustomizeDropTarget({ slot }: { slot: DropSlotRect }) {
     <div
       ref={setNodeRef}
       data-customize-drop-target={slot.id}
+      data-customize-drop-active={isOver || undefined}
       className="pointer-events-none fixed rounded-sm border border-dashed border-border"
       style={{
         left: slot.rect.left,
         top: slot.rect.top,
         width: slot.rect.width,
         height: slot.rect.height,
-        opacity: isOver ? 1 : 0.4,
       }}
     />
   );

@@ -344,6 +344,51 @@ describe("SampleWorkspaceBody - passivity", () => {
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
   });
 
+  it("stays passive through a whole session: popover, preference edits, ghost toggles and exit add no host call, query or handler", async () => {
+    renderBody();
+    await waitFor(() => expect(proxyFor(key("composer.model"))).not.toBeNull());
+    const assertPassive = (step: string): void => {
+      expect(hostCalls.methods, step).toEqual([]);
+      expect(queryClient.getQueryCache().getAll(), step).toHaveLength(0);
+      expect(getActiveModelPicker(), step).toBeNull();
+      expect(getFocusedComposerControls(), step).toBeNull();
+      expect(openActiveDraftsControl(), step).toBe(false);
+    };
+    assertPassive("mounted");
+
+    // The editor's own popover, on a hotspot whose live twin talks to a host.
+    act(() => {
+      useCustomizeStore
+        .getState()
+        .openPopover(key("composer.model"), key("composer.model"), null);
+    });
+    assertPassive("popover open");
+    act(() => useCustomizeStore.getState().closePopover());
+    assertPassive("popover closed");
+
+    // Preference edits re-render the real pieces (see the suite below).
+    act(() => {
+      useLayoutStore.setState({
+        composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
+      });
+    });
+    assertPassive("dock row folded");
+    act(() => {
+      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+    });
+    assertPassive("minimap hidden (ghosted)");
+    act(() => {
+      useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+    });
+    assertPassive("rail panel ghosted");
+
+    act(() => {
+      useCustomizeStore.setState({ session: null });
+    });
+    assertPassive("session ended");
+    expect(useCustomizeStore.getState().instances.size).toBe(0);
+  });
+
   it("registers no dynamic action handler", async () => {
     renderBody();
     await waitFor(() => expect(proxyFor(key("composer.model"))).not.toBeNull());

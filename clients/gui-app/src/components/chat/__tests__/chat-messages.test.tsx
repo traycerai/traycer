@@ -2797,6 +2797,128 @@ describe("ChatMessages scroll policy", () => {
       );
       expect(screen.getByTestId("chat-minimap-ghost")).not.toBeNull();
     });
+    // Full-session regression on the REAL ChatMessages: LegendList, the
+    // minimap, the scroll cache and the customize hotspot are all real; only
+    // the row renderer is this file's lightweight mock. ChatMessages takes no
+    // host client (`hostId={null}`), so "the editor changed nothing" is
+    // measured on what it can actually disturb - scroll and anchor state,
+    // layout churn, and the side-effect counters - as a DELTA over the same
+    // mounted nodes, not against a second mount. The popover steps are
+    // store-driven (no overlay is mounted here); the overlay-driven,
+    // host-boundary version lives in the live-toolbar suite.
+    //
+    // Following-end continuously re-pins in the real scheduler, including
+    // during an idle control interval. For that mode assert stable geometry
+    // and cached intent; command counts cannot identify their initiator.
+    // A free-scrolling reader must receive NO scroll command from any step.
+    async function runFullEditingSession(scrolledAway: boolean): Promise<void> {
+      useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+      act(() => {
+        useCustomizeStore.setState({ session: null, instances: new Map() });
+      });
+      const onVisibleRange = vi.fn();
+      const view = renderChatMessages({
+        messages: makeCompletedTranscript(40),
+        scrollStateKey: scrolledAway
+          ? "customize-full-session-away"
+          : "customize-full-session",
+        onVisibleOrdinalRangeChange: onVisibleRange,
+      });
+      await waitForNavigationSettle();
+      if (scrolledAway) {
+        await enterFreeScrollingAwayFromEnd();
+        await waitForPillVisible();
+      }
+      const spies = spyLegendListScrollCommands();
+      onTestFinished(spies.restore);
+
+      const observe = () => ({
+        scrollTop: getScrollNode().scrollTop,
+        savedTabState: peekSavedChatTabState(view.identity),
+        jumpPillVisible: isJumpPillVisible(),
+        minimapTicks: screen.getAllByTestId("chat-turn-minimap-tick").length,
+        itemSizeChanges: legendListItemSizeChanges.count,
+        visibleRangeCalls: onVisibleRange.mock.calls.length,
+        activityGroupWrites: activityGroupOpenIds.setOpenCalls.length,
+      });
+      const before = observe();
+
+      // CONTROL: what a plain re-render costs in scroll commands.
+      const commandsBeforeControl = spies.totalCalls();
+      act(() => view.rerenderWith({}));
+      await settleLegendList();
+      const controlCommands = spies.totalCalls() - commandsBeforeControl;
+      expect(observe(), "control re-render").toEqual(before);
+      if (scrolledAway) expect(controlCommands).toBe(0);
+
+      const minimapInstance = () =>
+        [...useCustomizeStore.getState().instances.values()].find(
+          (candidate) => candidate.settingId === "chat.minimapSide",
+        );
+      const steps: ReadonlyArray<readonly [string, () => void]> = [
+        [
+          "enter the session",
+          () =>
+            useCustomizeStore.setState({
+              session: {
+                scene: "in-place",
+                opener: { kind: "none" },
+                startedAt: 0,
+              },
+              instances: new Map(),
+              activeKey: null,
+              popoverKey: null,
+              invoker: null,
+              disclosure: null,
+              pendingTarget: null,
+              preferredTileId: null,
+              history: { past: [], future: [] },
+            }),
+        ],
+        [
+          "open the minimap popover",
+          () => {
+            const found = minimapInstance();
+            if (found === undefined)
+              throw new Error("chat.minimapSide did not register");
+            useCustomizeStore
+              .getState()
+              .openPopover(found.key, found.key, null);
+          },
+        ],
+        [
+          "close the popover",
+          () => useCustomizeStore.getState().closePopover(),
+        ],
+        [
+          "exit the session",
+          () => useCustomizeStore.setState({ session: null }),
+        ],
+      ];
+      let commandsSoFar = spies.totalCalls();
+      for (const [name, run] of steps) {
+        act(run);
+        await settleLegendList();
+        // The editor is engaged while the session is live, so an unchanged
+        // observation is not just "nothing rendered".
+        if (name === "open the minimap popover")
+          expect(minimapInstance()).toBeDefined();
+        expect(observe(), name).toEqual(before);
+        const issued = spies.totalCalls() - commandsSoFar;
+        commandsSoFar = spies.totalCalls();
+        if (scrolledAway) expect(issued, `${name}: scroll commands`).toBe(0);
+      }
+      expect(useCustomizeStore.getState().instances.size).toBe(0);
+    }
+
+    it("a full editing session over the live, following chat leaves its scroll, anchor and layout untouched", async () => {
+      await runFullEditingSession(false);
+    });
+
+    it("a full editing session never yanks a reader who scrolled away from the end", async () => {
+      await runFullEditingSession(true);
+    });
+
     describe("S4: coarse pointer (real ChatMessages wiring)", () => {
       const COARSE_REASON = "Minimap is unavailable with a coarse pointer";
       const TILE = "tile-coarse";

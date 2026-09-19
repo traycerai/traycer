@@ -102,16 +102,19 @@ vi.mock("@dnd-kit/core", () => ({
 }));
 
 vi.mock("@/components/resources/resource-usage-chip", () => ({
-  OwnerResourceChip: (props: {
-    readonly kind: string;
-    readonly ownerId: string;
-    readonly hostId: string | null;
+  NavigatorResourceHotspotChip: (props: {
+    readonly owner: {
+      readonly kind: string;
+      readonly ownerId: string;
+      readonly hostId: string | null;
+    } | null;
     readonly metrics: ReadonlyArray<string>;
   }) => {
-    resourceChipCalls.calls.push(props);
+    if (props.owner === null) return null;
+    resourceChipCalls.calls.push({ ...props.owner, metrics: props.metrics });
     return (
       <span
-        data-testid={`owner-resource-chip-${props.hostId}-${props.ownerId}`}
+        data-testid={`owner-resource-chip-${props.owner.hostId}-${props.owner.ownerId}`}
       />
     );
   },

@@ -1,18 +1,77 @@
+/* The scrim darkens ghost backgrounds, so theme text alone is not a
+   sufficient boundary (e.g. Everforest light). Use a mode-neutral stroke. */
+[data-customize-editor] {
+  --customize-outline: #000;
+}
+.dark [data-customize-editor] {
+  --customize-outline: #fff;
+}
+[data-customize-proxy] {
+  border-color: var(--customize-outline);
+  --ring: var(--customize-outline);
+}
+[data-customize-drop-target],
+[data-customize-proxy][data-customize-ghost] {
+  border-color: color-mix(in srgb, var(--customize-outline) 80%, transparent);
+}
+[data-customize-drop-active] {
+  border-color: var(--customize-outline);
+}
+[data-customize-drop-line] {
+  background: var(--customize-outline);
+}
+[data-customize-editor] [data-customize-proxy]:focus-visible {
+  outline-color: var(--customize-outline);
+}
+
+/* Editor controls need stronger contrast than decorative theme accents.
+   Scope to controls, leaving the inert option pictures in the actual theme. */
+[data-customize-editor]
+  :is(button, input):not([inert] *):not([data-customize-proxy]),
+[data-customize-editor][data-slot="tooltip-content"] {
+  --primary: var(--foreground);
+  --primary-foreground: var(--background);
+  --muted-foreground: var(--foreground);
+  --ring: var(--foreground);
+}
+[data-customize-editor]
+  :is(button, input):not([inert] *):not([data-customize-proxy]):focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+}
+[data-customize-editor]
+  :is(
+    input,
+    [data-slot="checkbox"],
+    [data-slot="radio-group-item"],
+    [data-slot="switch"],
+    [data-variant="outline"]
+  ):not([inert] *) {
+  border-color: var(--foreground);
+}
+[data-customize-editor] .text-muted-foreground:not([inert] *) {
+  color: var(--foreground);
+}
+
+[data-customize-editor] button[aria-expanded="true"]:not([inert] *) {
+  background-color: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+
 /* Button feedback belongs to this editor, including its portalled controls. */
 [data-customize-editor] button:not([data-customize-proxy]) {
-  transition: transform 125ms ease-out;
+  transition: transform var(--customize-press-duration, 125ms) ease-out;
 }
 [data-customize-editor] button:not([data-customize-proxy]):active {
-  transform: scale(0.97);
+  transform: scale(var(--customize-press-scale, 0.97));
 }
-:root[data-reduce-panel-motion] [data-customize-editor] button {
-  transition: none;
-  transform: none;
+:root[data-reduce-panel-motion] [data-customize-editor] {
+  --customize-press-duration: 0ms;
+  --customize-press-scale: 1;
 }
 @media (prefers-reduced-motion: reduce) {
-  [data-customize-editor] button {
-    transition: none;
-    transform: none;
+  [data-customize-editor] {
+    --customize-press-duration: 0ms;
+    --customize-press-scale: 1;
   }
 }
 @media (hover: hover) and (pointer: fine) {
@@ -21,17 +80,25 @@
   }
 }
 @media (forced-colors: active) {
-  [data-customize-proxy] {
+  [data-customize-drop-target],
+  [data-customize-drop-active],
+  [data-customize-proxy],
+  [data-customize-proxy][data-customize-ghost] {
+    border-color: ButtonText;
     outline: 1px dashed ButtonText;
   }
-  [data-customize-proxy]:focus-visible {
+  [data-customize-drop-line] {
+    background: Highlight;
+  }
+  [data-customize-editor] [data-customize-proxy]:focus-visible {
     outline: 2px solid Highlight;
   }
 }
 
-:root[data-customize-keyboard] [data-customize-editor] button {
-  transition: none;
-  transform: none;
+:root[data-customize-keyboard] [data-customize-editor],
+[data-customize-editor][data-customize-keyboard] {
+  --customize-press-duration: 0ms;
+  --customize-press-scale: 1;
 }
 
 :root [data-customize-editor][data-customize-keyboard],

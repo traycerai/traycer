@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Grip } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -109,13 +110,15 @@ export function CustomizeBar({
       aria-label="Customize layout"
       data-state={editing ? "open" : "closed"}
       data-customize-bar
-      className="pointer-events-auto fixed top-safe-top-gutter left-safe-center-x flex w-max max-w-safe-dvw -translate-x-1/2 flex-wrap items-center gap-4 rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg"
+      className={cn(
+        "pointer-events-auto fixed top-safe-top-gutter left-safe-center-x flex w-max max-w-safe-dvw flex-wrap items-center gap-4 rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg",
+        position === null && "-translate-x-1/2",
+      )}
       style={
         position
           ? {
               left: position.x,
               top: position.y,
-              transform: "none",
               maxWidth: window.innerWidth - padding.left - padding.right,
             }
           : undefined

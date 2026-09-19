@@ -17,6 +17,43 @@ export interface HotspotRects {
   readonly unreachable: ReadonlySet<InstanceKey>;
   readonly version: number;
 }
+// Portalled proxies must respect the clipping of their source surfaces.
+function visibleHotspotRect(node: HTMLElement, rect: DOMRect): DOMRect {
+  let left = Math.max(0, rect.left);
+  let top = Math.max(0, rect.top);
+  let right = Math.min(window.innerWidth, rect.right);
+  let bottom = Math.min(window.innerHeight, rect.bottom);
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    const clipsX = /^(auto|scroll|hidden|clip)$/.test(style.overflowX);
+    const clipsY = /^(auto|scroll|hidden|clip)$/.test(style.overflowY);
+    if (!clipsX && !clipsY) continue;
+    const bounds = parent.getBoundingClientRect();
+    if (clipsX) {
+      left = Math.max(left, bounds.left + parent.clientLeft);
+      right = Math.min(
+        right,
+        bounds.left + parent.clientLeft + parent.clientWidth,
+      );
+    }
+    if (clipsY) {
+      top = Math.max(top, bounds.top + parent.clientTop);
+      bottom = Math.min(
+        bottom,
+        bounds.top + parent.clientTop + parent.clientHeight,
+      );
+    }
+  }
+  // A clipped fragment cannot host the editor's minimum 24px hit target.
+  const width = right - left;
+  const height = bottom - top;
+  return new DOMRect(
+    left,
+    top,
+    width < rect.width && width < 24 ? 0 : width,
+    height < rect.height && height < 24 ? 0 : height,
+  );
+}
 export function useHotspotRects(
   instances: ReadonlyMap<InstanceKey, HotspotInstance>,
 ): HotspotRects {
@@ -34,7 +71,10 @@ export function useHotspotRects(
       const rects = new Map<InstanceKey, DOMRect>();
       const unreachable = new Set<InstanceKey>();
       for (const [key, instance] of instances) {
-        const rect = instance.node.getBoundingClientRect();
+        const rect = visibleHotspotRect(
+          instance.node,
+          instance.node.getBoundingClientRect(),
+        );
         if (
           !instance.node.isConnected ||
           !instance.node.getClientRects().length ||

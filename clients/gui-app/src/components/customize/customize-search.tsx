@@ -242,7 +242,7 @@ export function CustomizeSearch({
                   aria-selected={index === search.activeIndex}
                   className={cn(
                     "w-full cursor-pointer rounded-md p-2 text-left text-ui-sm",
-                    index === search.activeIndex && "bg-foreground/8",
+                    index === search.activeIndex && "bg-foreground/5",
                   )}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => {
