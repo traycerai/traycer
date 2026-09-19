@@ -29,6 +29,7 @@ const testState = vi.hoisted(() => ({
   hostPresent: true,
   hostId: "host-test" as string | null,
   hostEntry: null as HostDirectoryEntry | null,
+  directoryCalls: 0,
   status: { kind: "absent" } as ChatSearchMessageHitsStatus,
   historyOverlayActive: false,
   hitsArgs: [] as Array<{
@@ -60,7 +61,10 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => testState.hostId,
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => testState.hostEntry,
+  useHostDirectoryEntry: () => {
+    testState.directoryCalls += 1;
+    return testState.hostEntry;
+  },
 }));
 vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
   useChatSearchMessageHits: (args: {
@@ -189,13 +193,19 @@ function renderSection(overrides: {
   readonly query?: string;
   readonly filtersActive?: boolean;
   readonly taskListSettled?: boolean;
+  readonly display?: "list" | "count-only";
+  readonly standalone?: boolean;
 }): {
   readonly container: HTMLElement;
   readonly onRowKeyDown: () => void;
+  readonly onCountChange: (count: string | null) => void;
+  readonly onShowTasks: () => void;
   /** Re-renders the same props, so a changed `testState` is picked up. */
   readonly rerender: () => void;
 } {
   const onRowKeyDown = vi.fn<() => void>();
+  const onCountChange = vi.fn<(count: string | null) => void>();
+  const onShowTasks = vi.fn<() => void>();
   // A FRESH element each time, not one held in a variable: React bails out of
   // a subtree whose element is reference-identical to the last render's, so
   // re-rendering the same object would do nothing at all and every assertion
@@ -206,12 +216,18 @@ function renderSection(overrides: {
       filtersActive={overrides.filtersActive ?? false}
       taskListSettled={overrides.taskListSettled ?? true}
       onRowKeyDown={onRowKeyDown}
+      display={overrides.display ?? "list"}
+      standalone={overrides.standalone ?? false}
+      onCountChange={onCountChange}
+      onShowTasks={onShowTasks}
     />
   );
   const view = render(element());
   return {
     container: view.container,
     onRowKeyDown,
+    onCountChange,
+    onShowTasks,
     rerender: () => {
       view.rerender(element());
     },
@@ -222,6 +238,7 @@ beforeEach(() => {
   testState.hostPresent = true;
   testState.hostId = "host-test";
   testState.hostEntry = null;
+  testState.directoryCalls = 0;
   testState.status = { kind: "absent" };
   testState.historyOverlayActive = false;
   testState.hitsArgs = [];
@@ -290,29 +307,50 @@ describe("HistoryMessageHits: the header", () => {
 
     renderSection({});
 
-    expect(screen.getByRole("heading").textContent).toBe(
-      "In messages · on Tanveer's MacBook · 1 chat",
+    expect(screen.getByRole("heading").textContent).toBe("Message matches");
+    expect(screen.getByRole("status").parentElement?.textContent).toBe(
+      "1 chat on Tanveer's MacBook",
     );
   });
 
-  it("says the hits are unfiltered only while a task filter is active", () => {
+  it("falls back to this machine when the directory has no label", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({});
+
+    expect(screen.getByRole("status").parentElement?.textContent).toBe(
+      "1 chat on this machine",
+    );
+  });
+
+  it("says filters narrow tasks only, and only while a task filter is active", () => {
     testState.status = readyStatus(
       [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
       "complete",
     );
+    const sentence =
+      "History filters narrow tasks only. These matches come from this machine’s whole chat index.";
 
     renderSection({ filtersActive: false });
-    // The whole header IS the assertion that the label is absent, rather than
-    // a `queryByText` that would pass on a header that said something else.
-    expect(screen.getByRole("heading").textContent).toBe(
-      "In messages · on this host · 2 chats",
-    );
+    expect(screen.queryByText(sentence)).toBeNull();
+    // The old "· not filtered" suffix is gone for good, not merely hidden.
+    expect(screen.getByRole("heading").textContent).toBe("Message matches");
+    expect(document.body.textContent).not.toContain("not filtered");
     cleanup();
 
     renderSection({ filtersActive: true });
-    expect(screen.getByRole("heading").textContent).toBe(
-      "In messages · on this host · 2 chats · not filtered",
-    );
+    expect(screen.getByText(sentence)).toBeTruthy();
+    expect(document.body.textContent).not.toContain("not filtered");
+  });
+
+  it("hands off to chat search with the plain 'Refine in chat search' label", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({});
+
+    expect(
+      screen.getByRole("button", { name: "Refine in chat search" }),
+    ).toBeTruthy();
   });
 });
 
@@ -322,9 +360,7 @@ describe("HistoryMessageHits: the count line", () => {
 
     renderSection({});
 
-    const heading = screen.getByRole("heading", { name: /In messages/ });
-    const count = heading.querySelector("[role='status']");
-    expect(count?.textContent).toBe(" · Searching messages…");
+    expect(screen.getByRole("status").textContent).toBe("Searching");
   });
 
   it("adds a plus when more pages of chats remain", () => {
@@ -338,9 +374,205 @@ describe("HistoryMessageHits: the count line", () => {
 
     renderSection({});
 
-    expect(screen.getByRole("heading").textContent).toBe(
-      "In messages · on this host · 2+ chats",
+    expect(screen.getByRole("status").textContent).toBe("2+ chats");
+  });
+});
+
+describe("HistoryMessageHits: the count it reports upward", () => {
+  it("reports a primitive N once ready", () => {
+    testState.status = readyStatus(
+      [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
+      "complete",
     );
+
+    const { onCountChange } = renderSection({});
+
+    expect(onCountChange).toHaveBeenLastCalledWith("2");
+  });
+
+  it("reports N+ while a next cursor exists", () => {
+    testState.status = {
+      ...readyStatus([messageMatch("chat-1", 1)], "complete"),
+      showMore: () => {},
+    };
+
+    const { onCountChange } = renderSection({});
+
+    expect(onCountChange).toHaveBeenLastCalledWith("1+");
+  });
+
+  it("reports 'pending' while the search is in flight", () => {
+    testState.status = { kind: "loading" };
+
+    const { onCountChange } = renderSection({});
+
+    expect(onCountChange).toHaveBeenLastCalledWith("pending");
+  });
+
+  it("reports nothing for a failed search, never a false zero", () => {
+    testState.status = { kind: "error", message: "The host went away." };
+
+    const { onCountChange } = renderSection({});
+
+    expect(onCountChange).toHaveBeenLastCalledWith(null);
+    expect(onCountChange).not.toHaveBeenCalledWith("0");
+  });
+
+  it("reports nothing for an absent status", () => {
+    const { onCountChange } = renderSection({});
+
+    expect(onCountChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("reports nothing below the body-search minimum", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { onCountChange } = renderSection({ query: "b" });
+
+    expect(onCountChange).toHaveBeenLastCalledWith(null);
+    expect(testState.hitsArgs).toEqual([]);
+  });
+
+  it("reports nothing with no host client to ask", () => {
+    testState.hostPresent = false;
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { onCountChange } = renderSection({});
+
+    expect(onCountChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("reports a real zero when a ready search found nothing", () => {
+    testState.status = readyStatus([], "complete");
+
+    const { onCountChange } = renderSection({});
+
+    expect(onCountChange).toHaveBeenLastCalledWith("0");
+  });
+
+  it("does not report again when a re-render leaves the projection unchanged", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { onCountChange, rerender } = renderSection({});
+    rerender();
+    rerender();
+
+    expect(onCountChange).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HistoryMessageHits: count-only display", () => {
+  it("draws nothing but still asks, so the Tasks badge stays live", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { container, onCountChange } = renderSection({
+      display: "count-only",
+    });
+
+    expect(container.firstChild).toBeNull();
+    expect(testState.hitsArgs[0]?.scopeKind).toBe("all-accessible-tasks");
+    expect(onCountChange).toHaveBeenLastCalledWith("1");
+  });
+
+  it("draws nothing even in standalone form", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { container } = renderSection({
+      display: "count-only",
+      standalone: true,
+    });
+
+    expect(container.firstChild).toBeNull();
+  });
+});
+
+describe("HistoryMessageHits: the standalone Messages pane", () => {
+  it("explains the two-character minimum and offers the way back to Tasks", () => {
+    const { onShowTasks } = renderSection({ query: "b", standalone: true });
+
+    expect(
+      screen.getByText("Type 2 characters to search messages"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show tasks" }));
+    expect(onShowTasks).toHaveBeenCalledTimes(1);
+    expect(testState.hitsArgs).toEqual([]);
+  });
+
+  it("gives an empty query the same explanation", () => {
+    renderSection({ query: "", standalone: true });
+
+    expect(
+      screen.getByText("Type 2 characters to search messages"),
+    ).toBeTruthy();
+  });
+
+  it("says search is unavailable on this machine, and never reads the host directory, with no host runtime", () => {
+    testState.hostPresent = false;
+    testState.hostEntry = {
+      hostId: "host-test",
+      label: "Tanveer's MacBook",
+      kind: "local",
+      websocketUrl: null,
+      version: null,
+      transportDialability: "dialable",
+    };
+
+    renderSection({ standalone: true });
+
+    expect(
+      screen.getByText("Message search isn’t available on this machine"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show tasks" })).toBeTruthy();
+    // Outside a runtime provider the directory hook throws, so the cheap gate
+    // must not reach for it at all.
+    expect(testState.directoryCalls).toBe(0);
+  });
+
+  it("names the host when a runtime is present but the search source is absent", () => {
+    testState.hostEntry = {
+      hostId: "host-test",
+      label: "Tanveer's MacBook",
+      kind: "local",
+      websocketUrl: null,
+      version: null,
+      transportDialability: "dialable",
+    };
+
+    renderSection({ standalone: true });
+
+    expect(
+      screen.getByText("Message search isn’t available on Tanveer's MacBook"),
+    ).toBeTruthy();
+  });
+
+  it("says search is unavailable for an absent status", () => {
+    renderSection({ standalone: true });
+
+    expect(
+      screen.getByText("Message search isn’t available on this machine"),
+    ).toBeTruthy();
+  });
+
+  it("shows the loading section even before the task list has settled", () => {
+    testState.status = { kind: "loading" };
+
+    renderSection({ standalone: true, taskListSettled: false });
+
+    expect(screen.getByTestId("history-message-hits-loading")).toBeTruthy();
+  });
+
+  it("renders the hits themselves", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({ standalone: true });
+
+    expect(screen.getByRole("button", { name: /Chat chat-1/ })).toBeTruthy();
+  });
+
+  it("stays silent, not explanatory, when it is only the group under All", () => {
+    const { container } = renderSection({ query: "b", standalone: false });
+
+    expect(container.firstChild).toBeNull();
   });
 });
 
@@ -358,7 +590,9 @@ describe("HistoryMessageHits: loading and failure", () => {
 
     renderSection({ taskListSettled: true });
 
-    expect(screen.getByRole("heading", { name: /In messages/ })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Message matches" }),
+    ).toBeTruthy();
     expect(screen.getByTestId("history-message-hits-loading")).toBeTruthy();
   });
 
@@ -454,7 +688,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
     renderSection({ query: "  browser  " });
     fireEvent.click(
-      screen.getByRole("button", { name: /Open in Search chats/ }),
+      screen.getByRole("button", { name: "Refine in chat search" }),
     );
 
     const state = useChatSearchStore.getState();

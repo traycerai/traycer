@@ -42,12 +42,12 @@ export function HistorySurface() {
   const routeSearch = history?.routeSearch ?? parseHistorySearch({});
 
   const scope = history?.scope ?? "all";
-  void scope;
-  void onScopeChange;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="history-surface">
       <EpicsListPanel
+        scope={scope}
+        onScopeChange={onScopeChange}
         variant="page"
         className={undefined}
         onSelectEpic={null}

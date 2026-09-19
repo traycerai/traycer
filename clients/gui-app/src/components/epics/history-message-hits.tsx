@@ -19,7 +19,13 @@
  * makes this a second list rather than a second copy of the first: History
  * already lists titles above.
  */
-import { useCallback, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -39,7 +45,12 @@ import {
 import { useChatSearchTaskTitles } from "@/hooks/chats/use-chat-search-task-titles";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { CHAT_SEARCH_BODY_MIN_QUERY_CHARS } from "@/lib/chat-search/chat-search-results";
+import {
+  CHAT_SEARCH_BODY_MIN_QUERY_CHARS,
+  projectSearchCount,
+} from "@/lib/chat-search/chat-search-results";
+import type { HistoryCount } from "@/components/epics/history-scope-bar";
+import { cn } from "@/lib/utils";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -61,7 +72,7 @@ const ALL_TASKS_SCOPE: ChatSearchSurfaceScope = {
   kind: "all-accessible-tasks",
 };
 
-export interface HistoryMessageHitsProps {
+export interface HistoryMessageHitsInputs {
   /** History's raw query; the trim, cap and debounce are the hook's. */
   readonly query: string;
   /**
@@ -80,6 +91,13 @@ export interface HistoryMessageHitsProps {
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }
 
+export interface HistoryMessageHitsProps extends HistoryMessageHitsInputs {
+  readonly display: "list" | "count-only";
+  readonly standalone: boolean;
+  readonly onCountChange: (count: HistoryCount) => void;
+  readonly onShowTasks: () => void;
+}
+
 /**
  * The cheap gates, kept in a component of their own so the section's queries -
  * the search itself and the task-title index - are never mounted for a History
@@ -94,28 +112,21 @@ export function HistoryMessageHits(props: HistoryMessageHitsProps): ReactNode {
     client === null ||
     props.query.trim().length < CHAT_SEARCH_BODY_MIN_QUERY_CHARS
   ) {
-    return null;
+    return (
+      <HistoryMessageHitsUnavailable {...props} hostLabel="this machine" />
+    );
   }
   return (
-    <HistoryMessageHitsSection
-      client={client}
-      hostId={hostId}
-      query={props.query}
-      filtersActive={props.filtersActive}
-      taskListSettled={props.taskListSettled}
-      onRowKeyDown={props.onRowKeyDown}
-    />
+    <HistoryMessageHitsSection {...props} client={client} hostId={hostId} />
   );
 }
 
-function HistoryMessageHitsSection(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly hostId: string | null;
-  readonly query: string;
-  readonly filtersActive: boolean;
-  readonly taskListSettled: boolean;
-  readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
-}): ReactNode {
+function HistoryMessageHitsSection(
+  props: HistoryMessageHitsProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly hostId: string | null;
+  },
+): ReactNode {
   const {
     client,
     filtersActive,
@@ -123,6 +134,8 @@ function HistoryMessageHitsSection(props: {
     onRowKeyDown,
     query,
     taskListSettled,
+    display,
+    standalone,
   } = props;
   const status = useChatSearchMessageHits({
     client,
@@ -130,6 +143,10 @@ function HistoryMessageHitsSection(props: {
     query,
     scope: ALL_TASKS_SCOPE,
   });
+  const count = messageCountProjection(status);
+  const { onCountChange } = props;
+  useLayoutEffect(() => onCountChange(count), [count, onCountChange]);
+  const animateArrival = useMessageArrival(display, standalone);
   const taskTitles = useChatSearchTaskTitles();
   const hostEntry = useHostDirectoryEntry(hostId);
   const navigate = useNavigate();
@@ -180,26 +197,31 @@ function HistoryMessageHitsSection(props: {
     if (historyOverlayActive) close();
   }, [close, historyOverlayActive, openWith, query]);
 
-  if (status.kind === "absent") return null;
-  if (status.kind === "loading" && !taskListSettled) return null;
+  if (display === "count-only") return null;
+  if (status.kind === "absent")
+    return (
+      <HistoryMessageHitsUnavailable
+        {...props}
+        hostLabel={hostEntry?.label ?? "this machine"}
+      />
+    );
+  if (status.kind === "loading" && !taskListSettled && !standalone) return null;
   return (
     <section
       aria-label="Message matches"
-      className="flex flex-col transition-[opacity,translate] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0"
+      className={cn(
+        "mt-6 flex flex-col border-t border-border pt-3",
+        animateArrival &&
+          !standalone &&
+          "transition-[opacity,translate] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0",
+      )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-x-2 border-t border-border px-3 pt-3 pb-1">
-        <h3 className="min-w-0 text-ui-xs text-muted-foreground">
-          <span className="font-medium tracking-wide uppercase">
-            In messages
-          </span>
-          <HeaderDetail
-            status={status}
-            hostLabel={hostEntry?.label ?? "this host"}
-            filtersActive={filtersActive}
-          />
+      <div className="flex flex-wrap items-center justify-between gap-x-2 px-3.5 pb-1">
+        <h3 className="min-w-0 text-overline font-semibold tracking-wide text-muted-foreground uppercase">
+          Message matches
         </h3>
         <Button variant="link" size="inline-xs" onClick={openDialog}>
-          Open in Search chats
+          Refine in chat search
           {/* A visual affordance only: run into the label it follows, the
               chord turns the button's accessible name into one unreadable
               word, and the action it names is already announced. */}
@@ -210,6 +232,11 @@ function HistoryMessageHitsSection(props: {
           )}
         </Button>
       </div>
+      <HeaderDetail
+        status={status}
+        hostLabel={hostEntry?.label ?? "this machine"}
+        filtersActive={filtersActive}
+      />
       <HistoryMessageHitsBody
         status={status}
         hostId={hostId}
@@ -223,7 +250,7 @@ function HistoryMessageHitsSection(props: {
 }
 
 /**
- * What the header says after "In messages": the host whose index answered, how
+ * The message source line: the host whose index answered, how
  * much it found, and - when History is narrowed by a filter the index cannot
  * reproduce - that the hits below ignore it.
  */
@@ -235,15 +262,50 @@ function HeaderDetail(props: {
   const { filtersActive, hostLabel, status } = props;
   return (
     <>
-      <span>{` · on ${hostLabel}`}</span>
-      <span role="status" className="tabular-nums">
-        {status.kind === "loading" ? " · Searching messages…" : null}
-        {status.kind === "ready"
-          ? ` · ${chatCountLabel(status.messages.length, status.showMore !== null)}`
-          : null}
-      </span>
-      {filtersActive ? <span> · not filtered</span> : null}
+      <p className="px-3.5 pb-2 text-ui-xs text-muted-foreground">
+        <span role="status" className="tabular-nums">
+          {status.kind === "loading" ? "Searching" : null}
+          {status.kind === "ready"
+            ? chatCountLabel(status.messages.length, status.showMore !== null)
+            : null}
+        </span>
+        {" on "}
+        <span className="text-foreground">{hostLabel}</span>
+      </p>
+      {filtersActive ? (
+        <p className="mx-3.5 mb-2.5 rounded-sm border border-info/30 bg-info/10 px-2.5 py-2 text-ui-xs text-info-foreground">
+          History filters narrow tasks only. These matches come from this
+          machine’s whole chat index.
+        </p>
+      ) : null}
     </>
+  );
+}
+
+/** Cheap-gate explanation; no search or title-query hooks mount here. */
+function HistoryMessageHitsUnavailable(
+  props: HistoryMessageHitsProps & { readonly hostLabel: string },
+): ReactNode {
+  const { onCountChange } = props;
+  useLayoutEffect(() => onCountChange(null), [onCountChange]);
+  if (props.display === "count-only" || !props.standalone) return null;
+  const tooShort = props.query.trim().length < CHAT_SEARCH_BODY_MIN_QUERY_CHARS;
+  return (
+    <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+      <p className="text-ui-sm font-medium">
+        {tooShort
+          ? "Type 2 characters to search messages"
+          : `Message search isn’t available on ${props.hostLabel}`}
+      </p>
+      <p className="max-w-lg text-ui-xs leading-4.5 text-pretty text-muted-foreground">
+        {tooShort
+          ? "Message search reads this machine’s chat index, which needs at least two characters."
+          : "This machine’s chat index can’t be searched right now. Tasks come from your account. Chats on other machines weren’t searched."}
+      </p>
+      <Button variant="muted" size="sm" onClick={props.onShowTasks}>
+        Show tasks
+      </Button>
+    </div>
   );
 }
 
@@ -332,4 +394,40 @@ function HistoryMessageHitsBody(props: {
 function chatCountLabel(count: number, more: boolean): string {
   if (more) return `${count}+ chats`;
   return count === 1 ? "1 chat" : `${count} chats`;
+}
+
+function messageCountProjection(
+  status: ChatSearchMessageHitsStatus,
+): HistoryCount {
+  const projection = projectSearchCount(
+    status.kind === "ready"
+      ? {
+          kind: "ready",
+          count: status.messages.length,
+          more: status.showMore !== null,
+        }
+      : status,
+  );
+  if (projection.kind === "pending") return "pending";
+  if (projection.kind === "count")
+    return `${projection.value}${projection.more ? "+" : ""}`;
+  return null;
+}
+
+function useMessageArrival(
+  display: "list" | "count-only",
+  standalone: boolean,
+): boolean {
+  // Scope switches are instant. Only the initial asynchronous group arrival
+  // in All gets the existing fade/translate, even though the query stays live.
+  const [entrance, setEntrance] = useState({
+    display,
+    standalone,
+    animate: !standalone && display === "list",
+  });
+  if (entrance.display !== display || entrance.standalone !== standalone) {
+    setEntrance({ display, standalone, animate: false });
+    return false;
+  }
+  return entrance.animate;
 }

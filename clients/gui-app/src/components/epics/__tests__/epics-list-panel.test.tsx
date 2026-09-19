@@ -38,8 +38,8 @@ import {
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import {
-  EpicsListPanel,
   PickerEpicsListPanel,
   type EpicsListPanelVariant,
 } from "@/components/epics/epics-list-panel";
@@ -426,7 +426,9 @@ function renderPanelWithOpenItem(
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <EpicsListPanel
+      <ScopedEpicsListPanel
+        initialScope="all"
+        onScopeSpy={null}
         variant={variant}
         className={undefined}
         onSelectEpic={null}
@@ -470,7 +472,9 @@ function renderPanelView(variant: EpicsListPanelVariant, initialEntry: string) {
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <EpicsListPanel
+      <ScopedEpicsListPanel
+        initialScope="all"
+        onScopeSpy={null}
         variant={variant}
         className={undefined}
         onSelectEpic={null}
@@ -1071,7 +1075,10 @@ describe("<EpicsListPanel />", () => {
 
     const rows = await screen.findByTestId("epics-list-rows");
     expect(rows.textContent).toContain("Local");
-    expect(screen.queryByRole("status")).toBeNull();
+    // The scope bar's own count line is allowed; a completeness notice is not.
+    expect(screen.queryByRole("status")?.textContent ?? "").not.toMatch(
+      /cloud|device|partial|truncated/i,
+    );
     // Scoped to the list body's own container rather than the whole
     // document: unrelated chrome (a filter chip label, for example) could
     // otherwise fail this assertion for a reason that has nothing to do with
@@ -3305,7 +3312,7 @@ describe("<EpicsListPanel />", () => {
   it("preserves spaces typed into the page search box", async () => {
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
 
     fireEvent.change(input, { target: { value: "hello " } });
@@ -3379,7 +3386,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     const first = screen.getByRole("link", {
       name: "Open task Open from landing",
@@ -3423,7 +3430,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     const orphan = screen.getByRole("link", {
       name: "Open task Preserved orphan",
@@ -3461,7 +3468,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     const orphan = screen.getByRole("link", {
       name: "Open task Preserved orphan",
@@ -3480,7 +3487,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     input.focus();
 
@@ -3499,7 +3506,7 @@ describe("<EpicsListPanel />", () => {
 
     renderPanel("page", "/");
     const input = await screen.findByRole("searchbox", {
-      name: "Search tasks",
+      name: "Search tasks and messages",
     });
     const taskRow = screen.getByRole("link", {
       name: "Open task Open from landing",
@@ -3532,6 +3539,8 @@ describe("<EpicsListPanel />", () => {
     );
 
     expect(screen.queryByRole("button", { name: /Chat chat-hit/ })).toBeNull();
-    expect(screen.queryByRole("heading", { name: /In messages/ })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Message matches" }),
+    ).toBeNull();
   });
 });

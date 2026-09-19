@@ -1,3 +1,5 @@
+import { useState } from "react";
+import type { HistoryScope } from "@/lib/history-scope";
 /**
  * `/epics` route screen - canonical surface for browsing every epic, plus
  * legacy phases that still need to open through the Epic view.
@@ -13,12 +15,15 @@ export interface EpicsListProps {
 }
 
 export function EpicsList(props: EpicsListProps) {
+  const [scope, onScopeChange] = useState<HistoryScope>("all");
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
       data-testid="epics-list-screen"
     >
       <EpicsListPanel
+        scope={scope}
+        onScopeChange={onScopeChange}
         variant="page"
         className={undefined}
         onSelectEpic={null}

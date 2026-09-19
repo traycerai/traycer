@@ -19,8 +19,6 @@ export function HistoryModalContent(
 ): ReactNode {
   const [scope, onScopeChange] = useState<HistoryScope>("all");
   useLayoutEffect(() => registerHistoryModalScope(scope), [scope]);
-  // TODO(T7): pass scope/onScopeChange to EpicsListPanel here and in HistorySurface.
-  void onScopeChange;
   // No autofocus on a touch pointer: focusing the search input raises the
   // on-screen keyboard over half the just-opened sheet. The pointer is what
   // decides, not the width - a desktop window snapped narrow still types with
@@ -37,6 +35,8 @@ export function HistoryModalContent(
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <EpicsListPanel
+        scope={scope}
+        onScopeChange={onScopeChange}
         variant="page"
         className={undefined}
         onSelectEpic={props.onSelectEpic}

@@ -15,14 +15,12 @@ import {
   ArrowDownToLine,
   Check,
   ExternalLink,
-  ListChecks,
   Paintbrush,
   Pencil,
   Search,
   Trash2,
   X,
 } from "lucide-react";
-import { RefreshIcon } from "@/components/refresh-icon";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { openEpicInBackground } from "@/lib/commands/actions/open-epic-in-background";
 import {
@@ -65,7 +63,6 @@ import { ClearFiltersButton } from "@/components/home/toolbar/clear-filters-butt
 import type {
   HistoryItem,
   HistoryWorkspaceRef,
-  HistorySortOption,
 } from "@/components/home/data/home-page.data";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
@@ -73,7 +70,6 @@ import {
   canEditHistoryItemTitle,
   DEFAULT_SORT,
 } from "@/components/home/data/home-page.data";
-import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
   EpicsListError,
@@ -88,11 +84,16 @@ import { MobileHistoryList } from "@/components/epics/mobile/mobile-history-list
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
-import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
+import type { HistoryMessageHitsInputs } from "@/components/epics/history-message-hits";
 import {
-  HistoryMessageHits,
-  type HistoryMessageHitsProps,
-} from "@/components/epics/history-message-hits";
+  HistoryScopedResults,
+  type HistoryCount,
+} from "@/components/epics/history-scope-bar";
+import {
+  HistoryTaskControls,
+  type HistoryTaskControlsProps,
+} from "@/components/epics/history-task-controls";
+import type { HistoryScope } from "@/lib/history-scope";
 import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -107,7 +108,6 @@ import {
   useRouteHistorySearchState,
   type HistorySearchController,
 } from "@/hooks/home/use-history-search-state";
-import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
@@ -143,11 +143,12 @@ const PRESERVED_ORPHAN_DELETE_TOOLTIP =
 const DELETE_IN_FLIGHT_TOOLTIP = "This task is being deleted.";
 const UNVERIFIED_SESSION_DELETE_TOOLTIP =
   "Your sign-in couldn't be confirmed. Deleting this task will work again once it is.";
-const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 export type EpicsListPanelVariant = "page" | "picker";
 
 interface EpicsListPanelProps {
+  readonly scope: HistoryScope;
+  readonly onScopeChange: (scope: HistoryScope) => void;
   readonly variant: EpicsListPanelVariant;
   readonly className: string | undefined;
   /**
@@ -173,6 +174,8 @@ interface EpicsListPanelProps {
 }
 
 interface RouteEpicsListPanelProps {
+  readonly scope: HistoryScope;
+  readonly onScopeChange: (scope: HistoryScope) => void;
   readonly variant: EpicsListPanelVariant;
   readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
@@ -183,6 +186,8 @@ interface RouteEpicsListPanelProps {
 }
 
 interface AmbientEpicsListPanelProps {
+  readonly scope: HistoryScope;
+  readonly onScopeChange: (scope: HistoryScope) => void;
   readonly variant: EpicsListPanelVariant;
   readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
@@ -192,6 +197,8 @@ interface AmbientEpicsListPanelProps {
 }
 
 interface EpicsListPanelBodyProps {
+  readonly scope: HistoryScope;
+  readonly onScopeChange: (scope: HistoryScope) => void;
   readonly variant: EpicsListPanelVariant;
   readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
@@ -207,6 +214,8 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
     return (
       <AmbientEpicsListPanel
         variant={props.variant}
+        scope={props.scope}
+        onScopeChange={props.onScopeChange}
         className={props.className}
         onSelectEpic={props.onSelectEpic}
         onOpenItem={props.onOpenItem}
@@ -218,6 +227,8 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
   return (
     <RouteEpicsListPanel
       variant={props.variant}
+      scope={props.scope}
+      onScopeChange={props.onScopeChange}
       className={props.className}
       onSelectEpic={props.onSelectEpic}
       onOpenItem={props.onOpenItem}
@@ -229,7 +240,10 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
 }
 
 export function PickerEpicsListPanel(
-  props: Omit<AmbientEpicsListPanelProps, "variant">,
+  props: Omit<
+    AmbientEpicsListPanelProps,
+    "variant" | "scope" | "onScopeChange"
+  >,
 ): ReactNode {
   const [search, setSearch] = useState(DEFAULT_HISTORY_SEARCH);
   const update = useCallback((patch: HistorySearchPatch) => {
@@ -241,6 +255,8 @@ export function PickerEpicsListPanel(
     <EpicsListPanelBody
       {...props}
       variant="picker"
+      scope="tasks"
+      onScopeChange={() => {}}
       historySearch={historySearch}
     />
   );
@@ -251,6 +267,8 @@ function RouteEpicsListPanel(props: RouteEpicsListPanelProps): ReactNode {
   return (
     <EpicsListPanelBody
       variant={props.variant}
+      scope={props.scope}
+      onScopeChange={props.onScopeChange}
       className={props.className}
       onSelectEpic={props.onSelectEpic}
       onOpenItem={props.onOpenItem}
@@ -266,6 +284,8 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
   return (
     <EpicsListPanelBody
       variant={props.variant}
+      scope={props.scope}
+      onScopeChange={props.onScopeChange}
       className={props.className}
       onSelectEpic={props.onSelectEpic}
       onOpenItem={props.onOpenItem}
@@ -690,10 +710,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const keyboardNav = useHistoryListKeyboardNav(searchInputRef, rowsScopeRef);
 
   // The message-hit section under the list. `null` withholds it entirely:
-  // `picker` is a task picker, where a message is not a destination, and
-  // selection acts on tasks, which a message row is not one of.
-  const messageHits: HistoryMessageHitsProps | null =
-    variant === "picker" || selectionMode
+  // `picker` is a task picker, where a message is not a destination. Selection
+  // derives Tasks scope below; the message controller still answers its badge.
+  const messageHits: HistoryMessageHitsInputs | null =
+    variant === "picker"
       ? null
       : {
           query: search.query,
@@ -701,6 +721,67 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           taskListSettled: !isPending,
           onRowKeyDown: keyboardNav.onRowKeyDown,
         };
+
+  const pageSearch = showPageSearch ? (
+    <PanelSearchInput
+      inputRef={searchInputRef}
+      value={search.query}
+      onChange={(next) => {
+        updateSearch({ query: next });
+      }}
+      onKeyDown={keyboardNav.onSearchKeyDown}
+      isFetching={isFetching}
+      focusOnMount={props.autoFocusSearch}
+      placement="page"
+      placeholder="Search by title, repo, branch, or PR"
+      ariaLabel="Search tasks"
+    />
+  ) : null;
+  const controls: HistoryTaskControlsProps = {
+    disabledReasonId: null,
+    filters: { active: hasActiveFilters, onClear: handleClear },
+    showSelection: selectionEnabled,
+    selection: selectionMode
+      ? {
+          kind: "active",
+          canSelect: selectableItemIds.length > 0,
+          selectedCount,
+          allVisibleSelected:
+            selectableItemIds.length > 0 &&
+            selectedCount === selectableItemIds.length,
+          isDeletePending: deleteMutation.isPending,
+          canSweepSelected,
+          onSelectAll: selectAllVisible,
+          onDeselectAll: deselectAllVisible,
+          onCancel: cancelSelection,
+          onDeleteSelected: () => {
+            requestDelete(visibleSelectedIds);
+          },
+          onSweepSelected: () => {
+            // The whole selection goes in as ONE set so a worktree
+            // shared between two selected tasks is judged against the
+            // selection, not one task, and stops reading as "shared".
+            if (!canSweepSelected) return;
+            setSweepEpicIds(visibleSelectedIds);
+          },
+        }
+      : {
+          kind: "idle",
+          canSelect: selectableItemIds.length > 0,
+          onStart: enterSelectionMode,
+        },
+    sort: search.sort,
+    onSortChange: (next) => {
+      updateSearch({ sort: next, sortExplicit: true });
+    },
+    availableRepos: availableRepos,
+    availableWorkspaces: availableWorkspaces,
+    search: search,
+    onSearchChange: updateSearch,
+    facets: facets,
+    chatHostFilterSupported: chatHostFilterSupported,
+    refresh: { isFetching, hostId, onRefetch: refetch },
+  };
 
   return (
     <TooltipProvider>
@@ -713,86 +794,34 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           props.className,
         )}
       >
-        {showPageSearch ? (
-          <PanelSearchInput
-            inputRef={searchInputRef}
-            value={search.query}
-            onChange={(next) => {
-              updateSearch({ query: next });
-            }}
-            onKeyDown={keyboardNav.onSearchKeyDown}
-            isFetching={isFetching}
-            focusOnMount={props.autoFocusSearch}
-            placement="page"
-            placeholder="Search by title, repo, branch, or PR"
-            ariaLabel="Search tasks"
-          />
-        ) : null}
-        <PanelChromeBar
-          leading={
-            showToolbarSearch ? (
-              <PanelSearchInput
-                inputRef={searchInputRef}
-                value={search.query}
-                onChange={(next) => {
-                  updateSearch({ query: next });
-                }}
-                onKeyDown={keyboardNav.onSearchKeyDown}
-                isFetching={isFetching}
-                focusOnMount={props.autoFocusSearch}
-                placement="toolbar"
-                placeholder="Search by title, repo, branch, or PR"
-                ariaLabel="Search tasks"
-              />
-            ) : null
-          }
-          filters={{ active: hasActiveFilters, onClear: handleClear }}
-          showSelection={selectionEnabled}
-          selection={
-            selectionMode
-              ? {
-                  kind: "active",
-                  canSelect: selectableItemIds.length > 0,
-                  selectedCount,
-                  allVisibleSelected:
-                    selectableItemIds.length > 0 &&
-                    selectedCount === selectableItemIds.length,
-                  isDeletePending: deleteMutation.isPending,
-                  canSweepSelected,
-                  onSelectAll: selectAllVisible,
-                  onDeselectAll: deselectAllVisible,
-                  onCancel: cancelSelection,
-                  onDeleteSelected: () => {
-                    requestDelete(visibleSelectedIds);
-                  },
-                  onSweepSelected: () => {
-                    // The whole selection goes in as ONE set so a worktree
-                    // shared between two selected tasks is judged against the
-                    // selection, not one task, and stops reading as "shared".
-                    if (!canSweepSelected) return;
-                    setSweepEpicIds(visibleSelectedIds);
-                  },
-                }
-              : {
-                  kind: "idle",
-                  canSelect: selectableItemIds.length > 0,
-                  onStart: enterSelectionMode,
-                }
-          }
-          sort={search.sort}
-          onSortChange={(next) => {
-            updateSearch({ sort: next, sortExplicit: true });
-          }}
-          availableRepos={availableRepos}
-          availableWorkspaces={availableWorkspaces}
-          search={search}
-          onSearchChange={updateSearch}
-          facets={facets}
-          chatHostFilterSupported={chatHostFilterSupported}
-          refresh={{ isFetching, hostId, onRefetch: refetch }}
-        />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <HistoryListBody
+            scope={selectionMode ? "tasks" : props.scope}
+            onScopeChange={selectionMode ? () => {} : props.onScopeChange}
+            pageSearch={pageSearch}
+            chrome={
+              <PanelChromeBar
+                leading={
+                  showToolbarSearch ? (
+                    <PanelSearchInput
+                      inputRef={searchInputRef}
+                      value={search.query}
+                      onChange={(next) => {
+                        updateSearch({ query: next });
+                      }}
+                      onKeyDown={keyboardNav.onSearchKeyDown}
+                      isFetching={isFetching}
+                      focusOnMount={props.autoFocusSearch}
+                      placement="toolbar"
+                      placeholder="Search by title, repo, branch, or PR"
+                      ariaLabel="Search tasks"
+                    />
+                  ) : null
+                }
+                controls={controls}
+              />
+            }
+            controls={controls}
             variant={variant}
             error={error}
             isPending={isPending}
@@ -933,6 +962,8 @@ interface PanelSearchInputProps {
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
   const { inputRef } = props;
+  const isMobileViewport = useIsMobileViewport();
+  const searchesMessages = props.placement === "page" && !isMobileViewport;
   // Defer the focus to the next frame so it lands after Radix Dialog's
   // own mount focus-trap runs (the modal host wraps this surface). A
   // synchronous focus here would be clobbered by the dialog's
@@ -975,13 +1006,18 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
             props.onChange(event.target.value);
           }}
           onKeyDown={props.onKeyDown}
-          placeholder={props.placeholder}
-          aria-label={props.ariaLabel}
+          placeholder={
+            searchesMessages ? "Search tasks and messages" : props.placeholder
+          }
+          aria-label={
+            searchesMessages ? "Search tasks and messages" : props.ariaLabel
+          }
         />
         {props.value.length > 0 ? (
           <InputGroupAddon align="inline-end">
             <InputGroupButton
               size="icon-xs"
+              tabIndex={searchesMessages ? -1 : 0}
               aria-label="Clear search"
               onClick={() => {
                 props.onChange("");
@@ -996,199 +1032,22 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
   );
 }
 
-interface PanelFilterControls {
-  readonly active: boolean;
-  readonly onClear: () => void;
-}
-
-type PanelSelectionControls =
-  | {
-      readonly kind: "idle";
-      readonly canSelect: boolean;
-      readonly onStart: () => void;
-    }
-  | {
-      readonly kind: "active";
-      readonly canSelect: boolean;
-      readonly selectedCount: number;
-      readonly allVisibleSelected: boolean;
-      readonly isDeletePending: boolean;
-      /** At least one selected task owns a worktree the dialog could list. */
-      readonly canSweepSelected: boolean;
-      readonly onSelectAll: () => void;
-      readonly onDeselectAll: () => void;
-      readonly onCancel: () => void;
-      readonly onDeleteSelected: () => void;
-      readonly onSweepSelected: () => void;
-    };
-
-interface PanelRefreshControls {
-  readonly isFetching: boolean;
-  readonly hostId: string | null;
-  readonly onRefetch: () => void | Promise<unknown>;
-}
-
-interface PanelChromeBarProps {
+function PanelChromeBar(props: {
   readonly leading: ReactNode;
-  readonly filters: PanelFilterControls;
-  /** False for the read-only `variant="picker"` embed: hides the entry point
-   * into bulk select/sweep/delete rather than merely disabling it. */
-  readonly showSelection: boolean;
-  readonly selection: PanelSelectionControls;
-  readonly sort: HistorySortOption;
-  readonly onSortChange: (next: HistorySortOption) => void;
-  readonly availableRepos: ReadonlyArray<string>;
-  readonly availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
-  readonly search: HistorySearchState;
-  readonly onSearchChange: (patch: HistorySearchPatch) => void;
-  readonly facets: HistoryFacets | undefined;
-  readonly chatHostFilterSupported: boolean;
-  readonly refresh: PanelRefreshControls;
-}
-
-function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
-  const { isFetching, hostId, onRefetch } = props.refresh;
-  const refreshTasks = useCallback(async () => {
-    await onRefetch();
-  }, [onRefetch]);
-  const refresh = useRefreshSpinner({
-    onRefresh: refreshTasks,
-    externalRefreshing: isFetching,
-    timeoutMs: HISTORY_REFRESH_TIMEOUT_MS,
-  });
-
+  readonly controls: HistoryTaskControlsProps;
+}): ReactNode {
   return (
-    // Wraps instead of clipping when the bar is narrower than its controls
-    // (sub-340px phones, or the Clear button appearing beside the cluster).
-    // The button cluster `grow`s so it renders identically while everything
-    // fits on one line (buttons flush right, as justify-between alone would
-    // place them) and spans the full row - still right-aligned - when it
-    // wraps below the Clear button.
     <div
       className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2"
       data-testid="panel-chrome-bar"
     >
-      {/* `flex-1` stretches the toolbar search when leading carries it, but
-          deliberately NO `min-w-0`: the shrink permit let this box collapse
-          under the button cluster while the Clear button inside could not
-          shrink with it, overlapping "Clear" onto the sort menu on narrow
-          phones. Without it the cluster's min-width is the Clear button, so
-          the row's flex-wrap fires instead. The search input keeps its own
-          `min-w-0`, so it still yields space before any wrap. */}
       <div className="flex flex-1 items-center gap-2">
         {props.leading}
-        {props.filters.active ? (
-          <ClearFiltersButton onClick={props.filters.onClear} />
+        {props.controls.filters.active ? (
+          <ClearFiltersButton onClick={props.controls.filters.onClear} />
         ) : null}
       </div>
-      <div className="flex min-w-0 grow flex-wrap items-center justify-end gap-1">
-        {props.selection.kind === "active" ? (
-          <>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={!props.selection.canSelect}
-              onClick={
-                props.selection.allVisibleSelected
-                  ? props.selection.onDeselectAll
-                  : props.selection.onSelectAll
-              }
-            >
-              {props.selection.allVisibleSelected
-                ? "Deselect all"
-                : "Select all"}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={props.selection.onCancel}
-            >
-              <X />
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="muted"
-              size="icon-sm"
-              aria-label={
-                props.selection.selectedCount > 0
-                  ? `Sweep worktrees for ${props.selection.selectedCount} selected tasks`
-                  : "Sweep worktrees for selected tasks"
-              }
-              aria-haspopup="dialog"
-              data-testid="epics-list-sweep-selected"
-              disabled={!props.selection.canSweepSelected}
-              onClick={props.selection.onSweepSelected}
-            >
-              <Paintbrush />
-            </Button>
-            <Button
-              type="button"
-              variant="destructive-ghost"
-              size="icon-sm"
-              aria-label={
-                props.selection.selectedCount > 0
-                  ? `Delete ${props.selection.selectedCount} selected epics`
-                  : "Delete selected epics"
-              }
-              data-testid="epics-list-delete-selected"
-              disabled={
-                props.selection.selectedCount === 0 ||
-                props.selection.isDeletePending
-              }
-              onClick={props.selection.onDeleteSelected}
-            >
-              <Trash2 />
-            </Button>
-          </>
-        ) : (
-          // Paired sub-groups so a wrap breaks between pairs instead of
-          // orphaning a lone icon on its own line. Intra- and inter-group
-          // gaps are both gap-1, so the one-line rendering is unchanged.
-          <>
-            <div className="flex shrink-0 items-center gap-1">
-              <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
-              <EpicsFilterPopover
-                availableRepos={props.availableRepos}
-                availableWorkspaces={props.availableWorkspaces}
-                search={props.search}
-                onSearchChange={props.onSearchChange}
-                facets={props.facets}
-                chatHostFilterSupported={props.chatHostFilterSupported}
-              />
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              {props.showSelection ? (
-                <Button
-                  type="button"
-                  variant="muted"
-                  size="sm"
-                  aria-label="Select history items"
-                  disabled={!props.selection.canSelect}
-                  className="overflow-visible"
-                  onClick={props.selection.onStart}
-                >
-                  <ListChecks className="size-4" />
-                  Select
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Refresh tasks"
-                data-testid="epics-list-refresh"
-                disabled={refresh.refreshing || hostId === null}
-                onClick={refresh.trigger}
-              >
-                <RefreshIcon refreshing={refresh.refreshing} />
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
+      <HistoryTaskControls {...props.controls} />
     </div>
   );
 }
@@ -1215,6 +1074,11 @@ function describeDeleteTitle(
 }
 
 interface HistoryListBodyProps extends EpicsListBodyProps {
+  readonly scope: HistoryScope;
+  readonly onScopeChange: (scope: HistoryScope) => void;
+  readonly pageSearch: ReactNode;
+  readonly chrome: ReactNode;
+  readonly controls: HistoryTaskControlsProps;
   readonly variant: EpicsListPanelVariant;
   /**
    * The DESKTOP scroll container's ref, and only it. Arrow traversal reads
@@ -1233,7 +1097,7 @@ interface HistoryListBodyProps extends EpicsListBodyProps {
    * The mobile branch does not take it, for the same reason it does not take
    * the scope ref.
    */
-  readonly messageHits: HistoryMessageHitsProps | null;
+  readonly messageHits: HistoryMessageHitsInputs | null;
   readonly onRefresh: () => Promise<unknown>;
 }
 
@@ -1258,29 +1122,33 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
   });
   if (isMobileViewport && props.variant !== "picker") {
     return (
-      <MobileHistoryList
-        error={props.error}
-        isPending={props.isPending}
-        isFetching={props.isFetching}
-        hasActiveFilters={props.hasActiveFilters}
-        chatHostFilterUnsupported={props.chatHostFilterUnsupported}
-        hostRequiresCloudToList={props.hostRequiresCloudToList}
-        items={props.items}
-        completeness={props.completeness}
-        cloudPagePending={props.cloudPagePending}
-        onRetry={props.onRetry}
-        selectionMode={props.selectionMode}
-        selectedIds={props.selectedIds}
-        onToggleSelection={props.onToggleSelection}
-        onRequestDelete={props.onRequestDelete}
-        onSetPinned={props.onSetPinned}
-        pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
-        hasNextPage={props.hasNextPage}
-        isFetchingNextPage={props.isFetchingNextPage}
-        onLoadMore={props.onLoadMore}
-        onOpenItem={openHistoryItem}
-        onRefresh={props.onRefresh}
-      />
+      <>
+        {props.pageSearch}
+        {props.chrome}
+        <MobileHistoryList
+          error={props.error}
+          isPending={props.isPending}
+          isFetching={props.isFetching}
+          hasActiveFilters={props.hasActiveFilters}
+          chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+          hostRequiresCloudToList={props.hostRequiresCloudToList}
+          items={props.items}
+          completeness={props.completeness}
+          cloudPagePending={props.cloudPagePending}
+          onRetry={props.onRetry}
+          selectionMode={props.selectionMode}
+          selectedIds={props.selectedIds}
+          onToggleSelection={props.onToggleSelection}
+          onRequestDelete={props.onRequestDelete}
+          onSetPinned={props.onSetPinned}
+          pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+          hasNextPage={props.hasNextPage}
+          isFetchingNextPage={props.isFetchingNextPage}
+          onLoadMore={props.onLoadMore}
+          onOpenItem={openHistoryItem}
+          onRefresh={props.onRefresh}
+        />
+      </>
     );
   }
   // Destructured rather than read as `props.rowsScopeRef` in the JSX: the
@@ -1288,49 +1156,85 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
   // ACCESS and rejects it (and then flags every sibling prop in the same
   // element). The base component did the same thing with its `listRef`.
   const { messageHits, rowsScopeRef } = props;
-  return (
-    <div ref={rowsScopeRef} className="min-h-0 flex-1 overflow-y-auto pb-10">
-      <EpicsListBody
-        error={props.error}
-        isPending={props.isPending}
-        isFetching={props.isFetching}
-        hasActiveFilters={props.hasActiveFilters}
-        chatHostFilterUnsupported={props.chatHostFilterUnsupported}
-        hostRequiresCloudToList={props.hostRequiresCloudToList}
-        items={props.items}
-        onRetry={props.onRetry}
-        selectionMode={props.selectionMode}
-        selectionEnabled={props.selectionEnabled}
-        selectedIds={props.selectedIds}
-        onToggleSelection={props.onToggleSelection}
-        onRequestDelete={props.onRequestDelete}
-        onRequestSweep={props.onRequestSweep}
-        onSetPinned={props.onSetPinned}
-        pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
-        hasNextPage={props.hasNextPage}
-        isFetchingNextPage={props.isFetchingNextPage}
-        onLoadMore={props.onLoadMore}
-        onSelectEpic={props.onSelectEpic}
-        onOpenItem={props.onOpenItem}
-        onOpenInNewWindow={props.onOpenInNewWindow}
-        openInNewWindowAvailable={props.openInNewWindowAvailable}
-        worktreesByEpicId={props.worktreesByEpicId}
-        surfaceHostId={props.surfaceHostId}
-        openEpicIds={props.openEpicIds}
-        completeness={props.completeness}
-        cloudPagePending={props.cloudPagePending}
-        onRowKeyDown={props.onRowKeyDown}
-      />
-      {messageHits === null ? null : (
-        <HistoryMessageHits
-          query={messageHits.query}
-          filtersActive={messageHits.filtersActive}
-          taskListSettled={messageHits.taskListSettled}
-          onRowKeyDown={messageHits.onRowKeyDown}
-        />
-      )}
-    </div>
+  const taskList = (
+    <EpicsListBody
+      error={props.error}
+      isPending={props.isPending}
+      isFetching={props.isFetching}
+      hasActiveFilters={props.hasActiveFilters}
+      chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+      hostRequiresCloudToList={props.hostRequiresCloudToList}
+      items={props.items}
+      onRetry={props.onRetry}
+      selectionMode={props.selectionMode}
+      selectionEnabled={props.selectionEnabled}
+      selectedIds={props.selectedIds}
+      onToggleSelection={props.onToggleSelection}
+      onRequestDelete={props.onRequestDelete}
+      onRequestSweep={props.onRequestSweep}
+      onSetPinned={props.onSetPinned}
+      pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+      hasNextPage={props.hasNextPage}
+      isFetchingNextPage={props.isFetchingNextPage}
+      onLoadMore={props.onLoadMore}
+      onSelectEpic={props.onSelectEpic}
+      onOpenItem={props.onOpenItem}
+      onOpenInNewWindow={props.onOpenInNewWindow}
+      openInNewWindowAvailable={props.openInNewWindowAvailable}
+      worktreesByEpicId={props.worktreesByEpicId}
+      surfaceHostId={props.surfaceHostId}
+      openEpicIds={props.openEpicIds}
+      completeness={props.completeness}
+      cloudPagePending={props.cloudPagePending}
+      onRowKeyDown={props.onRowKeyDown}
+    />
   );
+  if (messageHits === null) {
+    return (
+      <>
+        {props.pageSearch}
+        {props.chrome}
+        <div
+          ref={rowsScopeRef}
+          className="min-h-0 flex-1 overflow-y-auto pb-10"
+        >
+          {taskList}
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      {props.pageSearch}
+      <HistoryScopedResults
+        hostId={props.surfaceHostId}
+        scope={props.scope}
+        onScopeChange={props.onScopeChange}
+        taskCount={historyTaskCount(props)}
+        controls={props.controls}
+        taskList={taskList}
+        messageHits={messageHits}
+        rowsScopeRef={rowsScopeRef}
+      />
+    </>
+  );
+}
+
+function historyTaskCount(props: HistoryListBodyProps): HistoryCount {
+  if (
+    props.surfaceHostId === null ||
+    props.error !== null ||
+    props.hostRequiresCloudToList ||
+    props.chatHostFilterUnsupported
+  )
+    return null;
+  if (props.isPending || props.cloudPagePending) return "pending";
+  if (
+    props.items.length === 0 &&
+    props.completeness?.cloudPage === "unavailable"
+  )
+    return null;
+  return `${props.items.length}${props.hasNextPage ? "+" : ""}`;
 }
 
 interface EpicsListBodyProps {

@@ -1,8 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import type { HistoryScope } from "@/lib/history-scope";
 
 vi.mock("@/components/epics/epics-list-panel", () => ({
-  EpicsListPanel: () => <div data-testid="history-list-probe" />,
+  EpicsListPanel: (props: {
+    readonly scope: HistoryScope;
+    readonly onScopeChange: (scope: HistoryScope) => void;
+  }) => (
+    <div data-testid="history-list-probe" data-scope={props.scope}>
+      <button type="button" onClick={() => props.onScopeChange("messages")}>
+        pick messages
+      </button>
+      <button type="button" onClick={() => props.onScopeChange("tasks")}>
+        pick tasks
+      </button>
+    </div>
+  ),
 }));
 vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
   useCoarsePointer: () => false,
@@ -14,8 +33,6 @@ import {
   prepareHistoryScopeForPromotion,
   registerHistoryModalScope,
 } from "@/lib/history-scope-handoff";
-import type { HistoryScope } from "@/lib/history-scope";
-
 function capturedScope(): HistoryScope {
   prepareHistoryScopeForPromotion();
   return consumeHistoryScopeForPromotion();
@@ -52,6 +69,44 @@ describe("<HistoryModalContent /> scope registration", () => {
     );
     first.unmount();
     render(<HistoryModalContent onSelectEpic={() => undefined} />);
+    expect(capturedScope()).toBe("all");
+  });
+
+  it("hands the panel the scope it owns and follows the panel's requests", () => {
+    render(<HistoryModalContent onSelectEpic={() => undefined} />);
+    const probe = screen.getByTestId("history-list-probe");
+    expect(probe.dataset.scope).toBe("all");
+
+    fireEvent.click(screen.getByRole("button", { name: "pick messages" }));
+
+    expect(screen.getByTestId("history-list-probe").dataset.scope).toBe(
+      "messages",
+    );
+  });
+
+  it("promoting while on Messages hands the tab the Messages scope", () => {
+    render(<HistoryModalContent onSelectEpic={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "pick messages" }));
+
+    expect(capturedScope()).toBe("messages");
+  });
+
+  it("promoting after switching to Tasks hands over Tasks", () => {
+    render(<HistoryModalContent onSelectEpic={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "pick messages" }));
+    fireEvent.click(screen.getByRole("button", { name: "pick tasks" }));
+    expect(capturedScope()).toBe("tasks");
+  });
+
+  it("drops the registration when the modal unmounts on Messages", () => {
+    const view = render(<HistoryModalContent onSelectEpic={() => undefined} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "pick messages" }));
+    });
+    view.unmount();
+
     expect(capturedScope()).toBe("all");
   });
 });

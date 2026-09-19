@@ -46,10 +46,8 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  EpicsListPanel,
-  type EpicsListPanelVariant,
-} from "@/components/epics/epics-list-panel";
+import { ScopedEpicsListPanel } from "./scoped-panel-harness";
+import type { EpicsListPanelVariant } from "@/components/epics/epics-list-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
@@ -119,6 +117,12 @@ const testState = vi.hoisted(() => ({
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   refetch: vi.fn<() => Promise<void>>(),
   fetchNextPage: vi.fn<() => void>(),
+}));
+
+// The desktop scope bar names the host through the directory, which needs a
+// runtime provider this fixture does not mount.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -226,7 +230,9 @@ function renderPanelWithOpenItem(
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <EpicsListPanel
+      <ScopedEpicsListPanel
+        initialScope="all"
+        onScopeSpy={null}
         variant={variant}
         className={undefined}
         onSelectEpic={null}
@@ -1414,6 +1420,30 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           "epics-list-row-provenance-label-preserved-orphan",
         ),
       ).toBeNull();
+    });
+  });
+
+  describe("scope bar stays desktop-only", () => {
+    it("shows no scope control and keeps the top chrome and task-only search on a phone", async () => {
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+      renderPanel("page", "/");
+
+      const input = await screen.findByRole("searchbox", {
+        name: "Search tasks",
+      });
+      expect(input).not.toBeNull();
+      expect(screen.queryByRole("tablist")).toBeNull();
+      expect(screen.queryByRole("tab")).toBeNull();
+      expect(
+        screen.queryByRole("region", { name: "Message matches" }),
+      ).toBeNull();
+      const chrome = screen.getByTestId("panel-chrome-bar");
+      expect(
+        within(chrome).getByRole("button", { name: "Refresh tasks" }),
+      ).not.toBeNull();
+      expect(
+        within(chrome).getByRole("button", { name: "Select history items" }),
+      ).not.toBeNull();
     });
   });
 

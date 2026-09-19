@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface EpicsFilterPopoverProps {
+  readonly disabledReasonId: string | null;
   readonly availableRepos: ReadonlyArray<string>;
   readonly availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
   readonly search: HistorySearchState;
@@ -66,6 +67,20 @@ function historyFilterActiveCount(search: HistorySearchState): number {
 
 export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
   const activeCount = historyFilterActiveCount(props.search);
+  const trigger = (
+    <EpicsFilterTrigger
+      selectedCount={activeCount}
+      aria-disabled={props.disabledReasonId !== null || undefined}
+      aria-describedby={props.disabledReasonId ?? undefined}
+    />
+  );
+  if (props.disabledReasonId !== null) return trigger;
+  return <EnabledEpicsFilterPopover {...props} trigger={trigger} />;
+}
+
+function EnabledEpicsFilterPopover(
+  props: EpicsFilterPopoverProps & { readonly trigger: ReactNode },
+): ReactNode {
   const ownershipCounts = new Map(
     props.facets?.ownershipScopes.map((facet) => [facet.value, facet.count]) ??
       [],
@@ -95,9 +110,7 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
 
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <EpicsFilterTrigger selectedCount={activeCount} />
-      </PopoverTrigger>
+      <PopoverTrigger asChild>{props.trigger}</PopoverTrigger>
       <PopoverContent
         align="end"
         className="max-h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)] overflow-y-auto"

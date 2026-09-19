@@ -590,7 +590,9 @@ describe("<EpicsList />", () => {
     await screen.findByText("Alpha Epic");
     fireEvent.click(await screen.findByTestId("epics-list-show-more"));
     fireEvent.change(
-      await screen.findByRole("searchbox", { name: "Search tasks" }),
+      await screen.findByRole("searchbox", {
+        name: "Search tasks and messages",
+      }),
       { target: { value: "beta" } },
     );
 
