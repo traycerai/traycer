@@ -650,6 +650,7 @@ import {
   gitStreamFileAssetV11,
   gitStreamFileAssetV12,
 } from "@traycer/protocol/host/git-asset-stream";
+import { hostTunnelOpenV10 } from "@traycer/protocol/host/tunnel-stream";
 import {
   terminalCreateDowngradeV21ToV10,
   terminalCreateV10,
@@ -11448,6 +11449,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: gitStreamFileAssetV12,
+        },
+      },
+    },
+  },
+  // Host-to-host byte tunnel a port forward rides on - no degrade; rationale in `tunnel-stream.ts`'s file-level doc.
+  "host.tunnel.open": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostTunnelOpenV10,
         },
       },
     },

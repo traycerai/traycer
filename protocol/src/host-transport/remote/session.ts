@@ -16,6 +16,7 @@ import {
   SERVES_EVERY_INSTALLED_MAJOR,
 } from "@traycer/protocol/framework/capability-manifest";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import { HOST_TUNNEL_OPEN_METHOD } from "@traycer/protocol/host/tunnel-stream";
 import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
@@ -99,6 +100,7 @@ import {
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
+  SESSION_CAPABILITY_TUNNEL_STREAMS,
   creditPayloadSchema,
   decodeMuxFrame,
   encodeMuxFrame,
@@ -142,6 +144,9 @@ import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 const BULK_QOS_STREAM_METHODS: ReadonlySet<string> = new Set([
   "workspace.streamAsset",
   "git.streamFileAsset",
+  // Tunnel data must yield to interactive traffic exactly as a bulk transfer
+  // does; its own per-stream window (`tunnel-stream.ts`) sits above this.
+  HOST_TUNNEL_OPEN_METHOD,
 ]);
 
 function qosForStreamMethod(method: string): QosClassValue {
@@ -740,6 +745,8 @@ interface ActiveConnection {
    * go out compressed.
    */
   bodyCompressionSupported: boolean;
+  /** Whether the HOST advertised `SESSION_CAPABILITY_TUNNEL_STREAMS`; gates `host.tunnel.open` in `openSubscription`. */
+  tunnelStreamsSupported: boolean;
   hostAttached: boolean;
   /**
    * When this connection last received a frame THROUGH THE NOISE CHANNEL -
@@ -2288,6 +2295,7 @@ export class RemoteSession<
       cloudVerdictUpdateSupported: false,
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
+      tunnelStreamsSupported: false,
       hostAttached: true,
       lastInChannelInboundAt: Date.now(),
       inChannelFrames: 0,
@@ -2945,6 +2953,9 @@ export class RemoteSession<
     connection.bodyCompressionSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_BODY_COMPRESSION,
     );
+    connection.tunnelStreamsSupported = parsed.data.capabilities.includes(
+      SESSION_CAPABILITY_TUNNEL_STREAMS,
+    );
     if (
       parsed.data.capabilities.includes(SESSION_CAPABILITY_FINE_CREDITS) &&
       FINE_INITIAL_BULK_SEND_CREDITS < INITIAL_BULK_SEND_CREDITS
@@ -3463,6 +3474,31 @@ export class RemoteSession<
   ): void {
     const hostManifest = connection.hostManifest;
     if (hostManifest === null) {
+      return;
+    }
+    if (
+      stream.method === HOST_TUNNEL_OPEN_METHOD &&
+      !connection.tunnelStreamsSupported
+    ) {
+      // Refused HERE, before any SUBSCRIBE: a host that never advertised the
+      // capability does not run the tunnel's per-stream window, so the typed
+      // answer - naming the host as the side to upgrade - is the only honest
+      // one, and it must not depend on what that host's manifest happens to
+      // list.
+      stream.goFatal({
+        code: "INCOMPATIBLE",
+        reason: `The host does not support tunnel streams ('${SESSION_CAPABILITY_TUNNEL_STREAMS}'); update the Traycer host on that machine`,
+        incompatibleMethods: [
+          {
+            method: stream.method,
+            clientCanonical: this.clientManifests.stream[stream.method] ?? null,
+            hostCanonical: hostManifest.stream[stream.method] ?? null,
+            blocking: "host-missing-method",
+          },
+        ],
+        upgradeGuidance: { clientShouldUpgrade: false, hostShouldUpgrade: true },
+      });
+      this.subscriptions.delete(stream.streamId);
       return;
     }
     const selectedClientManifest = selectConnectionManifestForPeer(
