@@ -121,15 +121,6 @@ const LANDING_SCOPE: DraftInventoryScope = {
   surface: "landing",
   activeDraftId: "landing-active",
 };
-const CHAT_SCOPE: DraftInventoryScope = {
-  surface: "chat",
-  epicId: "epic-1",
-  chatId: "chat-own",
-};
-const NEW_CHAT_SCOPE: DraftInventoryScope = {
-  surface: "new-chat",
-  epicId: "epic-1",
-};
 
 function list(input: {
   readonly scope: DraftInventoryScope;
@@ -217,12 +208,14 @@ describe("landing rows", () => {
 });
 
 describe("chat rows", () => {
-  it("excludes the scope's own chat, incomplete rows and empty content", () => {
+  // Chat rows carry no scope of their own any more (H01/H02: the control
+  // that used to scope them to "this task" is gone) - they only ever show up
+  // under `all`, from every epic, filtered on completeness and content alone.
+  it("excludes incomplete rows and empty content, under `all`", () => {
     const rows = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       composer: {
-        "chat-own": chatDraft({ draftId: "draft-own" }),
         "chat-sibling": chatDraft({ draftId: "draft-sibling" }),
         "chat-unsynced": chatDraft({ draftId: null }),
         "chat-no-epic": chatDraft({
@@ -238,7 +231,7 @@ describe("chat rows", () => {
     expect(rows.map((row) => row.id)).toEqual(["draft-sibling"]);
   });
 
-  it("keeps only this epic under `current` and every epic under `all`", () => {
+  it("never lists a chat row under `current`, whatever epic it belongs to", () => {
     const composer = {
       "chat-here": chatDraft({ draftId: "draft-here" }),
       "chat-there": chatDraft({
@@ -247,13 +240,13 @@ describe("chat rows", () => {
       }),
     };
     expect(
-      list({ scope: CHAT_SCOPE, filter: "current", composer }).map(
+      list({ scope: LANDING_SCOPE, filter: "current", composer }).map(
         (row) => row.id,
       ),
-    ).toEqual(["draft-here"]);
+    ).toEqual([]);
     expect(
       new Set(
-        list({ scope: CHAT_SCOPE, filter: "all", composer }).map(
+        list({ scope: LANDING_SCOPE, filter: "all", composer }).map(
           (row) => row.id,
         ),
       ),
@@ -270,12 +263,14 @@ describe("chat rows", () => {
       }),
     };
     expect(
-      list({ scope: CHAT_SCOPE, filter: "all", composer }).map((row) => row.id),
+      list({ scope: LANDING_SCOPE, filter: "all", composer }).map(
+        (row) => row.id,
+      ),
     ).toEqual(["draft-live"]);
     expect(
       new Set(
         list({
-          scope: CHAT_SCOPE,
+          scope: LANDING_SCOPE,
           filter: "all",
           composer,
           liveSessionHostIds: new Set(["host-a", "host-b"]),
@@ -286,8 +281,8 @@ describe("chat rows", () => {
 
   it("badges an open chat and marks a replica foreign", () => {
     const rows = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       composer: {
         "chat-open": chatDraft({ draftId: "draft-open" }),
         "chat-closed": chatDraft({ draftId: "draft-closed" }),
@@ -311,8 +306,8 @@ describe("chat rows", () => {
 
   it("falls back to Chat / Epic for a row no local composer has named", () => {
     const [row] = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       composer: {
         "chat-remote": chatDraft({
           draftId: "draft-remote",
@@ -327,31 +322,22 @@ describe("chat rows", () => {
 });
 
 describe("new-chat rows", () => {
-  it("excludes the scope epic's own modal draft", () => {
-    const rows = list({
-      scope: NEW_CHAT_SCOPE,
-      filter: "all",
-      newChat: {
-        "epic-1": newChatPatch({ draftId: "draft-own-modal" }),
-        "epic-2": newChatPatch({ draftId: "draft-other-modal" }),
-      },
-    });
-    expect(rows.map((row) => row.id)).toEqual(["draft-other-modal"]);
-  });
-
-  it("lists this epic's modal draft from a chat composer under `current`", () => {
+  // Same as chat rows: no scope epic to exclude by any more, so every
+  // complete modal draft lists under `all`, from every epic, and none under
+  // `current`.
+  it("lists every epic's modal draft under `all`, and none under `current`", () => {
     const newChat = {
       "epic-1": newChatPatch({ draftId: "draft-here" }),
       "epic-2": newChatPatch({ draftId: "draft-there" }),
     };
     expect(
-      list({ scope: CHAT_SCOPE, filter: "current", newChat }).map(
+      list({ scope: LANDING_SCOPE, filter: "current", newChat }).map(
         (row) => row.id,
       ),
-    ).toEqual(["draft-here"]);
+    ).toEqual([]);
     expect(
       new Set(
-        list({ scope: CHAT_SCOPE, filter: "all", newChat }).map(
+        list({ scope: LANDING_SCOPE, filter: "all", newChat }).map(
           (row) => row.id,
         ),
       ),
@@ -360,7 +346,7 @@ describe("new-chat rows", () => {
 
   it("drops a patch with no draft id and one with empty content", () => {
     const rows = list({
-      scope: CHAT_SCOPE,
+      scope: LANDING_SCOPE,
       filter: "all",
       newChat: {
         "epic-2": newChatPatch({ draftId: null }),
@@ -375,7 +361,7 @@ describe("new-chat rows", () => {
     bindNewChatDraftHost("epic-2", "host-a");
     try {
       const rows = list({
-        scope: CHAT_SCOPE,
+        scope: LANDING_SCOPE,
         filter: "all",
         newChat: {
           "epic-2": newChatPatch({
@@ -397,8 +383,8 @@ describe("new-chat rows", () => {
 
   it("is never open and never foreign", () => {
     const [row] = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       newChat: { "epic-1": newChatPatch({ draftId: "draft-modal" }) },
     });
     expect(row).toMatchObject({ open: false, foreign: false });
@@ -406,8 +392,8 @@ describe("new-chat rows", () => {
 
   it("falls back to Epic when no modal has recorded a title", () => {
     const [row] = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       newChat: {
         "epic-1": newChatPatch({ draftId: "draft-modal", epicTitle: null }),
       },
@@ -435,16 +421,6 @@ describe("filters and ordering", () => {
         ),
       ),
     ).toEqual(new Set(["landing", "chat", "new-chat"]));
-  });
-
-  it("omits landing rows from an in-epic `current` list", () => {
-    const rows = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
-      landing: [landingTab({ id: "landing-one" })],
-      composer: { "chat-one": chatDraft({ draftId: "draft-chat" }) },
-    });
-    expect(rows.map((row) => row.kind)).toEqual(["chat"]);
   });
 
   it("sorts newest first, breaking ties by id", () => {
@@ -516,8 +492,8 @@ describe("row text", () => {
 
   it("falls back to the chat's own name for an untyped chat draft", () => {
     const [named] = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       composer: {
         "chat-named": chatDraft({
           draftId: "draft-named",
@@ -529,8 +505,8 @@ describe("row text", () => {
     expect(named.preview).toBe("Refactor the parser");
     // Unnamed rows land on the chip fallback, not on "Start Page".
     const [unnamed] = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       composer: {
         "chat-remote": chatDraft({
           draftId: "draft-remote",
@@ -544,8 +520,8 @@ describe("row text", () => {
 
   it("falls back to New agent for an untyped modal draft", () => {
     const [row] = list({
-      scope: CHAT_SCOPE,
-      filter: "current",
+      scope: LANDING_SCOPE,
+      filter: "all",
       newChat: {
         "epic-1": newChatPatch({
           draftId: "draft-modal",

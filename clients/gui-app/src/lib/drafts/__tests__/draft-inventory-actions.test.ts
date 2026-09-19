@@ -9,6 +9,7 @@ import {
   deleteLandingDraftRow,
   deleteNewChatDraftRow,
   openChatDraftRow,
+  openNewChatDraftRow,
 } from "@/lib/drafts/draft-inventory-actions";
 import {
   acquireDraftMirrorSession,
@@ -35,9 +36,31 @@ import {
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
+
+// Passthrough by default; the finding-2 tests below gate a single call so a
+// surface can bind WHILE the upload is still in flight - the exact race the
+// `stillUnmounted` re-check exists for.
+const draftBlobTransportMocks = vi.hoisted(() => ({
+  putDraftBlobsForWrite:
+    vi.fn<
+      typeof import("@/lib/drafts/draft-blob-transport").putDraftBlobsForWrite
+    >(),
+}));
+vi.mock("@/lib/drafts/draft-blob-transport", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/drafts/draft-blob-transport")>();
+  draftBlobTransportMocks.putDraftBlobsForWrite.mockImplementation(
+    actual.putDraftBlobsForWrite,
+  );
+  return {
+    ...actual,
+    putDraftBlobsForWrite: draftBlobTransportMocks.putDraftBlobsForWrite,
+  };
+});
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -243,7 +266,7 @@ describe("deleteComposerDraftRow routes the host tombstone itself (critique C1)"
     if (!outcome.deleted || outcome.undo === null) {
       throw new Error("expected an undoable delete");
     }
-    outcome.undo();
+    expect(outcome.undo()).toBe(true);
 
     const after = useComposerDraftStore.getState().drafts[CHAT_ID];
     expect(after?.content).toEqual(typed("unsent"));
@@ -270,7 +293,7 @@ describe("deleteComposerDraftRow routes the host tombstone itself (critique C1)"
       expect(log.deletes).toEqual([draftId]);
     });
 
-    outcome.undo();
+    expect(outcome.undo()).toBe(true);
 
     // The fence left the row with no owner and no route (the composer is
     // unmounted, so `composerHostByChatId` has nothing for it). Without the
@@ -380,7 +403,7 @@ describe("deleteNewChatDraftRow reaches the host with the modal unmounted (criti
     if (!outcome.deleted || outcome.undo === null) {
       throw new Error("expected an undoable delete");
     }
-    outcome.undo();
+    expect(outcome.undo()).toBe(true);
 
     const after =
       useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
@@ -423,7 +446,7 @@ describe("deleteLandingDraftRow", () => {
     }
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
 
-    outcome.undo();
+    expect(outcome.undo()).toBe(true);
 
     const restored = useLandingDraftStore.getState().drafts;
     expect(restored).toHaveLength(1);
@@ -584,5 +607,235 @@ describe("openChatDraftRow navigates to the chat's epic, not just its canvas", (
 
     expect(opened).toBe(false);
     expect(nav.calls).toEqual([]);
+  });
+});
+
+describe("openNewChatDraftRow requires the row's owner host (review finding 3)", () => {
+  function makeNavigate() {
+    const calls: NavigateOptions[] = [];
+    const navigate = ((options: NavigateOptions) => {
+      calls.push(options);
+      return Promise.resolve();
+    }) as UseNavigateResult<string>;
+    return { calls, navigate };
+  }
+
+  beforeEach(async () => {
+    useTabsStore.setState({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    __resetTabSyncCoordinatorForTesting();
+    __resetTabNavigationControllerForTesting();
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  afterEach(() => {
+    useNewConversationModalOpenStore.getState().close();
+  });
+
+  it("refuses a row with no owner host, opening neither the tab nor the modal", () => {
+    const nav = makeNavigate();
+
+    const opened = openNewChatDraftRow(nav.navigate, {
+      epicId: EPIC_ID,
+      epicTitle: "Parser work",
+      ownerHostId: null,
+    });
+
+    expect(opened).toBe(false);
+    expect(nav.calls).toEqual([]);
+    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+  });
+
+  it("names the row's owner host on the modal request, not wherever the epic session resolves", () => {
+    const nav = makeNavigate();
+
+    const opened = openNewChatDraftRow(nav.navigate, {
+      epicId: EPIC_ID,
+      epicTitle: "Parser work",
+      ownerHostId: OTHER_HOST_ID,
+    });
+
+    expect(opened).toBe(true);
+    expect(nav.calls).toHaveLength(1);
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: EPIC_ID,
+      hostId: OTHER_HOST_ID,
+    });
+  });
+});
+
+describe("Undo does not overwrite work typed after the delete (review finding 1)", () => {
+  it("chat: a replacement typed before Undo is preserved, not stomped by the deleted snapshot", async () => {
+    const log = emptyLog();
+    const draftId = await publishChatDraft(log);
+    releaseDraftMirrorSession(HOST_ID);
+
+    const outcome = deleteComposerDraftRow(
+      { chatId: CHAT_ID, draftId, ownerHostId: HOST_ID, foreign: false },
+      fakeClient(log) as never,
+    );
+    if (!outcome.deleted || outcome.undo === null) {
+      throw new Error("expected an undoable delete");
+    }
+
+    // The user types into the now-empty buffer before pressing Undo - the
+    // ordinary edit path, not an external replacement.
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(CHAT_ID, typed("new work"), null);
+
+    expect(outcome.undo()).toBe(false);
+
+    const after = useComposerDraftStore.getState().drafts[CHAT_ID];
+    expect(after?.content).toEqual(typed("new work"));
+  });
+
+  it("new-agent: a replacement typed before Undo is preserved, not stomped by the deleted patch", () => {
+    const log = emptyLog();
+    const store = useNewConversationModalStore.getState();
+    store.setContent(EPIC_ID, typed("later"));
+    const before =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    const draftId = before?.draftId ?? null;
+    if (before === undefined || draftId === null) {
+      throw new Error("expected a patch");
+    }
+
+    const outcome = deleteNewChatDraftRow(
+      { epicId: EPIC_ID, draftId, ownerHostId: HOST_ID },
+      fakeClient(log) as never,
+    );
+    if (!outcome.deleted || outcome.undo === null) {
+      throw new Error("expected an undoable delete");
+    }
+
+    // The user reopens the modal and types before pressing Undo.
+    useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("replacement"));
+
+    expect(outcome.undo()).toBe(false);
+
+    const after =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    expect(after?.content).toEqual(typed("replacement"));
+  });
+});
+
+describe("Restoring a deleted draft re-checks the mount guard after the blob-upload await (review finding 2)", () => {
+  it("chat: a session that binds mid-upload wins - the direct restore never also publishes", async () => {
+    const log = emptyLog();
+    const draftId = await publishChatDraft(log);
+    releaseDraftMirrorSession(HOST_ID);
+    const client = fakeClient(log);
+    const requestSpy = vi.spyOn(client, "request");
+    let resolveBlobs: () => void = () => undefined;
+    draftBlobTransportMocks.putDraftBlobsForWrite.mockClear();
+    draftBlobTransportMocks.putDraftBlobsForWrite.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBlobs = () => resolve([]);
+        }),
+    );
+
+    const outcome = deleteComposerDraftRow(
+      { chatId: CHAT_ID, draftId, ownerHostId: HOST_ID, foreign: false },
+      client as never,
+    );
+    if (!outcome.deleted || outcome.undo === null) {
+      throw new Error("expected an undoable delete");
+    }
+    await vi.waitFor(() => {
+      expect(log.deletes).toEqual([draftId]);
+    });
+
+    expect(outcome.undo()).toBe(true);
+    await vi.waitFor(() => {
+      expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveBeenCalled();
+    });
+    expect(requestSpy).not.toHaveBeenCalledWith(
+      "drafts.upsert",
+      expect.anything(),
+    );
+
+    // A session for the chat's host binds WHILE the upload is still
+    // in-flight - the exact race the guard exists for.
+    bindComposerDraftHost(CHAT_ID, HOST_ID);
+    resolveBlobs();
+    await vi.waitFor(() => {
+      expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveResolvedTimes(
+        1,
+      );
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(requestSpy).not.toHaveBeenCalledWith(
+      "drafts.upsert",
+      expect.anything(),
+    );
+  });
+
+  it("new-agent: a modal that binds mid-upload wins - the direct restore never also publishes", async () => {
+    const log = emptyLog();
+    const store = useNewConversationModalStore.getState();
+    store.setContent(EPIC_ID, typed("later"));
+    const before =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    const draftId = before?.draftId ?? null;
+    if (before === undefined || draftId === null) {
+      throw new Error("expected a patch");
+    }
+    const client = fakeClient(log);
+    const requestSpy = vi.spyOn(client, "request");
+    let resolveBlobs: () => void = () => undefined;
+    draftBlobTransportMocks.putDraftBlobsForWrite.mockClear();
+    draftBlobTransportMocks.putDraftBlobsForWrite.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBlobs = () => resolve([]);
+        }),
+    );
+
+    const outcome = deleteNewChatDraftRow(
+      { epicId: EPIC_ID, draftId, ownerHostId: HOST_ID },
+      client as never,
+    );
+    if (!outcome.deleted || outcome.undo === null) {
+      throw new Error("expected an undoable delete");
+    }
+
+    expect(outcome.undo()).toBe(true);
+    await vi.waitFor(() => {
+      expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveBeenCalled();
+    });
+    expect(requestSpy).not.toHaveBeenCalledWith(
+      "drafts.upsert",
+      expect.anything(),
+    );
+
+    // A modal for the epic binds WHILE the upload is still in-flight.
+    bindNewChatDraftHost(EPIC_ID, HOST_ID);
+    resolveBlobs();
+    await vi.waitFor(() => {
+      expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveResolvedTimes(
+        1,
+      );
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(requestSpy).not.toHaveBeenCalledWith(
+      "drafts.upsert",
+      expect.anything(),
+    );
   });
 });
