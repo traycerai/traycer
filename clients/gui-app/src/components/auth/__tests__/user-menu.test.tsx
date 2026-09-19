@@ -27,6 +27,7 @@ import {
 import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
@@ -146,6 +147,7 @@ describe("<UserMenu />", () => {
     );
     restoreFetch = installFetch();
     useTitleBarDragStore.setState({ suppressors: new Set() });
+    useDesktopDialogStore.getState().close();
   });
 
   afterEach(() => {
@@ -153,6 +155,7 @@ describe("<UserMenu />", () => {
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
     useTitleBarDragStore.setState({ suppressors: new Set() });
+    useDesktopDialogStore.getState().close();
     restoreFetch();
   });
 
@@ -174,6 +177,30 @@ describe("<UserMenu />", () => {
     const identity = await screen.findByTestId("user-menu-identity");
     expect(identity.textContent).toContain("Ada Lovelace");
     expect(identity.textContent).toContain("ada@example.com");
+    result.cleanupClient();
+  });
+
+  // H10: the item is always there (no gate on showAppSettings or anything
+  // else) and opens the avatar Drafts dialog through the real store.
+  it("opens the Drafts dialog and closes the menu", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Drafts" }));
+
+    expect(useDesktopDialogStore.getState().activeDialog).toBe("drafts");
+    await waitFor(() => {
+      expect(screen.queryByTestId("user-menu-content")).toBeNull();
+    });
     result.cleanupClient();
   });
 
