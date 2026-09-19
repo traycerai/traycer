@@ -3,7 +3,8 @@
  * Helpers live in `epic-session-controller-test-support.ts`; this file holds
  * only components.
  */
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { use, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { QueryClientContext } from "@tanstack/react-query";
 import { installEpicSessionControllerEnvironment } from "@/lib/registries/epic-session-controller";
 import {
   openTestEpicTab,
@@ -44,19 +45,27 @@ function TestEpicSessionHookEnvironment(): ReactNode {
     effectiveHostClient,
     authService,
   });
-  const [environment] = useState((): TestEpicSessionEnvironment => ({
-    openTransport: (hostId) => latest.current.openTransport(hostId),
-    resolveHostClient: (hostId) => {
-      const override = readTestEpicSessionHostClientResolver();
-      if (override !== null) return override(hostId);
-      return hostId === latest.current.effectiveHostId
-        ? latest.current.effectiveHostClient
-        : null;
-    },
-    revalidateAuth: () => {
-      void latest.current.authService.revalidateCurrentContext();
-    },
-  }));
+  // The suite's own Query client, when it provides one: the session's History
+  // and home write-throughs are controller-owned and need it, exactly as the
+  // app's bridge supplies the app's.
+  const queryClient = use(QueryClientContext) ?? null;
+  const environment = useMemo(
+    (): TestEpicSessionEnvironment => ({
+      openTransport: (hostId) => latest.current.openTransport(hostId),
+      resolveHostClient: (hostId) => {
+        const override = readTestEpicSessionHostClientResolver();
+        if (override !== null) return override(hostId);
+        return hostId === latest.current.effectiveHostId
+          ? latest.current.effectiveHostClient
+          : null;
+      },
+      revalidateAuth: () => {
+        void latest.current.authService.revalidateCurrentContext();
+      },
+      queryClient,
+    }),
+    [queryClient],
+  );
   // EVERY commit, no deps: a re-render is how these suites say "an input
   // moved" - they mutate what a mocked hook answers and re-render, where
   // production would hear a store or host-row notification. Re-installing the

@@ -19,6 +19,7 @@
  * knows its entries, exactly as sign-out does in production.
  */
 import { afterEach } from "vitest";
+import type { QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -46,6 +47,7 @@ export interface TestEpicSessionEnvironment {
     hostId: string,
   ) => HostClient<HostRpcRegistry> | null;
   readonly revalidateAuth: () => void;
+  readonly queryClient: QueryClient | null;
 }
 
 /**
@@ -58,6 +60,7 @@ export function defaultTestEpicSessionEnvironment(): TestEpicSessionEnvironment 
     openTransport: (hostId) => fakeDurableStreamTransports().opener(hostId),
     resolveHostClient: () => null,
     revalidateAuth: () => undefined,
+    queryClient: null,
   };
 }
 
