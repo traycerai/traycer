@@ -233,9 +233,13 @@ export function validateVersionedRpcRegistry<
 /**
  * The structural pass alone. It reads registry keys, contract method names,
  * schema versions and bridge endpoints, and never touches a request or
- * response schema. Private on purpose: the only structural-only caller is
- * construction, and a dynamic registry must not be able to reach the
- * validated brand through it.
+ * response schema. Private so that construction is its only caller. Being
+ * private does not keep a registry from reaching the brand with only this pass
+ * run: `defineVersionedRpcRegistry` is public and does exactly that, and only
+ * the type-level validator stands in the way of a widened registry (it needs a
+ * visible `@ts-expect-error`). What keeps an unvalidated registry out of a
+ * build is the tripwire (`scripts/compat/__tests__/static-registries-tripwire`),
+ * which fails on any factory call site `STATIC_REGISTRIES` does not name.
  */
 function assertVersionedRpcRegistryStructure(
   registry: UncheckedVersionedRpcRegistry,

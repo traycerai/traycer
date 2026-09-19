@@ -37,6 +37,7 @@ const STATIC_REGISTRY_NAMES = [
   "hostRpcRegistry",
   "hostStreamRpcRegistry",
   "persistenceRecordRegistry",
+  "chatSyncRecordRegistry",
   "authRecordRegistry",
   "commonRecordRegistry",
 ] as const;
@@ -204,13 +205,14 @@ function plantedRecordEntry(): StaticRegistry {
 }
 
 describe("STATIC_REGISTRIES CI check", () => {
-  it("names exactly the five static registries and they all pass full validation", () => {
+  it("names exactly the six static registries and they all pass full validation", () => {
     expect(STATIC_REGISTRIES.map((entry) => entry.name)).toEqual([
       ...STATIC_REGISTRY_NAMES,
     ]);
     expect(STATIC_REGISTRIES.map((entry) => entry.kind)).toEqual([
       "unary-rpc",
       "stream-rpc",
+      "record",
       "record",
       "record",
       "record",

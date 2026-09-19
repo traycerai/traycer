@@ -43,6 +43,7 @@ import {
   hostStreamRpcRegistry,
 } from "../../src/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "../../src/host/released-floor";
+import { chatSyncRecordRegistry } from "../../src/persistence/chat-sync-registry";
 import { persistenceRecordRegistry } from "../../src/persistence/registry";
 
 /**
@@ -94,6 +95,15 @@ export const STATIC_REGISTRIES: readonly StaticRegistry[] = [
     name: "persistenceRecordRegistry",
     sourceFile: "src/persistence/registry.ts",
     registry: persistenceRecordRegistry,
+  },
+  {
+    // The chat-sync encoder's narrow door onto the same two contracts
+    // `persistenceRecordRegistry` registers. It is a registry of its own, so it
+    // is validated on its own.
+    kind: "record",
+    name: "chatSyncRecordRegistry",
+    sourceFile: "src/persistence/chat-sync-registry.ts",
+    registry: chatSyncRecordRegistry,
   },
   {
     kind: "record",

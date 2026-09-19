@@ -1,4 +1,9 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import ts from "typescript";
 import { z } from "zod";
 import {
   defineRecordContract,
@@ -22,6 +27,10 @@ import {
  * `validate*` (CI and explicit callers). Every validator walk goes through
  * an export of `json-schema-fingerprint`, so wrapping those exports is the
  * one seam that can observe a walk.
+ *
+ * This suite proves there is no JSON-Schema walk at import. It does not
+ * prove there is no schema materialisation: `.shape` / `.options` reads at
+ * module scope are A2's job, not this scan.
  */
 vi.mock(
   "@traycer/protocol/framework/json-schema-fingerprint",
@@ -142,6 +151,18 @@ describe("importing a registry module walks no schema", () => {
     validateVersionedRecordRegistry(mod.persistenceRecordRegistry);
     expect(spies.toJsonSchemaFingerprint.mock.calls.length).toBeGreaterThan(0);
     expect(spies.findAdditivityViolation.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("persistence/chat-sync-registry: import is silent; full validator walks the seam", async () => {
+    vi.resetModules();
+    const spies = await loadFingerprintSpies();
+    clearSpies(spies);
+    const mod =
+      await import("@traycer/protocol/persistence/chat-sync-registry");
+    expectEveryCounterZero(spies);
+
+    validateVersionedRecordRegistry(mod.chatSyncRecordRegistry);
+    expect(spies.toJsonSchemaFingerprint.mock.calls.length).toBeGreaterThan(0);
   });
 
   it("auth/registry: import is silent; full validator walks the seam", async () => {
@@ -302,5 +323,128 @@ describe("define* still throws structural errors", () => {
     ).toThrow(
       "Latest minor 0 for record 'echo-record' major 1 must be the highest installed minor 1",
     );
+  });
+});
+
+const PROTOCOL_ROOT = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+);
+
+const SKIP_DIR_NAMES = new Set([
+  "node_modules",
+  "dist",
+  ".git",
+  "__tests__",
+  "__fixtures__",
+]);
+
+const FINGERPRINT_RELATIVE = "src/framework/json-schema-fingerprint.ts";
+
+type ToJsonSchemaHit = {
+  readonly sourceFile: string;
+  readonly line: number;
+};
+
+function shouldSkipListedPath(relative: string): boolean {
+  const posix = relative.split(path.sep).join("/");
+  const segments = posix.split("/");
+  for (const segment of segments) {
+    if (SKIP_DIR_NAMES.has(segment)) {
+      return true;
+    }
+  }
+  const base = segments[segments.length - 1];
+  if (base === undefined) {
+    return true;
+  }
+  return base.endsWith(".d.ts") || base.endsWith(".test.ts");
+}
+
+function listProductionProtocolSrcFiles(): string[] {
+  const listing = execFileSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      "src/*.ts",
+    ],
+    { cwd: PROTOCOL_ROOT, encoding: "utf8" },
+  );
+  const files: string[] = [];
+  for (const relative of listing.split("\0")) {
+    if (relative.length === 0 || shouldSkipListedPath(relative)) {
+      continue;
+    }
+    const posix = relative.split(path.sep).join("/");
+    if (!posix.startsWith("src/")) {
+      continue;
+    }
+    const full = path.join(PROTOCOL_ROOT, relative);
+    if (!existsSync(full)) {
+      continue;
+    }
+    files.push(full);
+  }
+  return files;
+}
+
+function findToJsonSchemaCalls(
+  sourceFile: string,
+  text: string,
+): ToJsonSchemaHit[] {
+  const source = ts.createSourceFile(
+    sourceFile,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const hits: ToJsonSchemaHit[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "toJSONSchema"
+    ) {
+      const { line } = source.getLineAndCharacterOfPosition(
+        node.getStart(source),
+      );
+      hits.push({ sourceFile, line: line + 1 });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return hits;
+}
+
+describe("no toJSONSchema CallExpression outside json-schema-fingerprint", () => {
+  it("finds a planted z.toJSONSchema call", () => {
+    expect(
+      findToJsonSchemaCalls("planted.ts", "void z.toJSONSchema(z.string());\n"),
+    ).toHaveLength(1);
+  });
+
+  it("production protocol/src has no toJSONSchema calls outside json-schema-fingerprint.ts", () => {
+    const files = listProductionProtocolSrcFiles();
+    expect(files.length).toBeGreaterThan(0);
+    const hits: ToJsonSchemaHit[] = [];
+    for (const filePath of files) {
+      const relative = path
+        .relative(PROTOCOL_ROOT, filePath)
+        .split(path.sep)
+        .join("/");
+      if (relative === FINGERPRINT_RELATIVE) {
+        continue;
+      }
+      hits.push(
+        ...findToJsonSchemaCalls(relative, readFileSync(filePath, "utf8")),
+      );
+    }
+    expect(hits).toEqual([]);
   });
 });
