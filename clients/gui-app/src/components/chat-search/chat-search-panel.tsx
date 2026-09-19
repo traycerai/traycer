@@ -139,6 +139,8 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
     query.trim().slice(0, CHAT_SEARCH_MAX_QUERY_CHARS),
     CHAT_SEARCH_DEBOUNCE_MS,
   );
+  const messagesSearched =
+    debouncedQuery.length >= CHAT_SEARCH_BODY_MIN_QUERY_CHARS;
   // "This task" needs a task; outside one the toggle falls back to every task
   // without forgetting the choice.
   const currentTaskScoped = scope === "current-task" && activeEpicId !== null;
@@ -360,7 +362,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
         role="status"
         className="px-3 pt-2 pb-1 text-ui-xs text-muted-foreground tabular-nums"
       >
-        {resultCountLabel(status)}
+        {resultCountLabel(status, messagesSearched)}
       </p>
       <div ref={resultsRef} className="min-h-0 flex-1 overflow-y-auto">
         {unsupported ? (
@@ -395,9 +397,7 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
               results={status.results}
               loadingMore={status.loadingMore}
               loadMoreError={status.loadMoreError}
-              messagesSearched={
-                debouncedQuery.length >= CHAT_SEARCH_BODY_MIN_QUERY_CHARS
-              }
+              messagesSearched={messagesSearched}
               onOpen={openTarget}
               onShowMoreChats={showMoreChats}
               onShowMoreMessages={showMoreMessages}
@@ -411,12 +411,16 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
   );
 }
 
-function resultCountLabel(status: ChatSearchStatus): string {
+function resultCountLabel(
+  status: ChatSearchStatus,
+  messagesSearched: boolean,
+): string {
   if (status.kind === "loading") return "Searching chats…";
   if (status.kind !== "ready") return "";
   const { chatMatches, chatNextCursor, messageMatches, messageNextCursor } =
     status.results;
   const chats = `${chatMatches.length}${chatNextCursor === null ? "" : "+"}`;
+  if (!messagesSearched) return `${chats} chats by title`;
   const messages = `${messageMatches.length}${messageNextCursor === null ? "" : "+"}`;
   return `${chats} chats by title · ${messages} chats with message matches`;
 }

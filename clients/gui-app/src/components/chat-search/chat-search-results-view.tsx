@@ -458,8 +458,9 @@ export function ChatSearchMessageRow(props: {
     <button
       type="button"
       {...navProps}
+      // Without arrow navigation (the sidebar), children remain ordinary Tab stops.
       // ponytail: not a true roving composite; use a shared roving controller if a screen-reader pass asks for it.
-      tabIndex={-1}
+      tabIndex={navProps.onKeyDown === undefined ? 0 : -1}
       disabled={disabled}
       aria-label={`${role.full}, ${date}${repeated}: ${hit.snippet.text}`}
       onClick={() => onOpenMessage(hit.messageId)}

@@ -10,6 +10,7 @@ import type {
 import { ChatSearchPanel } from "@/components/chat-search/chat-search-panel";
 import type {
   ChatSearchBaseRequest,
+  ChatSearchExpansionStatus,
   useChatSearchMessageRows,
   useChatSearchResults,
 } from "@/hooks/chats/use-chat-search-query";
@@ -82,6 +83,11 @@ const openResultMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/chat-search/open-chat-search-result", () => ({
   openChatSearchResult: openResultMock,
 }));
+
+type ReadyExpansion = Extract<
+  ChatSearchExpansionStatus,
+  { readonly kind: "ready" }
+>;
 
 function idleStatus() {
   return { kind: "idle" as const };
@@ -233,6 +239,7 @@ describe("ChatSearchPanel: results view keyed by request", () => {
     useChatSearchMessageRowsMock.mockReturnValue({
       kind: "ready",
       messages: [],
+      matchCount: null,
       nextCursor: null,
       loadingMore: false,
       loadMoreError: null,
@@ -279,7 +286,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
     expect(countLine().textContent).toBe("Searching chats…");
   });
 
-  it("counts both sections, with a plus on the one that has more pages", () => {
+  it("counts both sections, with a plus on the one that has more pages", async () => {
     useChatSearchResultsMock.mockReturnValue({
       kind: "ready",
       results: results({
@@ -292,10 +299,44 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
       loadMoreError: null,
     });
 
+    const user = userEvent.setup();
     render(<ChatSearchPanel onClose={vi.fn()} />);
+    // Message search starts at two characters, and only then is it counted.
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search chats" }),
+      "ab",
+    );
 
     expect(countLine().textContent).toBe(
       "2 chats by title · 1+ chats with message matches",
+    );
+  });
+
+  it("counts only chats by title while the query is too short to search messages", async () => {
+    useChatSearchResultsMock.mockReturnValue({
+      kind: "ready",
+      results: results({ chatMatches: [chatMatch({ chatId: "c1" })] }),
+      loadingMore: false,
+      loadMoreError: null,
+    });
+
+    const user = userEvent.setup();
+    render(<ChatSearchPanel onClose={vi.fn()} />);
+    const input = screen.getByRole("searchbox", { name: "Search chats" });
+    const line = countLine();
+
+    await user.type(input, "a");
+
+    // Message search needs two characters, so no message count is claimed.
+    expect(line.textContent).toBe("1 chats by title");
+    expect(line.getAttribute("role")).toBe("status");
+
+    await user.type(input, "b");
+
+    // The same status node, now with the message half back.
+    expect(countLine()).toBe(line);
+    expect(line.textContent).toBe(
+      "1 chats by title · 0 chats with message matches",
     );
   });
 
@@ -362,20 +403,32 @@ describe("ChatSearchPanel: an expanded message hit", () => {
     });
   }
 
-  /** Serves `pages` one per cursor, the way the host pages a chat's hits. */
-  function servePages(
+  /**
+   * Serves `pages` one per cursor, the way the host pages a chat's hits, with
+   * the expansion snapshot's own total (`null`: its group was absent).
+   */
+  function servePagesWithTotal(
     pages: ReadonlyArray<ReadonlyArray<ChatSearchMessageHit>>,
+    matchCount: number | null,
   ) {
     useChatSearchMessageRowsMock.mockImplementation((args) => {
       const loaded = args.cursors.length;
-      return {
+      const status: ReadyExpansion = {
         kind: "ready",
         messages: pages.slice(0, loaded + 1).flat(),
+        matchCount,
         nextCursor: loaded < pages.length - 1 ? `cursor-${loaded + 1}` : null,
         loadingMore: false,
         loadMoreError: null,
       };
+      return status;
     });
+  }
+
+  function servePages(
+    pages: ReadonlyArray<ReadonlyArray<ChatSearchMessageHit>>,
+  ) {
+    servePagesWithTotal(pages, null);
   }
 
   /** Renders the panel with a real query typed, which the expansion needs. */
@@ -480,6 +533,47 @@ describe("ChatSearchPanel: an expanded message hit", () => {
       "Agent reply, Sep 8: other words",
     ]);
     expect(caption()).toBe("Showing 2 snippets · 2 of 2 matches");
+  });
+
+  it("shows the expansion's own total when it disagrees with the parent row", async () => {
+    const first = hit("a", "alpha words");
+    showMessageMatches([match("c1", 2, first)]);
+    servePagesWithTotal(
+      [[first, hit("b", "beta words"), hit("c", "gamma words")]],
+      3,
+    );
+    const user = userEvent.setup();
+    renderSearching(vi.fn());
+
+    await user.click(screen.getByRole("button", { name: "2 matches" }));
+
+    expect(caption()).toBe("Showing 3 snippets · 3 of 3 matches");
+  });
+
+  it("drops the denominator, and keeps every row, when the loaded rows outnumber the total", async () => {
+    const best = hit("best", "best words");
+    showMessageMatches([match("c1", 2, best)]);
+    // Best is not among the expansion's three, so four distinct hits are on
+    // screen against a total of three.
+    servePagesWithTotal(
+      [
+        [
+          hit("x", "xray words"),
+          hit("y", "yankee words"),
+          hit("z", "zulu words"),
+        ],
+      ],
+      3,
+    );
+    const user = userEvent.setup();
+    renderSearching(vi.fn());
+
+    await user.click(screen.getByRole("button", { name: "2 matches" }));
+
+    expect(caption()).toBe("Showing 4 snippets · 4 matches");
+    expect(
+      screen.getAllByRole("button", { name: /^Agent reply/ }),
+    ).toHaveLength(4);
   });
 
   describe("keyboard", () => {
