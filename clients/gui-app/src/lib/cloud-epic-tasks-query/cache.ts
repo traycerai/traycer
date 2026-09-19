@@ -34,6 +34,19 @@ export interface CloudEpicTasksCacheScope {
   readonly userId: string;
 }
 
+export async function restartCurrentTasksPinTail(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+): Promise<void> {
+  const matchesScope = (query: Query): boolean =>
+    currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope);
+  await queryClient.cancelQueries(
+    { predicate: matchesScope },
+    { revert: false },
+  );
+  await queryClient.invalidateQueries({ predicate: matchesScope });
+}
+
 export function removeDeletedEpicsFromCloudTaskCaches(
   queryClient: QueryClient,
   scope: CloudEpicTasksCacheScope,
@@ -161,6 +174,7 @@ export function updateEpicTitleInCloudTaskCaches(
     epicId,
     normalizedTitle,
   );
+  void restartCurrentTasksPinTail(queryClient, scope);
 }
 
 /**

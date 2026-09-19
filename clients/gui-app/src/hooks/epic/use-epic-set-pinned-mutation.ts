@@ -195,6 +195,14 @@ export function useEpicSetPinned() {
       ) => {
         if (ctx.hostId === null || ctx.userId === null) return;
         const scope = { hostId: ctx.hostId, userId: ctx.userId };
+        const pinTailScope = cloudQueryKeys.currentTasksPinTailScope(
+          ctx.hostId,
+          ctx.userId,
+        );
+        await queryClient.cancelQueries(
+          { queryKey: pinTailScope },
+          { revert: false },
+        );
         resetCloudEpicTasksPagesForScope(ctx.hostId, ctx.userId);
         // Both predicates also match the per-host PIN READING cache, which for
         // a local-homed row is where the RENDERED pin state comes from. The
@@ -216,10 +224,7 @@ export function useEpicSetPinned() {
             epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
         });
         await queryClient.invalidateQueries({
-          queryKey: cloudQueryKeys.currentTasksPinTailScope(
-            ctx.hostId,
-            ctx.userId,
-          ),
+          queryKey: pinTailScope,
         });
       },
       onError: (

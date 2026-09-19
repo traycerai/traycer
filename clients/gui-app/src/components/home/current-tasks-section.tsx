@@ -125,7 +125,11 @@ export function CurrentTasksSection(): ReactNode {
                   title="Pinned"
                   items={groups.pinned}
                   onRowKeyDown={onRowKeyDown}
-                  notice={null}
+                  notice={
+                    isEmpty && !isPending && !pinsComplete
+                      ? "Can't load your pinned tasks right now."
+                      : null
+                  }
                 />
                 <CurrentTaskGroup
                   title="Open"

@@ -14,6 +14,7 @@ import {
   EMPTY_LOCAL_HOMED_TASK_IDS,
 } from "@/components/home/data/home-page.data";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { usePendingSetPinnedEpicIds } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useOpenTabEpicIds } from "@/hooks/home/use-open-tab-epic-ids";
 import {
@@ -26,6 +27,7 @@ import {
   currentTaskPinsStatus,
   groupCurrentTasks,
   pinScanDecision,
+  type CurrentTaskPinScan,
   type CurrentTaskGroups,
   PIN_TAIL_PAGE_CAP,
 } from "@/lib/home/current-tasks";
@@ -106,13 +108,18 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
     enabled: true,
   });
   const firstPage = cloudTasks.query.data;
-  const scan = currentTaskPinScan({
+  const computedScan = currentTaskPinScan({
     firstPage,
     firstPagePlaceholder: cloudTasks.query.isPlaceholderData,
     cloudPagePending: cloudTasks.isCloudPagePending,
     hostId: cloudTasks.hostId,
     userId: cloudTasks.currentUserId,
   });
+  const pendingPinnedEpicIds = usePendingSetPinnedEpicIds();
+  const scan = useStablePinScan(
+    computedScan,
+    pendingPinnedEpicIds.size > 0 || cloudTasks.query.isRefetchError,
+  );
   const tailQuery = useQuery(
     currentTaskPinTailQueryOptions(scan.tailScope, scan.tailEnabled),
   );
@@ -157,6 +164,35 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
     userId: cloudTasks.currentUserId,
     ...status,
   };
+}
+
+function useStablePinScan(
+  scan: CurrentTaskPinScan,
+  preservePrevious: boolean,
+): CurrentTaskPinScan {
+  const [stableScan, setStableScan] = useState(scan);
+  if (!preservePrevious && !samePinScan(stableScan, scan)) {
+    setStableScan(scan);
+  }
+  return preservePrevious ? stableScan : scan;
+}
+
+function samePinScan(
+  left: CurrentTaskPinScan,
+  right: CurrentTaskPinScan,
+): boolean {
+  return (
+    left.firstPageDecision?.shouldContinue ===
+      right.firstPageDecision?.shouldContinue &&
+    left.firstPageDecision?.pinsComplete ===
+      right.firstPageDecision?.pinsComplete &&
+    left.firstPageUnavailable === right.firstPageUnavailable &&
+    left.firstPageLocalRowsIncomplete === right.firstPageLocalRowsIncomplete &&
+    left.tailEnabled === right.tailEnabled &&
+    left.tailScope.hostId === right.tailScope.hostId &&
+    left.tailScope.userId === right.tailScope.userId &&
+    left.tailScope.firstPageCursor === right.tailScope.firstPageCursor
+  );
 }
 
 function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {

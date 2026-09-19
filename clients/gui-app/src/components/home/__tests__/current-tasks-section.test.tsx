@@ -85,6 +85,7 @@ import { useHistorySearchStore } from "@/stores/home/history-search-store";
 const CAPTION =
   "Tasks in progress, pinned, or open in a tab. Everything else is in History.";
 const COVERAGE_NOTICE = "Can't check everything that's running right now";
+const PINS_UNAVAILABLE_NOTICE = "Can't load your pinned tasks right now.";
 
 function task(id: string, overrides: Partial<HistoryItem>): HistoryItem {
   return {
@@ -396,7 +397,7 @@ describe("<CurrentTasksSection />", () => {
       ).not.toBeNull();
     });
 
-    it("makes no false empty claim with zero rows, fleet coverage and incomplete pins", () => {
+    it("explains the blank with zero rows, fleet coverage and incomplete pins, and never claims empty", () => {
       testState.pinsComplete = false;
       renderSection();
 
@@ -404,10 +405,48 @@ describe("<CurrentTasksSection />", () => {
         screen.getByRole("heading", { name: "Current tasks" }),
       ).not.toBeNull();
       expect(screen.getByText(CAPTION)).not.toBeNull();
+      expect(
+        within(group("Pinned")).getByText(PINS_UNAVAILABLE_NOTICE),
+      ).not.toBeNull();
       expect(screen.queryByText("No current tasks")).toBeNull();
       expect(screen.queryByText(COVERAGE_NOTICE)).toBeNull();
       expect(screen.queryByTestId("epics-list-loading")).toBeNull();
       expect(rowIds()).toEqual([]);
+      // View history stays reachable from the header.
+      fireEvent.click(screen.getByRole("button", { name: /^View history/ }));
+      expect(testState.openHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it.each<ActivityFleetCoverage>(["partial", "none"])(
+      "shows the pins line beside the activity line for %s coverage when settled with incomplete pins",
+      (coverage) => {
+        testState.pinsComplete = false;
+        testState.activityCoverage = coverage;
+        renderSection();
+
+        expect(
+          within(group("Pinned")).getByText(PINS_UNAVAILABLE_NOTICE),
+        ).not.toBeNull();
+        expect(
+          within(group("In progress")).getByText(COVERAGE_NOTICE),
+        ).not.toBeNull();
+        expect(screen.queryByText("No current tasks")).toBeNull();
+        expect(screen.queryByTestId("epics-list-loading")).toBeNull();
+      },
+    );
+
+    it("does not show the pins line while pins are still loading or when they are complete", () => {
+      testState.pinsComplete = false;
+      testState.isPending = true;
+      const view = renderSection();
+      expect(screen.queryByText(PINS_UNAVAILABLE_NOTICE)).toBeNull();
+      view.unmount();
+
+      testState.pinsComplete = true;
+      testState.isPending = false;
+      testState.activityCoverage = "partial";
+      renderSection();
+      expect(screen.queryByText(PINS_UNAVAILABLE_NOTICE)).toBeNull();
     });
   });
 
