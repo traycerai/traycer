@@ -5,6 +5,8 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 const CLOUD_EPIC_TASKS_DISCRIMINATOR = "cloud.listTasks";
 const CLOUD_EPIC_TASKS_LAST_KNOWN_DISCRIMINATOR = "cloud.listTasks.lastKnown";
 const CURRENT_TASKS_PIN_TAIL_DISCRIMINATOR = "cloud.currentTasks.pinTail";
+const CURRENT_TASKS_PIN_BOUNDARY_DISCRIMINATOR =
+  "cloud.currentTasks.pinBoundary";
 // Deliberately NOT under `hostQueryKeys.scope(hostId)`, unlike its two
 // siblings above, and deliberately not a `cloud.listTasks*` string. Both would
 // change which queries this key answers to: the host scope would enlist a
@@ -17,6 +19,12 @@ const CLOUD_EPIC_TASKS_LOCAL_FIRST_REVALIDATION_DISCRIMINATOR =
   "cloud-epic-tasks-local-first-revalidation";
 
 export const cloudQueryKeys = {
+  currentTasksPinBoundary: (hostId: string, userId: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      CURRENT_TASKS_PIN_BOUNDARY_DISCRIMINATOR,
+      userId,
+    ] as const,
   currentTasksPinTailScope: (hostId: string, userId: string) =>
     [
       ...hostQueryKeys.scope(hostId),

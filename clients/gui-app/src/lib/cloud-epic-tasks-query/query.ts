@@ -149,6 +149,7 @@ export function fetchCloudEpicTasksFirstPageByHostId(
 interface FetchCloudEpicTasksCursorPageOptions {
   readonly request: ListCloudTasksRequest;
   readonly cursor: string;
+  readonly abortSignal: AbortSignal | undefined;
 }
 
 /**
@@ -165,7 +166,7 @@ export function fetchCloudEpicTasksCursorPageByHostId(
     expectedUserId: userId,
     request: options.request,
     cursor: options.cursor,
-    abortSignal: undefined,
+    abortSignal: options.abortSignal,
     localFirstPhase: undefined,
     requestContextPolicy: "require-current",
   }).then((response) =>

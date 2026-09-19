@@ -353,6 +353,38 @@ export function usePendingSetPinnedEpicIds(): ReadonlySet<string> {
   );
 }
 
+export function useHasPendingSetPinnedForScope(
+  hostId: string | null,
+  userId: string | null,
+): boolean {
+  const pendingContexts = useMutationState({
+    filters: {
+      mutationKey: epicMutationKeys.setPinned(),
+      status: "pending",
+    },
+    select: (mutation) => mutation.state.context,
+  });
+  if (hostId === null || userId === null) return false;
+  return pendingContexts.some(
+    (context) =>
+      isSetEpicPinnedMutationContext(context) &&
+      context.hostId === hostId &&
+      context.userId === userId,
+  );
+}
+
+function isSetEpicPinnedMutationContext(
+  value: unknown,
+): value is SetEpicPinnedMutationContext {
+  if (value === null || typeof value !== "object") return false;
+  return (
+    "hostId" in value &&
+    (typeof value.hostId === "string" || value.hostId === null) &&
+    "userId" in value &&
+    (typeof value.userId === "string" || value.userId === null)
+  );
+}
+
 /**
  * The part of {@link SetEpicPinnedVariables} this identification needs.
  *

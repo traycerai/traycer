@@ -32,6 +32,7 @@ import {
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import {
+  reconcileAuthoritativeEpicTitleInCloudTaskCaches,
   setEpicPinnedInCloudTaskCaches,
   updateEpicTitleInCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
@@ -44,32 +45,62 @@ const HOST_ID = "host-1";
 const USER_ID = "user-1";
 const SCOPE = { hostId: HOST_ID, userId: USER_ID };
 
+interface CursorPageArgs {
+  readonly request: typeof LIST_CLOUD_TASKS_REQUEST;
+  readonly cursor: string;
+  readonly abortSignal: AbortSignal | undefined;
+}
+
 const testState = vi.hoisted(() => {
   const state: {
     firstPage: ListTasksResponse | undefined;
     placeholder: ListTasksResponse | undefined;
     firstPageNeverSettles: boolean;
+    /** The host the mocked window is bound to; a test moves it to switch hosts. */
+    hostId: string;
+    /** First pages for hosts other than `host-1`, whose page is `firstPage`. */
+    pagesByHost: Record<string, ListTasksResponse | undefined>;
+    /** Hosts whose first-page request rejects. */
+    failingHosts: Set<string>;
   } = {
     firstPage: undefined,
     placeholder: undefined,
     firstPageNeverSettles: false,
+    hostId: "host-1",
+    pagesByHost: {},
+    failingHosts: new Set(),
   };
   return state;
 });
 
-const fetchCursorPage = vi.hoisted(() => vi.fn());
+const fetchCursorPage = vi.hoisted(() =>
+  vi.fn<
+    (
+      hostId: string,
+      userId: string,
+      args: CursorPageArgs,
+    ) => Promise<ListTasksResponse>
+  >(),
+);
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => {
+    const hostId = testState.hostId;
     const query = useQuery(
       queryOptions<ListTasksResponse>({
         queryKey: cloudEpicTasksQueryKey(
-          HOST_ID,
+          hostId,
           USER_ID,
           LIST_CLOUD_TASKS_REQUEST,
         ),
         queryFn: () => {
-          const firstPage = testState.firstPage;
+          if (testState.failingHosts.has(hostId)) {
+            return Promise.reject(new Error("first page failed"));
+          }
+          const firstPage =
+            hostId === HOST_ID
+              ? testState.firstPage
+              : testState.pagesByHost[hostId];
           if (testState.firstPageNeverSettles || firstPage === undefined) {
             return new Promise<ListTasksResponse>(() => undefined);
           }
@@ -81,7 +112,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
     );
     return {
       query,
-      hostId: HOST_ID,
+      hostId,
       currentUserId: USER_ID,
       isCloudPagePending: false,
       initialLegRefused: false,
@@ -267,6 +298,9 @@ beforeEach(() => {
   testState.firstPage = undefined;
   testState.placeholder = undefined;
   testState.firstPageNeverSettles = false;
+  testState.hostId = HOST_ID;
+  testState.pagesByHost = {};
+  testState.failingHosts = new Set();
   useCloudEpicTasksPagesStore.setState({
     pagesByIdentity: {},
     generationByIdentity: {},
@@ -319,8 +353,8 @@ describe("useCurrentTasks pin tail", () => {
 
   it("renames a tail-only task", async () => {
     const { queryClient, result } = await renderWithTail();
-    // A rename now also restarts the tail scan, so the server's answer to that
-    // fresh scan has to carry the rename, as the real one would.
+    // An authoritative rename also restarts the tail scan, so the server's
+    // answer to that fresh scan has to carry the rename, as the real one would.
     fetchCursorPage.mockResolvedValue(
       page(
         [task("tail-only", true, "Renamed in History", undefined)],
@@ -330,7 +364,7 @@ describe("useCurrentTasks pin tail", () => {
     );
 
     act(() => {
-      updateEpicTitleInCloudTaskCaches(
+      reconcileAuthoritativeEpicTitleInCloudTaskCaches(
         queryClient,
         SCOPE,
         "tail-only",
@@ -344,6 +378,45 @@ describe("useCurrentTasks pin tail", () => {
       );
       expect(row?.title).toBe("Renamed in History");
     });
+    await waitFor(() => {
+      expect(fetchCursorPage).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("patches a tail row for a passive title write-through without rescanning the tail", async () => {
+    const { queryClient, result } = await renderWithTail();
+
+    act(() => {
+      updateEpicTitleInCloudTaskCaches(
+        queryClient,
+        SCOPE,
+        "tail-only",
+        "Passively repaired",
+      );
+    });
+    // The same write again, now unchanged: still nothing to rescan.
+    act(() => {
+      updateEpicTitleInCloudTaskCaches(
+        queryClient,
+        SCOPE,
+        "tail-only",
+        "Passively repaired",
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.groups.pinned.find((item) => item.epicId === "tail-only")
+          ?.title,
+      ).toBe("Passively repaired");
+    });
+    await flushDeliveries();
+    expect(fetchCursorPage).toHaveBeenCalledTimes(1);
+    expect(
+      queryClient.getQueryState(
+        cloudQueryKeys.currentTasksPinTail(HOST_ID, USER_ID, "cursor-1"),
+      )?.isInvalidated,
+    ).toBe(false);
   });
 
   it("does not let a stale tail duplicate override the first-page row", async () => {
@@ -506,7 +579,12 @@ describe("useCurrentTasks initial tail vs. an authoritative write", () => {
     // What `useEpicUpdateTitle`'s `onSuccess` does. The optimistic title patch
     // skips the tail's undefined data, so only the restart can keep it right.
     act(() => {
-      updateEpicTitleInCloudTaskCaches(queryClient, SCOPE, "tail-x", "Renamed");
+      reconcileAuthoritativeEpicTitleInCloudTaskCaches(
+        queryClient,
+        SCOPE,
+        "tail-x",
+        "Renamed",
+      );
     });
 
     await waitFor(() => {
@@ -595,10 +673,14 @@ describe("useCurrentTasks unpinning a first-page row with a cached tail", () => 
     });
 
     await waitFor(() => {
-      expect(fetchCursorPage).toHaveBeenCalledWith(HOST_ID, USER_ID, {
-        request: LIST_CLOUD_TASKS_REQUEST,
-        cursor: "cursor-2",
-      });
+      expect(fetchCursorPage).toHaveBeenCalledWith(
+        HOST_ID,
+        USER_ID,
+        expect.objectContaining({
+          request: LIST_CLOUD_TASKS_REQUEST,
+          cursor: "cursor-2",
+        }),
+      );
     });
     await waitFor(() => {
       expect(sortedPinnedIds(result)).toEqual([
@@ -713,4 +795,361 @@ describe("useCurrentTasks first-page authority", () => {
       expect(result.current.isPending).toBe(false);
     },
   );
+});
+
+/** Answers a cursor request from the pin tails keyed by their first cursor. */
+function serveTails(tails: Readonly<Record<string, readonly string[]>>): void {
+  fetchCursorPage.mockImplementation(
+    (_hostId: string, _userId: string, args: CursorPageArgs) =>
+      Promise.resolve(
+        page((tails[args.cursor] ?? []).map(pinnedTask), null, null),
+      ),
+  );
+}
+
+describe("useCurrentTasks across a host switch", () => {
+  const HOST_B = "host-2";
+
+  function seedHosts(): void {
+    testState.firstPage = page(
+      [pinnedTask("a-first-1"), pinnedTask("a-first-2")],
+      "a-cursor",
+      SETTLED,
+    );
+    testState.pagesByHost = {
+      [HOST_B]: page([pinnedTask("b-first")], "b-cursor", SETTLED),
+    };
+    serveTails({ "a-cursor": ["a-tail"], "b-cursor": ["b-tail"] });
+  }
+
+  function cursorRequestsFor(hostId: string): string[] {
+    return fetchCursorPage.mock.calls
+      .filter((call) => call[0] === hostId)
+      .map((call) => call[2].cursor);
+  }
+
+  it("never hands host A's boundary to host B while a pin write is pending on A", async () => {
+    seedHosts();
+    const queryClient = newQueryClient();
+    const { result, rerender } = renderHook(
+      () => ({ tasks: useCurrentTasks(), pin: useEpicSetPinned() }),
+      { wrapper: wrapperFor(queryClient) },
+    );
+    await waitFor(() => {
+      expect(sortedPinnedIds(result)).toEqual([
+        "a-first-1",
+        "a-first-2",
+        "a-tail",
+      ]);
+    });
+
+    // A's write stays in the air for the whole test.
+    const rpc = deferred<PinResponse>();
+    pinRpc.mockImplementation(() => rpc.promise);
+    act(() => {
+      result.current.pin.mutate(unpin("a-first-2"));
+    });
+    await waitFor(() => {
+      expect(sortedPinnedIds(result)).toEqual(["a-first-1", "a-tail"]);
+    });
+
+    testState.hostId = HOST_B;
+    rerender();
+
+    // B is not held by A's write: its own tail is requested now and shown,
+    // and nothing of A's page or tail is read for it.
+    await waitFor(() => {
+      expect(sortedPinnedIds(result)).toEqual(["b-first", "b-tail"]);
+    });
+    expect(cursorRequestsFor(HOST_B)).toEqual(["b-cursor"]);
+    expect(cursorRequestsFor(HOST_ID)).toEqual(["a-cursor"]);
+
+    await act(async () => {
+      rpc.resolve({ pinned: false });
+      await Promise.resolve();
+    });
+    await flushDeliveries();
+    expect(sortedPinnedIds(result)).toEqual(["b-first", "b-tail"]);
+  });
+
+  async function renderBothHostsVisited() {
+    seedHosts();
+    const queryClient = newQueryClient();
+    const rendered = renderHook(() => useCurrentTasks(), {
+      wrapper: wrapperFor(queryClient),
+    });
+    await waitFor(() => {
+      expect(pinnedIds(rendered.result).sort()).toEqual([
+        "a-first-1",
+        "a-first-2",
+        "a-tail",
+      ]);
+    });
+    return { queryClient, ...rendered };
+  }
+
+  async function failFirstPageRefetch(
+    queryClient: QueryClient,
+    hostId: string,
+  ): Promise<void> {
+    // Later refetches of this page fail too, whichever observer starts them.
+    testState.failingHosts.add(hostId);
+    await act(async () => {
+      await queryClient
+        .fetchQuery({
+          queryKey: cloudEpicTasksQueryKey(
+            hostId,
+            USER_ID,
+            LIST_CLOUD_TASKS_REQUEST,
+          ),
+          queryFn: () => Promise.reject(new Error("refetch failed")),
+          staleTime: 0,
+        })
+        .catch(() => undefined);
+    });
+    expect(
+      queryClient.getQueryState(
+        cloudEpicTasksQueryKey(hostId, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      )?.status,
+    ).toBe("error");
+  }
+
+  it("resumes on B's own last boundary, not A's, when B's cached first page is in a refetch error", async () => {
+    const { queryClient, result, rerender } = await renderBothHostsVisited();
+
+    testState.hostId = HOST_B;
+    rerender();
+    await waitFor(() => {
+      expect(pinnedIds(result).sort()).toEqual(["b-first", "b-tail"]);
+    });
+    testState.hostId = HOST_ID;
+    rerender();
+    await waitFor(() => {
+      expect(pinnedIds(result).sort()).toEqual([
+        "a-first-1",
+        "a-first-2",
+        "a-tail",
+      ]);
+    });
+    await failFirstPageRefetch(queryClient, HOST_B);
+    const requestsBefore = fetchCursorPage.mock.calls.length;
+
+    testState.hostId = HOST_B;
+    rerender();
+
+    await waitFor(() => {
+      expect(pinnedIds(result).sort()).toEqual(["b-first", "b-tail"]);
+    });
+    await flushDeliveries();
+    expect(pinnedIds(result)).not.toContain("a-tail");
+    expect(fetchCursorPage.mock.calls.length).toBe(requestsBefore);
+  });
+
+  it("reads B as unavailable, never as A's scan, when B has no boundary and its cached first page is in a refetch error", async () => {
+    const { queryClient, result, rerender } = await renderBothHostsVisited();
+    // B's page is cached without B ever having been observed.
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(HOST_B, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      page([pinnedTask("b-first")], "b-cursor", SETTLED),
+    );
+    await failFirstPageRefetch(queryClient, HOST_B);
+
+    testState.hostId = HOST_B;
+    rerender();
+
+    await waitFor(() => {
+      expect(pinnedIds(result)).toEqual(["b-first"]);
+    });
+    await flushDeliveries();
+    expect(result.current.pinsComplete).toBe(false);
+    expect(cursorRequestsFor(HOST_B)).toEqual([]);
+    expect(cursorRequestsFor(HOST_ID)).toEqual(["a-cursor"]);
+  });
+});
+
+describe("useCurrentTasks remounting while a first-page unpin is in flight", () => {
+  const FIRST_PAGE_PINS = ["first-a", "first-b", "first-c"];
+  const UNRELATED_TAIL_PINS = ["tail-1", "tail-2"];
+
+  // Stands in for the History modal: a hook that outlives Current tasks and
+  // owns the pin write, so the write runs while Current tasks is unmounted.
+  async function unmountThenUnpin() {
+    testState.firstPage = page(
+      FIRST_PAGE_PINS.map(pinnedTask),
+      "cursor-1",
+      SETTLED,
+    );
+    serveTails({ "cursor-1": UNRELATED_TAIL_PINS });
+    const queryClient = newQueryClient();
+    const wrapper = wrapperFor(queryClient);
+    const modal = renderHook(() => useEpicSetPinned(), { wrapper });
+    const first = renderHook(() => useCurrentTasks(), { wrapper });
+    await waitFor(() => {
+      expect(pinnedIds(first.result).sort()).toEqual([
+        ...FIRST_PAGE_PINS,
+        ...UNRELATED_TAIL_PINS,
+      ]);
+    });
+    expect(fetchCursorPage).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    const rpc = deferred<PinResponse>();
+    pinRpc.mockImplementation(() => rpc.promise);
+    act(() => {
+      modal.result.current.mutate(unpin("first-b"));
+    });
+    await waitFor(() => {
+      const cached = queryClient.getQueryData<ListTasksResponse>(
+        cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      );
+      expect(
+        cached?.tasks.find((row) => row.epic?.light?.id === "first-b")?.pinned,
+      ).toBe(false);
+    });
+
+    // Closing the modal: Current tasks mounts on the optimistic page, before
+    // the response.
+    const remounted = renderHook(() => useCurrentTasks(), { wrapper });
+    return { queryClient, remounted, rpc };
+  }
+
+  const WITHOUT_FIRST_B = ["first-a", "first-c", ...UNRELATED_TAIL_PINS];
+
+  it("keeps the unrelated cached tail pins visible on the optimistic page and after the write succeeds", async () => {
+    const { remounted, rpc } = await unmountThenUnpin();
+
+    await waitFor(() => {
+      expect(pinnedIds(remounted.result).sort()).toEqual(WITHOUT_FIRST_B);
+    });
+    expect(fetchCursorPage).toHaveBeenCalledTimes(1);
+
+    testState.firstPage = page(
+      [pinnedTask("first-a"), pinnedTask("first-c"), pinnedTask("tail-1")],
+      "cursor-2",
+      SETTLED,
+    );
+    serveTails({ "cursor-2": ["tail-2"] });
+    await act(async () => {
+      rpc.resolve({ pinned: false });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(pinnedIds(remounted.result).sort()).toEqual(WITHOUT_FIRST_B);
+    });
+    expect(fetchCursorPage).toHaveBeenLastCalledWith(
+      HOST_ID,
+      USER_ID,
+      expect.objectContaining({ cursor: "cursor-2" }),
+    );
+  });
+
+  it("keeps the server-observed boundary when reconciliation fails after the write succeeded", async () => {
+    const { queryClient, remounted, rpc } = await unmountThenUnpin();
+    await waitFor(() => {
+      expect(pinnedIds(remounted.result).sort()).toEqual(WITHOUT_FIRST_B);
+    });
+
+    // The write succeeds; the first-page reconciliation that follows fails, so
+    // the cache keeps the optimistic page and `isRefetchError` outlives the
+    // write.
+    testState.failingHosts.add(HOST_ID);
+    await act(async () => {
+      rpc.resolve({ pinned: false });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryState(
+          cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+        )?.status,
+      ).toBe("error");
+    });
+    await waitFor(() => {
+      expect(queryClient.isMutating()).toBe(0);
+    });
+    await flushDeliveries();
+
+    expect(pinnedIds(remounted.result).sort()).toEqual(WITHOUT_FIRST_B);
+    // Only the boundary the server last showed was ever scanned.
+    expect(
+      fetchCursorPage.mock.calls.every((call) => call[2].cursor === "cursor-1"),
+    ).toBe(true);
+  });
+
+  it("keeps the unrelated cached tail pins visible and restores the row when the write is rolled back", async () => {
+    const { remounted, rpc } = await unmountThenUnpin();
+    await waitFor(() => {
+      expect(pinnedIds(remounted.result).sort()).toEqual(WITHOUT_FIRST_B);
+    });
+
+    await act(async () => {
+      rpc.reject(new Error("rpc failed"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(pinnedIds(remounted.result).sort()).toEqual([
+        ...FIRST_PAGE_PINS,
+        ...UNRELATED_TAIL_PINS,
+      ]);
+    });
+    expect(fetchCursorPage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useCurrentTasks restarting a multi-page pin tail", () => {
+  it("stops the abandoned cursor loop between pages while the replacement scan proceeds", async () => {
+    testState.firstPage = page([pinnedTask("first-pin")], "cursor-1", SETTLED);
+    const abandonedFirstPage = deferred<ListTasksResponse>();
+    fetchCursorPage.mockImplementation(
+      (_hostId: string, _userId: string, args: CursorPageArgs) => {
+        if (fetchCursorPage.mock.calls.length === 1) {
+          return abandonedFirstPage.promise;
+        }
+        return Promise.resolve(
+          args.cursor === "cursor-1"
+            ? page([pinnedTask("tail-a")], "cursor-2", null)
+            : page([pinnedTask("tail-b")], null, null),
+        );
+      },
+    );
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useCurrentTasks(), {
+      wrapper: wrapperFor(queryClient),
+    });
+    await waitFor(() => {
+      expect(fetchCursorPage).toHaveBeenCalledTimes(1);
+    });
+
+    // An authoritative rename abandons the in-flight scan and starts a new one.
+    act(() => {
+      reconcileAuthoritativeEpicTitleInCloudTaskCaches(
+        queryClient,
+        SCOPE,
+        "first-pin",
+        "Renamed",
+      );
+    });
+    await waitFor(() => {
+      expect(pinnedIds(result).sort()).toEqual([
+        "first-pin",
+        "tail-a",
+        "tail-b",
+      ]);
+    });
+    expect(fetchCursorPage).toHaveBeenCalledTimes(3);
+
+    // The abandoned scan's first page finally lands, pointing at more pages.
+    abandonedFirstPage.resolve(
+      page([pinnedTask("abandoned")], "abandoned-cursor", null),
+    );
+    await flushDeliveries();
+
+    expect(
+      fetchCursorPage.mock.calls.map((call) => call[2].cursor),
+    ).not.toContain("abandoned-cursor");
+    expect(fetchCursorPage).toHaveBeenCalledTimes(3);
+    expect(pinnedIds(result)).not.toContain("abandoned");
+  });
 });

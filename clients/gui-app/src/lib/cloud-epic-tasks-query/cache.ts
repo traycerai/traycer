@@ -174,6 +174,16 @@ export function updateEpicTitleInCloudTaskCaches(
     epicId,
     normalizedTitle,
   );
+}
+
+export function reconcileAuthoritativeEpicTitleInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  title: string,
+): void {
+  if (normalizeEpicTitle(title) === null) return;
+  updateEpicTitleInCloudTaskCaches(queryClient, scope, epicId, title);
   void restartCurrentTasksPinTail(queryClient, scope);
 }
 

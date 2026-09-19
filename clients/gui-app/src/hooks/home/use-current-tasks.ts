@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   queryOptions,
   replaceEqualDeep,
+  skipToken,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
 import type {
   ListTaskLight,
@@ -14,7 +16,7 @@ import {
   EMPTY_LOCAL_HOMED_TASK_IDS,
 } from "@/components/home/data/home-page.data";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
-import { usePendingSetPinnedEpicIds } from "@/hooks/epic/use-epic-set-pinned-mutation";
+import { useHasPendingSetPinnedForScope } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useOpenTabEpicIds } from "@/hooks/home/use-open-tab-epic-ids";
 import {
@@ -115,10 +117,19 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
     hostId: cloudTasks.hostId,
     userId: cloudTasks.currentUserId,
   });
-  const pendingPinnedEpicIds = usePendingSetPinnedEpicIds();
-  const scan = useStablePinScan(
+  const pinMutationPending = useHasPendingSetPinnedForScope(
+    cloudTasks.hostId,
+    cloudTasks.currentUserId,
+  );
+  const scan = useCurrentTaskPinBoundary(
     computedScan,
-    pendingPinnedEpicIds.size > 0 || cloudTasks.query.isRefetchError,
+    cloudTasks.hostId,
+    cloudTasks.currentUserId,
+    firstPage !== undefined &&
+      !cloudTasks.query.isPlaceholderData &&
+      !cloudTasks.isCloudPagePending &&
+      !cloudTasks.query.isRefetchError &&
+      !pinMutationPending,
   );
   const tailQuery = useQuery(
     currentTaskPinTailQueryOptions(scan.tailScope, scan.tailEnabled),
@@ -166,15 +177,51 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
   };
 }
 
-function useStablePinScan(
-  scan: CurrentTaskPinScan,
-  preservePrevious: boolean,
+function useCurrentTaskPinBoundary(
+  observedScan: CurrentTaskPinScan,
+  hostId: string | null,
+  userId: string | null,
+  authoritative: boolean,
 ): CurrentTaskPinScan {
-  const [stableScan, setStableScan] = useState(scan);
-  if (!preservePrevious && !samePinScan(stableScan, scan)) {
-    setStableScan(scan);
-  }
-  return preservePrevious ? stableScan : scan;
+  const queryClient = useQueryClient();
+  const scope = {
+    hostId: hostId ?? "",
+    userId: userId ?? "",
+  };
+  const fallbackScan = currentTaskPinScan({
+    firstPage: undefined,
+    firstPagePlaceholder: false,
+    cloudPagePending: true,
+    hostId,
+    userId,
+  });
+  const boundary = useQuery(currentTaskPinBoundaryQueryOptions(scope)).data;
+  useEffect(() => {
+    if (!authoritative || hostId === null || userId === null) return;
+    if (boundary !== undefined && samePinScan(boundary, observedScan)) return;
+    queryClient.setQueryData(
+      cloudQueryKeys.currentTasksPinBoundary(hostId, userId),
+      observedScan,
+    );
+  }, [authoritative, boundary, hostId, observedScan, queryClient, userId]);
+  if (authoritative) return observedScan;
+  return boundary ?? fallbackScan;
+}
+
+function currentTaskPinBoundaryQueryOptions(scope: {
+  readonly hostId: string;
+  readonly userId: string;
+}) {
+  return queryOptions<CurrentTaskPinScan>({
+    queryKey: cloudQueryKeys.currentTasksPinBoundary(
+      scope.hostId,
+      scope.userId,
+    ),
+    queryFn: skipToken,
+    enabled: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
 }
 
 function samePinScan(
@@ -238,8 +285,8 @@ function currentTaskPinTailQueryOptions(scope: PinTailScope, enabled: boolean) {
       scope.userId,
       scope.firstPageCursor,
     ),
-    queryFn: () =>
-      fetchPinTail(scope.hostId, scope.userId, scope.firstPageCursor),
+    queryFn: ({ signal }) =>
+      fetchPinTail(scope.hostId, scope.userId, scope.firstPageCursor, signal),
     enabled,
     staleTime: Infinity,
     gcTime: Infinity,
@@ -274,6 +321,7 @@ async function fetchPinTail(
   hostId: string,
   userId: string,
   firstPageCursor: string,
+  abortSignal: AbortSignal,
 ): Promise<PinTailResult> {
   const tasks: ListTaskLight[] = [];
   let cursor = firstPageCursor;
@@ -288,8 +336,10 @@ async function fetchPinTail(
       {
         request: LIST_CLOUD_TASKS_REQUEST,
         cursor,
+        abortSignal,
       },
     );
+    abortSignal.throwIfAborted();
     tasks.push(...page.tasks);
     const decision = pinScanDecision(page, "cursor", cursorPagesFetched);
     if (!decision.shouldContinue) {
