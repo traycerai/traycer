@@ -412,7 +412,7 @@ export type HostStatusStoreFormats = z.infer<
 export const hostStatusV14 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 4 } as const,
-  requestSchema: lazySchema(() => hostStatusV13.requestSchema),
+  requestSchema: hostStatusV13.requestSchema,
   responseSchema: lazySchema(() =>
     hostStatusV13.responseSchema.extend({
       // A pre-1.4 peer did not report its formats. Manufacturing the current
@@ -550,7 +550,7 @@ export type HostStatusInstall = z.infer<typeof hostStatusInstallSchema>;
 export const hostStatusV15 = defineRpcContract({
   method: "host.status",
   schemaVersion: { major: 1, minor: 5 } as const,
-  requestSchema: lazySchema(() => hostStatusV14.requestSchema),
+  requestSchema: hostStatusV14.requestSchema,
   responseSchema: lazySchema(() =>
     hostStatusV14.responseSchema.extend({
       // `null` is "no install record" - an unmanaged host, a dev host run from
