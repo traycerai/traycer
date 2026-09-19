@@ -9,6 +9,7 @@ import type {
 } from "@traycer/protocol/host/chat-search/schemas";
 import {
   ChatSearchResultsView,
+  MessageMatchRow,
   type ChatSearchExpansionTarget,
   type ChatSearchOpenTarget,
 } from "@/components/chat-search/chat-search-results-view";
@@ -699,5 +700,87 @@ describe("ChatSearchResultsView: an empty page that still has a cursor", () => {
     expect(screen.getByText("No chats match.")).toBeTruthy();
     expect(screen.queryByText("No matches on this page.")).toBeNull();
     expect(screen.queryByRole("button", { name: /Show more/ })).toBeNull();
+  });
+});
+
+describe("MessageMatchRow: group separation", () => {
+  function groupOf(chatId: string): HTMLElement {
+    const group = screen
+      .getByRole("button", {
+        name: `Open chat title-${chatId} at its best match`,
+      })
+      .closest("li");
+    if (group === null) throw new Error(`no group for ${chatId}`);
+    return group;
+  }
+
+  it("full: every group is a bordered row, only the last drops its divider, and an expansion stays inside its own group", async () => {
+    const user = userEvent.setup();
+    renderView({
+      results: results({
+        messageMatches: [
+          messageMatch({ chatId: "c1" }),
+          messageMatch({ chatId: "c2", matchCount: 3 }),
+          messageMatch({ chatId: "c3" }),
+        ],
+      }),
+      renderExpansion: () => <p>expanded-children</p>,
+    });
+    await user.click(screen.getByRole("button", { name: "3 matches" }));
+
+    const groups = ["c1", "c2", "c3"].map(groupOf);
+    expect(new Set(groups.map((group) => group.parentElement)).size).toBe(1);
+    for (const group of groups) {
+      expect(group.classList.contains("flex-col")).toBe(true);
+      expect(group.classList.contains("gap-1")).toBe(true);
+      expect(group.classList.contains("px-2")).toBe(true);
+      expect(group.classList.contains("py-3")).toBe(true);
+      expect(group.classList.contains("py-1")).toBe(false);
+      expect(group.classList.contains("border-b")).toBe(true);
+      expect(group.classList.contains("border-border")).toBe(true);
+      expect(group.classList.contains("last:border-b-0")).toBe(true);
+    }
+    // The expanded children belong to the middle group only, so the divider
+    // still falls between whole groups rather than inside one.
+    const expanded = screen.getByText("expanded-children");
+    expect(groups[1]?.contains(expanded)).toBe(true);
+    expect(groups[0]?.contains(expanded)).toBe(false);
+    expect(groups[2]?.contains(expanded)).toBe(false);
+    expect(groups[2]?.nextElementSibling).toBeNull();
+  });
+
+  it("full: the chat title is semibold", () => {
+    renderView({
+      results: results({ messageMatches: [messageMatch({ chatId: "c1" })] }),
+    });
+
+    const title = screen.getByText("title-c1");
+    expect(title.classList.contains("font-semibold")).toBe(true);
+    expect(title.classList.contains("font-medium")).toBe(false);
+  });
+
+  it("compact: keeps the tight one-line density, a medium title and no divider", () => {
+    render(
+      <ul>
+        <MessageMatchRow
+          match={messageMatch({ chatId: "c1" })}
+          expanded={false}
+          onOpen={vi.fn<(target: ChatSearchOpenTarget) => void>()}
+          onToggleExpanded={vi.fn<() => void>()}
+          renderExpansion={() => null}
+          taskTitle={null}
+          variant="compact"
+        />
+      </ul>,
+    );
+
+    const group = groupOf("c1");
+    expect(group.classList.contains("py-1")).toBe(true);
+    expect(group.classList.contains("py-3")).toBe(false);
+    expect(group.classList.contains("border-b")).toBe(false);
+    expect(group.classList.contains("last:border-b-0")).toBe(false);
+    const title = screen.getByText("title-c1");
+    expect(title.classList.contains("font-medium")).toBe(true);
+    expect(title.classList.contains("font-semibold")).toBe(false);
   });
 });

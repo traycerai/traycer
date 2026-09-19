@@ -341,7 +341,14 @@ export function MessageMatchRow(props: ChatSearchMessageMatchRowProps) {
     match.matchCount > 1,
   );
   return (
-    <li className="flex min-w-0 flex-col gap-1 px-2 py-1">
+    <li
+      className={cn(
+        "flex min-w-0 flex-col gap-1 px-2",
+        variant === "full"
+          ? "border-b border-border py-3 last:border-b-0"
+          : "py-1",
+      )}
+    >
       <div className="flex min-w-0 items-start gap-2">
         <button
           type="button"
@@ -357,7 +364,12 @@ export function MessageMatchRow(props: ChatSearchMessageMatchRowProps) {
             })
           }
         >
-          <span className="max-w-full truncate font-medium text-foreground">
+          <span
+            className={cn(
+              "max-w-full truncate text-foreground",
+              variant === "full" ? "font-semibold" : "font-medium",
+            )}
+          >
             {displayChatTitle(match.title)}
           </span>
           {variant === "full" ? (
