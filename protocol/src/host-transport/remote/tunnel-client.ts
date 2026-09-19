@@ -1,5 +1,6 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { IStreamSession, StreamFrameEnvelope } from "../stream-session";
+import { streamReportsOutboundDebt } from "./logical-stream";
 import { TunnelStreamEndpoint } from "./tunnel-stream";
 
 /**
@@ -21,8 +22,26 @@ export type HostTunnelResetReason =
   | { readonly kind: "peer-closed" }
   /** The session under the tunnel dropped; a tunnel is not resumable. */
   | { readonly kind: "link-dropped" }
-  /** The peer broke the tunnel framing or overran its window. */
+  /** The peer broke the tunnel framing or overran its window, or one of this side's handlers threw. */
   | { readonly kind: "violation"; readonly reason: string };
+
+/**
+ * Thrown by {@link openHostTunnel} for a stream that cannot report its
+ * outbound debt. Not a fallback to credits alone, on purpose: without the debt
+ * bound a peer's credit grants are all that limits what this side queues, and
+ * the only stream that would take that path in production is one somebody
+ * forgot to wire.
+ */
+export class HostTunnelUnsupportedStreamError extends Error {
+  readonly code = "TUNNEL_STREAM_DEBT_UNAVAILABLE";
+
+  constructor() {
+    super(
+      "This stream does not report outbound debt, so a tunnel over it could not bound what it queues",
+    );
+    this.name = "HostTunnelUnsupportedStreamError";
+  }
+}
 
 export interface HostTunnelHandlers {
   /** The accepting host authorized the stream; bytes written before this were held. */
@@ -53,11 +72,16 @@ export function openHostTunnel(
   stream: IStreamSession,
   handlers: HostTunnelHandlers,
 ): HostTunnel {
+  if (!streamReportsOutboundDebt(stream)) {
+    stream.close();
+    throw new HostTunnelUnsupportedStreamError();
+  }
   let settled = false;
   const endpoint = new TunnelStreamEndpoint({
     role: "opener",
     sendFrame: (envelope, binaryPayload) =>
       stream.sendClientFrame(envelope, binaryPayload),
+    outboundDebtBytes: () => stream.outboundDebtBytes(),
     onData: handlers.onData,
     onEnd: handlers.onEnd,
     onDrain: handlers.onDrain,
@@ -70,8 +94,9 @@ export function openHostTunnel(
       stream.close();
       handlers.onFinished();
     },
-    onViolation: (reason) => fail({ kind: "violation", reason }),
+    onFault: (reason) => fail({ kind: "violation", reason }),
   });
+  stream.onOutboundProgress(() => endpoint.notifyOutboundProgress());
 
   function fail(reason: HostTunnelResetReason): void {
     if (settled) {
@@ -80,7 +105,12 @@ export function openHostTunnel(
     settled = true;
     endpoint.close();
     stream.close();
-    handlers.onReset(reason);
+    try {
+      handlers.onReset(reason);
+    } catch {
+      // Terminal, and reached from the session's status fan-out: a throwing
+      // handler must not interrupt the teardown of its sibling streams.
+    }
   }
 
   // Handled one microtask late, in arrival order. A logical stream only turns
