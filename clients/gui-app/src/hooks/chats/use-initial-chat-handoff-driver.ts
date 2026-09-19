@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSessionState,
@@ -14,6 +15,17 @@ import {
 } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
+import {
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
+} from "@/lib/composer/image-atoms";
+import { submitHostHeldImageHashes } from "@/lib/composer/submit-host-held-image-hashes";
+import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import {
+  draftImageInliningNeeded,
+  prepareDraftImageInlining,
+} from "@/lib/drafts/draft-image-inlining";
 import {
   nextHandoffTransition,
   type HandoffStep,
@@ -39,12 +51,24 @@ export interface InitialChatHandoffDriverOptions {
   readonly nodeId: string;
   readonly scope: InitialChatHandoffScope;
   readonly profileUserId: string | null;
+  /**
+   * This chat's own live stream's draft-blob bridge capability, as a GETTER.
+   *
+   * A getter rather than a boolean for the same reason `useChatComposerSubmit`
+   * takes one: the flag is a property of the stream at the moment the message
+   * is dispatched, and the resend's dispatch can be several renders after this
+   * hook was called - the handoff waits for `snapshotLoaded`, for `canAct`, and
+   * for its own byte resolution. A boolean captured at mount would answer for
+   * the session as it was before any of that.
+   */
+  readonly getDraftBlobBridgeSupported: () => boolean;
 }
 
 export function useInitialChatHandoffDriver(
   options: InitialChatHandoffDriverOptions,
 ): void {
-  const { handle, nodeId, scope, profileUserId } = options;
+  const { handle, nodeId, scope, profileUserId, getDraftBlobBridgeSupported } =
+    options;
   const handoff = useInitialChatHandoffStore((state) =>
     selectInitialChatHandoff(state, scope),
   );
@@ -76,6 +100,11 @@ export function useInitialChatHandoffDriver(
     messages,
     snapshotLoaded,
   } = chatSnapshot;
+  const sendContent = useSeededSendContent(
+    handoff,
+    nodeId,
+    getDraftBlobBridgeSupported,
+  );
 
   useEffect(() => {
     const state = handle.store.getState();
@@ -93,6 +122,7 @@ export function useInitialChatHandoffDriver(
       profileUserId,
       replaceDraftContent,
       scope,
+      sendContent,
       state,
       step,
     });
@@ -108,8 +138,142 @@ export function useInitialChatHandoffDriver(
     profileUserId,
     replaceDraftContent,
     scope,
+    sendContent,
     snapshotLoaded,
   ]);
+}
+
+/**
+ * The handoff's content in the shape THIS stream takes.
+ *
+ * The landing composer registers the HASH-ONLY document - that is what keeps
+ * base64 out of `localStorage` under this key and what lets the handoff root
+ * those bytes against GC - so the wire shape has to be decided somewhere, and
+ * the resend is the only place that knows the message is actually going out.
+ *
+ * TWO SHAPES, and `getDraftBlobBridgeSupported()` plus this host's confirmed
+ * blob custody pick between them, through exactly the seam an ordinary send
+ * uses ({@link submitHostHeldImageHashes} + {@link draftImageInliningNeeded}).
+ * A hash the bridge can carry AND this host is confirmed to hold for THIS
+ * account ships bare, and the image never crosses the relay a second time;
+ * everything else is resolved back to `b64content`, exactly as before.
+ *
+ * WHY THE CUSTODY CHECK AND NOT THE FLAG ALONE. The hashes this resend sees are
+ * not only the ones the create sent by hash - the handoff records the fully
+ * hash-only document on purpose, so it also names images the create INLINED,
+ * whose bytes the host was never given. Shipping one of those bare because the
+ * stream *could* have carried it is a dangling hash, and the custody set is what
+ * separates the two. It is owner-keyed: a `null` owner (no signed-in account in
+ * this window) confirms nothing, so every node inlines - which is the correct
+ * answer rather than a degenerate one.
+ *
+ * `null` means "not ready yet, do not send": the inline shape needs an await -
+ * a partition read, a `drafts.readBlob`, a cloud fetch. That await settling is
+ * what re-renders this hook and lets the transition fire, so the send is delayed
+ * rather than dropped.
+ *
+ * A legacy v3 handoff - already fully inlined, written before any of this - and
+ * an image-free prompt both take the FAST PATH below: no hash-only node means
+ * nothing to decide, no state, no extra render.
+ */
+function useSeededSendContent(
+  handoff: InitialChatHandoff | null,
+  nodeId: string,
+  getDraftBlobBridgeSupported: () => boolean,
+): JsonContent | null {
+  const content = handoff?.content ?? null;
+  // The per-REGISTRATION identity, and deliberately not `handoff.key`. The key
+  // is `[userId, epicId]`, and a second create in the same epic REPLACES the
+  // entry under that same key - so a key match is true across exactly the
+  // replacement it was introduced to exclude. The resolved content of handoff A
+  // would still pass the guard below while the driver dispatched B's
+  // `messageId` and `clientActionId`, which is A's message sent as B's.
+  //
+  // `clientActionId` is pre-minted per submit (`RegisterInitialChatHandoffInput`
+  // declares it a required `string`), so it changes with every registration. A
+  // persisted record from before that field falls back to the key, which is no
+  // weaker there than what this did for every record until now.
+  const identity =
+    handoff === null ? null : (handoff.clientActionId ?? handoff.key);
+  // The handoff's OWN host - the machine the chat was created on and is bound
+  // to for life - not the window's effective one. Both the custody memo and the
+  // host byte leg are per host, and this is the host the resend goes to.
+  const hostId = handoff?.hostId ?? null;
+  // Structural, so memoizing is safe: it asks about the recorded document's
+  // shape, never about custody. The live questions are all inside the effect.
+  const nothingToDecide = useMemo(
+    () => content === null || hashOnlyImageHashes(content).length === 0,
+    [content],
+  );
+  const [resolved, setResolved] = useState<{
+    readonly identity: string;
+    readonly content: JsonContent;
+  } | null>(null);
+  useEffect(() => {
+    if (content === null || identity === null || nothingToDecide) return;
+    // Recomputed, never captured - the same contract the submit path states.
+    // A `drafts.putBlob` confirmed while this resolution runs should let its
+    // node travel bare; a confirmation invalidated in that window must not.
+    const readHeld = (): ReadonlySet<string> =>
+      submitHostHeldImageHashes({
+        surfaceKey: nodeId,
+        incarnation: null,
+        content,
+        hostId,
+        bridgeSupported: getDraftBlobBridgeSupported(),
+        ownerUserId: currentDraftBlobOwnerId(),
+      });
+    const needed = draftImageInliningNeeded(content, readHeld());
+    if (needed.length === 0) {
+      // Every hash-only node is in the host's custody: the recorded document IS
+      // the wire shape, and no byte ever leaves this window.
+      setResolved({ identity, content });
+      return;
+    }
+    let cancelled = false;
+    void prepareDraftImageInlining({
+      initialHashes: needed,
+      target: draftImageByteTargetForHost(hostId),
+      // The handoff's content is FROZEN - no editor owns it, nothing appends to
+      // it while the reads run - so this re-read is constant and the reconcile
+      // loop settles in one pass. The shared function is still the right one:
+      // its other half, the synchronous `commit` contract, is what keeps this
+      // rewrite in the same step as the final custody read.
+      readRequiredHashes: () => draftImageInliningNeeded(content, readHeld()),
+      commit: (base64ByHash) => {
+        if (cancelled) return;
+        setResolved({
+          identity,
+          content: inlineHashOnlyImageBytes(content, base64ByHash),
+        });
+      },
+    }).catch(() => {
+      // No byte source could be reached at all. Send what we have rather than
+      // stalling the handoff forever: a hash the host cannot resolve comes back
+      // as the existing dangling-hash rejection, which surfaces as a failed send
+      // and restores the prompt to the composer - a visible failure the user can
+      // act on, and the honest outcome when the bytes are genuinely unreachable.
+      if (cancelled) return;
+      setResolved({ identity, content });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    content,
+    getDraftBlobBridgeSupported,
+    hostId,
+    identity,
+    nodeId,
+    nothingToDecide,
+  ]);
+  if (nothingToDecide) return content;
+  // Identity-matched so a handoff replaced while its reads were in flight (a
+  // second create in the same epic) can never send the previous one's message.
+  // The identity is per REGISTRATION, not the store key the replacement reuses.
+  return resolved !== null && resolved.identity === identity
+    ? resolved.content
+    : null;
 }
 
 interface ApplyInitialChatHandoffStepInput {
@@ -122,6 +286,13 @@ interface ApplyInitialChatHandoffStepInput {
     selection: null,
   ) => void;
   readonly scope: InitialChatHandoffScope;
+  /**
+   * The handoff's content in the shape this stream takes - see
+   * {@link useSeededSendContent}. `null` while its bytes are still being
+   * resolved, which HOLDS the send rather than shipping a document the host
+   * cannot resolve.
+   */
+  readonly sendContent: JsonContent | null;
   readonly state: ChatSessionState;
   readonly step: HandoffStep;
 }
@@ -160,6 +331,9 @@ function applyInitialChatHandoffStep(
       ) {
         return;
       }
+      // Its images are still being resolved. Holding is the whole point of the
+      // `null`: the transition fires again when that settles.
+      if (input.sendContent === null) return;
       const sender: UserMessageSender = {
         type: "user",
         userId: input.profileUserId,
@@ -170,9 +344,10 @@ function applyInitialChatHandoffStep(
       const sent = input.state.sendSeededUserMessage({
         messageId: input.handoff.messageId,
         clientActionId: input.handoff.clientActionId,
-        content: input.handoff.content,
+        content: input.sendContent,
         sender,
         settings: input.handoff.settings,
+        worktreeIntent: input.handoff.worktreeIntent,
       });
       if (sent === null) return;
       useInitialChatHandoffStore

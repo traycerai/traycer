@@ -454,6 +454,7 @@ describe("the other record mutations refresh the list too", () => {
       epicId: EPIC_ID,
       chatId: "chat-1",
       title: "After",
+      hostId: HOST_ID,
     });
 
     await waitFor(() => {

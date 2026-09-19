@@ -52,6 +52,10 @@ import type {
 } from "../i-stream-session";
 import { WsStreamClient } from "../ws-stream-client";
 import { resetStreamMethodSupportMemo } from "../stream-method-support-registry";
+import {
+  getNegotiatedStreamMethodVersion,
+  resetNegotiatedStreamVersions,
+} from "../negotiated-stream-version-registry";
 import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
@@ -442,6 +446,7 @@ describe("WsStreamClient", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetNegotiatedStreamVersions();
   });
 
   describe("cloud verdict wire (lane 5, F1: opening-phase drop, stream carrier)", () => {
@@ -1908,6 +1913,53 @@ describe("WsStreamClient", () => {
     expect(
       client.getMethodSchemaVersion("host.notifications.cloudFeed.subscribe"),
     ).toBeNull();
+
+    session.close();
+  });
+
+  it("publishes the negotiated stream method version to the host-keyed registry after a handshake", async () => {
+    // The stream-version half of `negotiated-manifest-registry.ts`'s unary
+    // answer: `applyHostManifest` publishes at the SAME handshake it already
+    // records support at, so a dispatch that holds a hostId (not a live
+    // session) can ask what THIS host would negotiate.
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("git.subscribeStatus", {
+      hostId: "host-1",
+      runningDir: "/repo-a",
+      ignoreWhitespace: false,
+      freshNonce: null,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      getNegotiatedStreamMethodVersion(
+        mockLocalHostEntry.hostId,
+        "git.subscribeStatus",
+      ),
+    ).toBeNull();
+
+    completeHandshake(sockets[0].socket);
+
+    // Pinned against the client's own accessor, but only after proving that
+    // accessor answers something: `toEqual(null)` would pass vacuously on a
+    // publication that never ran.
+    const negotiated = client.getMethodSchemaVersion("git.subscribeStatus");
+    expect(negotiated).not.toBeNull();
+    expect(
+      getNegotiatedStreamMethodVersion(
+        mockLocalHostEntry.hostId,
+        "git.subscribeStatus",
+      ),
+    ).toEqual(negotiated);
 
     session.close();
   });

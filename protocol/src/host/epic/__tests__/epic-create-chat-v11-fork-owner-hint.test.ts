@@ -9,8 +9,10 @@ import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   epicCreateChatUpgradeV10ToV11,
+  epicCreateChatUpgradeV11ToV12,
   epicCreateChatV10,
   epicCreateChatV11,
+  epicCreateChatV12,
 } from "@traycer/protocol/host/epic/contracts";
 import {
   createChatForkSourceAssistantBoundarySchema,
@@ -46,7 +48,7 @@ describe("epic.createChat stays on the released floor", () => {
     expect(RELEASED_FLOOR_METHOD_NAMES).toContain("epic.createChat");
   });
 
-  it("advertises on the floor manifest at 1.1, not the optional manifest", () => {
+  it("advertises on the floor manifest at 1.2, not the optional manifest", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
@@ -54,7 +56,7 @@ describe("epic.createChat stays on the released floor", () => {
     );
     expect(split.manifest["epic.createChat"]).toEqual({
       major: 1,
-      minor: 1,
+      minor: 2,
       supportedMajors: [1],
     });
     expect(split.optionalManifest["epic.createChat"]).toBeUndefined();
@@ -79,18 +81,22 @@ describe("epic.createChat V11<->V10 negotiation bridges", () => {
 });
 
 describe("epic.createChat registry line shape", () => {
-  it("exposes minors 0 and 1 with latestMinor 1", () => {
+  it("exposes minors 0, 1 and 2 with latestMinor 2", () => {
     const line = hostRpcRegistry["epic.createChat"][1];
-    expect(line.latestMinor).toBe(1);
-    expect(Object.keys(line.versions).sort()).toEqual(["0", "1"]);
+    expect(line.latestMinor).toBe(2);
+    expect(Object.keys(line.versions).sort()).toEqual(["0", "1", "2"]);
     expect(line.versions[0].contract).toBe(epicCreateChatV10);
     expect(line.versions[1].contract).toBe(epicCreateChatV11);
+    expect(line.versions[2].contract).toBe(epicCreateChatV12);
   });
 
-  it("chains 1.0 -> 1.1 through epicCreateChatUpgradeV10ToV11", () => {
+  it("chains 1.0 -> 1.1 through epicCreateChatUpgradeV10ToV11, and 1.1 -> 1.2 through epicCreateChatUpgradeV11ToV12", () => {
     const line = hostRpcRegistry["epic.createChat"][1];
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(
       epicCreateChatUpgradeV10ToV11,
+    );
+    expect(line.versions[2].upgradeFromPreviousVersion).toBe(
+      epicCreateChatUpgradeV11ToV12,
     );
     expect(line.versions[0].upgradeFromPreviousVersion).toBeNull();
   });

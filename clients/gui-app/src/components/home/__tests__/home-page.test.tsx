@@ -130,6 +130,11 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => ({
     request: homeMocks.request,
+    // `epic.create` is dispatched with an idempotency key, which only the
+    // combined entry point can carry, so a client stub that stops at `request`
+    // fails at RUN time on the first create this suite drives.
+    requestWithOptions: (method: string, payload: unknown): Promise<unknown> =>
+      homeMocks.request(method, payload),
     getActiveHostId: homeMocks.getActiveHostId,
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
@@ -154,6 +159,8 @@ function useTestPlacementTarget(): LandingPlacementTarget {
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({
     request: homeMocks.request,
+    requestWithOptions: (method: string, payload: unknown): Promise<unknown> =>
+      homeMocks.request(method, payload),
     getActiveHostId: homeMocks.getActiveHostId,
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
@@ -173,6 +180,10 @@ vi.mock("@/lib/host/runtime", () => ({
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
+      requestWithOptions: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => homeMocks.request(method, payload),
       getActiveHostId: homeMocks.getActiveHostId,
       getActiveHost: homeMocks.getActiveHost,
       getRequestContextUserId: homeMocks.getRequestContextUserId,
@@ -1176,7 +1187,7 @@ describe("<HomePage />", () => {
   });
 
   describe("appearance wallpaper visibility and layout stability", () => {
-    it("mounts the appearance layer only while the tab is visible", () => {
+    it("keeps the appearance layer mounted across tab visibility and folder edits", () => {
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false, gcTime: 0 } },
       });
@@ -1189,15 +1200,29 @@ describe("<HomePage />", () => {
       expect(screen.queryByTestId("appearance-wallpaper-stub")).not.toBeNull();
       expect(homeMocks.appearanceEvents).toEqual(["mount"]);
 
+      const layer = screen.getByTestId("appearance-wallpaper-stub");
+
+      // A retained tab going hidden and back must not remount the wallpaper:
+      // a remount re-reads the blob and repaints from scratch (visible flash).
       homeMocks.tabActivity = { visible: false, focused: false };
       rerender(tree());
-      expect(screen.queryByTestId("appearance-wallpaper-stub")).toBeNull();
-      expect(homeMocks.appearanceEvents).toEqual(["mount", "unmount"]);
-
       homeMocks.tabActivity = { visible: true, focused: true };
       rerender(tree());
-      expect(screen.queryByTestId("appearance-wallpaper-stub")).not.toBeNull();
-      expect(homeMocks.appearanceEvents).toEqual(["mount", "unmount", "mount"]);
+
+      // Attaching a workspace folder re-renders the surface, not the wallpaper.
+      act(() => {
+        setGlobalWorkspaceFolders(["/tmp/attached"], {
+          "/tmp/attached": {
+            path: "/tmp/attached",
+            name: "attached",
+            repoIdentifier: null,
+            hostId: TEST_HOST_ID,
+          },
+        });
+      });
+
+      expect(screen.getByTestId("appearance-wallpaper-stub")).toBe(layer);
+      expect(homeMocks.appearanceEvents).toEqual(["mount"]);
       queryClient.clear();
     });
 

@@ -1,7 +1,9 @@
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   House,
+  LayersPlus,
   LogOut,
   Pin,
   Settings,
@@ -220,6 +222,18 @@ export function MobileNavDrawer(): ReactNode {
         </div>
       </nav>
       <div className="flex shrink-0 flex-col gap-1 border-t border-border/60 p-2">
+        <Button
+          type="button"
+          variant="ghost"
+          className={ROW_CLASS}
+          onClick={() => {
+            close();
+            useDesktopDialogStore.getState().openDrafts("menu");
+          }}
+        >
+          <LayersPlus className="size-4" />
+          <span className="flex-1 text-left">Drafts</span>
+        </Button>
         <Button
           type="button"
           variant="ghost"

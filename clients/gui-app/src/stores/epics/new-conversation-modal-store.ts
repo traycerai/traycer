@@ -25,8 +25,8 @@ import {
   sameLandingDraftWorkspace,
   sameNullableChatRunSettings,
   setLandingDraftWorkspacePrimary,
-  stripBase64ImageNodes,
 } from "@/stores/home/landing-draft-store";
+import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 export const createEmptyNewConversationContent = (): JsonContent => ({
@@ -371,10 +371,16 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
                       epicId,
                       {
                         ...patch,
-                        content:
-                          patch.content === null
-                            ? null
-                            : stripBase64ImageNodes(patch.content),
+                        // Fourth seam of the same class: the caret travels with
+                        // the strip. `selection` is persisted here so a focus
+                        // round-trip can restore it, and a removed pending image
+                        // node shifts every position after it.
+                        ...(patch.content === null
+                          ? {}
+                          : stripBase64ImageNodesWithSelection(
+                              patch.content,
+                              patch.selection,
+                            )),
                       },
                     ],
                   ],
