@@ -44,6 +44,15 @@ describe("<HistoryModalContent /> scope registration", () => {
     capturedScope();
   });
 
+  it("publishes the dialog's popover surface, not the frame's background, for sticky headers", () => {
+    render(<HistoryModalContent onSelectEpic={() => undefined} />);
+    const wrapper = screen.getByTestId("history-list-probe").parentElement;
+    if (wrapper === null) throw new Error("no modal content wrapper");
+
+    expect(wrapper.className).toContain("[--history-surface:var(--popover)]");
+    expect(wrapper.className).not.toContain("var(--background)");
+  });
+
   it("opens on all even when a previous modal left a non-default scope registered", () => {
     // A stale registration from an earlier session (a modal that never
     // unmounted cleanly) must not survive a fresh mount.

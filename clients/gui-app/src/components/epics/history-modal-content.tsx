@@ -32,8 +32,10 @@ export function HistoryModalContent(
   // so without it `min-width: auto` sizes it to the list's content
   // min-width - wider than the frame once titles outgrow the viewport,
   // clipping the toolbar and row metadata past the right edge.
+  // The dialog surface bridge paints --popover over the frame's bg-background.
+  // Sticky headers must match that opaque rendered surface.
   return (
-    <div className="[--history-surface:var(--background)] flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="[--history-surface:var(--popover)] flex min-h-0 min-w-0 flex-1 flex-col">
       <EpicsListPanel
         scope={scope}
         onScopeChange={onScopeChange}

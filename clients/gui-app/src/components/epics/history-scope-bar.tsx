@@ -36,6 +36,7 @@ export function HistoryScopedResults(props: {
   readonly onScopeChange: (scope: HistoryScope) => void;
   readonly taskCount: HistoryCount;
   readonly taskList: ReactNode;
+  readonly searchInput: ReactNode;
   readonly controls: HistoryTaskControlsProps;
   readonly messageHits: HistoryMessageHitsInputs;
   readonly rowsScopeRef: RefObject<HTMLDivElement | null>;
@@ -55,20 +56,26 @@ export function HistoryScopedResults(props: {
       }}
       className="min-h-0 flex-1 gap-0"
     >
-      <div className="flex flex-wrap items-center gap-2.5 px-2 pb-2.5">
-        <TabsList
-          variant="scope"
-          size="scope"
-          indicatorIndex={SCOPES.indexOf(scope)}
-          aria-label="Search scope"
+      <div className="@container/history-search px-2 pb-2">
+        <div
+          data-history-search-row=""
+          className="flex flex-col items-start gap-2 @min-[32rem]/history-search:flex-row @min-[32rem]/history-search:items-center"
         >
-          {SCOPES.map((value) => (
-            <TabsTrigger key={value} variant="scope" value={value}>
-              {LABELS[value]}
-              <CountBadge count={hasQuery ? counts[value] : null} />
-            </TabsTrigger>
-          ))}
-        </TabsList>
+          {props.searchInput}
+          <TabsList
+            variant="scope"
+            size="scope"
+            indicatorIndex={SCOPES.indexOf(scope)}
+            aria-label="Search scope"
+          >
+            {SCOPES.map((value) => (
+              <TabsTrigger key={value} variant="scope" value={value}>
+                {LABELS[value]}
+                <CountBadge count={hasQuery ? counts[value] : null} />
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
       </div>
       <TabsContent value={scope} asChild>
         <div

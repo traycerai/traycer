@@ -1014,7 +1014,10 @@ function PanelSearchInputBody(
   return (
     <div
       className={cn(
-        props.placement === "page" ? "px-2 pb-3" : "min-w-0 flex-1 sm:max-w-sm",
+        "min-w-0",
+        searchesMessages && "w-full flex-1",
+        !searchesMessages && props.placement === "page" && "px-2 pb-3",
+        props.placement === "toolbar" && "flex-1 sm:max-w-sm",
       )}
     >
       <InputGroup>
@@ -1234,19 +1237,17 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
     );
   }
   return (
-    <>
-      {props.pageSearch}
-      <HistoryScopedResults
-        hostId={props.surfaceHostId}
-        scope={props.scope}
-        onScopeChange={props.onScopeChange}
-        taskCount={historyTaskCount(props)}
-        controls={props.controls}
-        taskList={taskList}
-        messageHits={messageHits}
-        rowsScopeRef={rowsScopeRef}
-      />
-    </>
+    <HistoryScopedResults
+      searchInput={props.pageSearch}
+      hostId={props.surfaceHostId}
+      scope={props.scope}
+      onScopeChange={props.onScopeChange}
+      taskCount={historyTaskCount(props)}
+      controls={props.controls}
+      taskList={taskList}
+      messageHits={messageHits}
+      rowsScopeRef={rowsScopeRef}
+    />
   );
 }
 

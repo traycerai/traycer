@@ -495,6 +495,73 @@ describe("History scope bar: structure", () => {
     expect(isSelected("all")).toBe(true);
   });
 
+  it("puts the search box and the tablist in one row, box first, with the results below it", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    const list = await screen.findByRole("tablist", { name: "Search scope" });
+    const user = userEvent.setup();
+    const box = searchBox();
+
+    const row = list.closest("[data-history-search-row]");
+    if (row === null) throw new Error("the tablist is not in the search row");
+    expect(row.contains(box)).toBe(true);
+    expect(
+      box.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    const below = [screen.getByRole("tabpanel"), scroller()];
+    for (const node of below) {
+      expect(row.contains(node)).toBe(false);
+      expect(
+        row.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+
+    // Scope changes swap the panel, never the row: same box, same row.
+    await user.click(scopeTab("messages"));
+    expect(searchBox()).toBe(box);
+    expect(row.contains(box)).toBe(true);
+    expect(row.contains(screen.getByRole("tablist"))).toBe(true);
+  });
+
+  it("slides the indicator across the 1:2:3 columns and keeps the compact sizing", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    const list = await screen.findByRole("tablist", { name: "Search scope" });
+    const user = userEvent.setup();
+    const indicator = (): HTMLElement => {
+      const node = list.querySelector<HTMLElement>(
+        '[data-slot="tabs-indicator"]',
+      );
+      if (node === null) throw new Error("no scope indicator");
+      return node;
+    };
+
+    expect(list.className).toContain("grid-cols-[1fr_2fr_3fr]");
+    expect(list.className).toContain("h-8");
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.className).toContain("min-h-7");
+    }
+
+    // Width is (index + 1) / 6 of the inner row, offset by index * 50% of
+    // its own width: the left edge lands on 0, 1/6 and 1/2 of the row.
+    const cases: ReadonlyArray<readonly [HistoryScope, number, string]> = [
+      ["all", 1 / 6, "translateX(0%)"],
+      ["tasks", 2 / 6, "translateX(50%)"],
+      ["messages", 3 / 6, "translateX(100%)"],
+    ];
+    for (const [scope, fraction, transform] of cases) {
+      await user.click(scopeTab(scope));
+      const node = indicator();
+      // jsdom serializes the product with the factor first.
+      expect(node.style.width).toBe(`calc(${fraction} * (100% - 4px))`);
+      expect(node.style.transform).toBe(transform);
+      expect(node.className).toContain("transition-[transform,width]");
+      expect(node.className).toContain("duration-160");
+      expect(node.className).toContain("motion-reduce:transition-none");
+    }
+  });
+
   it("offers no Alt scope shortcuts", async () => {
     seedSearch(readyHits(["chat-hit"], false));
     renderScoped("all");
