@@ -328,7 +328,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
     await user.type(input, "a");
 
     // Message search needs two characters, so no message count is claimed.
-    expect(line.textContent).toBe("1 chats by title");
+    expect(line.textContent).toBe("1 chat by title");
     expect(line.getAttribute("role")).toBe("status");
 
     await user.type(input, "b");
@@ -336,7 +336,7 @@ describe("ChatSearchPanel: count line and filter vocabulary", () => {
     // The same status node, now with the message half back.
     expect(countLine()).toBe(line);
     expect(line.textContent).toBe(
-      "1 chats by title · 0 chats with message matches",
+      "1 chat by title · 0 chats with message matches",
     );
   });
 

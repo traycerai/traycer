@@ -732,6 +732,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         updateSearch({ query: next });
       }}
       onKeyDown={keyboardNav.onSearchKeyDown}
+      clearOnEscape={!selectionMode}
       isFetching={isFetching}
       focusOnMount={props.autoFocusSearch}
       scope={selectionMode ? "tasks" : props.scope}
@@ -814,6 +815,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                         updateSearch({ query: next });
                       }}
                       onKeyDown={keyboardNav.onSearchKeyDown}
+                      clearOnEscape={!selectionMode}
                       isFetching={isFetching}
                       focusOnMount={props.autoFocusSearch}
                       scope="tasks"
@@ -959,6 +961,7 @@ interface PanelSearchInputProps {
   readonly value: string;
   readonly onChange: (next: string) => void;
   readonly onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+  readonly clearOnEscape: boolean;
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
   readonly placement: "page" | "toolbar";
@@ -997,6 +1000,7 @@ function PanelSearchInputBody(
   props: PanelSearchInputProps & { readonly searchesMessages: boolean },
 ): ReactNode {
   const { inputRef, searchesMessages } = props;
+  const clearOnEscape = searchesMessages && props.clearOnEscape;
   // Defer the focus to the next frame so it lands after Radix Dialog's
   // own mount focus-trap runs (the modal host wraps this surface). A
   // synchronous focus here would be clobbered by the dialog's
@@ -1041,7 +1045,21 @@ function PanelSearchInputBody(
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
-          onKeyDown={props.onKeyDown}
+          onKeyDown={(event) => {
+            if (
+              clearOnEscape &&
+              event.key === "Escape" &&
+              props.value.length > 0
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              props.onChange("");
+              return;
+            }
+            props.onKeyDown(event);
+          }}
+          data-history-search-clear-on-escape={clearOnEscape ? "" : undefined}
+          aria-keyshortcuts={clearOnEscape ? "Escape" : undefined}
           placeholder={props.placeholder}
           aria-label={props.ariaLabel}
         />

@@ -3122,7 +3122,7 @@ describe("<TestEpicSessionTab />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -3131,7 +3131,7 @@ describe("<TestEpicSessionTab />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
     await waitFor(() => {

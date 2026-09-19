@@ -14,6 +14,15 @@ export const historyOverlayModule: SystemOverlayModule<"history"> = {
   ),
   promotionIntent: () => resolveHistoryTabIntent(),
   isOverlayPath: (pathname) => isHistoryPath(pathname),
-  consumeEscape: () => false,
+  // Radix captures Escape before the input receives it. Keep the modal open
+  // for the focused desktop search; the input alone clears and consumes it.
+  consumeEscape: () => {
+    const input = document.activeElement;
+    return (
+      input instanceof HTMLInputElement &&
+      input.hasAttribute("data-history-search-clear-on-escape") &&
+      input.value.length > 0
+    );
+  },
   prepareForPromotion: prepareHistoryScopeForPromotion,
 };

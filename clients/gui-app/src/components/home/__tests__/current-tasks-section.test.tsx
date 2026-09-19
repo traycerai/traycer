@@ -13,6 +13,10 @@ const testState = vi.hoisted(() => ({
   pendingPinIds: new Set<string>(),
 }));
 
+const pinSupport = vi.hoisted(() =>
+  vi.fn<(hostId: string | null) => boolean>(),
+);
+
 interface SetPinnedVariables {
   readonly epicId: string;
   readonly pinned: boolean;
@@ -53,7 +57,7 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
-  useEpicPinLocalHomeSupported: () => true,
+  useEpicPinLocalHomeSupported: (hostId: string | null) => pinSupport(hostId),
 }));
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
@@ -86,6 +90,7 @@ const CAPTION =
   "Tasks in progress, pinned, or open in a tab. Everything else is in History.";
 const COVERAGE_NOTICE = "Can't check everything that's running right now";
 const PINS_UNAVAILABLE_NOTICE = "Can't load your pinned tasks right now.";
+const PINS_PARTIAL_NOTICE = "Some pinned tasks couldn't load.";
 
 function task(id: string, overrides: Partial<HistoryItem>): HistoryItem {
   return {
@@ -152,6 +157,8 @@ describe("<CurrentTasksSection />", () => {
     testState.openHistory.mockReset();
     testState.setPinnedMutate.mockReset();
     testState.pendingPinIds = new Set();
+    pinSupport.mockReset();
+    pinSupport.mockReturnValue(true);
     useAuthStore.setState({ status: "signed-in" });
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
@@ -277,6 +284,41 @@ describe("<CurrentTasksSection />", () => {
 
       const pin = screen.getByTestId("epics-list-row-pin");
       expect(pin instanceof HTMLButtonElement && pin.disabled).toBe(true);
+    });
+
+    it("dispatches a pin against the row's owning host", () => {
+      setGroups({ open: [task("a", { hostId: "host-b", isLocalHome: true })] });
+      renderSection();
+
+      fireEvent.click(screen.getByTestId("epics-list-row-pin"));
+
+      expect(pinSupport).toHaveBeenCalledWith("host-b");
+      expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+        epicId: "epic-a",
+        pinned: true,
+        isLocalHome: true,
+        hostId: "host-b",
+      });
+    });
+
+    it("gates a local row on its owning host: unsupported there is aria-disabled and never dispatches", () => {
+      pinSupport.mockImplementation((hostId) => hostId !== "host-b");
+      setGroups({
+        open: [
+          task("a", { hostId: "host-b", isLocalHome: true }),
+          task("c", { hostId: "host-d", isLocalHome: true }),
+        ],
+      });
+      renderSection();
+
+      const pinA = within(rowItem("a")).getByTestId("epics-list-row-pin");
+      const pinC = within(rowItem("c")).getByTestId("epics-list-row-pin");
+      expect(pinA.getAttribute("aria-disabled")).toBe("true");
+      expect(pinC.getAttribute("aria-disabled")).toBeNull();
+      fireEvent.click(pinA);
+      expect(testState.setPinnedMutate).not.toHaveBeenCalled();
+      fireEvent.click(pinC);
+      expect(testState.setPinnedMutate).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -434,6 +476,33 @@ describe("<CurrentTasksSection />", () => {
         expect(screen.queryByTestId("epics-list-loading")).toBeNull();
       },
     );
+
+    it("with pinned rows and incomplete pins, shows the partial line once, after the pinned rows", () => {
+      testState.pinsComplete = false;
+      setGroups({ pinned: [task("p1", {}), task("p2", {})] });
+      renderSection();
+
+      const notice = within(group("Pinned")).getByText(PINS_PARTIAL_NOTICE);
+      expect(screen.getAllByText(PINS_PARTIAL_NOTICE)).toHaveLength(1);
+      expect(screen.queryByText(PINS_UNAVAILABLE_NOTICE)).toBeNull();
+      expect(rowIds()).toEqual(["p1", "p2"]);
+      expect(
+        rowButton("p2").compareDocumentPosition(notice) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("shows the 'none' copy, not the partial one, when only other groups have rows and pins are incomplete", () => {
+      testState.pinsComplete = false;
+      setGroups({ open: [task("o1", {})] });
+      renderSection();
+
+      expect(
+        within(group("Pinned")).getByText(PINS_UNAVAILABLE_NOTICE),
+      ).not.toBeNull();
+      expect(screen.queryByText(PINS_PARTIAL_NOTICE)).toBeNull();
+      expect(rowIds()).toEqual(["o1"]);
+    });
 
     it("does not show the pins line while pins are still loading or when they are complete", () => {
       testState.pinsComplete = false;

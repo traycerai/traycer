@@ -34,12 +34,13 @@ export interface CloudEpicTasksCacheScope {
   readonly userId: string;
 }
 
-export async function restartCurrentTasksPinTail(
+export async function restartCurrentTasksPinReads(
   queryClient: QueryClient,
   scope: CloudEpicTasksCacheScope,
 ): Promise<void> {
   const matchesScope = (query: Query): boolean =>
-    currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope);
+    currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope) ||
+    epicPinReadingQueryKeyMatchesScope(query.queryKey, scope);
   await queryClient.cancelQueries(
     { predicate: matchesScope },
     { revert: false },
@@ -70,6 +71,7 @@ export function removeDeletedEpicsFromCloudTaskCaches(
     predicate: (query) =>
       cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
       cloudEpicTasksLastKnownQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
       currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
   })) {
     if (response === undefined) continue;
@@ -124,6 +126,7 @@ export function readEpicTitlesFromCloudTaskCaches(
   for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
     predicate: (query) =>
       cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
       currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
   })) {
     if (response === undefined) continue;
@@ -154,6 +157,7 @@ export function updateEpicTitleInCloudTaskCaches(
   ] of queryClient.getQueriesData<ListTasksResponse>({
     predicate: (query) =>
       cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
       currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
   })) {
     if (response === undefined) continue;
@@ -184,7 +188,7 @@ export function reconcileAuthoritativeEpicTitleInCloudTaskCaches(
 ): void {
   if (normalizeEpicTitle(title) === null) return;
   updateEpicTitleInCloudTaskCaches(queryClient, scope, epicId, title);
-  void restartCurrentTasksPinTail(queryClient, scope);
+  void restartCurrentTasksPinReads(queryClient, scope);
 }
 
 /**
@@ -336,58 +340,12 @@ function setEpicPinnedInTaskContextsResponse(
 }
 
 /**
- * Scope match for the per-host PIN READING key (`cloudQueryKeys.epicPinReading`):
- * `["host", hostId, "epic.listTasks", params, userId, population, "pin-reading"]`
- * - so the user sits at index 4, one earlier than in the History key, which is
- * why this cannot be folded into the predicate below.
- *
- * Matching on host and user and NOT on `population` is deliberate: one host/user
- * can hold several entries at once, one per population the session has asked
- * about, and a pin is a fact about the epic on that host rather than about any one
- * of those questions. So a write reaches every variant, including the inactive
- * entry a later tab close returns this hook to.
- *
- * The reading cache holds a `ListTasksResponse`, the same shape History's does,
- * so every existing row patch applies to it unchanged; only the MATCH was
- * missing.
- *
- * Enrolled at three of the eleven sites that match the History key, and the
- * other eight are decisions rather than omissions. Enrolled: the pin patch below
- * (which is also the rollback - `onError` inverts the bit through it) and the
- * pin mutation's two `onSuccess` predicates.
- *
- * Two things are read out of this cache, not one: the `pinned` FIELD, and
- * MEMBERSHIP. `combineLocalPinReadings` admits a row only for `home: "local"`
- * with a `pinned` present, and `pinnedKnown` reports whether the epic is in that
- * map at all - so an epic's ABSENCE renders, as "nobody answered". The first
- * version of this list said a new row here "is never rendered from it" and was
- * wrong for exactly that reason (R8). The obligation is discharged at the KEY
- * rather than by enrolling a row-inserting write: `cloudQueryKeys.epicPinReading`
- * carries the host's local-homed open population, so an epic entering it re-asks
- * the host. Not enrolled, then:
- *
- *  - the two title paths here and the session provider's title write-through - a
- *    title in this cache is never rendered from it;
- *  - `epic.create`'s patch, which inserts a row into History's cache and still
- *    cannot answer this one's question. It merges a `TaskLight`, a type with
- *    nowhere to carry `home` (see `setEpicLocalHomeInCloudTaskCaches` below),
- *    filling `pinned` with `existingTask?.pinned ?? false`. So the row is either
- *    skipped here for want of `home: "local"`, or - were it made to carry one -
- *    would present a fabricated `false` as a READING from the owning host's
- *    durable registry, which is the false-as-an-answer defect `pinnedKnown`
- *    exists to prevent. Only the host can answer `pinnedByUserId`, and the
- *    population key is what makes it be asked. It also covers the arrivals this
- *    patch never sees at all: an epic created in another window, learned from
- *    another session, or newly local-homed after this page was fetched;
- *  - `setEpicLocalHomeInCloudTaskCaches` - a stale `home` here cannot be read in
- *    either direction. An epic that stops being local-homed leaves the session's
- *    local-home set and is no longer overlaid; one that BECOMES local-homed
- *    enters this host's population, which re-keys the reading and asks the host
- *    instead of trusting the cached row's marker;
- *  - the `lastViewed` sort predicate and `reopenLocalFirstCloudPage` - both
- *    describe a paged, verdict-demotable History page, which this is not;
- *  - the delete sweep - this cache is a pinned-bit LOOKUP, never a row source,
- *    so an entry for a deleted epic can neither render nor reintroduce a row.
+ * Local pin readings also supply Current tasks rows. Enroll them in title and
+ * delete patches as well as pin writes; authoritative renames cancel and
+ * restart in-flight reads so a delayed initial page cannot undo the write.
+ * New local epics re-key the owning host's population instead of fabricating
+ * a pin reading from a create response. Home changes likewise re-key that
+ * population. History pagination and last-viewed ordering do not apply here.
  */
 export function epicPinReadingQueryKeyMatchesScope(
   queryKey: readonly unknown[],

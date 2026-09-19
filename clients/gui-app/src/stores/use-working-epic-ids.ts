@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from "react";
 import { agentActivityTiers } from "@/lib/agent-activity";
-import { epicActivityStatusFromSources } from "@/hooks/epic/use-epic-activity-status";
+import {
+  chatSessionActivity,
+  epicActivityStatusFromSources,
+} from "@/hooks/epic/use-epic-activity-status";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
@@ -61,20 +64,35 @@ function subscribeWorkingEpicIds(onChange: () => void): () => void {
     onChange();
   };
   const resyncChatSubscriptions = (): void => {
-    reconcileStoreSubscriptions(
-      CHAT_REGISTRY.listHandles(),
-      chatSubscriptions,
-      (handle) => handle.store.subscribe(emitIfChanged),
+    const handles = CHAT_REGISTRY.listHandles();
+    const membershipChanged =
+      handles.length !== chatSubscriptions.size ||
+      handles.some((handle) => !chatSubscriptions.has(handle));
+    reconcileStoreSubscriptions(handles, chatSubscriptions, (handle) =>
+      handle.store.subscribe((state, previous) => {
+        if (chatSessionActivity(state) !== chatSessionActivity(previous)) {
+          emitIfChanged();
+        }
+      }),
     );
-    emitIfChanged();
+    if (membershipChanged) emitIfChanged();
   };
   const resyncEpicSubscriptions = (): void => {
-    reconcileStoreSubscriptions(
-      EPIC_REGISTRY.liveHandles(),
-      epicSubscriptions,
-      (handle) => handle.store.subscribe(emitIfChanged),
+    const handles = EPIC_REGISTRY.liveHandles();
+    const membershipChanged =
+      handles.length !== epicSubscriptions.size ||
+      handles.some((handle) => !epicSubscriptions.has(handle));
+    reconcileStoreSubscriptions(handles, epicSubscriptions, (handle) =>
+      handle.store.subscribe((state, previous) => {
+        if (
+          state.chats.allIds !== previous.chats.allIds ||
+          state.tuiAgents.allIds !== previous.tuiAgents.allIds
+        ) {
+          emitIfChanged();
+        }
+      }),
     );
-    emitIfChanged();
+    if (membershipChanged) emitIfChanged();
   };
   const unsubscribeActivity = useAgentActivityStore.subscribe(emitIfChanged);
   const unsubscribeChatRegistry = CHAT_REGISTRY.subscribe(

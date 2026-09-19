@@ -36,6 +36,16 @@ export function CurrentTasksSection(): ReactNode {
   const { groups, isPending, pinsComplete, activityCoverage } =
     useCurrentTasks();
   const { openHistory } = useSystemTabModalActions();
+  const setPinned = useEpicSetPinned();
+  const pendingPinIds = usePendingSetPinnedEpicIds();
+  const onSetPinned = (item: HistoryItem, pinned: boolean): void => {
+    setPinned.mutate({
+      epicId: item.epicId,
+      pinned,
+      isLocalHome: item.isLocalHome === true,
+      hostId: item.hostId ?? null,
+    });
+  };
   const chord = useBindingForAction("app.history.open");
   const headingId = useId();
   const sectionRef = useRef<HTMLElement>(null);
@@ -111,6 +121,8 @@ export function CurrentTasksSection(): ReactNode {
                   title="In progress"
                   items={groups.inProgress}
                   onRowKeyDown={onRowKeyDown}
+                  onSetPinned={onSetPinned}
+                  pendingPinIds={pendingPinIds}
                   notice={
                     activityCoverage === "fleet"
                       ? null
@@ -121,9 +133,11 @@ export function CurrentTasksSection(): ReactNode {
                   title="Pinned"
                   items={groups.pinned}
                   onRowKeyDown={onRowKeyDown}
+                  onSetPinned={onSetPinned}
+                  pendingPinIds={pendingPinIds}
                   notice={
-                    isEmpty && !isPending && !pinsComplete
-                      ? "Can't load your pinned tasks right now."
+                    !isPending && !pinsComplete
+                      ? pinnedTasksUnavailableNotice(groups.pinned.length)
                       : null
                   }
                 />
@@ -131,6 +145,8 @@ export function CurrentTasksSection(): ReactNode {
                   title="Open"
                   items={groups.open}
                   onRowKeyDown={onRowKeyDown}
+                  onSetPinned={onSetPinned}
+                  pendingPinIds={pendingPinIds}
                   notice={null}
                 />
               </>
@@ -146,6 +162,8 @@ function CurrentTaskGroup(props: {
   readonly title: string;
   readonly items: readonly HistoryItem[];
   readonly notice: string | null;
+  readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
+  readonly pendingPinIds: ReadonlySet<string>;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }): ReactNode {
   const headingId = useId();
@@ -169,17 +187,14 @@ function CurrentTaskGroup(props: {
           {props.items.length}
         </span>
       </h3>
-      {props.notice === null ? null : (
-        <p className="px-2.5 py-1 text-ui-xs text-muted-foreground">
-          {props.notice}
-        </p>
-      )}
       <ul className="flex flex-col gap-0.5">
         {visible.map((item) => (
           <CurrentTaskRow
             key={item.id}
             item={item}
             onRowKeyDown={props.onRowKeyDown}
+            onSetPinned={props.onSetPinned}
+            isPinPending={props.pendingPinIds.has(item.epicId)}
           />
         ))}
       </ul>
@@ -192,17 +207,22 @@ function CurrentTaskGroup(props: {
           Show {remaining} more
         </button>
       ) : null}
+      {props.notice === null ? null : (
+        <p className="px-2.5 py-1 text-ui-xs text-muted-foreground">
+          {props.notice}
+        </p>
+      )}
     </section>
   );
 }
 
 function CurrentTaskRow(props: {
   readonly item: HistoryItem;
+  readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
+  readonly isPinPending: boolean;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }): ReactNode {
   const openItem = useHistoryOpenItem({ onSelectEpic: null, onOpenItem: null });
-  const setPinned = useEpicSetPinned();
-  const pendingIds = usePendingSetPinnedEpicIds();
   const item = props.item;
   return (
     <HistoryTaskRow
@@ -231,21 +251,20 @@ function CurrentTaskRow(props: {
       hasSweepControl={false}
       contextMenuItems={null}
       openInNewWindowControl={null}
-      onSetPinned={(epicId, pinned) =>
-        setPinned.mutate({
-          epicId,
-          pinned,
-          isLocalHome: item.isLocalHome === true,
-          hostId: null,
-        })
-      }
-      isPinPending={pendingIds.has(item.epicId)}
+      onSetPinned={(_epicId, pinned) => props.onSetPinned(item, pinned)}
+      isPinPending={props.isPinPending}
       pinAlwaysVisible
       showOpenBadge={false}
       isOpen={false}
       worktrees={[]}
     />
   );
+}
+
+function pinnedTasksUnavailableNotice(pinnedCount: number): string {
+  return pinnedCount > 0
+    ? "Some pinned tasks couldn't load."
+    : "Can't load your pinned tasks right now.";
 }
 
 function currentTaskTargets(scope: HTMLElement): HTMLElement[] {

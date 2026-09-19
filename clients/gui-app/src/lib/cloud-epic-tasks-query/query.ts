@@ -272,7 +272,9 @@ function sortRepoIdentifiers(
   );
 }
 
-function isListTasksResponse(value: unknown): value is ListTasksResponse {
+export function isListTasksResponse(
+  value: unknown,
+): value is ListTasksResponse {
   return (
     typeof value === "object" &&
     value !== null &&

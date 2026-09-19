@@ -51,6 +51,23 @@ interface CursorPageArgs {
   readonly abortSignal: AbortSignal | undefined;
 }
 
+interface LocalRowsReading {
+  readonly tasks: ReadonlyArray<{
+    readonly task: ListTaskLight;
+    readonly hostId: string;
+  }>;
+  readonly pinnedStates: ReadonlyMap<string, boolean>;
+  readonly hostIds: ReadonlyMap<string, string>;
+  readonly isFetching: boolean;
+}
+
+const NO_LOCAL_ROWS: LocalRowsReading = {
+  tasks: [],
+  pinnedStates: new Map(),
+  hostIds: new Map(),
+  isFetching: false,
+};
+
 const testState = vi.hoisted(() => {
   const state: {
     firstPage: ListTasksResponse | undefined;
@@ -62,6 +79,10 @@ const testState = vi.hoisted(() => {
     pagesByHost: Record<string, ListTasksResponse | undefined>;
     /** Hosts whose first-page request rejects. */
     failingHosts: Set<string>;
+    /** Session ids of the open tabs `useOpenTabEpicIds` reports. */
+    openEpicIds: string[];
+    /** What the owner-host local read answers for those tabs. */
+    localRows: LocalRowsReading;
   } = {
     firstPage: undefined,
     placeholder: undefined,
@@ -69,6 +90,13 @@ const testState = vi.hoisted(() => {
     hostId: "host-1",
     pagesByHost: {},
     failingHosts: new Set(),
+    openEpicIds: [],
+    localRows: {
+      tasks: [],
+      pinnedStates: new Map(),
+      hostIds: new Map(),
+      isFetching: false,
+    },
   };
   return state;
 });
@@ -132,14 +160,31 @@ const NO_TASK_CONTEXTS = vi.hoisted(() => ({
   isFetching: false,
 }));
 
+const taskContextRequests = vi.hoisted(() => [] as string[][]);
+
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
-  useEpicGetTaskContexts: () => NO_TASK_CONTEXTS,
+  useEpicGetTaskContexts: (ids: readonly string[]) => {
+    taskContextRequests.push([...ids]);
+    return NO_TASK_CONTEXTS;
+  },
 }));
 
-vi.mock("@/hooks/home/use-open-tab-epic-ids", () => {
-  const none: string[] = [];
-  return { useOpenTabEpicIds: () => none };
-});
+vi.mock("@/hooks/home/use-open-tab-epic-ids", () => ({
+  useOpenTabEpicIds: () => testState.openEpicIds,
+}));
+
+// Only the owner-host read is faked (its transport path is covered against the
+// real fetch path in the pinned-states probe); `useCurrentTasks` is real.
+vi.mock(
+  "@/hooks/epic/use-epic-task-pinned-states-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/epic/use-epic-task-pinned-states-query")
+      >();
+    return { ...actual, useLocalHomedOpenTaskRows: () => testState.localRows };
+  },
+);
 
 interface PinVariables {
   readonly epicId: string;
@@ -301,6 +346,9 @@ beforeEach(() => {
   testState.hostId = HOST_ID;
   testState.pagesByHost = {};
   testState.failingHosts = new Set();
+  testState.openEpicIds = [];
+  testState.localRows = NO_LOCAL_ROWS;
+  taskContextRequests.length = 0;
   useCloudEpicTasksPagesStore.setState({
     pagesByIdentity: {},
     generationByIdentity: {},
@@ -1151,5 +1199,101 @@ describe("useCurrentTasks restarting a multi-page pin tail", () => {
     ).not.toContain("abandoned-cursor");
     expect(fetchCursorPage).toHaveBeenCalledTimes(3);
     expect(pinnedIds(result)).not.toContain("abandoned");
+  });
+});
+
+describe("useCurrentTasks open task owned by another host", () => {
+  const HOST_B = "host-b";
+
+  it("shows it as an Open row carrying B (window follows A), the owner's row winning over a stale first-page mirror, and never queries the effective host for it", async () => {
+    testState.firstPage = page(
+      [task("open-b", true, "Stale mirror title", "cloud")],
+      null,
+      SETTLED,
+    );
+    testState.openEpicIds = ["open-b", "open-cloud"];
+    testState.localRows = {
+      tasks: [
+        { task: task("open-b", false, "Owner title", "local"), hostId: HOST_B },
+      ],
+      pinnedStates: new Map([["open-b", false]]),
+      hostIds: new Map([["open-b", HOST_B]]),
+      isFetching: false,
+    };
+
+    const { result } = renderHook(() => useCurrentTasks(), {
+      wrapper: wrapperFor(newQueryClient()),
+    });
+
+    await waitFor(() => {
+      expect(result.current.groups.open.map((item) => item.title)).toEqual([
+        "Owner title",
+      ]);
+    });
+    expect(result.current.groups.open[0].hostId).toBe(HOST_B);
+    expect(result.current.groups.open[0].isLocalHome).toBe(true);
+    // The owner says unpinned; the mirror's `pinned: true` must not resurrect it.
+    expect(pinnedIds(result)).toEqual([]);
+    // Only the id the local read does not own goes to the effective host.
+    expect(taskContextRequests.length).toBeGreaterThan(0);
+    for (const ids of taskContextRequests) expect(ids).not.toContain("open-b");
+  });
+
+  it("drops a row read from a host that does not hold the session", async () => {
+    testState.firstPage = page([], null, SETTLED);
+    testState.openEpicIds = ["open-b"];
+    testState.localRows = {
+      tasks: [
+        {
+          task: task("open-b", false, "Wrong host", "local"),
+          hostId: "host-c",
+        },
+      ],
+      pinnedStates: new Map(),
+      hostIds: new Map([["open-b", HOST_B]]),
+      isFetching: false,
+    };
+
+    const { result } = renderHook(() => useCurrentTasks(), {
+      wrapper: wrapperFor(newQueryClient()),
+    });
+
+    await waitFor(() => {
+      expect(result.current.pinsComplete).toBe(true);
+    });
+    expect(result.current.groups.open).toEqual([]);
+  });
+});
+
+describe("useCurrentTasks pin tail under an unverified session", () => {
+  const PROFILE = { userId: USER_ID, userName: "U", email: "u@example.com" };
+  const CONTEXT = { userId: USER_ID, username: "U" };
+
+  it("fetches no cursor page for a cached pinned first page, and starts the tail once the session verifies", async () => {
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    testState.firstPage = page([pinnedTask("first-pin")], "cursor-1", SETTLED);
+    fetchCursorPage.mockResolvedValue(
+      page([pinnedTask("tail-only")], null, null),
+    );
+
+    const { result } = renderHook(() => useCurrentTasks(), {
+      wrapper: wrapperFor(newQueryClient()),
+    });
+
+    await waitFor(() => {
+      expect(pinnedIds(result)).toEqual(["first-pin"]);
+    });
+    await flushDeliveries();
+    expect(fetchCursorPage).not.toHaveBeenCalled();
+    // The tail cannot be read, so completeness must not be claimed.
+    expect(result.current.pinsComplete).toBe(false);
+
+    act(() => {
+      useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    });
+    await waitFor(() => {
+      expect(pinnedIds(result)).toContain("tail-only");
+    });
+    expect(fetchCursorPage).toHaveBeenCalledTimes(1);
   });
 });

@@ -286,7 +286,9 @@ function HistoryPinControl(props: {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const localHomePinSupported = useEpicPinLocalHomeSupported(null);
+  const localHomePinSupported = useEpicPinLocalHomeSupported(
+    props.item.hostId ?? null,
+  );
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
   const unavailableReason = historyPinUnavailableReason(

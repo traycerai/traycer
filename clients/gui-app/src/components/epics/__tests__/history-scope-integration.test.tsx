@@ -51,6 +51,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PickerEpicsListPanel } from "@/components/epics/epics-list-panel";
 import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import { SystemTabModalSurface } from "@/components/layout/dialogs/system-tab-modal-host";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
@@ -351,6 +353,39 @@ function renderScoped(initialScope: HistoryScope): {
   });
   render(<RouterProvider router={router} />);
   return { onScopeSpy };
+}
+
+/**
+ * The History MODAL as the app builds it: the real system-modal surface (frame,
+ * `onEscapeKeyDown` -> `overlayConsumesEscape`, `HistoryModalContent`) inside a
+ * real Radix Dialog root, so Radix's capture-phase Escape listener is in play.
+ */
+function renderInModal(onClose: () => void): void {
+  const rootRoute = createRootRoute({ component: () => <RootOutlet /> });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => (
+      <DialogPrimitive.Root
+        open
+        onOpenChange={(next) => {
+          if (!next) onClose();
+        }}
+      >
+        <SystemTabModalSurface
+          active={{ kind: "history", section: null }}
+          editingTheme={false}
+          onClose={onClose}
+          onPromote={() => undefined}
+        />
+      </DialogPrimitive.Root>
+    ),
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  render(<RouterProvider router={router} />);
 }
 
 function renderPicker(): void {
@@ -934,6 +969,69 @@ describe("History scope bar: the filters line", () => {
     });
     await user.click(scopeTab("all"));
     expect(screen.queryByText(LINE)).toBeNull();
+  });
+});
+
+describe("History search: Escape with a non-empty query", () => {
+  async function focusedBox(): Promise<HTMLInputElement> {
+    await screen.findByRole("tablist");
+    const box = searchBox();
+    if (!(box instanceof HTMLInputElement)) throw new Error("no search input");
+    act(() => {
+      box.focus();
+    });
+    return box;
+  }
+
+  it("in the modal, clears the query and keeps the modal open; the next Escape closes it", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    const onClose = vi.fn<() => void>();
+    renderInModal(onClose);
+    const box = await focusedBox();
+    expect(box.value).toBe("matching");
+    const user = userEvent.setup();
+
+    // Radix listens for Escape in the capture phase on the document, so it sees
+    // this key before any `onKeyDown` on the input.
+    await user.keyboard("{Escape}");
+
+    expect((searchBox() as HTMLInputElement).value).toBe("");
+    expect(useHistorySearchStore.getState().search.query).toBe("");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await user.keyboard("{Escape}");
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("in the modal's selection mode, Escape is unchanged: it closes and leaves the query alone", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    const onClose = vi.fn<() => void>();
+    renderInModal(onClose);
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+    await focusedBox();
+
+    await user.keyboard("{Escape}");
+
+    expect(onClose).toHaveBeenCalled();
+    expect(useHistorySearchStore.getState().search.query).toBe("matching");
+  });
+
+  it("in the promoted tab, clears the query", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    const box = await focusedBox();
+    const user = userEvent.setup();
+
+    await user.keyboard("{Escape}");
+
+    expect(box.value).toBe("");
+    expect(useHistorySearchStore.getState().search.query).toBe("");
   });
 });
 

@@ -420,7 +420,9 @@ function resultCountLabel(
   const { chatMatches, chatNextCursor, messageMatches, messageNextCursor } =
     status.results;
   const chats = `${chatMatches.length}${chatNextCursor === null ? "" : "+"}`;
-  if (!messagesSearched) return `${chats} chats by title`;
+  const chatNoun = chats === "1" ? "chat" : "chats";
+  if (!messagesSearched) return `${chats} ${chatNoun} by title`;
   const messages = `${messageMatches.length}${messageNextCursor === null ? "" : "+"}`;
-  return `${chats} chats by title · ${messages} chats with message matches`;
+  const messageNoun = messages === "1" ? "chat" : "chats";
+  return `${chats} ${chatNoun} by title · ${messages} ${messageNoun} with message matches`;
 }

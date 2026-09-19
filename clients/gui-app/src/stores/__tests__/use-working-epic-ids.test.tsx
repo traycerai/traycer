@@ -3,7 +3,7 @@
  * activity naming an agent a LIVE epic projection no longer holds is not work,
  * and dropping that agent from the projection has to notify the list.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -12,7 +12,21 @@ import {
   publishAgentActivity,
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
+import { epicActivityStatusFromSources } from "@/hooks/epic/use-epic-activity-status";
 import { useWorkingEpicIds } from "@/stores/use-working-epic-ids";
+
+// Spy only: the real rule still runs, so the assertions below are about HOW OFTEN
+// the aggregate scan asks it, not about what it answers.
+vi.mock("@/hooks/epic/use-epic-activity-status", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/epic/use-epic-activity-status")
+    >();
+  return {
+    ...actual,
+    epicActivityStatusFromSources: vi.fn(actual.epicActivityStatusFromSources),
+  };
+});
 
 const EPIC_ID = "epic-working";
 const AGENT_ID = "chat-1";
@@ -108,5 +122,29 @@ describe("useWorkingEpicIds", () => {
     });
 
     expect(result.current.has(EPIC_ID)).toBe(true);
+  });
+});
+
+describe("useWorkingEpicIds ignores unrelated session updates", () => {
+  it("does not rescan on an epic-store write that touches neither chats nor tuiAgents, but does when the agent list changes", () => {
+    const handle = registerSessionHoldingAgents([AGENT_ID]);
+    renderHook(() => useWorkingEpicIds());
+    act(() => {
+      publishWorking([AGENT_ID]);
+    });
+    const scan = vi.mocked(epicActivityStatusFromSources);
+    scan.mockClear();
+
+    act(() => {
+      handle.store.setState((state) => ({
+        epic: { ...state.epic, title: "Unrelated transcript-side update" },
+      }));
+    });
+    expect(scan).not.toHaveBeenCalled();
+
+    act(() => {
+      handle.store.setState({ chats: { allIds: [], byId: {} } });
+    });
+    expect(scan).toHaveBeenCalled();
   });
 });

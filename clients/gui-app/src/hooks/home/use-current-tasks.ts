@@ -16,6 +16,7 @@ import {
   EMPTY_LOCAL_HOMED_TASK_IDS,
 } from "@/components/home/data/home-page.data";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useLocalHomedOpenTaskRows } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { useHasPendingSetPinnedForScope } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useOpenTabEpicIds } from "@/hooks/home/use-open-tab-epic-ids";
@@ -89,7 +90,7 @@ export function useCurrentTasks(): CurrentTasks {
     nowMs,
   });
   const items = useMemo(
-    () => deduplicateItems([...pins.fetchedItems, ...hydration.items]),
+    () => deduplicateItems([...hydration.items, ...pins.fetchedItems]),
     [hydration.items, pins.fetchedItems],
   );
   const groups = useMemo(
@@ -131,8 +132,12 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
       !cloudTasks.query.isRefetchError &&
       !pinMutationPending,
   );
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const tailEnabled = scan.tailEnabled && cloudAuthorized;
   const tailQuery = useQuery(
-    currentTaskPinTailQueryOptions(scan.tailScope, scan.tailEnabled),
+    currentTaskPinTailQueryOptions(scan.tailScope, tailEnabled),
   );
   const firstItems = useMemo(
     () =>
@@ -166,7 +171,7 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
     firstPageUnavailable: scan.firstPageUnavailable,
     firstPageLocalRowsIncomplete: scan.firstPageLocalRowsIncomplete,
     firstPageDecision: scan.firstPageDecision,
-    tailEnabled: scan.tailEnabled,
+    tailEnabled,
     tailPending: tailQuery.isPending,
     tailPinsComplete: tailQuery.data?.pinsComplete === true,
   });
@@ -246,6 +251,7 @@ function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {
   readonly items: readonly HistoryItem[];
   readonly isFetching: boolean;
 } {
+  const localRows = useLocalHomedOpenTaskRows(input.openEpicIds, input.userId);
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
@@ -254,28 +260,53 @@ function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {
       input.fetchedItems.map((item) => item.epicId),
     );
     return [...new Set([...input.workingEpicIds, ...input.openEpicIds])]
-      .filter((epicId) => !fetchedEpicIds.has(epicId))
+      .filter(
+        (epicId) =>
+          !fetchedEpicIds.has(epicId) && !localRows.hostIds.has(epicId),
+      )
       .sort();
-  }, [input.fetchedItems, input.openEpicIds, input.workingEpicIds]);
+  }, [
+    input.fetchedItems,
+    input.openEpicIds,
+    input.workingEpicIds,
+    localRows.hostIds,
+  ]);
   const taskContexts = useEpicGetTaskContexts(hydrationIds, input.userId, {
     enabled: cloudAuthorized,
   });
   const items = useMemo(
-    () =>
-      buildHistoryItemsFromTasks(
+    () => [
+      ...buildHistoryItemsFromTasks(
+        localRows.tasks.flatMap(({ task, hostId }) =>
+          task.home === "local" &&
+          localRows.hostIds.get(task.epic?.light?.id ?? "") === hostId
+            ? [task]
+            : [],
+        ),
+        input.nowMs,
+        input.userId,
+        EMPTY_LOCAL_HOMED_TASK_IDS,
+      ).map((item) => ({
+        ...item,
+        hostId: localRows.hostIds.get(item.epicId),
+      })),
+      ...buildHistoryItemsFromTasks(
         [...taskContexts.tasksById.values()],
         input.nowMs,
         input.userId,
         taskContexts.localHomedTaskIds,
       ),
+    ],
     [
       input.nowMs,
       input.userId,
       taskContexts.localHomedTaskIds,
       taskContexts.tasksById,
+      localRows.tasks,
+      localRows.hostIds,
     ],
   );
-  return { items, isFetching: taskContexts.isFetching };
+  return { items, isFetching: taskContexts.isFetching || localRows.isFetching };
 }
 
 function currentTaskPinTailQueryOptions(scope: PinTailScope, enabled: boolean) {

@@ -223,7 +223,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import {
+  useEpicTaskPinnedStates,
+  useLocalHomedOpenTaskRows,
+} from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { useEpicSetPinned } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { __resetCloudEpicTasksClientsForTests } from "@/lib/cloud-epic-tasks-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -836,5 +839,78 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
       hostId: OWNER_HOST_ID,
       pinnedKnown: false,
     });
+  });
+});
+
+/**
+ * `useLocalHomedOpenTaskRows` reads each open local-homed epic from the host
+ * holding its live session - never the window's - and tags the row with it.
+ */
+describe("useLocalHomedOpenTaskRows reads each open epic from its owner", () => {
+  beforeEach(() => {
+    transport.dispatched.length = 0;
+    transport.responseByHostId.clear();
+    transport.resolvableHostIds.clear();
+    transport.contextUserByHostId.clear();
+    transport.listenersByHostId.clear();
+    transport.heldHostIds.clear();
+    transport.parkedByHostId.clear();
+    __resetCloudEpicTasksClientsForTests();
+    transport.resolvableHostIds.add(OWNER_HOST_ID);
+    transport.resolvableHostIds.add(OTHER_HOST_ID);
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow(EPIC_LOCAL, true)]),
+    );
+    transport.responseByHostId.set(
+      OTHER_HOST_ID,
+      page([localRow(EPIC_ON_OTHER_HOST, false)]),
+    );
+    registryState.localHomedByHost = new Map([
+      [EPIC_LOCAL, OWNER_HOST_ID],
+      [EPIC_ON_OTHER_HOST, OTHER_HOST_ID],
+    ]);
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+  });
+
+  function renderRows(userId: string | null) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return renderHook(
+      () => useLocalHomedOpenTaskRows([EPIC_LOCAL, EPIC_ON_OTHER_HOST], userId),
+      { wrapper: makeWrapper(queryClient) },
+    );
+  }
+
+  it("tags each row with its OWN host, reads pins from it, and never asks the window's host", async () => {
+    const { result } = renderRows(USER_ID);
+
+    await waitFor(() => {
+      expect(result.current.tasks).toHaveLength(2);
+    });
+    const hostByEpic = new Map(
+      result.current.tasks.map(({ task, hostId }) => [
+        task.epic?.light?.id ?? "",
+        hostId,
+      ]),
+    );
+    expect(hostByEpic.get(EPIC_LOCAL)).toBe(OWNER_HOST_ID);
+    expect(hostByEpic.get(EPIC_ON_OTHER_HOST)).toBe(OTHER_HOST_ID);
+    expect(result.current.pinnedStates.get(EPIC_LOCAL)).toBe(true);
+    expect(result.current.pinnedStates.get(EPIC_ON_OTHER_HOST)).toBe(false);
+    expect(dispatchesTo(WINDOW_HOST_ID)).toEqual([]);
+  });
+
+  it("dispatches nothing and returns no rows without a user id", () => {
+    const { result } = renderRows(null);
+
+    expect(result.current.tasks).toEqual([]);
+    expect(transport.dispatched).toEqual([]);
   });
 });
