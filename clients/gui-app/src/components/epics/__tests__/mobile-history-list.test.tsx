@@ -1435,7 +1435,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(screen.queryByRole("tablist")).toBeNull();
       expect(screen.queryByRole("tab")).toBeNull();
       expect(
-        screen.queryByRole("region", { name: "Message matches" }),
+        screen.queryByRole("region", { name: /^Message matches/ }),
       ).toBeNull();
       const chrome = screen.getByTestId("panel-chrome-bar");
       expect(

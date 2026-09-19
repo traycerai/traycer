@@ -21,12 +21,15 @@
  */
 import {
   useCallback,
+  useId,
+  useRef,
   useLayoutEffect,
   useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { HistoryGroupHeader } from "@/components/epics/history-group-header";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatSearchExpandedRows } from "@/components/chat-search/chat-search-expanded-rows";
@@ -112,9 +115,7 @@ export function HistoryMessageHits(props: HistoryMessageHitsProps): ReactNode {
     client === null ||
     props.query.trim().length < CHAT_SEARCH_BODY_MIN_QUERY_CHARS
   ) {
-    return (
-      <HistoryMessageHitsUnavailable {...props} hostLabel="this machine" />
-    );
+    return <HistoryMessageHitsUnavailable {...props} />;
   }
   return (
     <HistoryMessageHitsSection {...props} client={client} hostId={hostId} />
@@ -143,6 +144,8 @@ function HistoryMessageHitsSection(
     query,
     scope: ALL_TASKS_SCOPE,
   });
+  const headingId = useId();
+  const groupRef = useRef<HTMLElement>(null);
   const count = messageCountProjection(status);
   const { onCountChange } = props;
   useLayoutEffect(() => onCountChange(count), [count, onCountChange]);
@@ -199,92 +202,64 @@ function HistoryMessageHitsSection(
 
   if (display === "count-only") return null;
   if (status.kind === "absent")
-    return (
-      <HistoryMessageHitsUnavailable
-        {...props}
-        hostLabel={hostEntry?.label ?? "this machine"}
-      />
-    );
+    return <HistoryMessageHitsUnavailable {...props} />;
   if (status.kind === "loading" && !taskListSettled && !standalone) return null;
   return (
-    <section
-      aria-label="Message matches"
-      className={cn(
-        "mt-6 flex flex-col border-t border-border pt-3",
-        animateArrival &&
-          !standalone &&
-          "transition-[opacity,translate] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0",
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-x-2 px-3.5 pb-1">
-        <h3 className="min-w-0 text-overline font-semibold tracking-wide text-muted-foreground uppercase">
-          Message matches
-        </h3>
-        <Button variant="link" size="inline-xs" onClick={openDialog}>
-          Refine in chat search
-          {/* A visual affordance only: run into the label it follows, the
-              chord turns the button's accessible name into one unreadable
-              word, and the action it names is already announced. */}
-          {chord === null ? null : (
-            <span aria-hidden className="text-muted-foreground">
-              {formatChordForDisplay(chord)}
-            </span>
-          )}
-        </Button>
-      </div>
-      <HeaderDetail
-        status={status}
-        hostLabel={hostEntry?.label ?? "this machine"}
-        filtersActive={filtersActive}
-      />
-      <HistoryMessageHitsBody
-        status={status}
-        hostId={hostId}
-        onOpen={openTarget}
-        onRowKeyDown={onRowKeyDown}
-        renderExpansion={renderExpansion}
-        taskTitles={taskTitles}
-      />
-    </section>
-  );
-}
-
-/**
- * The message source line: the host whose index answered, how
- * much it found, and - when History is narrowed by a filter the index cannot
- * reproduce - that the hits below ignore it.
- */
-function HeaderDetail(props: {
-  readonly status: ChatSearchMessageHitsStatus;
-  readonly hostLabel: string;
-  readonly filtersActive: boolean;
-}): ReactNode {
-  const { filtersActive, hostLabel, status } = props;
-  return (
     <>
-      <p className="px-3.5 pb-2 text-ui-xs text-muted-foreground">
-        <span role="status" className="tabular-nums">
-          {status.kind === "loading" ? "Searching" : null}
+      <HistoryGroupHeader
+        kind="messages"
+        id={headingId}
+        hostLabel={hostEntry?.label ?? "this machine"}
+        targetRef={groupRef}
+        pinBottom={!standalone}
+        actions={
+          <Button variant="link" size="sm" onClick={openDialog}>
+            Refine in chat search
+            {chord === null ? null : (
+              <span aria-hidden className="text-muted-foreground">
+                {formatChordForDisplay(chord)}
+              </span>
+            )}
+          </Button>
+        }
+      />
+      <section
+        ref={groupRef}
+        aria-labelledby={headingId}
+        className={cn(
+          "flex scroll-mt-[var(--history-messages-header-height,3rem)] flex-col",
+          animateArrival &&
+            !standalone &&
+            "transition-[opacity,translate] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0",
+        )}
+      >
+        <p role="status" className="sr-only">
+          {status.kind === "loading" ? "Searching messages…" : null}
           {status.kind === "ready"
             ? chatCountLabel(status.messages.length, status.showMore !== null)
             : null}
-        </span>
-        {" on "}
-        <span className="text-foreground">{hostLabel}</span>
-      </p>
-      {filtersActive ? (
-        <p className="mx-3.5 mb-2.5 rounded-sm border border-info/30 bg-info/10 px-2.5 py-2 text-ui-xs text-info-foreground">
-          History filters narrow tasks only. These matches come from this
-          machine’s whole chat index.
         </p>
-      ) : null}
+        {filtersActive ? (
+          <p className="px-3.5 pb-2 text-ui-xs text-muted-foreground">
+            Filters apply to tasks only.
+          </p>
+        ) : null}
+        <HistoryMessageHitsBody
+          status={status}
+          hostId={hostId}
+          onOpen={openTarget}
+          onRowKeyDown={onRowKeyDown}
+          renderExpansion={renderExpansion}
+          taskTitles={taskTitles}
+        />
+      </section>
     </>
   );
 }
 
 /** Cheap-gate explanation; no search or title-query hooks mount here. */
 function HistoryMessageHitsUnavailable(
-  props: HistoryMessageHitsProps & { readonly hostLabel: string },
+  props: HistoryMessageHitsProps,
 ): ReactNode {
   const { onCountChange } = props;
   useLayoutEffect(() => onCountChange(null), [onCountChange]);
@@ -295,12 +270,7 @@ function HistoryMessageHitsUnavailable(
       <p className="text-ui-sm font-medium">
         {tooShort
           ? "Type 2 characters to search messages"
-          : `Message search isn’t available on ${props.hostLabel}`}
-      </p>
-      <p className="max-w-lg text-ui-xs leading-4.5 text-pretty text-muted-foreground">
-        {tooShort
-          ? "Message search reads this machine’s chat index, which needs at least two characters."
-          : "This machine’s chat index can’t be searched right now. Tasks come from your account. Chats on other machines weren’t searched."}
+          : "Message search isn't available right now."}
       </p>
       <Button variant="muted" size="sm" onClick={props.onShowTasks}>
         Show tasks

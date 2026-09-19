@@ -3540,7 +3540,7 @@ describe("<EpicsListPanel />", () => {
 
     expect(screen.queryByRole("button", { name: /Chat chat-hit/ })).toBeNull();
     expect(
-      screen.queryByRole("region", { name: "Message matches" }),
+      screen.queryByRole("region", { name: /^Message matches/ }),
     ).toBeNull();
   });
 });

@@ -33,7 +33,7 @@ export function HistoryModalContent(
   // min-width - wider than the frame once titles outgrow the viewport,
   // clipping the toolbar and row metadata past the right edge.
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="[--history-surface:var(--background)] flex min-h-0 min-w-0 flex-1 flex-col">
       <EpicsListPanel
         scope={scope}
         onScopeChange={onScopeChange}

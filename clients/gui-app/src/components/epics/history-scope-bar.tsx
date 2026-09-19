@@ -1,5 +1,4 @@
-import { useId, useState, type ReactNode, type RefObject } from "react";
-import { Info } from "lucide-react";
+import { useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ClearFiltersButton } from "@/components/home/toolbar/clear-filters-button";
@@ -11,6 +10,7 @@ import {
   HistoryTaskControls,
   type HistoryTaskControlsProps,
 } from "@/components/epics/history-task-controls";
+import { HistoryGroupHeader } from "@/components/epics/history-group-header";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import type { HistoryScope } from "@/lib/history-scope";
 
@@ -42,7 +42,6 @@ export function HistoryScopedResults(props: {
 }): ReactNode {
   const { rowsScopeRef, scope, onScopeChange } = props;
   const [messageCount, setMessageCount] = useState<HistoryCount>(null);
-  const noticeId = useId();
   const hostEntry = useHostDirectoryEntry(props.hostId);
   const hostLabel = hostEntry?.label ?? "this machine";
   const counts = { all: null, tasks: props.taskCount, messages: messageCount };
@@ -70,19 +69,13 @@ export function HistoryScopedResults(props: {
             </TabsTrigger>
           ))}
         </TabsList>
-        <p className="min-w-0 flex-1 basis-60 text-ui-xs leading-4.5 text-pretty text-muted-foreground">
-          <ScopeNote scope={scope} hostLabel={hostLabel} />
-        </p>
       </div>
       <TabsContent value={scope} asChild>
         <div
           ref={rowsScopeRef}
-          className="min-h-0 flex-1 overflow-y-auto border-t border-border pb-10"
+          className="min-h-0 flex-1 overflow-y-auto border-t border-border [--history-header-clearance:max(var(--history-tasks-header-height,3rem),var(--history-messages-header-height,3rem))] [&_[data-history-row-target]]:scroll-my-(--history-header-clearance) [&_[data-chat-search-nav]]:scroll-my-(--history-header-clearance)"
         >
-          <p
-            role="status"
-            className="px-3.5 pt-2.5 pb-1 text-ui-xs text-muted-foreground"
-          >
+          <p role="status" className="sr-only">
             {scope !== "messages"
               ? countStatus(props.taskCount, "tasks")
               : null}
@@ -98,27 +91,17 @@ export function HistoryScopedResults(props: {
                 )
               : null}
           </p>
-          {scope === "messages" ? (
-            <TaskControlsNotice
-              controls={props.controls}
-              filtersActive={props.messageHits.filtersActive}
-              noticeId={noticeId}
-            />
-          ) : (
-            <TasksGroup
-              controls={props.controls}
-              taskCount={props.taskCount}
-              taskList={props.taskList}
-            />
+          {scope === "messages" ? null : (
+            <TasksGroup controls={props.controls} taskList={props.taskList} />
           )}
           <HistoryMessageHits
             {...props.messageHits}
-            filtersActive={scope === "all" && props.messageHits.filtersActive}
             display={scope === "tasks" ? "count-only" : "list"}
             standalone={scope === "messages"}
             onCountChange={setMessageCount}
             onShowTasks={() => onScopeChange("tasks")}
           />
+          <div className="h-10" aria-hidden="true" />
         </div>
       </TabsContent>
     </Tabs>
@@ -155,79 +138,34 @@ function countStatus(count: HistoryCount, unit: string): string | null {
   return `${count} ${label}`;
 }
 
-function ScopeNote(props: {
-  readonly scope: HistoryScope;
-  readonly hostLabel: string;
-}): ReactNode {
-  if (props.scope === "tasks")
-    return "Titles, repos, branches and PR numbers, from your account’s task list.";
-  if (props.scope === "messages")
-    return (
-      <>
-        Message text on{" "}
-        <b className="font-medium text-foreground">{props.hostLabel}</b>. Other
-        machines aren’t searched.
-      </>
-    );
-  return (
-    <>
-      Task titles, repos, branches and PR numbers from your account — and
-      message text on{" "}
-      <b className="font-medium text-foreground">{props.hostLabel}</b>.
-    </>
-  );
-}
-
-function TaskControlsNotice(props: {
-  readonly controls: HistoryTaskControlsProps;
-  readonly filtersActive: boolean;
-  readonly noticeId: string;
-}): ReactNode {
-  return (
-    <div className="mx-3.5 mb-2.5 flex items-start gap-2 rounded-sm border border-info/30 bg-info/10 px-2.5 py-2 text-ui-xs leading-4.5 text-info-foreground">
-      <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <p id={props.noticeId}>
-          <strong className="font-semibold">
-            Filters and sort apply to tasks only.
-          </strong>{" "}
-          This machine’s chat index doesn’t know about repos, workspaces or
-          owners.
-        </p>
-        {props.filtersActive ? (
-          <p>Your task filters are kept and come back in Tasks.</p>
-        ) : null}
-        <HistoryTaskControls
-          {...props.controls}
-          disabledReasonId={props.noticeId}
-        />
-      </div>
-    </div>
-  );
-}
-
 function TasksGroup(props: {
   readonly controls: HistoryTaskControlsProps;
-  readonly taskCount: HistoryCount;
   readonly taskList: ReactNode;
 }): ReactNode {
+  const headingId = useId();
+  const groupRef = useRef<HTMLElement>(null);
   return (
-    <section aria-label="Tasks" className="pt-1.5">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 pb-1">
-        <h2 className="flex items-baseline gap-2 text-overline font-semibold tracking-wide text-muted-foreground uppercase">
-          Tasks{" "}
-          <span className="text-micro font-normal tracking-normal tabular-nums">
-            <CountBadge count={props.taskCount} />
-          </span>
-        </h2>
-        <HistoryTaskControls {...props.controls} />
-      </div>
-      {props.controls.filters.active ? (
-        <div className="px-3.5 pb-2">
-          <ClearFiltersButton onClick={props.controls.filters.onClear} />
-        </div>
-      ) : null}
-      {props.taskList}
-    </section>
+    <>
+      <HistoryGroupHeader
+        kind="tasks"
+        id={headingId}
+        hostLabel={null}
+        targetRef={groupRef}
+        pinBottom={false}
+        actions={<HistoryTaskControls {...props.controls} />}
+      />
+      <section
+        ref={groupRef}
+        aria-labelledby={headingId}
+        className="scroll-mt-[var(--history-tasks-header-height,3rem)]"
+      >
+        {props.controls.filters.active ? (
+          <div className="px-3.5 pb-2">
+            <ClearFiltersButton onClick={props.controls.filters.onClear} />
+          </div>
+        ) : null}
+        {props.taskList}
+      </section>
+    </>
   );
 }

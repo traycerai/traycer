@@ -14,7 +14,6 @@ import type {
   HistorySearchState,
 } from "@/lib/history-search";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { cn } from "@/lib/utils";
 
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -51,7 +50,6 @@ interface PanelRefreshControls {
 }
 
 export interface HistoryTaskControlsProps {
-  readonly disabledReasonId: string | null;
   readonly filters: PanelFilterControls;
   /** False for the read-only `variant="picker"` embed: hides the entry point
    * into bulk select/sweep/delete rather than merely disabling it. */
@@ -72,11 +70,6 @@ export function HistoryTaskControls(
   props: HistoryTaskControlsProps,
 ): ReactNode {
   const { isFetching, hostId, onRefetch } = props.refresh;
-  const disabled = props.disabledReasonId !== null;
-  const disabledProps = {
-    "aria-disabled": disabled || undefined,
-    "aria-describedby": props.disabledReasonId ?? undefined,
-  };
   const refreshTasks = useCallback(async () => {
     await onRefetch();
   }, [onRefetch]);
@@ -87,12 +80,7 @@ export function HistoryTaskControls(
   });
 
   return (
-    <div
-      className={cn(
-        "flex min-w-0 grow flex-wrap items-center justify-end gap-1",
-        disabled && "opacity-45",
-      )}
-    >
+    <div className="flex min-w-0 grow flex-wrap items-center justify-end gap-1">
       {props.selection.kind === "active" ? (
         <ActiveSelectionControls selection={props.selection} />
       ) : (
@@ -101,13 +89,8 @@ export function HistoryTaskControls(
         // gaps are both gap-1, so the one-line rendering is unchanged.
         <>
           <div className="flex shrink-0 items-center gap-1">
-            <EpicsSortMenu
-              value={props.sort}
-              onChange={props.onSortChange}
-              disabledReasonId={props.disabledReasonId}
-            />
+            <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
             <EpicsFilterPopover
-              disabledReasonId={props.disabledReasonId}
               availableRepos={props.availableRepos}
               availableWorkspaces={props.availableWorkspaces}
               search={props.search}
@@ -123,10 +106,9 @@ export function HistoryTaskControls(
                 variant="muted"
                 size="sm"
                 aria-label="Select history items"
-                disabled={!disabled && !props.selection.canSelect}
-                {...disabledProps}
+                disabled={!props.selection.canSelect}
                 className="overflow-visible"
-                onClick={disabled ? undefined : props.selection.onStart}
+                onClick={props.selection.onStart}
               >
                 <ListChecks className="size-4" />
                 Select
@@ -138,9 +120,8 @@ export function HistoryTaskControls(
               size="icon-sm"
               aria-label="Refresh tasks"
               data-testid="epics-list-refresh"
-              disabled={!disabled && (refresh.refreshing || hostId === null)}
-              {...disabledProps}
-              onClick={disabled ? undefined : refresh.trigger}
+              disabled={refresh.refreshing || hostId === null}
+              onClick={refresh.trigger}
             >
               <RefreshIcon refreshing={refresh.refreshing} />
             </Button>

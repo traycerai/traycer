@@ -293,24 +293,38 @@ describe("HistoryMessageHits: when the question cannot be asked", () => {
   });
 });
 
+const TANVEER_HOST: HostDirectoryEntry = {
+  hostId: "host-test",
+  label: "Tanveer's MacBook",
+  kind: "local",
+  websocketUrl: null,
+  version: null,
+  transportDialability: "dialable",
+};
+
+const TANVEER_NAME = "Message matches Tanveer's MacBook";
+const THIS_MACHINE_NAME = "Message matches this machine";
+
+/** The header band: the heading's parent, a direct sibling of its region. */
+function headerBand(): HTMLElement {
+  const band = screen.getByRole("heading").parentElement;
+  if (band === null) throw new Error("the heading has no header band");
+  return band;
+}
+
 describe("HistoryMessageHits: the header", () => {
-  it("names the host the index belongs to", () => {
-    testState.hostEntry = {
-      hostId: "host-test",
-      label: "Tanveer's MacBook",
-      kind: "local",
-      websocketUrl: null,
-      version: null,
-      transportDialability: "dialable",
-    };
+  it("names the host in the heading, so the region's name carries it too", () => {
+    testState.hostEntry = TANVEER_HOST;
     testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
 
     renderSection({});
 
-    expect(screen.getByRole("heading").textContent).toBe("Message matches");
-    expect(screen.getByRole("status").parentElement?.textContent).toBe(
-      "1 chat on Tanveer's MacBook",
-    );
+    const heading = screen.getByRole("heading", {
+      name: TANVEER_NAME,
+    });
+    expect(heading.tagName).toBe("H3");
+    const region = screen.getByRole("region", { name: TANVEER_NAME });
+    expect(region.getAttribute("aria-labelledby")).toBe(heading.id);
   });
 
   it("falls back to this machine when the directory has no label", () => {
@@ -318,29 +332,49 @@ describe("HistoryMessageHits: the header", () => {
 
     renderSection({});
 
-    expect(screen.getByRole("status").parentElement?.textContent).toBe(
-      "1 chat on this machine",
-    );
+    expect(
+      screen.getByRole("heading", { name: THIS_MACHINE_NAME }),
+    ).toBeTruthy();
   });
 
-  it("says filters narrow tasks only, and only while a task filter is active", () => {
+  it("is a direct sibling of its region, in the same scrolling flow", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { container } = renderSection({});
+
+    const band = headerBand();
+    const region = screen.getByRole("region");
+    expect(band.parentElement).toBe(container);
+    expect(region.parentElement).toBe(container);
+    expect(band.nextElementSibling).toBe(region);
+  });
+
+  it("draws no visible count line and no Tasks-style badge", () => {
     testState.status = readyStatus(
       [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
       "complete",
     );
-    const sentence =
-      "History filters narrow tasks only. These matches come from this machine’s whole chat index.";
 
-    renderSection({ filtersActive: false });
-    expect(screen.queryByText(sentence)).toBeNull();
-    // The old "· not filtered" suffix is gone for good, not merely hidden.
-    expect(screen.getByRole("heading").textContent).toBe("Message matches");
-    expect(document.body.textContent).not.toContain("not filtered");
+    renderSection({});
+
+    // Only the polite status carries the number, and it is sr-only.
+    const status = screen.getByRole("status");
+    expect(status.className).toContain("sr-only");
+    expect(status.textContent).toBe("2 chats");
+    expect(headerBand().textContent).not.toMatch(/\d/);
+  });
+
+  it("pins to the top and the bottom under All, to the top only standalone", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({ standalone: false });
+    expect(headerBand().className).toContain("top-0");
+    expect(headerBand().className).toContain("bottom-0");
     cleanup();
 
-    renderSection({ filtersActive: true });
-    expect(screen.getByText(sentence)).toBeTruthy();
-    expect(document.body.textContent).not.toContain("not filtered");
+    renderSection({ standalone: true });
+    expect(headerBand().className).toContain("top-0");
+    expect(headerBand().className).not.toContain("bottom-0");
   });
 
   it("hands off to chat search with the plain 'Refine in chat search' label", () => {
@@ -352,15 +386,203 @@ describe("HistoryMessageHits: the header", () => {
       screen.getByRole("button", { name: "Refine in chat search" }),
     ).toBeTruthy();
   });
+
+  it("is not a row stop: only the hit controls carry the row-navigation hooks", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { onRowKeyDown } = renderSection({});
+    const label = screen.getByRole("button", {
+      name: /^Message matches/,
+    });
+    fireEvent.keyDown(label, { key: "ArrowDown" });
+
+    expect(onRowKeyDown).not.toHaveBeenCalled();
+    expect(label.closest("[data-chat-search-nav]")).toBeNull();
+    expect(label.hasAttribute("data-history-row-target")).toBe(false);
+    // The hit itself is the one control that does carry the hook.
+    expect(
+      screen
+        .getByRole("button", { name: /Chat chat-1/ })
+        .closest("[data-chat-search-nav]"),
+    ).not.toBeNull();
+  });
+});
+
+describe("HistoryMessageHits: the header label scrolls its region", () => {
+  const scrollIntoView = vi.fn<(options: ScrollIntoViewOptions) => void>();
+  const nativeScrollIntoView = Reflect.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollIntoView",
+  );
+  let reducedMotion = false;
+
+  beforeEach(() => {
+    scrollIntoView.mockReset();
+    reducedMotion = false;
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches:
+        query === "(prefers-reduced-motion: reduce)" ? reducedMotion : false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (nativeScrollIntoView === undefined) {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    } else {
+      Object.defineProperty(
+        Element.prototype,
+        "scrollIntoView",
+        nativeScrollIntoView,
+      );
+    }
+  });
+
+  it("scrolls the region to its start, smoothly by default", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({});
+    fireEvent.click(screen.getByRole("button", { name: /^Message matches/ }));
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "smooth",
+    });
+    expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByRole("region"));
+  });
+
+  it("jumps instantly under reduced motion", () => {
+    reducedMotion = true;
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({});
+    fireEvent.click(screen.getByRole("button", { name: /^Message matches/ }));
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "instant",
+    });
+  });
+});
+
+describe("HistoryMessageHits: when it draws no header", () => {
+  it("draws none below the minimum, with no runtime, or for an absent source", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    const short = renderSection({ query: "b", standalone: false });
+    expect(short.container.querySelector("h3")).toBeNull();
+    cleanup();
+
+    testState.hostPresent = false;
+    const bare = renderSection({ standalone: false });
+    expect(bare.container.querySelector("h3")).toBeNull();
+    cleanup();
+
+    testState.hostPresent = true;
+    testState.status = { kind: "absent" };
+    const absent = renderSection({ standalone: false });
+    expect(absent.container.querySelector("h3")).toBeNull();
+  });
+
+  it("draws none in count-only, however ready the answer", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    const { container } = renderSection({ display: "count-only" });
+
+    expect(container.querySelector("h3")).toBeNull();
+  });
+
+  it("draws none under All while the task list is unsettled and messages load", () => {
+    testState.status = { kind: "loading" };
+
+    const { container } = renderSection({ taskListSettled: false });
+
+    expect(container.querySelector("h3")).toBeNull();
+  });
+
+  it("does draw it standalone while loading, settled tasks or not", () => {
+    testState.status = { kind: "loading" };
+
+    renderSection({ standalone: true, taskListSettled: false });
+
+    expect(screen.getByRole("heading", { level: 3 })).toBeTruthy();
+  });
+});
+
+describe("HistoryMessageHits: the filters line", () => {
+  const LINE = "Filters apply to tasks only.";
+
+  it("is one muted line, only while a task filter is active", () => {
+    testState.status = readyStatus(
+      [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
+      "complete",
+    );
+
+    renderSection({ filtersActive: false });
+    expect(screen.queryByText(LINE)).toBeNull();
+    cleanup();
+
+    renderSection({ filtersActive: true });
+    const line = screen.getByText(LINE);
+    expect(line.tagName).toBe("P");
+    expect(line.className).toContain("text-muted-foreground");
+    // No icon, no callout box, and none of the old sentences.
+    expect(line.querySelector("svg")).toBeNull();
+    expect(line.parentElement?.getAttribute("role")).not.toBe("note");
+    expect(document.body.textContent).not.toContain("whole chat index");
+    expect(document.body.textContent).not.toContain("not filtered");
+  });
+
+  it("shows under standalone Messages too", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({ filtersActive: true, standalone: true });
+
+    expect(screen.getAllByText(LINE)).toHaveLength(1);
+  });
+
+  it("is absent when the message group itself is not drawn", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+
+    renderSection({ filtersActive: true, display: "count-only" });
+
+    expect(screen.queryByText(LINE)).toBeNull();
+  });
 });
 
 describe("HistoryMessageHits: the count line", () => {
-  it("is an always-mounted status that says the search is running while it loads", () => {
+  it("is an always-mounted, sr-only status that says the search is running while it loads", () => {
     testState.status = { kind: "loading" };
 
     renderSection({});
 
-    expect(screen.getByRole("status").textContent).toBe("Searching");
+    const status = screen.getByRole("status");
+    expect(status.className).toContain("sr-only");
+    expect(status.textContent).toBe("Searching messages…");
+  });
+
+  it("keeps the same status node as the count arrives", () => {
+    testState.status = { kind: "loading" };
+    const { rerender } = renderSection({});
+    const before = screen.getByRole("status");
+
+    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    rerender();
+
+    expect(screen.getByRole("status")).toBe(before);
+    expect(before.textContent).toBe("1 chat");
   });
 
   it("adds a plus when more pages of chats remain", () => {
@@ -506,21 +728,14 @@ describe("HistoryMessageHits: the standalone Messages pane", () => {
     ).toBeTruthy();
   });
 
-  it("says search is unavailable on this machine, and never reads the host directory, with no host runtime", () => {
+  it("says search is unavailable, and never reads the host directory, with no host runtime", () => {
     testState.hostPresent = false;
-    testState.hostEntry = {
-      hostId: "host-test",
-      label: "Tanveer's MacBook",
-      kind: "local",
-      websocketUrl: null,
-      version: null,
-      transportDialability: "dialable",
-    };
+    testState.hostEntry = TANVEER_HOST;
 
     renderSection({ standalone: true });
 
     expect(
-      screen.getByText("Message search isn’t available on this machine"),
+      screen.getByText("Message search isn't available right now."),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Show tasks" })).toBeTruthy();
     // Outside a runtime provider the directory hook throws, so the cheap gate
@@ -528,28 +743,24 @@ describe("HistoryMessageHits: the standalone Messages pane", () => {
     expect(testState.directoryCalls).toBe(0);
   });
 
-  it("names the host when a runtime is present but the search source is absent", () => {
-    testState.hostEntry = {
-      hostId: "host-test",
-      label: "Tanveer's MacBook",
-      kind: "local",
-      websocketUrl: null,
-      version: null,
-      transportDialability: "dialable",
-    };
+  it("gives the same bare line, with no host, when a runtime is present but the source is absent", () => {
+    testState.hostEntry = TANVEER_HOST;
 
-    renderSection({ standalone: true });
+    const { container, onShowTasks } = renderSection({ standalone: true });
 
-    expect(
-      screen.getByText("Message search isn’t available on Tanveer's MacBook"),
-    ).toBeTruthy();
+    expect(container.textContent).toBe(
+      "Message search isn't available right now.Show tasks",
+    );
+    expect(container.querySelector("h3")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show tasks" }));
+    expect(onShowTasks).toHaveBeenCalledTimes(1);
   });
 
   it("says search is unavailable for an absent status", () => {
     renderSection({ standalone: true });
 
     expect(
-      screen.getByText("Message search isn’t available on this machine"),
+      screen.getByText("Message search isn't available right now."),
     ).toBeTruthy();
   });
 
@@ -591,7 +802,7 @@ describe("HistoryMessageHits: loading and failure", () => {
     renderSection({ taskListSettled: true });
 
     expect(
-      screen.getByRole("heading", { name: "Message matches" }),
+      screen.getByRole("heading", { name: THIS_MACHINE_NAME }),
     ).toBeTruthy();
     expect(screen.getByTestId("history-message-hits-loading")).toBeTruthy();
   });

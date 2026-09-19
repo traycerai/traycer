@@ -2,14 +2,16 @@
  * History's scope control end to end: the real `<EpicsListPanel>` (page and
  * picker) with only the host boundaries faked. What lives here is what the
  * panel suite and the message-hits suite cannot see alone - which lists are
- * mounted per scope, the keyboard path through the tab bar, the disabled task
- * controls in Messages, the truthful badges, and selection mode.
+ * mounted per scope, the keyboard path through the tab bar, the per-scope
+ * search box, the group headers, the task controls that only exist in a
+ * task scope, the truthful badges, and selection mode.
  */
 import "./stub-sweep-dialog-host-hooks";
 
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatSearchMessageMatch } from "@traycer/protocol/host/chat-search/schemas";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
@@ -44,7 +46,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PickerEpicsListPanel } from "@/components/epics/epics-list-panel";
 import { ScopedEpicsListPanel } from "./scoped-panel-harness";
@@ -85,6 +87,38 @@ const testState = vi.hoisted(() => ({
   activityCalls: 0,
   hitsCalls: 0,
   chatSearchClient: null as { readonly getActiveHostId: () => string } | null,
+  hostEntry: null as HostDirectoryEntry | null,
+}));
+
+// The measured header height lives outside React for the same reason: a test
+// can resize a header without re-rendering anything above it, which is the
+// path the panel has to absorb (the real hook is a ResizeObserver, which
+// jsdom cannot drive, and jsdom has no layout to measure anyway).
+const headerHeights = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const box = { height: 0 };
+  return {
+    box,
+    listeners,
+    subscribe: (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    read: (): number => box.height,
+  };
+});
+
+vi.mock("@/hooks/ui/use-measured-element-height", () => ({
+  useMeasuredElementHeight: () => {
+    const [element, setElement] = useState<HTMLDivElement | null>(null);
+    const height = useSyncExternalStore(
+      headerHeights.subscribe,
+      headerHeights.read,
+    );
+    return { element, setElement, height };
+  },
 }));
 
 // The message controller's answer lives outside React so a test can move it
@@ -130,7 +164,7 @@ vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: () => testState.hostEntry,
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -368,11 +402,37 @@ function isSelected(scope: HistoryScope): boolean {
 const taskLink = () =>
   screen.queryByRole("link", { name: "Open task Open from landing" });
 const hitButton = () => screen.queryByRole("button", { name: /Chat chat-hit/ });
+// The Messages heading carries the host, and the region is labelled by it, so
+// the region's name is "Message matches" plus the host label.
 const messageRegion = () =>
-  screen.queryByRole("region", { name: "Message matches" });
+  screen.queryByRole("region", { name: /^Message matches/ });
 const tasksRegion = () => screen.queryByRole("region", { name: "Tasks" });
-const searchBox = () =>
-  screen.getByRole("searchbox", { name: "Search tasks and messages" });
+const messagesHeading = () => screen.queryByRole("heading", { level: 3 });
+const tasksHeading = () => screen.queryByRole("heading", { level: 2 });
+/** The desktop page has exactly one search box, whatever its per-scope name. */
+const searchBox = () => screen.getByRole("searchbox");
+/** The scroller both group headers and both regions are direct children of. */
+const scroller = (): HTMLElement => {
+  const parent = (messageRegion() ?? tasksRegion())?.parentElement;
+  if (parent === null || parent === undefined) throw new Error("no scroller");
+  return parent;
+};
+/** The scope bar's sr-only live status: the scroller's first child. */
+const scopeStatus = (): HTMLElement => {
+  const node = scroller().firstElementChild;
+  if (!(node instanceof HTMLElement) || node.getAttribute("role") !== "status")
+    throw new Error("the scope bar status is not the scroller's first child");
+  return node;
+};
+
+const TANVEER_HOST: HostDirectoryEntry = {
+  hostId: "host-test",
+  label: "Tanveer's MacBook",
+  kind: "local",
+  websocketUrl: null,
+  version: null,
+  transportDialability: "dialable",
+};
 
 /** A query long enough to be searched, and a client to search it with. */
 function seedSearch(status: ChatSearchMessageHitsStatus): void {
@@ -399,6 +459,9 @@ beforeEach(() => {
   testState.activityCalls = 0;
   testState.hitsCalls = 0;
   testState.chatSearchClient = null;
+  testState.hostEntry = null;
+  headerHeights.box.height = 0;
+  headerHeights.listeners.clear();
   hitsStore.box.status = { kind: "absent" };
   hitsStore.listeners.clear();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -620,7 +683,9 @@ describe("History scope bar: task controls placement", () => {
       renderScoped(scope);
       await screen.findByRole("tablist");
 
-      const group = within(tasksRegion() as HTMLElement);
+      const header = tasksHeading()?.parentElement;
+      if (header === null || header === undefined) throw new Error("no header");
+      const group = within(header);
       for (const name of [
         /^Most recent|^Relevance/,
         /^Filter/,
@@ -634,20 +699,24 @@ describe("History scope bar: task controls placement", () => {
     },
   );
 
-  it("Messages moves them inside the notice, and says why", async () => {
+  it("Messages renders none of them, and no notice in their place", async () => {
     seedSearch(readyHits(["chat-hit"], false));
     renderScoped("messages");
     await screen.findByRole("tablist");
 
-    const notice = screen.getByText("Filters and sort apply to tasks only.");
-    const box = notice.closest("div");
-    expect(box).not.toBeNull();
-    const inside = within(box as HTMLElement);
-    for (const name of [/^Filter/, "Select history items", "Refresh tasks"]) {
-      expect(inside.getAllByRole("button", { name })).toHaveLength(1);
-      expect(screen.getAllByRole("button", { name })).toHaveLength(1);
+    for (const name of [
+      /^Most recent|^Relevance/,
+      /^Filter/,
+      "Select history items",
+      "Refresh tasks",
+    ]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
     }
     expect(tasksRegion()).toBeNull();
+    expect(tasksHeading()).toBeNull();
+    expect(screen.queryByText(/apply to tasks only/)).toBeNull();
+    expect(screen.queryByText(/come back in Tasks/)).toBeNull();
+    expect(screen.queryByRole("note")).toBeNull();
   });
 
   it("the picker keeps them in the top chrome bar with no scope bar", async () => {
@@ -664,19 +733,17 @@ describe("History scope bar: task controls placement", () => {
     expect(
       within(chrome).getByRole("searchbox", { name: "Search tasks" }),
     ).toBeTruthy();
+    expect(
+      within(chrome).getByPlaceholderText(
+        "Search by title, repo, branch, or PR",
+      ),
+    ).toBeTruthy();
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(messageRegion()).toBeNull();
   });
 });
 
-describe("History scope bar: disabled task controls in Messages", () => {
-  const CONTROLS: ReadonlyArray<string | RegExp> = [
-    /^Oldest/,
-    /^Filter/,
-    "Select history items",
-    "Refresh tasks",
-  ];
-
+describe("History scope bar: task controls in Messages", () => {
   function seedNarrowedTasks(): void {
     seedSearch(readyHits(["chat-hit"], false));
     setSearch({
@@ -687,55 +754,26 @@ describe("History scope bar: disabled task controls in Messages", () => {
     });
   }
 
-  it("keeps all four focusable, aria-disabled and described by the notice", async () => {
+  it("keeps every task value while the controls are gone", async () => {
     seedNarrowedTasks();
-    renderScoped("messages");
-    await screen.findByRole("tablist");
-
-    for (const name of CONTROLS) {
-      const button = screen.getByRole("button", { name });
-      expect(button.getAttribute("aria-disabled")).toBe("true");
-      expect((button as HTMLButtonElement).disabled).toBe(false);
-      const describedBy = button.getAttribute("aria-describedby");
-      expect(describedBy).not.toBeNull();
-      expect(document.getElementById(describedBy ?? "")?.textContent).toContain(
-        "Filters and sort apply to tasks only.",
-      );
-      button.focus();
-      expect(document.activeElement).toBe(button);
-    }
-  });
-
-  it("dispatches and opens nothing on click, Enter, Space or ArrowDown, and keeps every value", async () => {
-    seedNarrowedTasks();
-    const { onScopeSpy } = renderScoped("messages");
+    const { onScopeSpy } = renderScoped("all");
     await screen.findByRole("tablist");
     const user = userEvent.setup();
 
-    for (const name of CONTROLS) {
-      const button = screen.getByRole("button", { name });
-      await user.click(button);
-      button.focus();
-      await user.keyboard("{Enter}");
-      await user.keyboard(" ");
-      await user.keyboard("{ArrowDown}");
-    }
+    await user.click(scopeTab("messages"));
 
+    expect(screen.queryByRole("button", { name: /^Oldest/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Filter/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh tasks" })).toBeNull();
     expect(screen.queryByRole("menu")).toBeNull();
-    expect(screen.queryByTestId("epics-filter-popover")).toBeNull();
     expect(testState.refetch).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-    expect(isSelected("messages")).toBe(true);
-    expect(onScopeSpy).not.toHaveBeenCalled();
+    expect(onScopeSpy).toHaveBeenLastCalledWith("messages");
     expect(useHistorySearchStore.getState().search).toMatchObject({
       sort: "oldest",
       sortExplicit: true,
       ownershipScopes: ["shared"],
       query: "matching",
     });
-    expect(
-      screen.getByText("Your task filters are kept and come back in Tasks."),
-    ).toBeTruthy();
   });
 
   it("gives the values back, live, when the scope returns to Tasks", async () => {
@@ -757,19 +795,483 @@ describe("History scope bar: disabled task controls in Messages", () => {
       expect(testState.refetch).toHaveBeenCalledTimes(1);
     });
     expect(useHistorySearchStore.getState().search.sort).toBe("oldest");
+    expect(
+      screen
+        .getByRole("button", { name: /^Filter/ })
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
+  });
+});
+
+describe("History scope bar: the filters line", () => {
+  const LINE = "Filters apply to tasks only.";
+
+  function seedFilters(active: boolean): void {
+    seedSearch(readyHits(["chat-hit"], false));
+    setSearch({
+      query: "matching",
+      ownershipScopes: active ? ["shared"] : [],
+    });
+  }
+
+  it.each<HistoryScope>(["all", "messages"])(
+    "is one muted line under %s while a task filter is active",
+    async (scope) => {
+      seedFilters(true);
+      renderScoped(scope);
+      await screen.findByRole("tablist");
+
+      const line = screen.getByText(LINE);
+      expect(line.tagName).toBe("P");
+      expect(line.className).toContain("text-muted-foreground");
+      expect(line.querySelector("svg")).toBeNull();
+      expect(document.body.textContent).not.toContain("whole chat index");
+      expect(document.body.textContent).not.toContain(
+        "Your task filters are kept",
+      );
+    },
+  );
+
+  it("is absent under Tasks, where the filters simply apply", async () => {
+    seedFilters(true);
+    renderScoped("tasks");
+    await screen.findByRole("tablist");
+
+    expect(screen.queryByText(LINE)).toBeNull();
   });
 
-  it("names the narrowed-tasks caveat on the hits only in All", async () => {
-    seedNarrowedTasks();
+  it.each<HistoryScope>(["all", "messages"])(
+    "is absent under %s while no task filter is active",
+    async (scope) => {
+      seedFilters(false);
+      renderScoped(scope);
+      await screen.findByRole("tablist");
+
+      expect(screen.queryByText(LINE)).toBeNull();
+    },
+  );
+
+  it("comes and goes with the filter and the scope", async () => {
+    seedFilters(true);
     renderScoped("all");
     await screen.findByRole("tablist");
     const user = userEvent.setup();
-    const sentence =
-      "History filters narrow tasks only. These matches come from this machine’s whole chat index.";
 
-    expect(screen.getByText(sentence)).toBeTruthy();
+    expect(screen.getAllByText(LINE)).toHaveLength(1);
     await user.click(scopeTab("messages"));
-    expect(screen.queryByText(sentence)).toBeNull();
+    expect(screen.getAllByText(LINE)).toHaveLength(1);
+    await user.click(scopeTab("tasks"));
+    expect(screen.queryByText(LINE)).toBeNull();
+    act(() => {
+      setSearch({ query: "matching", ownershipScopes: [] });
+    });
+    await user.click(scopeTab("all"));
+    expect(screen.queryByText(LINE)).toBeNull();
+  });
+});
+
+describe("History scope bar: the search box follows the scope", () => {
+  const ALL = "Search tasks and messages";
+  const TASKS = "Search by title, repo, branch, or PR";
+
+  it("names its purpose, as placeholder and label, per scope", async () => {
+    testState.hostEntry = TANVEER_HOST;
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+    const box = searchBox();
+
+    const expectName = (name: string): void => {
+      expect(box.getAttribute("placeholder")).toBe(name);
+      expect(box.getAttribute("aria-label")).toBe(name);
+    };
+    expectName(ALL);
+    await user.click(scopeTab("tasks"));
+    expectName(TASKS);
+    await user.click(scopeTab("messages"));
+    expectName("Search messages on Tanveer's MacBook");
+    await user.click(scopeTab("all"));
+    expectName(ALL);
+    // The same input throughout: focus and the typed value ride through.
+    expect(searchBox()).toBe(box);
+    expect((box as HTMLInputElement).value).toBe("matching");
+  });
+
+  it("falls back to this machine when the host has no label", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("messages");
+    await screen.findByRole("tablist");
+
+    expect(
+      screen.getByRole("searchbox", {
+        name: "Search messages on this machine",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("keeps a typed query and its focus across scope changes", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+    const box = searchBox();
+    fireEvent.change(box, { target: { value: "matching more" } });
+
+    await user.click(scopeTab("messages"));
+    await user.click(scopeTab("tasks"));
+
+    expect(searchBox()).toBe(box);
+    expect((box as HTMLInputElement).value).toBe("matching more");
+    expect(useHistorySearchStore.getState().search.query).toBe("matching more");
+  });
+
+  it("reads the Tasks wording, not the scope, while selecting", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    // Messages has no Select control; from All the derived scope is Tasks.
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+
+    await user.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+
+    expect(searchBox().getAttribute("placeholder")).toBe(TASKS);
+    expect(searchBox().getAttribute("aria-label")).toBe(TASKS);
+  });
+
+  it("leaves the picker's task-only wording alone", async () => {
+    testState.hostEntry = TANVEER_HOST;
+    seedSearch(readyHits(["chat-hit"], false));
+    renderPicker();
+
+    const box = await screen.findByRole("searchbox", { name: "Search tasks" });
+    expect(box.getAttribute("placeholder")).toBe(TASKS);
+  });
+});
+
+describe("History scope bar: the group headers", () => {
+  const scrollIntoView = vi.fn<(options: ScrollIntoViewOptions) => void>();
+  const nativeScrollIntoView = Reflect.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollIntoView",
+  );
+  let reducedMotion = false;
+
+  beforeEach(() => {
+    scrollIntoView.mockReset();
+    reducedMotion = false;
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      // Only the reduced-motion query is ever true; the panel's own mobile
+      // viewport query must keep answering "desktop".
+      matches:
+        query === "(prefers-reduced-motion: reduce)" ? reducedMotion : false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (nativeScrollIntoView === undefined) {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    } else {
+      Object.defineProperty(
+        Element.prototype,
+        "scrollIntoView",
+        nativeScrollIntoView,
+      );
+    }
+  });
+
+  it("puts each header directly before its region, inside the one scroller", async () => {
+    testState.hostEntry = TANVEER_HOST;
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    const tasksHeader = tasksHeading()?.parentElement;
+    const messagesHeader = messagesHeading()?.parentElement;
+    expect(tasksHeader?.nextElementSibling).toBe(tasksRegion());
+    expect(messagesHeader?.nextElementSibling).toBe(messageRegion());
+    expect(tasksHeader?.parentElement).toBe(scroller());
+    expect(messagesHeader?.parentElement).toBe(scroller());
+    expect(tasksRegion()?.parentElement).toBe(scroller());
+    expect(messageRegion()?.parentElement).toBe(scroller());
+    // Tasks first, then Messages, in reading order.
+    expect(
+      tasksRegion()?.compareDocumentPosition(messagesHeader as HTMLElement) ??
+        0,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("labels each region by its heading, and the Messages heading names the host", async () => {
+    testState.hostEntry = TANVEER_HOST;
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    expect(tasksRegion()?.getAttribute("aria-labelledby")).toBe(
+      tasksHeading()?.id,
+    );
+    expect(messageRegion()?.getAttribute("aria-labelledby")).toBe(
+      messagesHeading()?.id,
+    );
+    expect(
+      screen.getByRole("heading", {
+        level: 3,
+        name: "Message matches Tanveer's MacBook",
+      }),
+    ).toBe(messagesHeading());
+    expect(
+      screen.getByRole("region", { name: "Message matches Tanveer's MacBook" }),
+    ).toBe(messageRegion());
+    expect(tasksHeading()?.textContent).toBe("Tasks");
+  });
+
+  it("pins Tasks to the top; Messages to the top and bottom in All, the top alone standalone", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+
+    expect(tasksHeading()?.parentElement?.className).toContain("top-0");
+    expect(tasksHeading()?.parentElement?.className).not.toContain("bottom-0");
+    expect(messagesHeading()?.parentElement?.className).toContain("top-0");
+    expect(messagesHeading()?.parentElement?.className).toContain("bottom-0");
+
+    await user.click(scopeTab("messages"));
+    expect(messagesHeading()?.parentElement?.className).toContain("top-0");
+    expect(messagesHeading()?.parentElement?.className).not.toContain(
+      "bottom-0",
+    );
+  });
+
+  it("scrolls the Messages region to its start when its label is pressed", async () => {
+    testState.hostEntry = TANVEER_HOST;
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+
+    await user.click(
+      within(messagesHeading() as HTMLElement).getByRole("button", {
+        name: /^Message matches/,
+      }),
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "smooth",
+    });
+    expect(scrollIntoView.mock.contexts[0]).toBe(messageRegion());
+  });
+
+  it("scrolls the Tasks region to its start, instantly under reduced motion", async () => {
+    reducedMotion = true;
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+
+    await user.click(
+      within(tasksHeading() as HTMLElement).getByRole("button", {
+        name: "Tasks",
+      }),
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "instant",
+    });
+    expect(scrollIntoView.mock.contexts[0]).toBe(tasksRegion());
+  });
+
+  it("draws no Messages header, and no Tasks-only header state, where it has no group", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("tasks");
+    await screen.findByRole("tablist");
+    // Tasks: the group is count-only.
+    expect(messagesHeading()).toBeNull();
+    expect(messageRegion()).toBeNull();
+    expect(tasksHeading()).not.toBeNull();
+    cleanup();
+
+    // The source is absent: nothing to head.
+    seedSearch({ kind: "absent" });
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    expect(messagesHeading()).toBeNull();
+    expect(messageRegion()).toBeNull();
+    expect(tasksHeading()).not.toBeNull();
+  });
+
+  it("draws no Messages header under All while the task list is still unsettled", async () => {
+    testState.isPending = true;
+    seedSearch({ kind: "loading" });
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    expect(messagesHeading()).toBeNull();
+    expect(messageRegion()).toBeNull();
+    // Standalone it does not wait for the task list, which it does not show.
+    cleanup();
+    renderScoped("messages");
+    await screen.findByRole("tablist");
+    expect(messagesHeading()).not.toBeNull();
+  });
+
+  it("is not a row stop: ArrowDown and ArrowUp walk task rows and hits only", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const input = searchBox();
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(taskLink());
+    fireEvent.keyDown(taskLink() as HTMLElement, { key: "ArrowDown" });
+    // Past the Messages header label, straight onto the hit.
+    expect(document.activeElement).toBe(hitButton());
+    fireEvent.keyDown(hitButton() as HTMLElement, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(taskLink());
+    for (const header of [tasksHeading(), messagesHeading()]) {
+      const label = header?.querySelector("button");
+      expect(label?.hasAttribute("data-history-row-target")).toBe(false);
+      expect(label?.hasAttribute("data-chat-search-nav")).toBe(false);
+    }
+  });
+
+  it("writes each header's measured height onto the scroller, and only there", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    expect(
+      scroller().style.getPropertyValue("--history-tasks-header-height"),
+    ).toBe("");
+    act(() => {
+      headerHeights.box.height = 48;
+      for (const listener of headerHeights.listeners) listener();
+    });
+    expect(
+      scroller().style.getPropertyValue("--history-tasks-header-height"),
+    ).toBe("48px");
+    expect(
+      scroller().style.getPropertyValue("--history-messages-header-height"),
+    ).toBe("48px");
+
+    // A header that leaves takes its property with it.
+    const user = userEvent.setup();
+    await user.click(scopeTab("tasks"));
+    expect(
+      scroller().style.getPropertyValue("--history-messages-header-height"),
+    ).toBe("");
+    expect(
+      scroller().style.getPropertyValue("--history-tasks-header-height"),
+    ).toBe("48px");
+  });
+
+  it("re-renders neither the panel body nor the task rows when a header resizes", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const queryCalls = testState.historyQueryCalls;
+    const activityCalls = testState.activityCalls;
+    const hitsCalls = testState.hitsCalls;
+
+    for (const height of [48, 64, 40]) {
+      act(() => {
+        headerHeights.box.height = height;
+        for (const listener of headerHeights.listeners) listener();
+      });
+    }
+
+    expect(
+      scroller().style.getPropertyValue("--history-tasks-header-height"),
+    ).toBe("40px");
+    expect(testState.historyQueryCalls).toBe(queryCalls);
+    expect(testState.activityCalls).toBe(activityCalls);
+    expect(testState.hitsCalls).toBe(hitsCalls);
+  });
+});
+
+describe("History scope bar: the sr-only status", () => {
+  it("is one visually hidden polite node holding the counts, and no visible count line", async () => {
+    testState.hostEntry = TANVEER_HOST;
+    seedSearch(readyHits(["chat-hit", "chat-two"], false));
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    const status = scopeStatus();
+    expect(status.className).toContain("sr-only");
+    expect(status.textContent).toBe(
+      "1 task · 2 chats with message matches on Tanveer's MacBook",
+    );
+    // No Tasks heading badge, no visible message count anywhere in a header.
+    expect(tasksHeading()?.parentElement?.textContent).not.toMatch(/\d/);
+    expect(messagesHeading()?.parentElement?.textContent).not.toMatch(/\d/);
+  });
+
+  it("is the same node as counts change and scopes switch, and still updates", async () => {
+    seedSearch({ kind: "loading" });
+    renderScoped("all");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+    const status = scopeStatus();
+    await waitFor(() => {
+      expect(status.textContent).toContain("Searching");
+    });
+
+    setHits(readyHits(["chat-hit"], false));
+    expect(scopeStatus()).toBe(status);
+    expect(status.textContent).toBe(
+      "1 task · 1 chat with message matches on this machine",
+    );
+
+    setHits(readyHits(["chat-hit", "chat-two"], true));
+    expect(status.textContent).toBe(
+      "1 task · 2+ chats with message matches on this machine",
+    );
+
+    await user.click(scopeTab("messages"));
+    expect(scopeStatus()).toBe(status);
+    expect(status.textContent).toBe(
+      "2+ chats with message matches on this machine",
+    );
+
+    await user.click(scopeTab("tasks"));
+    expect(scopeStatus()).toBe(status);
+    expect(status.textContent).toBe("1 task");
+
+    await user.click(scopeTab("all"));
+    expect(scopeStatus()).toBe(status);
+    expect(status.textContent).toContain("2+ chats");
+  });
+
+  it("has no ScopeNote and repeats no count in visible text", async () => {
+    seedSearch(readyHits(["chat-hit"], false));
+    setSearch({ query: "matching", ownershipScopes: ["shared"] });
+    renderScoped("all");
+    await screen.findByRole("tablist");
+
+    expect(screen.queryByText(/come back in Tasks/)).toBeNull();
+    expect(screen.queryByText(/whole chat index/)).toBeNull();
+    // Counts are visible on the pills alone.
+    expect(badgeOf("tasks")).toBe("1");
+    expect(badgeOf("messages")).toBe("1");
   });
 });
 
@@ -1051,14 +1553,32 @@ describe("History scope bar: the Messages pane without a searchable query", () =
 
   it("says search is unavailable, rather than empty, when the index cannot be asked", async () => {
     testState.chatSearchClient = null;
+    testState.hostEntry = TANVEER_HOST;
     setSearch({ query: "matching" });
-    renderScoped("messages");
+    const { onScopeSpy } = renderScoped("messages");
+    await screen.findByRole("tablist");
+    const user = userEvent.setup();
+
+    const line = screen.getByText("Message search isn't available right now.");
+    // One line and one way out: no host, no second explanation.
+    expect(line.parentElement?.textContent).toBe(
+      "Message search isn't available right now.Show tasks",
+    );
+    expect(messagesHeading()).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Show tasks" }));
+    expect(onScopeSpy).toHaveBeenCalledWith("tasks");
+  });
+
+  it("says nothing about the missing index under All", async () => {
+    testState.chatSearchClient = null;
+    setSearch({ query: "matching" });
+    renderScoped("all");
     await screen.findByRole("tablist");
 
-    expect(
-      screen.getByText("Message search isn’t available on this machine"),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Show tasks" })).toBeTruthy();
+    expect(screen.queryByText(/Message search/)).toBeNull();
+    expect(messagesHeading()).toBeNull();
+    expect(tasksRegion()).not.toBeNull();
   });
 
   it("deleting the query below the minimum does not change the scope", async () => {

@@ -44,7 +44,10 @@ export function HistorySurface() {
   const scope = history?.scope ?? "all";
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="history-surface">
+    <div
+      className="[--history-surface:var(--canvas)] flex min-h-0 flex-1 flex-col"
+      data-testid="history-surface"
+    >
       <EpicsListPanel
         scope={scope}
         onScopeChange={onScopeChange}

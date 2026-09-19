@@ -89,6 +89,7 @@ import {
   HistoryScopedResults,
   type HistoryCount,
 } from "@/components/epics/history-scope-bar";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import {
   HistoryTaskControls,
   type HistoryTaskControlsProps,
@@ -733,13 +734,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       onKeyDown={keyboardNav.onSearchKeyDown}
       isFetching={isFetching}
       focusOnMount={props.autoFocusSearch}
+      scope={selectionMode ? "tasks" : props.scope}
+      hostId={hostId}
       placement="page"
       placeholder="Search by title, repo, branch, or PR"
       ariaLabel="Search tasks"
     />
   ) : null;
   const controls: HistoryTaskControlsProps = {
-    disabledReasonId: null,
     filters: { active: hasActiveFilters, onClear: handleClear },
     showSelection: selectionEnabled,
     selection: selectionMode
@@ -814,6 +816,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                       onKeyDown={keyboardNav.onSearchKeyDown}
                       isFetching={isFetching}
                       focusOnMount={props.autoFocusSearch}
+                      scope="tasks"
+                      hostId={hostId}
                       placement="toolbar"
                       placeholder="Search by title, repo, branch, or PR"
                       ariaLabel="Search tasks"
@@ -958,14 +962,41 @@ interface PanelSearchInputProps {
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
   readonly placement: "page" | "toolbar";
+  readonly scope: HistoryScope;
+  readonly hostId: string | null;
   readonly placeholder: string;
   readonly ariaLabel: string;
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
-  const { inputRef } = props;
   const isMobileViewport = useIsMobileViewport();
-  const searchesMessages = props.placement === "page" && !isMobileViewport;
+  if (props.placement === "page" && !isMobileViewport) {
+    return <ScopedPanelSearchInput {...props} />;
+  }
+  return <PanelSearchInputBody {...props} searchesMessages={false} />;
+}
+
+function ScopedPanelSearchInput(props: PanelSearchInputProps): ReactNode {
+  const hostEntry = useHostDirectoryEntry(props.hostId);
+  const labels: Record<HistoryScope, string> = {
+    all: "Search tasks and messages",
+    tasks: "Search by title, repo, branch, or PR",
+    messages: `Search messages on ${hostEntry?.label ?? "this machine"}`,
+  };
+  return (
+    <PanelSearchInputBody
+      {...props}
+      placeholder={labels[props.scope]}
+      ariaLabel={labels[props.scope]}
+      searchesMessages
+    />
+  );
+}
+
+function PanelSearchInputBody(
+  props: PanelSearchInputProps & { readonly searchesMessages: boolean },
+): ReactNode {
+  const { inputRef, searchesMessages } = props;
   // Defer the focus to the next frame so it lands after Radix Dialog's
   // own mount focus-trap runs (the modal host wraps this surface). A
   // synchronous focus here would be clobbered by the dialog's
@@ -1008,12 +1039,8 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
             props.onChange(event.target.value);
           }}
           onKeyDown={props.onKeyDown}
-          placeholder={
-            searchesMessages ? "Search tasks and messages" : props.placeholder
-          }
-          aria-label={
-            searchesMessages ? "Search tasks and messages" : props.ariaLabel
-          }
+          placeholder={props.placeholder}
+          aria-label={props.ariaLabel}
         />
         {props.value.length > 0 ? (
           <InputGroupAddon align="inline-end">
