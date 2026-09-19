@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { makeMergedNotificationRow } from "@/lib/home-focus/__tests__/fixtures";
 
@@ -103,6 +103,7 @@ describe("useConsumeBrowserAttention", () => {
     setFocus(true, true);
   });
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -166,6 +167,36 @@ describe("useConsumeBrowserAttention", () => {
     rerender();
     expect(markAsRead).toHaveBeenCalledTimes(2);
     expect(markAsRead).toHaveBeenLastCalledWith(newer);
+  });
+
+  it("retries a still-unread row on the next window focus without going inactive", () => {
+    renderHook(() => useConsumeBrowserAttention(TARGET, true));
+    expect(markAsRead).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event("focus"));
+    expect(markAsRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a still-unread row when the document goes hidden then visible", () => {
+    renderHook(() => useConsumeBrowserAttention(TARGET, true));
+    expect(markAsRead).toHaveBeenCalledTimes(1);
+    setFocus(false, true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(markAsRead).toHaveBeenCalledTimes(1);
+    setFocus(true, true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(markAsRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mark a row again on foreground once it is actually read", () => {
+    const { rerender } = renderHook(() =>
+      useConsumeBrowserAttention(TARGET, true),
+    );
+    expect(markAsRead).toHaveBeenCalledTimes(1);
+    rowsState.current = [row({ readAt: 5 })];
+    rerender();
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(markAsRead).toHaveBeenCalledTimes(1);
   });
 
   it("does not consume rows for another tab", () => {

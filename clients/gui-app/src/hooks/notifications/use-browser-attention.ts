@@ -63,12 +63,19 @@ export function useConsumeBrowserAttention(
         }
       }
     };
+    const consumeOnForeground = () => {
+      // The action is fire-and-forget: an attempted host read can fail and
+      // leave the row unread. A new foreground gesture retries those rows,
+      // while ordinary mutation-driven renders still deduplicate attempts.
+      consumed.current.clear();
+      consume();
+    };
     consume();
-    window.addEventListener("focus", consume);
-    document.addEventListener("visibilitychange", consume);
+    window.addEventListener("focus", consumeOnForeground);
+    document.addEventListener("visibilitychange", consumeOnForeground);
     return () => {
-      window.removeEventListener("focus", consume);
-      document.removeEventListener("visibilitychange", consume);
+      window.removeEventListener("focus", consumeOnForeground);
+      document.removeEventListener("visibilitychange", consumeOnForeground);
     };
   }, [active, rows, markAsRead, epicId, hostId, sessionId, tabId]);
 }
