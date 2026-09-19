@@ -120,6 +120,11 @@ Each card's label and copy come from `getting-started-settings.definitions.ts`, 
 Only the replay card owns a search ENTRY and an anchor - it inherited the removed General "Product tour" row, keywords included, so "walkthrough" and "first run" still land on it.
 The three guide cards contribute their words to the page instead: each one names a settings page that already has an entry of its own, and a second result under the same label would outrank the page the person typing it wants.
 
+On the mobile viewport the first-task guide has a second branch, for an account that already has tasks: the phone's landing page carries no task list, so the guide teaches where they went rather than how to start another one.
+Step 1 points at the header hamburger, step 2 at the first row in the drawer's Recent tasks list, and both are DERIVED from the drawer's open state - opening it by any route advances, closing it without picking returns to step 1, and opening a task ends the guide.
+The count comes from the drawer's own `useHistoryQuery`, so it is a cache read rather than a second fetch; while it is outstanding the guide draws nothing, and an empty list or an error falls through to the folder flow every desktop user sees.
+Anchoring inside the drawer is what `guide-overlays.ts` is for: a modal surface seals every body-level sibling off, so the card is PORTALLED into it rather than floated beside it - the Sheet is already on that list by slot, and the installed app's hand-rolled panel says the same thing on `data-overlay-surface`.
+
 Getting started leads the sidebar in its own unlabeled Guide group, above
 Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once

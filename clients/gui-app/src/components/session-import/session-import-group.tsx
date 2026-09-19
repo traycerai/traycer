@@ -248,9 +248,13 @@ function SessionImportTaskLabel(props: {
   const { row, tone, showFolder } = props;
   const onboarding = tone.surface === "onboarding";
   const folderLabel = onboarding ? getBasename(row.folderPath) : row.folderPath;
+  // The class is how the phone shape reaches the title to let it WRAP
+  // (`onboarding-import.css`): a 393pt row truncates most session titles at
+  // the first clause, and the title is the only thing on the row that says
+  // which session it is.
   const titleClass = cn(
     "min-w-0 truncate text-ui-sm",
-    onboarding && "font-medium",
+    onboarding && "onboarding-import-task-title font-medium",
     tone.strong,
   );
   const folder = showFolder ? (
@@ -275,7 +279,7 @@ function SessionImportTaskLabel(props: {
           card has room for: which folder it ran in, and how long ago. The
           dialog keeps the timestamp in its own right-hand column. */}
       {onboarding ? (
-        <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="onboarding-import-task-meta flex min-w-0 items-baseline gap-1.5">
           {folder}
           {folder === null ? null : (
             <span aria-hidden className={tone.faint}>

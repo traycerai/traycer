@@ -16,6 +16,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import {
   isFeatureAnnouncementConsumed,
   useFeatureAnnouncementsStore,
@@ -47,7 +48,9 @@ const SESSION_IMPORT_ANNOUNCEMENT_TOAST_ID =
  * - the user is signed in and has COMPLETED onboarding - a fresh user meets
  *   the feature as the tour's last act instead, which consumes the same id;
  * - the tour is not on screen (a replay from Settings), for the reason the
- *   session-import progress toast holds: a toast over the stage is noise;
+ *   session-import progress toast holds: a toast over the stage is noise -
+ *   and neither is the first-task guide, which is that tour continued over
+ *   the real app, and whose coachmark asks for the next move by itself;
  * - the window narrator does not own the frame with the app gated behind
  *   its dialog, where a toast renders dead (`pointer-events: none`) and
  *   could never be dismissed - the same predicate the app-update toast
@@ -58,8 +61,8 @@ const SESSION_IMPORT_ANNOUNCEMENT_TOAST_ID =
  *
  * "Later" just dismisses - the announcement is consumed either way. A gate
  * that closes while the toast is up - the host losing the capability,
- * sign-out, the tour opening - dismisses it, since it is permanent
- * otherwise; see the effect.
+ * sign-out, the tour or the first-task guide starting - dismisses it, since
+ * it is permanent otherwise; see the effect.
  */
 export function SessionImportAnnouncementController(): ReactNode {
   const available = useSessionImportAvailable();
@@ -78,6 +81,12 @@ export function SessionImportAnnouncementController(): ReactNode {
     (state) => state.completedAt !== null,
   );
   const tourOpen = useOnboardingTourOpenStore((state) => state.open);
+  // The first-task guide is the tour's own last act, continued over the real
+  // app, and it reads the same way: a permanent toast beside a coachmark is
+  // two things asking for the next move at once.
+  const guideActive = useFirstTaskGuideStore(
+    (state) => state.status === "active",
+  );
   const consumed = useFeatureAnnouncementsStore((state) =>
     isFeatureAnnouncementConsumed(state.consumed, "session-import"),
   );
@@ -103,17 +112,22 @@ export function SessionImportAnnouncementController(): ReactNode {
     // The toast is permanent, so a gate that closes after it is up takes it
     // down: the host losing the capability (a swap to an older host), a
     // sign-out, or the tour opening (a replay from Settings, which shows the
-    // same feature as an act, and a toast over the stage is noise). Not the
+    // same feature as an act, and a toast over the stage is noise) - the
+    // first-task guide activating is the same story on the real app. Not the
     // narrator or a stream drop: both are transient, and a toast under a
     // dialog is inert rather than wrong. Gone is gone: the id is claimed, so
     // nothing re-shows it.
-    if (shownRef.current && (!available || !signedIn || tourOpen)) {
+    if (
+      shownRef.current &&
+      (!available || !signedIn || tourOpen || guideActive)
+    ) {
       shownRef.current = false;
       toast.dismiss(SESSION_IMPORT_ANNOUNCEMENT_TOAST_ID);
       return;
     }
     if (consumed || !available || !signedIn || !onboardingComplete) return;
-    if (tourOpen || narrated || !streamLive || !supported) return;
+    if (tourOpen || guideActive || narrated || !streamLive || !supported)
+      return;
     // A claim, not a consume: `consumed` above is this window's copy, and a
     // second window restored alongside this one holds its own. The claim
     // re-reads the install's record, so of two windows that both get here
@@ -143,6 +157,7 @@ export function SessionImportAnnouncementController(): ReactNode {
     available,
     claim,
     consumed,
+    guideActive,
     narrated,
     onboardingComplete,
     signedIn,

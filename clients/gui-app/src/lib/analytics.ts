@@ -255,7 +255,10 @@ export type AnalyticsOnboardingStep =
   | "providers"
   | "session-import"
   | "task-context"
-  | "task-tabs";
+  | "task-tabs"
+  // The installed mobile app's whole tour is the welcome screen, so that is
+  // the step it finishes on. No act follows it there.
+  | "welcome";
 
 /** Which surface opened the import wizard - onboarding act or Settings. */
 export type AnalyticsSessionImportSurface = "dialog" | "onboarding";
@@ -1394,6 +1397,7 @@ const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "session-import",
   "task-context",
   "task-tabs",
+  "welcome",
 ]);
 
 const ANALYTICS_TARGETS = new Set<string>([

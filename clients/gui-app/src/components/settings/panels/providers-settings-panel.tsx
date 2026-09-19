@@ -845,6 +845,7 @@ function ProvidersRailLayout({
               ariaLabel="Providers"
               variant="settings"
               className="gap-1"
+              phone={false}
               rows={visibleProviders.map((state) => ({
                 providerId: state.providerId,
                 active: state.providerId === active.providerId,
@@ -854,6 +855,7 @@ function ProvidersRailLayout({
                 description: null,
                 trailing: null,
                 disabledReason: null,
+                phoneDescription: null,
                 onSelect: onSelectProvider,
               }))}
             />

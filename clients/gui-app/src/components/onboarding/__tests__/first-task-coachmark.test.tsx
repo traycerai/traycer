@@ -107,6 +107,33 @@ function SharedCoachmarkHarness() {
   );
 }
 
+/**
+ * A step with no `action` whose target carries nothing pressable, which is the
+ * one arrangement that used to put a live-looking button on the card with
+ * nothing behind it.
+ */
+function UnpressableCoachmarkHarness() {
+  const rootRef = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={rootRef} data-testid="unpressable-guide-root">
+      {/* No button, no link, nothing focusable inside it either. */}
+      <div data-testid="unpressable-target">Read only</div>
+      <OnboardingCoachmark
+        id="unpressable-guide"
+        title="Nothing to press"
+        content="This step's target carries no control."
+        progress={null}
+        rootRef={rootRef}
+        selector='[data-testid="unpressable-target"]'
+        onClose={() => useFirstTaskGuideStore.getState().dismiss()}
+        onTarget={null}
+        back={null}
+        action={null}
+      />
+    </div>
+  );
+}
+
 function PopoverCoachmarkHarness() {
   const rootRef = useRef<HTMLDivElement>(null);
   return (
@@ -522,17 +549,17 @@ describe("FirstTaskCoachmark", () => {
 
     const card = await screen.findByTestId("guide-coachmark");
     const floater = card.closest<HTMLElement>(".first-task-coachmark-floater");
-    expect(floater?.dataset.overPopover).toBe("true");
-    expect(screen.getByTestId("guide-coachmark-halo").dataset.overPopover).toBe(
+    expect(floater?.dataset.overOverlay).toBe("true");
+    expect(screen.getByTestId("guide-coachmark-halo").dataset.overOverlay).toBe(
       "true",
     );
     // The attribute is only worth anything because the stylesheet raises the
     // shared layer above a popover's own when it is set.
     expect(guideCss).toContain(
-      '.first-task-coachmark-halo[data-over-popover="true"]',
+      '.first-task-coachmark-halo[data-over-overlay="true"]',
     );
     expect(guideCss).toMatch(
-      /\[data-over-popover="true"\][\s\S]*?--coachmark-z: 60;/,
+      /\[data-over-overlay="true"\][\s\S]*?--coachmark-z: 60;/,
     );
     expect(screen.queryByTestId("guide-coachmark-dim")).toBeNull();
   });
@@ -783,6 +810,27 @@ describe("FirstTaskCoachmark", () => {
         "imported",
       ),
     );
+  });
+
+  // The default action presses whatever the card points at. When there is
+  // nothing to press it has to LEAVE: a card whose only button neither moves the
+  // guide nor closes it is a dead end the user cannot reason their way out of.
+  it("dismisses instead of doing nothing when the default action has nothing to press", async () => {
+    render(<UnpressableCoachmarkHarness />);
+    makeTargetVisible(screen.getByTestId("unpressable-target"));
+    fireEvent(window, new Event("resize"));
+    const card = await screen.findByTestId("guide-coachmark");
+
+    // The bare default label, which is what a step with no `action` shows.
+    fireEvent.click(screen.getByRole("button", { name: /Try it/ }));
+
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+
+    // The keyboard path through the same default carries the same guard.
+    useFirstTaskGuideStore.getState().activate();
+    fireEvent.keyDown(card, { key: "ArrowRight" });
+
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
   });
 
   it("acknowledges a late mounted target through the root click listener", async () => {

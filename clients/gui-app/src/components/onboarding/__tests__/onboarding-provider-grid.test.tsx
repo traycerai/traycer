@@ -28,6 +28,7 @@ const rows = providerIds.map(
       description: null,
       trailing: null,
       disabledReason: null,
+      phoneDescription: null,
       onSelect: null,
     }) satisfies ProviderListRow,
 );
