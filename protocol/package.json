@@ -187,7 +187,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs && bun scripts/compat/validate-static-registries.ts",
+    "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs && bun run validate:registries",
+    "validate:registries": "bun scripts/compat/validate-static-registries.ts",
     "compile": "tsc --noEmit",
     "prepack": "bun run build",
     "test": "vitest run",
@@ -209,5 +210,18 @@
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "nx": {
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^production",
+          "sharedGlobals",
+          "{workspaceRoot}/clients/**/*.ts",
+          "{workspaceRoot}/clients/**/*.tsx"
+        ]
+      }
+    }
   }
 }
