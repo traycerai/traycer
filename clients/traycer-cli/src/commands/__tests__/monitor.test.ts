@@ -452,6 +452,40 @@ describe("stop initiator notices (negotiated @1.3)", () => {
     void result;
   });
 
+  it("names a user-stopped inactivity notice without attributing the stop to the user", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    sessions[0].serverFrame?.({
+      kind: "notice",
+      hasBinaryPayload: false,
+      notice: {
+        kind: "inactivity",
+        senderAgentId: "a1",
+        responseId: "response-1",
+        receiverAgentId: "receiver-1",
+        receiverTitle: "Worker",
+        receiverHarnessId: "codex",
+        epicId: "e1",
+        reason: "user-stopped",
+        detail: null,
+        droppedReceivers: null,
+        stopInitiator: null,
+        noticedAt: 123,
+      },
+    });
+
+    const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("was stopped before it could reply");
+    expect(output).not.toContain("stopped by the user");
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
+
   it("keeps human-initiated stops attributed to the user", async () => {
     const stdoutSpy = vi
       .spyOn(process.stdout, "write")

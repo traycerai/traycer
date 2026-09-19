@@ -79,7 +79,7 @@ export type AgentSessionState = z.infer<typeof agentSessionStateSchema>;
  * Display metadata, never a routing decision: all four resume identically, and
  * a consumer that branched on this to decide whether an agent can be revived
  * would be re-introducing the dead/asleep confusion one level down. It exists
- * so the UI can say "stopped by you" instead of "asleep" and so an
+ * so the UI can say "stopped" instead of "asleep" and so an
  * orchestrator can tell a peer it stopped from one that timed out.
  *
  * `null` where the reason is unknown or does not apply - a `running` agent, a
