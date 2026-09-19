@@ -407,10 +407,10 @@ describe("EpicSidebarMessageHits", () => {
   it("keeps expansions across a rerender and drops them when the host changes", async () => {
     const user = userEvent.setup();
     const { rerender } = render(sectionOnHost(SESSION_HOST_ID));
-    await user.click(screen.getByRole("button", { name: /Show all/ }));
+    await user.click(screen.getByRole("button", { name: /^\d+ matches$/ }));
     expect(
       screen
-        .getByRole("button", { name: /Show all/ })
+        .getByRole("button", { name: /^\d+ matches$/ })
         .getAttribute("aria-expanded"),
     ).toBe("true");
 
@@ -420,14 +420,14 @@ describe("EpicSidebarMessageHits", () => {
     rerender(sectionOnHost(SESSION_HOST_ID));
     expect(
       screen
-        .getByRole("button", { name: /Show all/ })
+        .getByRole("button", { name: /^\d+ matches$/ })
         .getAttribute("aria-expanded"),
     ).toBe("true");
 
     rerender(sectionOnHost("other-host"));
     expect(
       screen
-        .getByRole("button", { name: /Show all/ })
+        .getByRole("button", { name: /^\d+ matches$/ })
         .getAttribute("aria-expanded"),
     ).toBe("false");
   });

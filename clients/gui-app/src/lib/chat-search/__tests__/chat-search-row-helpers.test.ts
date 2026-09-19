@@ -244,6 +244,57 @@ describe("chatSearchSnippetWindow", () => {
     }
   });
 
+  it("widens the window to keep an emoji whole at its leading edge", () => {
+    // Budget 3 alone would start at unit 1, the emoji's low surrogate.
+    const result = chatSearchSnippetWindow("😀abc", [{ start: 2, end: 3 }], 3);
+    expect(result).toEqual({
+      text: "😀ab",
+      highlights: [{ start: 2, end: 3 }],
+      start: 0,
+      end: 4,
+    });
+  });
+
+  it("widens the window to keep an emoji whole at its trailing edge", () => {
+    expect(chatSearchSnippetWindow("abc😀", [{ start: 0, end: 1 }], 4)).toEqual(
+      {
+        text: "abc😀",
+        highlights: [{ start: 0, end: 1 }],
+        start: 0,
+        end: 5,
+      },
+    );
+    // No highlights: a one-unit budget still yields the whole emoji.
+    expect(chatSearchSnippetWindow("😀abc", [], 1)).toEqual({
+      text: "😀",
+      highlights: [],
+      start: 0,
+      end: 2,
+    });
+  });
+
+  it("keeps a combining mark with its base character", () => {
+    const result = chatSearchSnippetWindow("éx", [], 1);
+    expect(result.text).toBe("é");
+    expect(result.start).toBe(0);
+    expect(result.end).toBe(2);
+  });
+
+  it("rebases highlights against the snapped start", () => {
+    // Raw start 3 lands inside the second emoji; snapped to 2, so the
+    // highlight on "x" (unit 4) sits at offset 2, not 1.
+    const result = chatSearchSnippetWindow(
+      "😀😀xyz",
+      [{ start: 4, end: 5 }],
+      3,
+    );
+    expect(result.start).toBe(2);
+    expect(result.text).toBe("😀xy");
+    expect(result.highlights).toEqual([{ start: 2, end: 3 }]);
+    const [h] = result.highlights;
+    expect(result.text.slice(h.start, h.end)).toBe("x");
+  });
+
   it("handles empty text and a zero budget", () => {
     expect(chatSearchSnippetWindow("", [], 10)).toEqual({
       text: "",

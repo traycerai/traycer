@@ -166,7 +166,7 @@ const EXPANSION_BASE: ChatSearchBaseRequest = {
 function readyStatus(
   messages: ReadonlyArray<ChatSearchMessageMatch>,
   indexState: ChatSearchResponse["indexState"],
-): ChatSearchMessageHitsStatus {
+): Extract<ChatSearchMessageHitsStatus, { readonly kind: "ready" }> {
   return {
     kind: "ready",
     messages,
@@ -176,6 +176,13 @@ function readyStatus(
     loadingMore: false,
     loadMoreError: null,
   };
+}
+
+/** The partial-index caveat: the one status that is not the header's count. */
+function stillIndexingNote(): HTMLElement {
+  const note = screen.getByText(/Still indexing/);
+  expect(note.getAttribute("role")).toBe("status");
+  return note;
 }
 
 function renderSection(overrides: {
@@ -309,6 +316,34 @@ describe("HistoryMessageHits: the header", () => {
   });
 });
 
+describe("HistoryMessageHits: the count line", () => {
+  it("is an always-mounted status that says the search is running while it loads", () => {
+    testState.status = { kind: "loading" };
+
+    renderSection({});
+
+    const heading = screen.getByRole("heading", { name: /In messages/ });
+    const count = heading.querySelector("[role='status']");
+    expect(count?.textContent).toBe(" · Searching messages…");
+  });
+
+  it("adds a plus when more pages of chats remain", () => {
+    testState.status = {
+      ...readyStatus(
+        [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
+        "complete",
+      ),
+      showMore: () => {},
+    };
+
+    renderSection({});
+
+    expect(screen.getByRole("heading").textContent).toBe(
+      "In messages · on this host · 2+ chats",
+    );
+  });
+});
+
 describe("HistoryMessageHits: loading and failure", () => {
   it("withholds the loading row until the task list has settled", () => {
     testState.status = { kind: "loading" };
@@ -343,7 +378,8 @@ describe("HistoryMessageHits: loading and failure", () => {
     expect(screen.getByText("No messages match.")).toBeTruthy();
     // A complete index means the empty answer is the whole answer; there is
     // no caveat to add, and adding one would imply doubt that does not exist.
-    expect(screen.queryByRole("status")).toBeNull();
+    // (The header's count line is always a status, so look for the caveat.)
+    expect(screen.queryByText(/Still indexing/)).toBeNull();
   });
 
   // The regression: an unfinished startup sweep is the likeliest EXPLANATION
@@ -355,7 +391,7 @@ describe("HistoryMessageHits: loading and failure", () => {
 
     renderSection({});
 
-    expect(screen.getByRole("status").textContent).toBe(
+    expect(stillIndexingNote().textContent).toBe(
       "Still indexing chats on this host. Some results may be missing.",
     );
     expect(screen.getByText("No messages match.")).toBeTruthy();
@@ -368,7 +404,7 @@ describe("HistoryMessageHits: loading and failure", () => {
 
     renderSection({});
 
-    expect(screen.getByRole("status").textContent).toBe(
+    expect(stillIndexingNote().textContent).toBe(
       "Still indexing chats on this host. Some results may be missing.",
     );
     expect(screen.queryByText("No messages match.")).toBeNull();
@@ -431,17 +467,35 @@ describe("HistoryMessageHits: the two ways out", () => {
 
 describe("HistoryMessageHits: keyboard", () => {
   it("binds History's traversal to every hit control", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    // Header, "N matches" disclosure and the best-hit child: three stops.
+    testState.status = readyStatus([messageMatch("chat-1", 3)], "complete");
 
     const { container, onRowKeyDown } = renderSection({});
-    const row = screen.getByRole("button", { name: /Chat chat-1/ });
-    fireEvent.keyDown(row, { key: "ArrowDown" });
-
-    expect(onRowKeyDown).toHaveBeenCalledTimes(1);
+    const stops = container.querySelectorAll("[data-chat-search-nav]");
     // The marker the traversal reads is the chat-search one, placed by the
     // shared row - History's hook matches both. See
     // `use-history-list-keyboard-nav.ts`.
-    expect(container.querySelectorAll("[data-chat-search-nav]").length).toBe(1);
+    expect(stops.length).toBe(3);
+    for (const stop of stops) fireEvent.keyDown(stop, { key: "ArrowDown" });
+
+    expect(onRowKeyDown).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets Left and Right on a header expand and collapse instead of reaching History's traversal", () => {
+    testState.status = readyStatus([messageMatch("chat-1", 3)], "complete");
+
+    const { onRowKeyDown } = renderSection({});
+    const header = screen.getByRole("button", {
+      name: "Open chat Chat chat-1 at its best match",
+    });
+    fireEvent.keyDown(header, { key: "ArrowRight" });
+
+    expect(
+      screen
+        .getByRole("button", { name: "3 matches" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(onRowKeyDown).not.toHaveBeenCalled();
   });
 });
 
@@ -455,13 +509,13 @@ describe("HistoryMessageHits: a host switch is a different index", () => {
     testState.status = readyStatus([messageMatch("chat-1", 2)], "complete");
 
     const { rerender } = renderSection({});
-    const toggle = screen.getByRole("button", { name: /Show all 2 matches/ });
+    const toggle = screen.getByRole("button", { name: "2 matches" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(toggle);
     expect(
       screen
-        .getByRole("button", { name: /Show all 2 matches/ })
+        .getByRole("button", { name: "2 matches" })
         .getAttribute("aria-expanded"),
     ).toBe("true");
 
@@ -470,7 +524,7 @@ describe("HistoryMessageHits: a host switch is a different index", () => {
 
     expect(
       screen
-        .getByRole("button", { name: /Show all 2 matches/ })
+        .getByRole("button", { name: "2 matches" })
         .getAttribute("aria-expanded"),
     ).toBe("false");
   });
@@ -481,12 +535,12 @@ describe("HistoryMessageHits: a host switch is a different index", () => {
     testState.status = readyStatus([messageMatch("chat-1", 2)], "complete");
 
     const { rerender } = renderSection({});
-    fireEvent.click(screen.getByRole("button", { name: /Show all 2 matches/ }));
+    fireEvent.click(screen.getByRole("button", { name: "2 matches" }));
     rerender();
 
     expect(
       screen
-        .getByRole("button", { name: /Show all 2 matches/ })
+        .getByRole("button", { name: "2 matches" })
         .getAttribute("aria-expanded"),
     ).toBe("true");
   });

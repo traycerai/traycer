@@ -160,9 +160,14 @@ function HistoryMessageHitsSection(props: {
         <ChatSearchExpandedRows
           client={client}
           base={expansionBase}
-          epicId={target.epicId}
-          chatId={target.chatId}
-          onOpenMessage={(messageId) => openTarget({ ...target, messageId })}
+          {...target}
+          onOpenMessage={(messageId) =>
+            openTarget({
+              epicId: target.epicId,
+              chatId: target.chatId,
+              messageId,
+            })
+          }
         />
       ),
     [client, expansionBase, openTarget],
@@ -178,7 +183,10 @@ function HistoryMessageHitsSection(props: {
   if (status.kind === "absent") return null;
   if (status.kind === "loading" && !taskListSettled) return null;
   return (
-    <section aria-label="Message matches" className="flex flex-col">
+    <section
+      aria-label="Message matches"
+      className="flex flex-col transition-[opacity,translate] duration-160 ease-[cubic-bezier(0.23,1,0.32,1)] starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0"
+    >
       <div className="flex flex-wrap items-center justify-between gap-x-2 border-t border-border px-3 pt-3 pb-1">
         <h3 className="min-w-0 text-ui-xs text-muted-foreground">
           <span className="font-medium tracking-wide uppercase">
@@ -228,9 +236,12 @@ function HeaderDetail(props: {
   return (
     <>
       <span>{` · on ${hostLabel}`}</span>
-      {status.kind === "ready" ? (
-        <span>{` · ${chatCountLabel(status.messages.length)}`}</span>
-      ) : null}
+      <span role="status" className="tabular-nums">
+        {status.kind === "loading" ? " · Searching messages…" : null}
+        {status.kind === "ready"
+          ? ` · ${chatCountLabel(status.messages.length, status.showMore !== null)}`
+          : null}
+      </span>
       {filtersActive ? <span> · not filtered</span> : null}
     </>
   );
@@ -318,6 +329,7 @@ function HistoryMessageHitsBody(props: {
 }
 
 /** A hit is one CHAT, however many of its messages matched. */
-function chatCountLabel(count: number): string {
+function chatCountLabel(count: number, more: boolean): string {
+  if (more) return `${count}+ chats`;
   return count === 1 ? "1 chat" : `${count} chats`;
 }

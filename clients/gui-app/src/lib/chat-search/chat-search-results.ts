@@ -287,14 +287,6 @@ export function chatSearchRoleLabels(hit: {
   }
 }
 
-/** Compatibility for rows that have not migrated to the two role labels. */
-export function chatSearchTierLabel(hit: {
-  readonly tier: ChatSearchMessageHit["tier"];
-  readonly interAgent: boolean;
-}): string {
-  return chatSearchRoleLabels(hit).short;
-}
-
 export interface ChatSearchSnippetWindow {
   readonly text: string;
   readonly highlights: ReadonlyArray<ChatSearchRange>;
@@ -303,7 +295,11 @@ export interface ChatSearchSnippetWindow {
   readonly end: number;
 }
 
-/** Centre on the first highlight, or use the leading text when none exists. */
+const snippetSegmenter = new Intl.Segmenter(undefined, {
+  granularity: "grapheme",
+});
+
+/** Centre on the first highlight, keeping complete graphemes at both edges. */
 export function chatSearchSnippetWindow(
   text: string,
   ranges: ReadonlyArray<ChatSearchRange>,
@@ -324,7 +320,12 @@ export function chatSearchSnippetWindow(
       Math.min(first.start - Math.floor(context / 2), text.length - length),
     );
   }
-  const end = Math.min(text.length, start + length);
+  let end = Math.min(text.length, start + length);
+  const graphemes = snippetSegmenter.segment(text);
+  start = graphemes.containing(start)?.index ?? start;
+  const last = graphemes.containing(end - 1);
+  if (length === 0) end = start;
+  else if (last !== undefined) end = last.index + last.segment.length;
   return {
     text: text.slice(start, end),
     highlights: highlights.flatMap((segment) => {

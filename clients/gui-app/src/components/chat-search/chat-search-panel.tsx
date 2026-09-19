@@ -38,6 +38,7 @@ import { useChatSearchHost } from "@/hooks/chats/use-chat-search-host";
 import {
   useChatSearchResults,
   type ChatSearchBaseRequest,
+  type ChatSearchStatus,
 } from "@/hooks/chats/use-chat-search-query";
 import { useChatSearchTaskTitles } from "@/hooks/chats/use-chat-search-task-titles";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
@@ -45,6 +46,7 @@ import {
   CHAT_SEARCH_BODY_MIN_QUERY_CHARS,
   CHAT_SEARCH_DEBOUNCE_MS,
   chatSearchDateRange,
+  chatSearchRoleLabels,
 } from "@/lib/chat-search/chat-search-results";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
 import { useHostClient } from "@/lib/host";
@@ -64,8 +66,14 @@ const ROLE_OPTIONS: ReadonlyArray<{
   // Whose words: only the prompts this user typed, or only the agent's
   // replies. Notices, cards and prompts sent by other agents match under
   // "All messages" alone.
-  { value: "human", label: "Your messages" },
-  { value: "assistant", label: "Agent replies" },
+  {
+    value: "human",
+    label: chatSearchRoleLabels({ tier: "user", interAgent: false }).full,
+  },
+  {
+    value: "assistant",
+    label: chatSearchRoleLabels({ tier: "assistant", interAgent: false }).full,
+  },
 ];
 
 const DATE_OPTIONS: ReadonlyArray<{
@@ -234,9 +242,14 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
         <ChatSearchExpandedRows
           client={client}
           base={base}
-          epicId={target.epicId}
-          chatId={target.chatId}
-          onOpenMessage={(messageId) => openTarget({ ...target, messageId })}
+          {...target}
+          onOpenMessage={(messageId) =>
+            openTarget({
+              epicId: target.epicId,
+              chatId: target.chatId,
+              messageId,
+            })
+          }
         />
       ),
     [base, client, openTarget],
@@ -343,6 +356,12 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
           </SelectContent>
         </Select>
       </div>
+      <p
+        role="status"
+        className="px-3 pt-2 pb-1 text-ui-xs text-muted-foreground tabular-nums"
+      >
+        {resultCountLabel(status)}
+      </p>
       <div ref={resultsRef} className="min-h-0 flex-1 overflow-y-auto">
         {unsupported ? (
           <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground">
@@ -390,4 +409,14 @@ export function ChatSearchPanel(props: { readonly onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+function resultCountLabel(status: ChatSearchStatus): string {
+  if (status.kind === "loading") return "Searching chats…";
+  if (status.kind !== "ready") return "";
+  const { chatMatches, chatNextCursor, messageMatches, messageNextCursor } =
+    status.results;
+  const chats = `${chatMatches.length}${chatNextCursor === null ? "" : "+"}`;
+  const messages = `${messageMatches.length}${messageNextCursor === null ? "" : "+"}`;
+  return `${chats} chats by title · ${messages} chats with message matches`;
 }
