@@ -213,8 +213,12 @@ vi.mock(
 
 import {
   closeTestEpicTab,
+  openTestEpicTab,
+  setTestEffectiveHost,
   setTestEpicSessionHostClientResolver,
+  TEST_EPIC_TAB_NAME,
 } from "@/lib/registries/test-support/epic-session-controller-test-support";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   clearSessionCreatedEpics,
@@ -494,6 +498,11 @@ function snapshotMeta(roomId: string): SnapshotMetaEpic {
 }
 
 function deliverSnapshot(stream: ControlledEpicStream, roomId: string): void {
+  // Open first, as a real stream does. A session is an authority for its
+  // write-throughs only while LIVE (snapshot loaded, host transport open), so
+  // a fixture that stops at the snapshot describes a session that writes
+  // nothing.
+  stream.callbacks.onConnectionStatus("open", null, false);
   stream.callbacks.onSnapshot(snapshotMeta(roomId), new Uint8Array([0, 0]));
 }
 
@@ -2884,6 +2893,10 @@ describe("<TestEpicSessionTab />", () => {
     // A `@1.6` peer's omission is unknown: the cached local home survives.
     act(() => {
       store.setState({
+        // Live: the home write-through speaks only for a session whose
+        // snapshot has loaded on an open host transport.
+        snapshotLoaded: true,
+        hostTransportStatus: "open",
         hasFreshCloudSyncStatus: true,
         durabilityStatusNegotiated: true,
         durabilityLegsNegotiated: true,
@@ -3542,6 +3555,196 @@ describe("<TestEpicSessionTab />", () => {
       });
       expect(streams).toHaveLength(3);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
+
+    it("a re-point MOVES the write-throughs: the OLD handle writes nothing, the NEW handle writes both", async () => {
+      const queryClient = new QueryClient();
+      const cloudTasksUserId = "alice@example.com";
+      const queryKey = cloudEpicTasksQueryKey(
+        "host-a",
+        cloudTasksUserId,
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      queryClient.setQueryData<ListTasksResponse>(queryKey, {
+        tasks: [makeHistoryTask("epic-session-test", "", cloudTasksUserId)],
+        hasMore: false,
+      });
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          {providerBody((handle) => seenHandles.push(handle))}
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            {providerBody((handle) => seenHandles.push(handle))}
+          </QueryClientProvider>,
+        );
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-b");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      const secondHandle = seenHandles.at(-1);
+      if (secondHandle === undefined) {
+        throw new Error("expected a replacement handle after the re-point");
+      }
+      await act(() => Promise.resolve());
+
+      // A title landing on the OLD handle after the commit reaches neither
+      // the tab record nor the History row: the re-point MOVED the
+      // subscriptions to the replacement, and the old handle's store is no
+      // longer observed by anything this module attached.
+      // Forced LIVE in the same write: the replaced handle's transport may
+      // have closed, and a handle that is merely not live writes nothing
+      // either - the MOVE has to be the only thing stopping this title.
+      act(() => {
+        firstHandle.store.setState((state) => ({
+          snapshotLoaded: true,
+          hostTransportStatus: "open",
+          epic: { ...state.epic, title: "Old Handle Title" },
+        }));
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(
+        useEpicCanvasStore.getState().tabsById["epic-session-test"]?.name,
+      ).toBe(TEST_EPIC_TAB_NAME);
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("");
+
+      // The NEW handle's title reaches both.
+      act(() => {
+        secondHandle.store.setState((state) => ({
+          epic: { ...state.epic, title: "New Handle Title" },
+        }));
+      });
+      expect(
+        useEpicCanvasStore.getState().tabsById["epic-session-test"]?.name,
+      ).toBe("New Handle Title");
+      await waitFor(() => {
+        expect(
+          queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+            ?.light?.title,
+        ).toBe("New Handle Title");
+      });
+    });
+
+    it("a re-point during an active hold still writes the first title before the session can be evicted", async () => {
+      const EPIC_ID = "epic-session-test";
+      const queryClient = new QueryClient();
+      const cloudTasksUserId = "alice@example.com";
+      const queryKey = cloudEpicTasksQueryKey(
+        "host-a",
+        cloudTasksUserId,
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      queryClient.setQueryData<ListTasksResponse>(queryKey, {
+        tasks: [makeHistoryTask(EPIC_ID, "", cloudTasksUserId)],
+        hasMore: false,
+      });
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const controller = getEpicSessionController();
+
+      // UNNAMED before the harness opens it (which keeps an existing record),
+      // so the surfaced epic also carries a metadata hold. Opening a tab is an
+      // acquisition, so the effective host is seeded first - the harness only
+      // mirrors it on render, and an earlier test's host would otherwise be
+      // what this session is built against.
+      setTestEffectiveHost("host-a", true);
+      openTestEpicTab(EPIC_ID, EPIC_ID, "");
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          {providerBody((handle) => seenHandles.push(handle))}
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+      });
+      expect(controller.readEntryStatusForTests(EPIC_ID)?.metadataHold).toBe(
+        true,
+      );
+
+      // Re-point while the hold is running; the replacement loads untitled.
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            {providerBody((handle) => seenHandles.push(handle))}
+          </QueryClientProvider>,
+        );
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-b");
+      });
+      // Read off the registry, not the probe: what this test is about happens
+      // after the surface is gone, so no React read is part of it.
+      await waitFor(() => {
+        const mounted = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+        expect(mounted).not.toBeNull();
+        expect(mounted).not.toBe(firstHandle);
+      });
+      const secondHandle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+      if (secondHandle === null) {
+        throw new Error("expected a replacement handle after the re-point");
+      }
+      await act(() => Promise.resolve());
+      // The hold moved to the replacement with it.
+      expect(controller.readEntryStatusForTests(EPIC_ID)?.metadataHold).toBe(
+        true,
+      );
+
+      // The surface leaves: the hold is now the only demand. And the registry
+      // is at its cap with this epic the only idle candidate, so the instant
+      // the hold releases that demand the session is evicted - detaching its
+      // write-throughs inside the very notification that carries the title.
+      view.unmount();
+      act(() => {
+        for (let i = 0; i < 5; i += 1) {
+          const otherId = `epic-session-repoint-hold-other-${i}`;
+          openTestEpicTab(otherId, otherId, `Other ${i}`);
+          controller.attachSurface(otherId, otherId);
+        }
+      });
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(secondHandle);
+
+      act(() => {
+        secondHandle.store.setState((state) => ({
+          epic: { ...state.epic, title: "First Title After Re-point" },
+        }));
+      });
+
+      expect(controller.readEntryStatusForTests(EPIC_ID)?.metadataHold).toBe(
+        false,
+      );
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBeNull();
+      expect(useEpicCanvasStore.getState().tabsById[EPIC_ID]?.name).toBe(
+        "First Title After Re-point",
+      );
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("First Title After Re-point");
     });
   });
 
