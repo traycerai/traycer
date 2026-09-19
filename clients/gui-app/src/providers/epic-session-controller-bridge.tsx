@@ -1,4 +1,5 @@
 import { useEffect, useMemo, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   useAuthService,
@@ -17,8 +18,8 @@ import {
 import "@/lib/epics/epic-parking-open-tabs";
 
 /**
- * Hands the epic session controller the three things it needs from the app
- * that only React can reach: the durable transport opener (the runner host is
+ * Hands the epic session controller the things it needs from the app that
+ * only React can reach: the durable transport opener (the runner host is
  * context-only), a requester for a named host off the app binding, and auth
  * revalidation.
  *
@@ -33,6 +34,9 @@ export function EpicSessionControllerBridge(): ReactNode {
   const openTransport = useDurableStreamTransportFactory();
   const binding = useHostBinding();
   const authService = useAuthService();
+  // App-lifetime, like everything else here: the History, task-context and
+  // home write-throughs belong to the live session, not to a mounted surface.
+  const queryClient = useQueryClient();
 
   const environment = useMemo((): EpicSessionControllerEnvironment => {
     // One requester per host for the life of this binding: every consumer of
@@ -51,8 +55,9 @@ export function EpicSessionControllerBridge(): ReactNode {
       revalidateAuth: () => {
         void authService.revalidateCurrentContext();
       },
+      queryClient,
     };
-  }, [authService, binding, openTransport]);
+  }, [authService, binding, openTransport, queryClient]);
 
   useEffect(() => {
     installEpicSessionControllerEnvironment(environment);

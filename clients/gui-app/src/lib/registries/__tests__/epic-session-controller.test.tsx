@@ -14,8 +14,18 @@ import { use, useEffect } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { QueryClient } from "@tanstack/react-query";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type {
+  ListTasksResponse,
+  TaskLight,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  type WorkerToMainEvent,
+} from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type { BridgeMessageEventLike } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 
 import {
   getEpicSessionController,
@@ -78,6 +88,11 @@ import {
   clearSessionCreatedEpics,
   markEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
+import {
+  LIST_CLOUD_TASKS_REQUEST,
+  cloudEpicTasksQueryKey,
+} from "@/lib/cloud-epic-tasks-query";
+import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 
 // ── Mocks needed only by the React mount test ───────────────────────────────
 // `TestEpicSessionTab` renders the real `<EpicSessionProvider>`, which reads
@@ -142,7 +157,21 @@ function snapshotMeta(roomId: string): SnapshotMetaEpic {
   };
 }
 
+/**
+ * The two facts that make a session an AUTHORITY for its write-throughs
+ * (`isEpicSessionLive`): a session that is not live stays attached and writes
+ * nothing, so a fixture that injects state straight into the store has to say
+ * the session is live, exactly as a fixture that drives a stream has to open it.
+ */
+const LIVE_SESSION = {
+  snapshotLoaded: true,
+  hostTransportStatus: "open",
+} as const;
+
 function deliverSnapshot(stream: ControlledEpicStream, roomId: string): void {
+  // Open first, as a real stream does: the snapshot arrives on an open
+  // transport, and the write-throughs and the metadata hold both wait for it.
+  stream.callbacks.onConnectionStatus("open", null, false);
   stream.callbacks.onSnapshot(snapshotMeta(roomId), new Uint8Array([0, 0]));
 }
 
@@ -562,7 +591,25 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     expect(status?.suspended).toBe(true);
   });
 
-  it("a record with a real name is never overwritten by the hold", async () => {
+  it("a record with a real name is mirrored over by the observed session title", async () => {
+    // The tab record is a MIRROR of the session's title, not an independent
+    // name of its own: nothing renames a tab record directly. The strip's
+    // inline rename enqueues `update-epic-title` on the session, so there the
+    // session's title already is the user's name.
+    //
+    // That does NOT make the session's title the user's latest name in
+    // general: a rename from History goes straight to the `epic.updateTitle`
+    // RPC and patches the Query caches, bypassing this store, so a session
+    // can be the stale party. The mirror is therefore authoritative only for
+    // a LIVE session (snapshot loaded, host transport open) - which this one
+    // is - and a session that is not live writes nothing; see "a session that
+    // is not live never reverts a History rename, and writes what changed
+    // once it is live again".
+    //
+    // Within that, it overwrites unconditionally, as the mounted `renameTab`
+    // effect it replaces did for the one tab it could see, once a real title
+    // landed. Stage 3 widens that to every open tab record of the epic, named
+    // or not.
     const EPIC_ID = "epic-metadata-hold-mixed-names";
     const TAB_UNNAMED = "tab-metadata-hold-mixed-unnamed";
     const TAB_NAMED = "tab-metadata-hold-mixed-named";
@@ -589,7 +636,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       { timeout: 5000 },
     );
     expect(useEpicCanvasStore.getState().tabsById[TAB_NAMED]?.name).toBe(
-      "My own name",
+      "Observed Title",
     );
   });
 
@@ -1173,5 +1220,748 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     expect(useEpicCanvasStore.getState().tabsById[TAB_ID]?.name).toBe(
       "Detached Hold Title",
     );
+  });
+});
+
+describe("session-owned write-throughs", () => {
+  /** Deliberately distinct from the outer describe's "host-a": scope.hostId
+   * in the write-through cache functions is `null` (any host for the user),
+   * so this literal never has to match the session's own host. */
+  const WRITE_THROUGH_CACHE_HOST_ID = "host-write-through-cache";
+
+  let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    __getOpenEpicRegistryForTests().disposeAll();
+    __resetEpicParkingForTests();
+    __setAgentActivityPlaneAnsweringForTests();
+    resetFakeDurableStreamTransports();
+    installTestEpicSessionEnvironment(defaultTestEpicSessionEnvironment());
+    setTestEffectiveHost("host-a", true);
+    previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+  });
+
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+    resetCanvasStore();
+    __resetEpicParkingForTests();
+    __resetAgentActivityStoreForTests();
+    useSelectionAuthorityStore.getState().reset();
+    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
+    setDesktopEpicOwnershipBridge(null);
+    resetAuth("signed-out", null);
+    vi.useRealTimers();
+  });
+
+  function makeWriteThroughHistoryTask(
+    id: string,
+    title: string,
+    createdBy: string,
+  ): TaskLight {
+    return {
+      epic: {
+        light: {
+          id,
+          title,
+          initialUserPrompt: "Investigate the write-through",
+          ticketCount: 0,
+          specCount: 0,
+          storyCount: 0,
+          reviewCount: 0,
+          status: "draft",
+          createdAt: 1,
+          updatedAt: 1,
+          createdBy,
+          version: "1",
+        },
+        permission: null,
+        repos: [],
+        workspaces: [],
+        roomInfo: null,
+      },
+    };
+  }
+
+  function writeThroughHistoryQueryKey(userId: string): readonly unknown[] {
+    return cloudEpicTasksQueryKey(
+      WRITE_THROUGH_CACHE_HOST_ID,
+      userId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+  }
+
+  function readHistoryTitle(
+    queryClient: QueryClient,
+    queryKey: readonly unknown[],
+  ): string | undefined {
+    return queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+      ?.light?.title;
+  }
+
+  /**
+   * Waits one real macrotask - long enough for any `notifyManager.schedule`
+   * callback (a `setTimeout(0)`, per `@tanstack/query-core`) to run. The
+   * write-throughs' Query-cache subscription reacts on that schedule, not
+   * synchronously, so a "this must NOT react" pin has to let the queue drain
+   * before it can trust a still-quiet cache.
+   */
+  async function flushQueryCacheNotifications(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  interface LiveWriteThroughSession {
+    readonly epicId: string;
+    readonly tabId: string;
+    readonly userId: string;
+    readonly queryClient: QueryClient;
+    readonly queryKey: readonly unknown[];
+    readonly handle: OpenEpicStoreHandle;
+  }
+
+  /**
+   * A live, TITLED session with no surface ever attached: an unnamed tab
+   * acquires for its metadata, then the store is written directly - the exact
+   * observable `attachTabNameSync` / `attachTitleCacheSync` react to,
+   * whichever pipeline produced it. The Yjs pipeline that actually generates a
+   * title from a stream is pinned elsewhere in this file ("the hold ends when
+   * a real title is observed…") and by test (a) below through the same
+   * mechanism as every other "hold ends" test in this suite; these tests are
+   * about the write-throughs the controller attaches around a title change,
+   * not about how a title is generated.
+   */
+  function acquireLiveTitledSession(
+    epicId: string,
+    tabId: string,
+    userId: string,
+  ): LiveWriteThroughSession {
+    const session = acquireLiveUntitledSession(epicId, tabId, userId);
+    session.handle.store.setState((state) => ({
+      epic: { ...state.epic, title: "First Title" },
+    }));
+    return session;
+  }
+
+  /**
+   * The same session one step earlier: live, hidden, its tab unnamed and its
+   * metadata hold still running, because no title has arrived yet.
+   */
+  function acquireLiveUntitledSession(
+    epicId: string,
+    tabId: string,
+    userId: string,
+  ): LiveWriteThroughSession {
+    resetAuth("signed-in", userId);
+    const queryClient = new QueryClient();
+    installTestEpicSessionEnvironment({
+      ...defaultTestEpicSessionEnvironment(),
+      queryClient,
+    });
+    const queryKey = writeThroughHistoryQueryKey(userId);
+    queryClient.setQueryData<ListTasksResponse>(queryKey, {
+      tasks: [makeWriteThroughHistoryTask(epicId, "", userId)],
+      hasMore: false,
+    });
+
+    openTestEpicTab(tabId, epicId, "");
+    const handle = __getOpenEpicRegistryForTests().peek(epicId);
+    if (handle === null) throw new Error("expected an acquired handle");
+
+    handle.store.setState(LIVE_SESSION);
+
+    return { epicId, tabId, userId, queryClient, queryKey, handle };
+  }
+
+  /**
+   * Five OTHER epics, surfaces attached and left attached (a mounted entry is
+   * never a prune candidate), so the registry sits at `maxLiveEpics` (5) with
+   * the epic under test as its only clean idle candidate: the moment that
+   * epic's demand is released, the cap takes it.
+   */
+  function fillRegistryToCap(label: string): void {
+    const controller = getEpicSessionController();
+    for (let i = 0; i < 5; i += 1) {
+      const otherTab = `tab-${label}-other-${i}`;
+      const otherEpic = `epic-${label}-other-${i}`;
+      openTestEpicTab(otherTab, otherEpic, `Other ${i}`);
+      controller.attachSurface(otherEpic, otherTab);
+    }
+  }
+
+  function setDocumentTitle(handle: OpenEpicStoreHandle, title: string): void {
+    handle.store.setState((state) => ({ epic: { ...state.epic, title } }));
+  }
+
+  function readTabName(tabId: string): string | undefined {
+    return useEpicCanvasStore.getState().tabsById[tabId]?.name;
+  }
+
+  /**
+   * Writes a NEW title through the CAPTURED (possibly stale) handle, and
+   * simulates a late `epic.listTasks` fetch landing with the pre-generation
+   * title - the two observables a teardown pin has to prove neither reaches.
+   */
+  function writeThroughOldHandle(session: LiveWriteThroughSession): void {
+    // Forced LIVE in the same write: disposal may close the old handle's
+    // transport, and a handle that is merely not live writes nothing either.
+    // The teardown has to be the ONLY thing standing between this title and
+    // the record, or these pins pass for the wrong reason.
+    session.handle.store.setState((state) => ({
+      ...LIVE_SESSION,
+      epic: { ...state.epic, title: "Second Title" },
+    }));
+    session.queryClient.setQueryData<ListTasksResponse>(session.queryKey, {
+      tasks: [makeWriteThroughHistoryTask(session.epicId, "", session.userId)],
+      hasMore: false,
+    });
+  }
+
+  /** Both subscriptions the write-through owns are gone: neither observable moved. */
+  async function expectDetachedWriteThroughs(
+    session: LiveWriteThroughSession,
+  ): Promise<void> {
+    await flushQueryCacheNotifications();
+    expect(useEpicCanvasStore.getState().tabsById[session.tabId]?.name).toBe(
+      "First Title",
+    );
+    expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe("");
+  }
+
+  interface FatalWorkerRig {
+    fatal(): void;
+  }
+
+  /**
+   * A worker that answers the handshake and can then die ON COMMAND - the
+   * same rig the provider suite's `installWorkerWithFatalOnFirstSpawn` uses
+   * for its own Retry pins, reused here with no React mounted at all: the
+   * controller reaches `failConstruction` from a session a metadata hold
+   * held, with no surface ever involved.
+   */
+  function installFatalWorkerRig(): FatalWorkerRig {
+    let deliverFatal: (() => void) | null = null;
+    __setEpicRuntimeWorkerFactoryForTests(() => {
+      const listeners = new Set<(event: BridgeMessageEventLike) => void>();
+      const deliver = (event: WorkerToMainEvent): void => {
+        for (const listener of [...listeners]) {
+          listener({ data: { frame: "event", event } });
+        }
+      };
+      let answeredHandshake = false;
+      deliverFatal = (): void => {
+        deliver({
+          kind: "fatal",
+          message: "the runtime worker died",
+          stack: null,
+        });
+      };
+      return {
+        postMessage: (): void => {
+          if (answeredHandshake) return;
+          answeredHandshake = true;
+          deliver({
+            kind: "ready",
+            protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
+          });
+        },
+        addEventListener: (
+          _type: "message",
+          listener: (event: BridgeMessageEventLike) => void,
+        ): void => {
+          listeners.add(listener);
+        },
+        removeEventListener: (
+          _type: "message",
+          listener: (event: BridgeMessageEventLike) => void,
+        ): void => {
+          listeners.delete(listener);
+        },
+        terminate: (): void => {},
+        onWorkerFault: (): void => {},
+      };
+    });
+    return {
+      fatal: (): void => {
+        if (deliverFatal === null) {
+          throw new Error("the first worker was never spawned");
+        }
+        deliverFatal();
+      },
+    };
+  }
+
+  it("never-activated tab: a generated title reaches the tab record and the cached History row with no surface ever attached", () => {
+    const session = acquireLiveTitledSession(
+      "epic-write-through-never-activated",
+      "tab-write-through-never-activated",
+      "alice@example.com",
+    );
+
+    expect(useEpicCanvasStore.getState().tabsById[session.tabId]?.name).toBe(
+      "First Title",
+    );
+    expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+      "First Title",
+    );
+  });
+
+  it("a late epic.listTasks result landing after the title is re-patched back to the generated title", async () => {
+    const session = acquireLiveTitledSession(
+      "epic-write-through-late-list",
+      "tab-write-through-late-list",
+      "alice@example.com",
+    );
+
+    // What a late fetch answers: the pre-generation title, landing after the
+    // session already patched the row.
+    session.queryClient.setQueryData<ListTasksResponse>(session.queryKey, {
+      tasks: [makeWriteThroughHistoryTask(session.epicId, "", session.userId)],
+      hasMore: false,
+    });
+
+    await waitFor(() => {
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "First Title",
+      );
+    });
+  });
+
+  it("a warm, suspended session keeps writing after its metadata hold ends", () => {
+    const session = acquireLiveTitledSession(
+      "epic-write-through-warm-suspended",
+      "tab-write-through-warm-suspended",
+      "alice@example.com",
+    );
+    const status = getEpicSessionController().readEntryStatusForTests(
+      session.epicId,
+    );
+    expect(status?.metadataHold).toBe(false);
+    expect(status?.suspended).toBe(true);
+    // Still warm in the registry - only the demand unit was handed back.
+    expect(__getOpenEpicRegistryForTests().peek(session.epicId)).not.toBeNull();
+
+    session.handle.store.setState((state) => ({
+      epic: { ...state.epic, title: "Second Title" },
+    }));
+
+    expect(useEpicCanvasStore.getState().tabsById[session.tabId]?.name).toBe(
+      "Second Title",
+    );
+    expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+      "Second Title",
+    );
+  });
+
+  it("sibling seeding: a tab opened later for an already-titled epic is seeded at once", () => {
+    const session = acquireLiveTitledSession(
+      "epic-write-through-sibling-seed",
+      "tab-write-through-sibling-seed-t1",
+      "alice@example.com",
+    );
+    const TAB_T2 = "tab-write-through-sibling-seed-t2";
+
+    openTestEpicTab(TAB_T2, session.epicId, "");
+
+    expect(useEpicCanvasStore.getState().tabsById[TAB_T2]?.name).toBe(
+      "First Title",
+    );
+  });
+
+  describe("a session is an authority only while it is live", () => {
+    it("a session that is not live never reverts a History rename, and writes what changed once it is live again", async () => {
+      const session = acquireLiveTitledSession(
+        "epic-write-through-stale-rename",
+        "tab-write-through-stale-rename",
+        "alice@example.com",
+      );
+      // Warm and unmounted - and now its host goes away. The session keeps
+      // "First Title"; it is the stale party from here on.
+      session.handle.store.setState({ hostTransportStatus: "reconnecting" });
+
+      // The History rename, exactly as `useEpicUpdateTitle` applies it on RPC
+      // success: straight into the caches, never through this session's store.
+      updateEpicTitleInCloudTaskCaches(
+        session.queryClient,
+        { hostId: null, userId: session.userId },
+        session.epicId,
+        "Renamed From History",
+      );
+      // That patch IS a Query-cache `updated` event, which is the half that
+      // re-applies the session's title over any differing row.
+      await flushQueryCacheNotifications();
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Renamed From History",
+      );
+
+      // Nor does the stale session's own title moving write anything.
+      setDocumentTitle(session.handle, "Stale Title");
+      await flushQueryCacheNotifications();
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Renamed From History",
+      );
+      expect(readTabName(session.tabId)).toBe("First Title");
+
+      // The host comes back and the document has caught up: what changed
+      // while the gate was closed is written, to both.
+      session.handle.store.setState((state) => ({
+        hostTransportStatus: "open",
+        epic: { ...state.epic, title: "Caught Up Title" },
+      }));
+      expect(readTabName(session.tabId)).toBe("Caught Up Title");
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Caught Up Title",
+      );
+    });
+
+    it("a title that changed while the session was not live is written when it is live again", () => {
+      const session = acquireLiveTitledSession(
+        "epic-write-through-reopen-changed",
+        "tab-write-through-reopen-changed",
+        "alice@example.com",
+      );
+      session.handle.store.setState({ hostTransportStatus: "reconnecting" });
+      setDocumentTitle(session.handle, "Changed While Away");
+      expect(readTabName(session.tabId)).toBe("First Title");
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "First Title",
+      );
+
+      // Reopening alone - no further title change - is what flushes it.
+      session.handle.store.setState({ hostTransportStatus: "open" });
+
+      expect(readTabName(session.tabId)).toBe("Changed While Away");
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Changed While Away",
+      );
+    });
+
+    it("a title that did NOT change while the session was not live is not re-written over a newer History rename when it is live again", async () => {
+      const session = acquireLiveTitledSession(
+        "epic-write-through-reopen-unchanged",
+        "tab-write-through-reopen-unchanged",
+        "alice@example.com",
+      );
+      session.handle.store.setState({ hostTransportStatus: "reconnecting" });
+      updateEpicTitleInCloudTaskCaches(
+        session.queryClient,
+        { hostId: null, userId: session.userId },
+        session.epicId,
+        "Renamed From History",
+      );
+      await flushQueryCacheNotifications();
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Renamed From History",
+      );
+
+      // Live again, its document still reading "First Title" - the title it
+      // already wrote once. Reopening flushes what CHANGED, and nothing did.
+      session.handle.store.setState({ hostTransportStatus: "open" });
+
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Renamed From History",
+      );
+      await flushQueryCacheNotifications();
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Renamed From History",
+      );
+    });
+
+    it("a snapshot that has not loaded writes nothing, whatever the transport says", () => {
+      const session = acquireLiveUntitledSession(
+        "epic-write-through-no-snapshot",
+        "tab-write-through-no-snapshot",
+        "alice@example.com",
+      );
+      session.handle.store.setState((state) => ({
+        snapshotLoaded: false,
+        epic: { ...state.epic, title: "Too Early" },
+      }));
+
+      expect(readTabName(session.tabId)).toBe("");
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe("");
+    });
+  });
+
+  describe("the metadata hold ends when every title writer has written", () => {
+    it("an early workspace-context title names the tab but does not end the hold; the document title does, and reaches History", () => {
+      const session = acquireLiveUntitledSession(
+        "epic-write-through-early-meta",
+        "tab-write-through-early-meta",
+        "alice@example.com",
+      );
+      const controller = getEpicSessionController();
+
+      // `epic.getWorkspaceContext` answers before the records snapshot
+      // (`applyEarlyMeta`): a real title on the LIGHT, none on the document.
+      session.handle.store.setState({
+        snapshotMeta: {
+          ...snapshotMeta("room-write-through-early-meta"),
+          epicLight: {
+            id: session.epicId,
+            title: "Early Meta Title",
+            initialUserPrompt: "Investigate the write-through",
+            ticketCount: 0,
+            specCount: 0,
+            storyCount: 0,
+            reviewCount: 0,
+            status: "draft",
+            createdAt: 1,
+            updatedAt: 1,
+            createdBy: session.userId,
+            version: "1",
+          },
+        },
+      });
+
+      // The tab writer takes the fallback and names the tab early...
+      expect(readTabName(session.tabId)).toBe("Early Meta Title");
+      // ...but the History writer is fed by the document title alone, so the
+      // hold is NOT done, and its demand keeps the session through the cap.
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe("");
+      expect(controller.readEntryStatusForTests(session.epicId)).toMatchObject({
+        metadataHold: true,
+        demandHeld: true,
+      });
+      fillRegistryToCap("write-through-early-meta");
+      expect(
+        __getOpenEpicRegistryForTests().peek(session.epicId),
+      ).not.toBeNull();
+
+      setDocumentTitle(session.handle, "Document Title");
+
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe(
+        "Document Title",
+      );
+      expect(readTabName(session.tabId)).toBe("Document Title");
+      expect(
+        controller.readEntryStatusForTests(session.epicId)?.metadataHold,
+      ).toBe(false);
+      // And only now does the cap get it.
+      expect(__getOpenEpicRegistryForTests().peek(session.epicId)).toBeNull();
+    });
+
+    it("hold end flushes the write-throughs before releasing demand, whatever the subscriber order", () => {
+      const session = acquireLiveUntitledSession(
+        "epic-write-through-flush-order",
+        "tab-write-through-flush-order",
+        "alice@example.com",
+      );
+      const controller = getEpicSessionController();
+      const TAB_SIBLING = "tab-write-through-flush-order-sibling";
+
+      // Force the write-throughs to RE-ATTACH while the hold is running: a new
+      // Query client is a new target, so they are detached and attached again
+      // - which puts their store subscription AFTER the hold's. The hold's
+      // callback now runs first on a title, and what it does is release the
+      // demand that the cap is waiting on.
+      const secondQueryClient = new QueryClient();
+      secondQueryClient.setQueryData<ListTasksResponse>(session.queryKey, {
+        tasks: [
+          makeWriteThroughHistoryTask(session.epicId, "", session.userId),
+        ],
+        hasMore: false,
+      });
+      installTestEpicSessionEnvironment({
+        ...defaultTestEpicSessionEnvironment(),
+        queryClient: secondQueryClient,
+      });
+      openTestEpicTab(TAB_SIBLING, session.epicId, "");
+      expect(
+        controller.readEntryStatusForTests(session.epicId)?.metadataHold,
+      ).toBe(true);
+      fillRegistryToCap("write-through-flush-order");
+      expect(
+        __getOpenEpicRegistryForTests().peek(session.epicId),
+      ).not.toBeNull();
+
+      setDocumentTitle(session.handle, "Title Under Cap Pressure");
+
+      // The release really happened inside that one notification...
+      expect(
+        controller.readEntryStatusForTests(session.epicId)?.metadataHold,
+      ).toBe(false);
+      expect(__getOpenEpicRegistryForTests().peek(session.epicId)).toBeNull();
+      // ...and every writer had already run: the re-attached cache writer
+      // (the second client, not the first) and both tab records.
+      expect(readHistoryTitle(secondQueryClient, session.queryKey)).toBe(
+        "Title Under Cap Pressure",
+      );
+      expect(readTabName(session.tabId)).toBe("Title Under Cap Pressure");
+      expect(readTabName(TAB_SIBLING)).toBe("Title Under Cap Pressure");
+    });
+
+    it("the backstop ending a hold on a session that is not live writes nothing", () => {
+      vi.useFakeTimers();
+      const session = acquireLiveUntitledSession(
+        "epic-write-through-backstop-not-live",
+        "tab-write-through-backstop-not-live",
+        "alice@example.com",
+      );
+      const controller = getEpicSessionController();
+
+      // A real document title, on a session whose host went away: nothing a
+      // writer may write, so the hold is not done either.
+      session.handle.store.setState((state) => ({
+        hostTransportStatus: "reconnecting",
+        epic: { ...state.epic, title: "Offline Title" },
+      }));
+      expect(
+        controller.readEntryStatusForTests(session.epicId)?.metadataHold,
+      ).toBe(true);
+
+      vi.advanceTimersByTime(TITLE_GENERATION_PENDING_TIMEOUT_MS);
+
+      // The backstop ends it all the same, and its flush goes through the
+      // same gate as every other write: a timeout does not force a stale one.
+      expect(
+        controller.readEntryStatusForTests(session.epicId)?.metadataHold,
+      ).toBe(false);
+      expect(readTabName(session.tabId)).toBe("");
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe("");
+    });
+  });
+
+  describe("teardown detaches the write-throughs", () => {
+    it("park: the old handle writes nothing afterward", async () => {
+      // Fake timers FIRST, before the tab ever opens: the park window is
+      // armed off `Date.now()` / `window.setTimeout` at tab-open, and a real
+      // timer scheduled before fake timers install is invisible to
+      // `vi.advanceTimersByTimeAsync` - it is a native timer the fake clock
+      // never took over.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const session = acquireLiveTitledSession(
+        "epic-write-through-teardown-park",
+        "tab-write-through-teardown-park",
+        "alice@example.com",
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+
+      expect(isEpicParked(session.epicId)).toBe(true);
+      expect(__getOpenEpicRegistryForTests().peek(session.epicId)).toBeNull();
+
+      vi.useRealTimers();
+      writeThroughOldHandle(session);
+      await expectDetachedWriteThroughs(session);
+    });
+
+    it("cap eviction: the old handle writes nothing afterward", async () => {
+      const session = acquireLiveTitledSession(
+        "epic-write-through-teardown-cap-eviction",
+        "tab-write-through-teardown-cap-eviction",
+        "alice@example.com",
+      );
+      const controller = getEpicSessionController();
+
+      // Five OTHER epics, surfaces attached and left attached (a mounted
+      // entry is never a prune candidate), so the epic under test - the only
+      // warm, demand-free entry - is what the cap picks once the sixth entry
+      // crosses `maxLiveEpics` (5).
+      for (let i = 0; i < 5; i += 1) {
+        const otherTab = `tab-write-through-evict-other-${i}`;
+        const otherEpic = `epic-write-through-evict-other-${i}`;
+        openTestEpicTab(otherTab, otherEpic, `Other ${i}`);
+        controller.attachSurface(otherEpic, otherTab);
+      }
+
+      expect(__getOpenEpicRegistryForTests().peek(session.epicId)).toBeNull();
+
+      writeThroughOldHandle(session);
+      await expectDetachedWriteThroughs(session);
+    });
+
+    it("sign-out: the old handle writes nothing afterward, and a late list result after sign-out is not re-patched", async () => {
+      const session = acquireLiveTitledSession(
+        "epic-write-through-teardown-signout",
+        "tab-write-through-teardown-signout",
+        "alice@example.com",
+      );
+
+      disposeAllOpenEpicSessions();
+      resetAuth("signed-out", null);
+
+      expect(__getOpenEpicRegistryForTests().size()).toBe(0);
+
+      writeThroughOldHandle(session);
+      await expectDetachedWriteThroughs(session);
+    });
+
+    it("user switch without sign-out: the old handle writes nothing into the new user's caches", async () => {
+      const session = acquireLiveTitledSession(
+        "epic-write-through-teardown-user-switch",
+        "tab-write-through-teardown-user-switch",
+        "alice@example.com",
+      );
+      const otherUserQueryKey = writeThroughHistoryQueryKey("bob@example.com");
+      session.queryClient.setQueryData<ListTasksResponse>(otherUserQueryKey, {
+        tasks: [
+          makeWriteThroughHistoryTask(session.epicId, "", "bob@example.com"),
+        ],
+        hasMore: false,
+      });
+
+      resetAuth("signed-in", "bob@example.com");
+
+      writeThroughOldHandle(session);
+      await flushQueryCacheNotifications();
+
+      expect(useEpicCanvasStore.getState().tabsById[session.tabId]?.name).toBe(
+        "First Title",
+      );
+      expect(readHistoryTitle(session.queryClient, session.queryKey)).toBe("");
+      expect(readHistoryTitle(session.queryClient, otherUserQueryKey)).toBe("");
+    });
+
+    it("last tab close: the record is kept in tabsById, and the old handle writes nothing afterward", async () => {
+      const session = acquireLiveTitledSession(
+        "epic-write-through-teardown-last-tab-close",
+        "tab-write-through-teardown-last-tab-close",
+        "alice@example.com",
+      );
+
+      closeTestEpicTab(session.tabId);
+
+      expect(
+        getEpicSessionController().readEntryStatusForTests(session.epicId),
+      ).toBeNull();
+      expect(
+        useEpicCanvasStore.getState().tabsById[session.tabId],
+      ).not.toBeUndefined();
+
+      writeThroughOldHandle(session);
+      await expectDetachedWriteThroughs(session);
+    });
+
+    it("failed construction: the old handle writes nothing after a retry that fails to rebuild", async () => {
+      const rig = installFatalWorkerRig();
+      const session = acquireLiveTitledSession(
+        "epic-write-through-teardown-failed-construction",
+        "tab-write-through-teardown-failed-construction",
+        "alice@example.com",
+      );
+
+      // Kill the live worker so the next reconcile treats the held handle as
+      // a corpse - the same liveness cell `onRuntimeFatal` writes in
+      // production - then force the rebuild attempt to fail.
+      rig.fatal();
+      __setEpicRuntimeWorkerFactoryForTests(() => {
+        throw new Error("Worker construction blocked by CSP");
+      });
+      getEpicSessionController().retry(session.epicId);
+
+      const status = getEpicSessionController().readEntryStatusForTests(
+        session.epicId,
+      );
+      expect(status?.constructionFailed).toBe(true);
+      expect(status?.hasSession).toBe(false);
+
+      writeThroughOldHandle(session);
+      await expectDetachedWriteThroughs(session);
+    });
   });
 });
