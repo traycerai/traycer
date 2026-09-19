@@ -42,6 +42,10 @@ import type {
   CommandSubpage,
   ReactCommandSource,
 } from "@/lib/commands/types";
+import {
+  hasActiveDraftsControl,
+  subscribeActiveDraftsControl,
+} from "@/lib/commands/active-drafts-control-registry";
 import { openDrafts } from "@/lib/keybindings/dispatch";
 import type { ChordString } from "@/lib/keybindings/chord";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
@@ -59,6 +63,14 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   );
   const draftsShortcut = useKeybindingStore(
     (state) => state.bindings["composer.drafts"],
+  );
+  // Cmd+S only opens the start-page control. Advertise that chord on the
+  // palette row only while a control is registered; otherwise the row still
+  // opens the avatar dialog, but showing the shortcut would lie.
+  const draftsControlActive = useSyncExternalStore(
+    subscribeActiveDraftsControl,
+    hasActiveDraftsControl,
+    hasActiveDraftsControl,
   );
   // Live snapshot of the active composer picker - the top-of-stack controller,
   // or null. The "Change model…" row dispatches `composer.model-picker.toggle`,
@@ -80,7 +92,9 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   // render, so opening the top-level palette does not eagerly hit SDKs.
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
-    const items: Array<CommandItem> = [buildDraftsItem(draftsShortcut)];
+    const items: Array<CommandItem> = [
+      buildDraftsItem(draftsControlActive ? draftsShortcut : null),
+    ];
     if (kind === null) return items;
     if (activeModelPicker !== null) {
       items.push(
@@ -109,6 +123,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     ctx.activeTabId,
     modelPickerShortcut,
     draftsShortcut,
+    draftsControlActive,
     activeModelPicker,
   ]);
 }

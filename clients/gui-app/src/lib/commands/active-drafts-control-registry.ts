@@ -13,14 +13,33 @@ export type DraftsControlEntryPoint = Extract<
 type DraftsControlAction = (entryPoint: DraftsControlEntryPoint) => void;
 
 const stack: DraftsControlAction[] = [];
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const listener of listeners) listener();
+}
 
 export function registerActiveDraftsControl(
   action: DraftsControlAction,
 ): () => void {
   stack.push(action);
+  notify();
   return () => {
     const index = stack.indexOf(action);
-    if (index !== -1) stack.splice(index, 1);
+    if (index === -1) return;
+    stack.splice(index, 1);
+    notify();
+  };
+}
+
+export function hasActiveDraftsControl(): boolean {
+  return stack.length > 0;
+}
+
+export function subscribeActiveDraftsControl(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
   };
 }
 
@@ -36,4 +55,5 @@ export function openActiveDraftsControl(
 /** Test-only: prevent registrations leaking between isolated tests. */
 export function resetActiveDraftsControlForTests(): void {
   stack.length = 0;
+  listeners.clear();
 }

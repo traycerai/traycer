@@ -12,6 +12,10 @@ import {
   registerActiveModelPicker,
   resetActiveModelPickerForTests,
 } from "@/lib/commands/active-model-picker-registry";
+import {
+  registerActiveDraftsControl,
+  resetActiveDraftsControlForTests,
+} from "@/lib/commands/active-drafts-control-registry";
 import { composerSource } from "@/lib/commands/sources/composer.source";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -307,6 +311,7 @@ describe("composerSource", () => {
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
+    resetActiveDraftsControlForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
     openDraftsMock.mockReset();
@@ -319,16 +324,18 @@ describe("composerSource", () => {
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
+    resetActiveDraftsControlForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
     openDraftsMock.mockReset();
   });
 
-  // H10/H12: Drafts is always in the palette, even with no composer focused -
-  // its Cmd+S opens the avatar menu's dialog rather than a composer control.
+  // H13: Drafts stays in the palette with no composer focused, but Cmd+S
+  // is not advertised because it only opens the start-page control.
   it("emits only the Drafts row when no composer is registered", () => {
     const items = captureItems(null, null);
     expect(items.map((i) => i.id)).toEqual(["composer:drafts"]);
+    expect(items[0]?.shortcut).toBe(null);
   });
 
   it("landing composer shows provider / model; no new-chat items", () => {
@@ -361,24 +368,40 @@ describe("composerSource", () => {
     // calls the shared `openDrafts` seam directly, entry point "palette".
     expect(item?.actionId).toBe(null);
     expect(item?.label).toBe("Drafts");
-    expect(item?.shortcut).toBe("mod+s");
+    expect(item?.shortcut).toBe(null);
 
     void item?.run(ctx(null, "landing"));
 
     expect(openDraftsMock).toHaveBeenCalledWith("palette");
   });
 
+  it("advertises Cmd+S on the Drafts row only while a start-page control is registered", () => {
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    registerActiveDraftsControl(() => undefined);
+    const item = captureItems(null, "landing").find(
+      (row) => row.id === "composer:drafts",
+    );
+    expect(item?.shortcut).toBe("mod+s");
+  });
+
   // H13: unlike every other row here, Drafts does not depend on a focused
   // composer - the palette still opens the avatar dialog when no start-page
-  // control is active.
+  // control is active, without advertising Cmd+S.
   it("keeps the Drafts row on a non-landing composer", () => {
     registerFocusedComposerControls(
       "chat-tile",
       stubControls({}),
       TEST_HOST_CLIENT,
     );
-    const ids = captureItems("epic-1", "chat-tile").map((i) => i.id);
-    expect(ids).toContain("composer:drafts");
+    const item = captureItems("epic-1", "chat-tile").find(
+      (row) => row.id === "composer:drafts",
+    );
+    expect(item).toBeDefined();
+    expect(item?.shortcut).toBe(null);
   });
 
   it("hides Change model… when no picker is registered", () => {

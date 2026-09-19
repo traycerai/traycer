@@ -3,6 +3,8 @@ import {
   registerActiveDraftsControl,
   resetActiveDraftsControlForTests,
   openActiveDraftsControl,
+  hasActiveDraftsControl,
+  subscribeActiveDraftsControl,
   type DraftsControlEntryPoint,
 } from "@/lib/commands/active-drafts-control-registry";
 import {
@@ -45,6 +47,21 @@ describe("active-drafts-control-registry", () => {
 
   it("no-ops when no composer is registered", () => {
     expect(openActiveDraftsControl("shortcut")).toBe(false);
+    expect(hasActiveDraftsControl()).toBe(false);
+  });
+
+  it("notifies subscribers when the stack becomes empty or non-empty", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeActiveDraftsControl(listener);
+    const dispose = registerActiveDraftsControl(() => undefined);
+    expect(hasActiveDraftsControl()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    dispose();
+    expect(hasActiveDraftsControl()).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    registerActiveDraftsControl(() => undefined);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("dispatches the top-of-stack action, passing its entry point through", () => {
