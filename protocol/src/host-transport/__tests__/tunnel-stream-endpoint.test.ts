@@ -1009,6 +1009,47 @@ describe("TunnelStreamEndpoint", () => {
     });
   });
 
+  describe("finished keys on the END barrier, not on an empty ledger", () => {
+    it("honours a legal finished while a trailing return CREDIT of ours is still held in the scheduler", async () => {
+      // Zero transport credits; the test releases exactly what each step needs.
+      const t = realSchedulerTunnel("opener", 0);
+      t.endpoint.handleFrame({ kind: "accept", hasBinaryPayload: false }, null);
+
+      // (1) Our END goes first and is allowed to LEAVE: one credit, one frame.
+      t.endpoint.end();
+      expect(t.scheduler.queuedCount()).toBe(1);
+      t.scheduler.grantCredits(1);
+      await t.settle();
+      expect(t.scheduler.queuedCount()).toBe(0);
+      expect(t.written).toHaveLength(1);
+
+      // (2)+(3) The transport is now held again (no credits left). The peer's
+      // last 16 DATA frames arrive and are consumed, which queues exactly one
+      // return CREDIT behind our already-delivered END - correct half-close
+      // behaviour, and it cannot leave.
+      for (let i = 0; i < TUNNEL_STREAM_CREDIT_GRANT_BATCH; i += 1) {
+        t.endpoint.handleFrame(DATA, new Uint8Array(1));
+      }
+      t.endpoint.ackConsumed(TUNNEL_STREAM_CREDIT_GRANT_BATCH);
+      await t.settle();
+      expect(t.scheduler.queuedCount()).toBe(1);
+      expect(t.written).toHaveLength(1);
+
+      // (4)+(5) The peer's legal END + FINISHED arrive while that CREDIT is
+      // still queued here. Nothing of ours is undelivered, so this is a
+      // completed transfer, not a violation.
+      t.endpoint.handleFrame({ kind: "end", hasBinaryPayload: false }, null);
+      t.endpoint.handleFrame(
+        { kind: "finished", hasBinaryPayload: false },
+        null,
+      );
+      expect(t.faults).toEqual([]);
+      expect(t.finishedCount()).toBe(1);
+      // The premise held to the end: the CREDIT never left.
+      expect(t.scheduler.queuedCount()).toBe(1);
+    });
+  });
+
   describe("D4 the debt bound counts frames, not only bytes", () => {
     it.each([
       ["one-byte", 1],

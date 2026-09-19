@@ -147,6 +147,14 @@ export class TunnelStreamEndpoint {
   private sendCredits = 0;
   private endRequested = false;
   private endSent = false;
+  /**
+   * This side's END has LEFT the scheduler. Per-stream FIFO makes it a
+   * barrier: every DATA frame of ours was queued before END, so END having
+   * left means all of them have. It is what completion keys on - not an empty
+   * ledger, which a trailing `credit` frame legitimately keeps non-empty.
+   */
+  private endLeft = false;
+  private endEntry: { readonly bodyBytes: number } | null = null;
   private needsDrain = false;
   /**
    * Data frames the peer is still licensed to send: the initial window, minus
@@ -307,16 +315,20 @@ export class TunnelStreamEndpoint {
       return;
     }
     if (frame.kind === "finished") {
-      // Only honest once both halves are done and nothing of this side's is
-      // left unsent ANYWHERE: `endSent` means END was queued, not delivered,
-      // so the ledger must be empty too - otherwise the CLOSE that follows
-      // would purge data still sitting in the scheduler and report success.
+      // Only honest once both halves are done and none of this side's DATA or
+      // END is left unsent ANYWHERE: `endSent` means END was queued, not
+      // delivered, so the test is that END has LEFT the scheduler (and with
+      // it, by FIFO, every DATA before it) - otherwise the CLOSE that follows
+      // would purge bytes still queued and report success. Deliberately NOT
+      // "the ledger is empty": after our END an honest exchange can still
+      // leave a return `credit` queued here, acking the peer's last frames,
+      // and that frame is obsolete the moment the peer has finished.
       if (
         this.options.role !== "opener" ||
         !this.endSent ||
         !this.peerEnded ||
         this.pending.length > 0 ||
-        this.ledger.length > 0
+        !this.endLeft
       ) {
         this.fault("premature tunnel finished");
         return;
@@ -434,6 +446,9 @@ export class TunnelStreamEndpoint {
         break;
       }
       this.ledgerBytes -= left.bodyBytes;
+      if (left === this.endEntry) {
+        this.endLeft = true;
+      }
       if (this.creditInFlight !== null && this.creditInFlight.entry === left) {
         // Only NOW is the peer licensed again.
         this.receiveCredits += this.creditInFlight.credits;
@@ -478,7 +493,7 @@ export class TunnelStreamEndpoint {
     }
     if (this.endRequested && !this.endSent && this.pending.length === 0) {
       this.endSent = true;
-      this.send(END_ENVELOPE, null);
+      this.endEntry = this.send(END_ENVELOPE, null);
       this.maybeFinish();
     }
   }
