@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LEGACY_COMPOSER_DRAFT_NAMESPACE,
+  interviewDraftBindingKey,
   legacyComposerDraftId,
   migratedLegacyComposerDraftId,
   mintDraftId,
@@ -54,5 +55,14 @@ describe("migratedLegacyComposerDraftId", () => {
     expect(migratedLegacyComposerDraftId("legacy-composer-")).toBe(
       "legacy-composer-",
     );
+  });
+});
+
+describe("interviewDraftBindingKey", () => {
+  it("joins chat and block with a NUL so the two ids cannot alias", () => {
+    const key = interviewDraftBindingKey("chat-1", "block-1");
+    expect(key).toBe("chat-1" + String.fromCharCode(0) + "block-1");
+    expect(key.charCodeAt(6)).toBe(0);
+    expect(key.length).toBe(14);
   });
 });
