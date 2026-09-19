@@ -613,6 +613,61 @@ describe("pending stand-in own-key operations", () => {
     ).toEqual(["Object.getOwnPropertyDescriptor"]);
     expect(
       plantedWhats(
+        `${STANDIN_IMPORT}void Object.values(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.values"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.entries(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.entries"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.getOwnPropertyNames(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.getOwnPropertyNames"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.getOwnPropertySymbols(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.getOwnPropertySymbols"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.getOwnPropertyDescriptors(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.getOwnPropertyDescriptors"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.getPrototypeOf(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.getPrototypeOf"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.setPrototypeOf(permissionModeSchema, null);\n`,
+      ),
+    ).toEqual(["Object.setPrototypeOf"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.freeze(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.freeze"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.seal(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.seal"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.isFrozen(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.isFrozen"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.hasOwn(permissionModeSchema, "x");\n`,
+      ),
+    ).toEqual(["Object.hasOwn"]);
+    expect(
+      plantedWhats(
         `${STANDIN_IMPORT}import v8 from "node:v8";\nvoid v8.serialize(permissionModeSchema);\n`,
       ),
     ).toEqual(["v8.serialize"]);

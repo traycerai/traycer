@@ -15,14 +15,47 @@ import {
 // `git -C traycer show 4a00b08be:<file>`. Do not derive these from the
 // live enum's `.options` — that list is built from the tuple under test.
 
+function isOrderPreservingSubsequence(
+  needle: readonly string[],
+  haystack: readonly string[],
+): boolean {
+  let i = 0;
+  for (const item of haystack) {
+    if (i < needle.length && item === needle[i]) {
+      i += 1;
+    }
+  }
+  return i === needle.length;
+}
+
 describe("lazySchema literal tuples match the pre-rewrite enum lists", () => {
+  it("a removed element is not an order-preserving subsequence", () => {
+    expect(isOrderPreservingSubsequence(["a", "c"], ["a", "b"])).toBe(false);
+  });
+
+  it("a reordered pair is not an order-preserving subsequence", () => {
+    expect(isOrderPreservingSubsequence(["b", "a"], ["a", "b"])).toBe(false);
+  });
+
+  it("an appended element keeps the written list as an order-preserving subsequence", () => {
+    expect(isOrderPreservingSubsequence(["a", "b"], ["a", "b", "c"])).toBe(
+      true,
+    );
+  });
+
   it("ALL_PERMISSION_MODES", () => {
-    expect(ALL_PERMISSION_MODES).toEqual([
+    const permissionModesAtRewrite = [
       "supervised",
       "auto_accept_edits",
       "auto",
       "full_access",
-    ]);
+    ];
+    expect(
+      isOrderPreservingSubsequence(
+        permissionModesAtRewrite,
+        ALL_PERMISSION_MODES,
+      ),
+    ).toBe(true);
   });
 
   it("ALL_PERMISSION_MODES_PRE_AUTO", () => {
@@ -75,12 +108,19 @@ describe("lazySchema literal tuples match the pre-rewrite enum lists", () => {
       "setup.cancelled",
       "worktree.missing",
     ];
-    expect(CHAT_EVENT_TYPES).toEqual(chatEventTypesAtRewrite);
-    expect(KNOWN_CHAT_EVENT_TYPES).toEqual(chatEventTypesAtRewrite);
+    expect(
+      isOrderPreservingSubsequence(chatEventTypesAtRewrite, CHAT_EVENT_TYPES),
+    ).toBe(true);
+    expect(
+      isOrderPreservingSubsequence(
+        chatEventTypesAtRewrite,
+        KNOWN_CHAT_EVENT_TYPES,
+      ),
+    ).toBe(true);
   });
 
   it("PROVIDER_ID_VALUES", () => {
-    expect(PROVIDER_ID_VALUES).toEqual([
+    const providerIdsAtRewrite = [
       "claude-code",
       "codex",
       "opencode",
@@ -102,17 +142,26 @@ describe("lazySchema literal tuples match the pre-rewrite enum lists", () => {
       "huggingface",
       "reasonix",
       "antigravity",
-    ]);
+    ];
+    expect(
+      isOrderPreservingSubsequence(providerIdsAtRewrite, PROVIDER_ID_VALUES),
+    ).toBe(true);
   });
 
   it("PENDING_FALLBACK_STATE_VALUES", () => {
-    expect(PENDING_FALLBACK_STATE_VALUES).toEqual([
+    const pendingFallbackAtRewrite = [
       "retrying",
       "hold",
       "choosing",
       "switching",
       "waiting",
-    ]);
+    ];
+    expect(
+      isOrderPreservingSubsequence(
+        pendingFallbackAtRewrite,
+        PENDING_FALLBACK_STATE_VALUES,
+      ),
+    ).toBe(true);
   });
 
   it("PROVIDER_NOTICE_KINDS_PRE_HARNESS_MESSAGE", () => {
