@@ -276,6 +276,7 @@ const logicalStreamPort: LogicalStreamPort = {
   sendStreamFrame: () => undefined,
   closeStream: () => undefined,
   requestSessionReconnect: () => undefined,
+  streamOutboundDebtBytes: () => 0,
 };
 
 /** Uses the production remote per-stream implementation and its frame/open order. */
