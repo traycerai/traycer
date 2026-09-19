@@ -1357,6 +1357,7 @@ describe("analytics", () => {
           input: "pointer",
           already_open: "false",
           draft_age: "under_1h",
+          used_search: false,
         }),
       ).toBeNull();
     });
@@ -1380,6 +1381,7 @@ describe("analytics", () => {
       const events = [
         AnalyticsEvent.DraftsListOpened,
         AnalyticsEvent.DraftOpened,
+        AnalyticsEvent.DraftsFilterChanged,
         AnalyticsEvent.DraftCopied,
         AnalyticsEvent.DraftDeleted,
         AnalyticsEvent.DraftDeleteUndone,
@@ -1390,18 +1392,75 @@ describe("analytics", () => {
       }
     });
 
-    it("rejects an otherwise-valid draft payload carrying one extra forbidden key", async () => {
+    it("rejects every draft event with one extra forbidden key", async () => {
       const { AnalyticsEvent, sanitizeAnalyticsProperties } =
         await import("@/lib/analytics");
 
-      expect(
-        sanitizeAnalyticsProperties(AnalyticsEvent.DraftCopied, {
-          surface: "start_page",
-          draft_kind: "chat",
-          input: "pointer",
-          chatId: "chat-1",
-        }),
-      ).toBeNull();
+      const fixtures = [
+        [
+          AnalyticsEvent.DraftsListOpened,
+          {
+            surface: "start_page",
+            entry_point: "button",
+            draft_count: "0",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftOpened,
+          {
+            surface: "avatar_menu",
+            draft_kind: "chat",
+            input: "pointer",
+            already_open: false,
+            draft_age: "under_1h",
+            used_search: true,
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftsFilterChanged,
+          {
+            surface: "avatar_menu",
+            this_task: null,
+            other_tasks: true,
+            start_pages: false,
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftCopied,
+          {
+            surface: "start_page",
+            draft_kind: "new_agent",
+            input: "keyboard",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftDeleted,
+          {
+            surface: "avatar_menu",
+            draft_kind: "start_page",
+            input: "pointer",
+            undo_offered: true,
+            draft_age: "over_7d",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftDeleteUndone,
+          {
+            surface: "start_page",
+            draft_kind: "chat",
+            draftId: "draft-1",
+          },
+        ],
+      ] as const;
+
+      for (const [event, properties] of fixtures) {
+        expect(sanitizeAnalyticsProperties(event, properties)).toBeNull();
+      }
     });
 
     it("rejects a draft event missing one of its required keys", async () => {
@@ -1414,6 +1473,7 @@ describe("analytics", () => {
           draft_kind: "chat",
           input: "pointer",
           draft_age: "under_1h",
+          used_search: true,
           // `already_open` omitted.
         }),
       ).toBeNull();
