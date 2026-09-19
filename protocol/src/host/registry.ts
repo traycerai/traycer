@@ -419,6 +419,7 @@ import {
   hostResolveRepoPathsV10,
   browserReplReleaseRealmV10,
   browserReplRunCellV10,
+  browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/contracts";
@@ -8847,6 +8848,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: browserReplReleaseRealmV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "browser.repl.stopCell": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserReplStopCellV10,
           upgradeFromPreviousVersion: null,
         },
       },

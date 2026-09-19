@@ -799,3 +799,42 @@ export const browserReplReleaseRealmV10 = defineRpcContract({
   requestSchema: browserReplReleaseRealmRequestSchema,
   responseSchema: browserReplReleaseRealmResponseSchema,
 });
+
+/**
+ * Interrupts the cell running in a routed realm, so the Stop the user presses
+ * on the agent's machine reaches the machine the cell is actually on.
+ *
+ * Without it Stop reports `idle` — truthfully about the agent's own host,
+ * which holds no owner for a routed realm — while the cell keeps driving a
+ * browser in front of the user. That is worse than not routing at all, which
+ * is why this is the third verb rather than a follow-up.
+ *
+ * The response is the target's OWN stop status, unchanged: `idle` (nothing was
+ * running), `stopped` (the cell was interrupted and nothing is still in an
+ * adapter call), `outcome_unknown` (interrupted, but a raw adapter call may
+ * still be in flight there). There is deliberately no fourth value here for
+ * "the machine could not be reached": that is not something the target can
+ * ever say about itself, so it is minted by the ORIGIN when this dial fails
+ * and never travels on the wire.
+ */
+export const browserReplStopCellRequestSchema = z.object({
+  epicId: z.string().min(1),
+  caller: browserReplCallerSchema,
+});
+export type BrowserReplStopCellRequest = z.infer<
+  typeof browserReplStopCellRequestSchema
+>;
+
+export const browserReplStopCellResponseSchema = z.object({
+  status: z.enum(["idle", "stopped", "outcome_unknown"]),
+});
+export type BrowserReplStopCellResponse = z.infer<
+  typeof browserReplStopCellResponseSchema
+>;
+
+export const browserReplStopCellV10 = defineRpcContract({
+  method: "browser.repl.stopCell",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplStopCellRequestSchema,
+  responseSchema: browserReplStopCellResponseSchema,
+});

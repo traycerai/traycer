@@ -23,6 +23,7 @@ import {
   hostResolveRepoPathsV10,
   browserReplReleaseRealmV10,
   browserReplRunCellV10,
+  browserReplStopCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
 import {
   managedCommandConfigureV10,
@@ -52,6 +53,7 @@ const NEW_METHODS = [
   hostAgentCreateFromRemoteSenderV10.method,
   browserReplRunCellV10.method,
   browserReplReleaseRealmV10.method,
+  browserReplStopCellV10.method,
 ] as const;
 
 describe("host-agent capability contracts", () => {
