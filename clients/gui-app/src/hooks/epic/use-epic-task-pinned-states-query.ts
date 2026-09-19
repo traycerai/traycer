@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -93,7 +93,6 @@ export function useEpicTaskPinnedStates(
   epicIds: ReadonlyArray<string>,
 ): ReadonlyMap<string, TaskPinnedState> {
   const client = useHostClient();
-  const binding = useHostBinding();
   const localHomedEpicIds = useLocalHomedOpenEpicIds(epicIds);
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   // `contextMetadata.userId` admits the local plane and is deliberately not
@@ -149,10 +148,27 @@ export function useEpicTaskPinnedStates(
     combine: combineTaskPinnedStateResults,
   });
 
-  // One cursorless `epic.listTasks` per host that owns a local-homed open tab,
-  // re-asked when that host's local-homed population changes. Usually one host,
-  // often zero; the hosts come from the epics' own sessions, so this never fans
-  // out across the whole directory the way the tab reconciler deliberately does.
+  const localRows = useLocalHomedOpenTaskRows(epicIds, userId);
+  const localPinReadings = localRows.pinnedStates;
+
+  return useMemo(
+    () =>
+      overlayLocalHomedPinnedStates(
+        queried,
+        localHomedEpicIds,
+        localPinReadings,
+        localRows.hostIds,
+      ),
+    [queried, localHomedEpicIds, localPinReadings, localRows.hostIds],
+  );
+}
+
+/** Local rows for open epics, read from the host holding each live session. */
+export function useLocalHomedOpenTaskRows(
+  epicIds: ReadonlyArray<string>,
+  userId: string | null,
+) {
+  const binding = useHostBinding();
   const localHomedByHost = useLocalHomedOpenEpicHostIds(epicIds);
   // Each host's reading is keyed by the POPULATION it has to answer for, not by
   // the host alone, and that is R8: the params are constant and
@@ -211,7 +227,12 @@ export function useEpicTaskPinnedStates(
       registerCloudEpicTasksClient(hostId, ownerClient);
     }
   }
-  const localPinReadings = useQueries({
+  const combineRows = useCallback(
+    (results: UseQueryResult<ListTasksResponse>[]) =>
+      combineLocalTaskRows(results, pinReadingPopulations),
+    [pinReadingPopulations],
+  );
+  const localRows = useQueries({
     queries:
       userId === null
         ? []
@@ -233,19 +254,33 @@ export function useEpicTaskPinnedStates(
             enabled: true,
             staleTime: Infinity,
           })),
-    combine: combineLocalPinReadings,
+    combine: combineRows,
   });
 
-  return useMemo(
-    () =>
-      overlayLocalHomedPinnedStates(
-        queried,
-        localHomedEpicIds,
-        localPinReadings,
-        localHomedByHost,
-      ),
-    [queried, localHomedEpicIds, localPinReadings, localHomedByHost],
-  );
+  return {
+    tasks: localRows.tasks,
+    pinnedStates: localRows.pinnedStates,
+    isFetching: localRows.isFetching,
+    hasError: localRows.hasError,
+    hostIds: localHomedByHost,
+  };
+}
+
+function combineLocalTaskRows(
+  results: UseQueryResult<ListTasksResponse>[],
+  populations: readonly { readonly hostId: string }[],
+) {
+  return {
+    tasks: results.flatMap((result, index) =>
+      (result.data?.tasks ?? []).map((task) => ({
+        task,
+        hostId: populations[index].hostId,
+      })),
+    ),
+    pinnedStates: combineLocalPinReadings(results),
+    isFetching: results.some((result) => result.isFetching),
+    hasError: results.some((result) => result.isError),
+  };
 }
 
 /**

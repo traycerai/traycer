@@ -1,3 +1,4 @@
+import { prepareHistoryScopeForPromotion } from "@/lib/history-scope-handoff";
 import { History } from "lucide-react";
 import { HistoryModalContent } from "@/components/epics/history-modal-content";
 import { resolveHistoryTabIntent } from "@/lib/commands/actions/open-system-tab";
@@ -13,6 +14,15 @@ export const historyOverlayModule: SystemOverlayModule<"history"> = {
   ),
   promotionIntent: () => resolveHistoryTabIntent(),
   isOverlayPath: (pathname) => isHistoryPath(pathname),
-  consumeEscape: () => false,
-  prepareForPromotion: () => undefined,
+  // Radix captures Escape before the input receives it. Keep the modal open
+  // for the focused desktop search; the input alone clears and consumes it.
+  consumeEscape: () => {
+    const input = document.activeElement;
+    return (
+      input instanceof HTMLInputElement &&
+      input.hasAttribute("data-history-search-clear-on-escape") &&
+      input.value.length > 0
+    );
+  },
+  prepareForPromotion: prepareHistoryScopeForPromotion,
 };

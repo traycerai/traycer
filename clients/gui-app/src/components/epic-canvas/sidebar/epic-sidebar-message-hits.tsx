@@ -90,9 +90,14 @@ export function EpicSidebarMessageHits(props: {
         <ChatSearchExpandedRows
           client={client}
           base={expansionBase}
-          epicId={target.epicId}
-          chatId={target.chatId}
-          onOpenMessage={(messageId) => openTarget({ ...target, messageId })}
+          {...target}
+          onOpenMessage={(messageId) =>
+            openTarget({
+              epicId: target.epicId,
+              chatId: target.chatId,
+              messageId,
+            })
+          }
         />
       ),
     [client, expansionBase, openTarget],

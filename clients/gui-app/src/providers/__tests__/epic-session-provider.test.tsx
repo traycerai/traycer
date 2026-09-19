@@ -466,6 +466,8 @@ import {
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { cloudQueryKeys } from "@/lib/query-keys";
+import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import type {
   DesktopOwnershipClaimResult,
   DesktopPerWindowStatePatch,
@@ -3086,6 +3088,108 @@ describe("<TestEpicSessionTab />", () => {
           ?.light?.title,
       ).toBe("Generated history title");
     });
+  });
+
+  it("does not restart a Current tasks pin tail for a task-context update that changes no title", async () => {
+    const queryClient = new QueryClient();
+    const cloudTasksUserId = "cloud-user-1";
+    useAuthStore.setState({
+      contextMetadata: { userId: cloudTasksUserId, username: "alice" },
+    });
+    const tailKey = cloudQueryKeys.currentTasksPinTail(
+      "host-a",
+      cloudTasksUserId,
+      "cursor-1",
+    );
+    const tailPage: ListTasksResponse = {
+      tasks: [makeHistoryTask("another-pinned", "Pinned", cloudTasksUserId)],
+      hasMore: false,
+    };
+    queryClient.setQueryData<ListTasksResponse>(tailKey, tailPage);
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    const streams: ControlledEpicStream[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      streams.push({ callbacks, closeCount: 0 });
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => undefined,
+      };
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TestEpicSessionTab
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </TestEpicSessionTab>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    act(() => {
+      deliverSnapshot(streams[0], "room-history");
+    });
+    // The subscriber now holds a non-empty title to write through on every
+    // matching query update.
+    await act(async () => {
+      await seenHandles[0].store
+        .getState()
+        .beginEpicTitleMutation("Generated history title");
+    });
+    const flush = async (): Promise<void> => {
+      await act(async () => {
+        for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+      });
+    };
+    await flush();
+
+    // Baseline: whatever the title write itself did to the tail is behind us.
+    act(() => {
+      queryClient.setQueryData<ListTasksResponse>(tailKey, {
+        ...tailPage,
+      });
+    });
+    expect(queryClient.getQueryState(tailKey)?.isInvalidated).toBe(false);
+
+    // Another task's context settles: an ordinary query notification that
+    // reaches the subscriber and changes no title.
+    act(() => {
+      queryClient.setQueryData(
+        hostQueryKeys.epicTaskContexts("host-a", cloudTasksUserId, [
+          "another-epic",
+        ]),
+        { tasks: {} },
+      );
+    });
+    await flush();
+
+    expect(queryClient.getQueryState(tailKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryData<ListTasksResponse>(tailKey)).toEqual(
+      tailPage,
+    );
+
+    // Control: the same probe does see an authoritative rename's restart.
+    act(() => {
+      reconcileAuthoritativeEpicTitleInCloudTaskCaches(
+        queryClient,
+        { hostId: null, userId: cloudTasksUserId },
+        "another-pinned",
+        "Renamed elsewhere",
+      );
+    });
+    await flush();
+    expect(queryClient.getQueryState(tailKey)?.isInvalidated).toBe(true);
   });
 
   it("claims desktop epic ownership before acquiring a renderer session", async () => {
