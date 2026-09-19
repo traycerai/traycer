@@ -132,7 +132,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-filter.ts": 2,
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
-  "gui-app/src/components/epics/epics-list-panel.tsx": 2,
+  // Enter/Space on a row's overlay link, plus the search box's Escape (clears a
+  // non-empty query; not a registered chord).
+  "gui-app/src/components/epics/epics-list-panel.tsx": 3,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
   "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 4,

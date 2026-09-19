@@ -115,7 +115,6 @@ describe("chat search store: dialog hand-off", () => {
 
   it("parks a new query and re-anchors even while the dialog is already open", () => {
     store().setOpen(true, MONDAY);
-    store().setDatePreset("day", MONDAY);
 
     const wednesday = MONDAY + 2 * DAY_MS;
     store().openWith(
@@ -127,7 +126,50 @@ describe("chat search store: dialog hand-off", () => {
     expect(store().scope).toBe("all-accessible-tasks");
     expect(store().dateAnchorMs).toBe(wednesday);
     expect(store().initialQuery).toBe("second query");
-    expect(lowerBound()).toBe(wednesday - DAY_MS);
+  });
+
+  it("resets the role and date filters when it opens a closed dialog", () => {
+    // Filters outlive a plain close on purpose, but a hand-off is a new search
+    // whose query was typed elsewhere: it must not inherit them silently.
+    store().setOpen(true, MONDAY);
+    store().setRoleFilter("assistant");
+    store().setDatePreset("week", MONDAY);
+    store().setOpen(false, MONDAY + 60_000);
+    expect(store().roleFilter).toBe("assistant");
+    expect(store().datePreset).toBe("week");
+
+    store().openWith(
+      { query: "release notes", scope: "current-task" },
+      MONDAY + DAY_MS,
+    );
+
+    expect(store().roleFilter).toBe("any");
+    expect(store().datePreset).toBe("any");
+    expect(lowerBound()).toBeNull();
+  });
+
+  it("resets the role and date filters when it hands off to an already-open dialog", () => {
+    store().setOpen(true, MONDAY);
+    store().setRoleFilter("human");
+    store().setDatePreset("day", MONDAY);
+
+    store().openWith(
+      { query: "second query", scope: "all-accessible-tasks" },
+      MONDAY + 2 * DAY_MS,
+    );
+
+    expect(store().roleFilter).toBe("any");
+    expect(store().datePreset).toBe("any");
+    expect(lowerBound()).toBeNull();
+  });
+
+  it("keeps the filters through a plain close and reopen", () => {
+    store().setOpen(true, MONDAY);
+    store().setRoleFilter("human");
+    store().setOpen(false, MONDAY + 1);
+    store().setOpen(true, MONDAY + 2);
+
+    expect(store().roleFilter).toBe("human");
   });
 
   it("clears a parked query on resetForTests", () => {

@@ -41,7 +41,9 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isRealEpicTitle } from "@/lib/display-title";
 import {
   cloudEpicTasksQueryKeyMatchesScope,
+  currentTasksPinTailQueryKeyMatchesScope,
   epicTaskContextsQueryKeyMatchesScope,
+  epicPinReadingQueryKeyMatchesScope,
   setEpicLocalHomeInCloudTaskCaches,
   updateEpicTitleInCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
@@ -209,7 +211,9 @@ function attachTitleCacheSync(
     if (!Array.isArray(queryKey)) return;
     if (
       !cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) &&
-      !epicTaskContextsQueryKeyMatchesScope(queryKey, scope)
+      !epicTaskContextsQueryKeyMatchesScope(queryKey, scope) &&
+      !epicPinReadingQueryKeyMatchesScope(queryKey, scope) &&
+      !currentTasksPinTailQueryKeyMatchesScope(queryKey, scope)
     ) {
       return;
     }
