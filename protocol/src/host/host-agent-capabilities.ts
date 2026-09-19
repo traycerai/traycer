@@ -717,11 +717,26 @@ export const browserReplCallerSchema = z.object({
 });
 export type BrowserReplCaller = z.infer<typeof browserReplCallerSchema>;
 
+/**
+ * One realm's identity, minted by the ORIGIN at realm birth and carried on
+ * every call about that realm.
+ *
+ * It is the fence that lets the target tell a straggler from new work, which
+ * the owner key alone cannot: a unary call issued before a release can arrive
+ * after it, and re-admitting it would resurrect a realm whose credential is
+ * already revoked. A tombstoned epoch is refused; a NEW epoch for the same
+ * owner key is admitted, and supersedes whatever that key still held - which
+ * is why this is an epoch rather than a per-owner tombstone, since the latter
+ * cannot tell re-registration from a late call.
+ */
+const browserRealmEpochSchema = z.string().min(1);
+
 export const browserReplRunCellRequestSchema = z.object({
   epicId: z.string().min(1),
   title: z.string().min(1),
   code: z.string().min(1),
   caller: browserReplCallerSchema,
+  realmEpoch: browserRealmEpochSchema,
 });
 export type BrowserReplRunCellRequest = z.infer<
   typeof browserReplRunCellRequestSchema
@@ -775,12 +790,19 @@ export const browserReplRunCellV10 = defineRpcContract({
  * Retires a routed realm on the browser's host: context, adapters, tab leases
  * and the cell child process. Sent when the agent's A2A registration is
  * released, which is the same deterministic signal a local realm is retired
- * on. Idempotent — a realm that is already gone is a success, so a release
- * racing an expiry is not an error either side has to reconcile.
+ * on.
+ *
+ * Idempotent, and that is load-bearing rather than merely tidy: the origin
+ * keeps owed releases until one is ANSWERED, and retries them against targets
+ * that may have restarted or already released. An unknown or
+ * already-tombstoned epoch is therefore a success — the obligation is
+ * discharged either way — so `released` reports whether this call found a
+ * live realm, never whether the caller may stop asking.
  */
 export const browserReplReleaseRealmRequestSchema = z.object({
   epicId: z.string().min(1),
   caller: browserReplCallerSchema,
+  realmEpoch: browserRealmEpochSchema,
 });
 export type BrowserReplReleaseRealmRequest = z.infer<
   typeof browserReplReleaseRealmRequestSchema
@@ -820,6 +842,7 @@ export const browserReplReleaseRealmV10 = defineRpcContract({
 export const browserReplStopCellRequestSchema = z.object({
   epicId: z.string().min(1),
   caller: browserReplCallerSchema,
+  realmEpoch: browserRealmEpochSchema,
 });
 export type BrowserReplStopCellRequest = z.infer<
   typeof browserReplStopCellRequestSchema
