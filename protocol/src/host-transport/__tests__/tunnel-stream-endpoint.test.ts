@@ -832,4 +832,294 @@ describe("TunnelStreamEndpoint", () => {
       scheduler.stop();
     });
   });
+
+  /**
+   * A tunnel endpoint wired to a REAL `PriorityScheduler`, the way the dialing
+   * session wires it: frames become BULK `OutboundChunkSource`s, debt is the
+   * scheduler's own `queuedBytesForStream`, progress is `onFrameWritten`. The
+   * test owns the transport credits, which is what forces every order below.
+   */
+  function realSchedulerTunnel(
+    role: "opener" | "acceptor",
+    initialBulkCredits: number,
+  ): {
+    readonly endpoint: TunnelStreamEndpoint;
+    readonly scheduler: PriorityScheduler;
+    readonly written: string[];
+    readonly faults: string[];
+    finishedCount(): number;
+    settle(): Promise<void>;
+  } {
+    const STREAM_ID = 9;
+    const written: string[] = [];
+    const faults: string[] = [];
+    let finished = 0;
+    let seq = 0;
+    const scheduler = new PriorityScheduler({
+      write: (frame) => {
+        written.push(`${frame.streamId}:${frame.qos}`);
+        return Promise.resolve();
+      },
+      onWriteError: () => undefined,
+      initialBulkCredits,
+      now: undefined,
+    });
+    const endpoint: TunnelStreamEndpoint = new TunnelStreamEndpoint({
+      role,
+      sendFrame: (envelope, binaryPayload) =>
+        scheduler.enqueue(
+          new OutboundChunkSource(
+            {
+              type: MuxFrameType.STREAM_FRAME,
+              streamId: STREAM_ID,
+              qos: QosClass.BULK,
+              json: { ...envelope },
+              binary: binaryPayload,
+            },
+            () => seq++,
+            false,
+          ),
+        ),
+      outboundDebtBytes: () => scheduler.queuedBytesForStream(STREAM_ID),
+      onData: () => undefined,
+      onEnd: () => undefined,
+      onAccept: () => undefined,
+      onFinished: () => {
+        finished += 1;
+      },
+      onDrain: () => undefined,
+      onFault: (reason) => faults.push(reason),
+    });
+    scheduler.onFrameWritten = () => endpoint.notifyOutboundProgress();
+    return {
+      endpoint,
+      scheduler,
+      written,
+      faults,
+      finishedCount: () => finished,
+      settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
+    };
+  }
+
+  const DATA: StreamFrameEnvelope = { kind: "data", hasBinaryPayload: true };
+
+  describe("D1 credit frames are coalesced and only relicense the peer once WRITTEN", () => {
+    it("inbound data + honest acks + zero transport credits: one credit frame queued, no relicence, then both on release", async () => {
+      // Zero bulk credits: nothing this side queues can leave until the test
+      // grants some. The peer keeps sending; the local consumer keeps acking.
+      const t = realSchedulerTunnel("acceptor", 0);
+      t.endpoint.accept();
+      for (let i = 0; i < TUNNEL_STREAM_WINDOW_FRAMES; i += 1) {
+        t.endpoint.handleFrame(DATA, new Uint8Array(1));
+      }
+      t.endpoint.ackConsumed(TUNNEL_STREAM_CREDIT_GRANT_BATCH);
+      t.endpoint.ackConsumed(TUNNEL_STREAM_CREDIT_GRANT_BATCH);
+      await t.settle();
+
+      // accept + exactly ONE credit frame, however many batches were acked.
+      expect(t.scheduler.queuedCount()).toBe(2);
+      expect(t.written).toEqual([]);
+      // The grant never left, so the peer is NOT relicensed: its next frame
+      // is sent against credits it cannot have received.
+      t.endpoint.handleFrame(DATA, new Uint8Array(1));
+      expect(t.faults).toEqual(["tunnel peer overran its credit window"]);
+    });
+
+    it("restores the allowance when the credit frame leaves, and sends the coalesced remainder as ONE frame", async () => {
+      const t = realSchedulerTunnel("acceptor", 0);
+      t.endpoint.accept();
+      for (let i = 0; i < TUNNEL_STREAM_WINDOW_FRAMES; i += 1) {
+        t.endpoint.handleFrame(DATA, new Uint8Array(1));
+      }
+      t.endpoint.ackConsumed(TUNNEL_STREAM_CREDIT_GRANT_BATCH);
+      t.endpoint.ackConsumed(TUNNEL_STREAM_CREDIT_GRANT_BATCH);
+      expect(t.scheduler.queuedCount()).toBe(2);
+
+      // The test releases the transport: accept, then credit{16}, leave; the
+      // frame-written notification sends the coalesced credit{16} behind it.
+      t.scheduler.grantCredits(8);
+      await t.settle();
+      expect(t.scheduler.queuedCount()).toBe(0);
+      expect(t.written).toHaveLength(3);
+
+      // Both grants are now real, so a full window is admitted and no more.
+      for (let i = 0; i < TUNNEL_STREAM_WINDOW_FRAMES; i += 1) {
+        t.endpoint.handleFrame(DATA, new Uint8Array(1));
+      }
+      expect(t.faults).toEqual([]);
+      t.endpoint.handleFrame(DATA, new Uint8Array(1));
+      expect(t.faults).toEqual(["tunnel peer overran its credit window"]);
+    });
+
+    it("the mirrored attack stays bounded: 10k inbound frames acked against a starved transport queue two frames", async () => {
+      const t = realSchedulerTunnel("acceptor", 0);
+      t.endpoint.accept();
+      let admitted = 0;
+      for (let i = 0; i < 10_000 && t.faults.length === 0; i += 1) {
+        t.endpoint.handleFrame(DATA, new Uint8Array(1));
+        t.endpoint.ackConsumed(1);
+        admitted += 1;
+      }
+      await t.settle();
+      expect(t.scheduler.queuedCount()).toBe(2);
+      // The window, then the fault: grants that never left bought nothing.
+      expect(admitted).toBe(TUNNEL_STREAM_WINDOW_FRAMES + 1);
+    });
+  });
+
+  describe("D3 finished is not honoured while this side's output is still in the scheduler", () => {
+    it("faults on finished while DATA+END are queued behind zero transport credits, and honours it once they left", async () => {
+      const held = realSchedulerTunnel("opener", 0);
+      held.endpoint.handleFrame(
+        { kind: "accept", hasBinaryPayload: false },
+        null,
+      );
+      held.endpoint.write(new Uint8Array(10));
+      held.endpoint.end();
+      // `pending` is empty and END is "sent" - both frames sit in the
+      // scheduler, which the old check could not see.
+      expect(held.endpoint.pendingBytes).toBe(0);
+      expect(held.scheduler.queuedCount()).toBe(2);
+      held.endpoint.handleFrame({ kind: "end", hasBinaryPayload: false }, null);
+      held.endpoint.handleFrame(
+        { kind: "finished", hasBinaryPayload: false },
+        null,
+      );
+      expect(held.faults).toEqual(["premature tunnel finished"]);
+      expect(held.finishedCount()).toBe(0);
+
+      // Control: the same sequence with the transport released first.
+      const free = realSchedulerTunnel("opener", 0);
+      free.endpoint.handleFrame(
+        { kind: "accept", hasBinaryPayload: false },
+        null,
+      );
+      free.endpoint.write(new Uint8Array(10));
+      free.endpoint.end();
+      free.scheduler.grantCredits(8);
+      await free.settle();
+      expect(free.scheduler.queuedCount()).toBe(0);
+      free.endpoint.handleFrame({ kind: "end", hasBinaryPayload: false }, null);
+      free.endpoint.handleFrame(
+        { kind: "finished", hasBinaryPayload: false },
+        null,
+      );
+      expect(free.faults).toEqual([]);
+      expect(free.finishedCount()).toBe(1);
+    });
+  });
+
+  describe("D4 the debt bound counts frames, not only bytes", () => {
+    it.each([
+      ["one-byte", 1],
+      ["max-size", TUNNEL_MAX_DATA_BYTES],
+    ])(
+      "forged credits + %s slices never queue more than a window of data frames",
+      async (_, sliceBytes) => {
+        const t = realSchedulerTunnel("opener", 0);
+        t.endpoint.handleFrame(
+          { kind: "accept", hasBinaryPayload: false },
+          null,
+        );
+        let peakQueued = 0;
+        for (let i = 0; i < 5_000; i += 1) {
+          const before = t.scheduler.queuedCount();
+          t.endpoint.write(new Uint8Array(sliceBytes));
+          const spent = t.scheduler.queuedCount() - before;
+          // The forging peer returns every credit the moment it is spent,
+          // although not one of these frames has left: the window alone would
+          // therefore never stop this loop.
+          if (spent > 0) {
+            t.endpoint.handleFrame(
+              { kind: "credit", hasBinaryPayload: false, credits: spent },
+              null,
+            );
+          }
+          peakQueued = Math.max(peakQueued, t.scheduler.queuedCount());
+        }
+        await t.settle();
+        expect(t.faults).toEqual([]);
+        expect(peakQueued).toBeLessThanOrEqual(TUNNEL_STREAM_WINDOW_FRAMES);
+        expect(t.endpoint.pendingBytes).toBeGreaterThan(0);
+      },
+    );
+  });
+
+  describe("D5 interactive traffic preempts queued tunnel data (real scheduler)", () => {
+    it("writes an interactive frame enqueued mid-transfer BEFORE the tunnel frames already queued ahead of it", async () => {
+      const TUNNEL_STREAM = 9;
+      const UNARY_STREAM = 21;
+      const order: number[] = [];
+      // Every write is held open by the test, so the queue state at each
+      // step is exact rather than timing-dependent.
+      const gates: Array<() => void> = [];
+      let seq = 0;
+      const scheduler = new PriorityScheduler({
+        write: (frame) => {
+          order.push(frame.streamId);
+          return new Promise((resolve) => gates.push(resolve));
+        },
+        onWriteError: () => undefined,
+        initialBulkCredits: 100,
+        now: undefined,
+      });
+      const endpoint: TunnelStreamEndpoint = new TunnelStreamEndpoint({
+        role: "opener",
+        sendFrame: (envelope, binaryPayload) =>
+          scheduler.enqueue(
+            new OutboundChunkSource(
+              {
+                type: MuxFrameType.STREAM_FRAME,
+                streamId: TUNNEL_STREAM,
+                qos: QosClass.BULK,
+                json: { ...envelope },
+                binary: binaryPayload,
+              },
+              () => seq++,
+              false,
+            ),
+          ),
+        outboundDebtBytes: () => scheduler.queuedBytesForStream(TUNNEL_STREAM),
+        onData: () => undefined,
+        onEnd: () => undefined,
+        onAccept: () => undefined,
+        onFinished: () => undefined,
+        onDrain: () => undefined,
+        onFault: () => undefined,
+      });
+      endpoint.handleFrame({ kind: "accept", hasBinaryPayload: false }, null);
+      for (let i = 0; i < 8; i += 1) {
+        endpoint.write(new Uint8Array(1024));
+      }
+      const flush = (): Promise<void> =>
+        new Promise((resolve) => setTimeout(resolve, 0));
+      await flush();
+      // Tunnel frame #1 is mid-write; seven more are queued behind it.
+      expect(order).toEqual([TUNNEL_STREAM]);
+      expect(scheduler.queuedCount()).toBe(7);
+
+      let unarySeq = 0;
+      scheduler.enqueue(
+        new OutboundChunkSource(
+          {
+            type: MuxFrameType.REQUEST,
+            streamId: UNARY_STREAM,
+            qos: QosClass.INTERACTIVE,
+            json: { requestId: "r" },
+            binary: null,
+          },
+          () => unarySeq++,
+          false,
+        ),
+      );
+      gates[0]();
+      await flush();
+      // A FIFO scheduler would write tunnel frame #2 here.
+      expect(order).toEqual([TUNNEL_STREAM, UNARY_STREAM]);
+      gates[1]();
+      await flush();
+      expect(order).toEqual([TUNNEL_STREAM, UNARY_STREAM, TUNNEL_STREAM]);
+      scheduler.stop();
+    });
+  });
 });

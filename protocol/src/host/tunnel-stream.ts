@@ -15,8 +15,16 @@
  *  - `end`: half-close; no more `data` follows in this direction.
  *  - `finished` (server only): the accepting side has received the opener's
  *    `end` and sent its own. Per-stream FIFO puts it after every byte the
- *    acceptor sent, and it proves the opener's last byte arrived, so the
- *    opener may now CLOSE the stream without purging anything still queued.
+ *    acceptor sent, and from an honest peer it proves the opener's last byte
+ *    arrived. The opener does not take that on trust: it honours `finished`
+ *    only once its own `end` is sent, the peer's `end` is received, and
+ *    nothing of its own is left unsent - neither held in the endpoint NOR
+ *    still queued in the session's scheduler - because the CLOSE that follows
+ *    purges whatever is queued. Anything earlier is a protocol violation.
+ *
+ * No frame on a tunnel stream may be chunked or exceed one chunk, whatever
+ * its mux type: data frames never need to, and a chunked CLOSE or FATAL would
+ * accumulate in the reassembler exactly as a chunked data frame would.
  *
  * Reset is the stream's own CLOSE / FATAL from either side. The windowing both
  * peers must agree on lives in `host-transport/remote/tunnel-stream.ts`.
@@ -31,9 +39,10 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 export const HOST_TUNNEL_OPEN_METHOD = "host.tunnel.open";
 
 /**
- * Whether `method`'s stream frames are never chunked. Both peers check this
- * before reassembly (`unchunkedStreamFrameViolation` in `chunking.ts`) and
- * reset the STREAM, never the session, on a violation.
+ * Whether NO frame on a stream of `method` may be chunked or exceed one
+ * chunk - its data, and its CLOSE / FATAL alike. Both peers check this before
+ * reassembly (`unchunkedStreamFrameViolation` in `chunking.ts`) and reset the
+ * STREAM, never the session, on a violation.
  */
 export function streamMethodForbidsChunking(method: string): boolean {
   return method === HOST_TUNNEL_OPEN_METHOD;

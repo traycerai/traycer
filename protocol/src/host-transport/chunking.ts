@@ -182,6 +182,22 @@ export function encodeMuxMessageBody(
   return body;
 }
 
+/**
+ * Exact length of the body {@link encodeMuxMessageBody} would produce, without
+ * building it. For a sender that must account for what it queued in the same
+ * unit the schedulers report debt in (remaining BODY bytes).
+ */
+export function muxMessageBodySize(
+  json: Record<string, unknown> | null,
+  binary: Uint8Array | null,
+): number {
+  return (
+    BODY_HEADER_LEN +
+    (json === null ? 0 : textEncoder.encode(JSON.stringify(json)).length) +
+    (binary === null ? 0 : binary.length)
+  );
+}
+
 export interface DecodedMessageBody {
   readonly json: Record<string, unknown> | null;
   readonly binary: Uint8Array | null;
@@ -537,10 +553,14 @@ export class StreamFrameNotAllowedError extends ChunkReassemblyError {
 }
 
 /**
- * The frame rule for a stream whose method never chunks (a tunnel): one
- * STREAM_FRAME is one whole message, and its WHOLE encoded length - header,
- * body header, json and binary together - fits one chunk. Returns the
- * violation, or `null`.
+ * The frame rule for a stream whose method never chunks (a tunnel): EVERY mux
+ * frame on it - data, and equally its CLOSE, FATAL or anything else - is one
+ * whole message whose WHOLE encoded length (header, body header, json and
+ * binary together) fits one chunk. Returns the violation, or `null`.
+ *
+ * Callers apply it only to a stream they have already identified as such; it
+ * deliberately does not look at the frame type, because the reassembler
+ * accumulates a chunked CLOSE exactly as readily as a chunked STREAM_FRAME.
  *
  * Checked on the raw decrypted frame, BEFORE the reassembler sees it. That
  * position is the point: past it a chunk sequence accumulates toward the
@@ -554,9 +574,6 @@ export function unchunkedStreamFrameViolation(
   frame: MuxFrame,
   encodedFrameBytes: number,
 ): string | null {
-  if (frame.type !== MuxFrameType.STREAM_FRAME) {
-    return null;
-  }
   if (frame.chunked) {
     return `chunked frame on stream ${frame.streamId}, whose method never chunks`;
   }

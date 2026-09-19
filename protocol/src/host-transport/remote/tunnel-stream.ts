@@ -1,5 +1,5 @@
 import { hostTunnelServerFrameSchema } from "@traycer/protocol/host/tunnel-stream";
-import { BULK_CHUNK_SIZE_BYTES } from "../chunking";
+import { BULK_CHUNK_SIZE_BYTES, muxMessageBodySize } from "../chunking";
 import { FINE_INBOUND_CREDIT_GRANT_BATCH } from "../mux";
 import type { StreamFrameEnvelope } from "../stream-session";
 
@@ -23,11 +23,30 @@ import type { StreamFrameEnvelope } from "../stream-session";
  * scheduler, not when it reaches the wire, so a peer that keeps granting
  * stream credits while withholding the session's transport credits would
  * license window after window into a scheduler queue with no bound of its own.
- * So the endpoint also bounds its own DEBT: it hands the scheduler a frame
- * only while what this stream already has queued there is under one window's
- * worth ({@link TUNNEL_STREAM_MAX_OUTBOUND_DEBT_BYTES}). Whatever a peer
- * grants, one tunnel holds at most one window (+1 frame) in the scheduler; the
- * rest waits here, where the paused producer bounds it to one chunk.
+ * So the endpoint also bounds its own DEBT, in frames AND bytes: it hands the
+ * scheduler a data frame only while this stream has fewer than a window of
+ * frames, and less than a window's worth of bytes
+ * ({@link TUNNEL_STREAM_MAX_OUTBOUND_DEBT_BYTES}), still queued there. The
+ * frame half is what bounds one-byte writes, which would otherwise admit tens
+ * of thousands of queue entries before reaching the byte bound. The rest
+ * waits here, where the paused producer bounds it to one chunk.
+ *
+ * EVERYTHING this side queues is covered, not only data. `credit` frames are
+ * coalesced: at most one is outstanding per stream, and the grant it carries
+ * is restored to the peer's receive allowance only once that frame has LEFT
+ * the scheduler - so a peer that starves this side's transport cannot keep
+ * sending against grants it never received while credit frames pile up. With
+ * `end` and `finished` (one each, ever) the most a tunnel can hold in its
+ * scheduler is a window of data frames plus three control frames.
+ *
+ * HOW IT KNOWS WHAT LEFT. Both schedulers report one number per stream:
+ * remaining body bytes. The endpoint keeps a FIFO ledger of the exact body
+ * size of every frame it handed over; per-stream FIFO and the fact that none
+ * of its frames ever chunks mean the queued frames are always a SUFFIX of
+ * that ledger, so comparing the ledger's total with the reported debt says
+ * exactly which frames have left. Known residual, in both schedulers: a
+ * pulled frame's debt is removed BEFORE its write is awaited, so "left" means
+ * "handed to the socket write", one frame ahead of "written".
  *
  * Backpressure is the Node stream contract: `write` returns `false` once the
  * window or the debt bound is reached and `onDrain` fires when it reopens. A
@@ -97,7 +116,11 @@ export interface TunnelStreamEndpointOptions {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ) => void;
-  /** Body bytes this stream still has queued or mid-transfer on its session's scheduler. */
+  /**
+   * Body bytes this stream still has queued or mid-transfer on its session's
+   * scheduler. The envelope handed to `sendFrame` must reach the scheduler as
+   * that frame's json VERBATIM (both peers do), or the ledger's sizes drift.
+   */
   readonly outboundDebtBytes: () => number;
   /** One inbound slice. The consumer owes one `ackConsumed(1)` once it has drained it. */
   readonly onData: (bytes: Uint8Array) => void;
@@ -137,6 +160,17 @@ export class TunnelStreamEndpoint {
   /** Slices delivered to the consumer and not yet acked. */
   private heldByConsumer = 0;
   private consumedSinceGrant = 0;
+  /** Body sizes of the frames handed to `sendFrame` and not yet seen to leave, oldest first. */
+  private readonly ledger: Array<{ readonly bodyBytes: number }> = [];
+  private ledgerBytes = 0;
+  /**
+   * The one `credit` frame allowed to be outstanding: its grant and its ledger
+   * entry. The grant is NOT yet part of {@link receiveCredits}.
+   */
+  private creditInFlight: {
+    readonly credits: number;
+    readonly entry: { readonly bodyBytes: number };
+  } | null = null;
   private peerEnded = false;
   private finishedSent = false;
   private closed = false;
@@ -154,7 +188,7 @@ export class TunnelStreamEndpoint {
     if (this.closed || this.accepted || this.options.role !== "acceptor") {
       return;
     }
-    this.options.sendFrame(ACCEPT_ENVELOPE, null);
+    this.send(ACCEPT_ENVELOPE, null);
     this.becomeAccepted();
   }
 
@@ -202,20 +236,23 @@ export class TunnelStreamEndpoint {
     );
     this.heldByConsumer -= acked;
     this.consumedSinceGrant += acked;
-    // After the peer's `end` nothing more can arrive, so a grant would only
-    // be a frame for nobody.
-    if (
-      this.peerEnded ||
-      this.consumedSinceGrant < TUNNEL_STREAM_CREDIT_GRANT_BATCH
-    ) {
-      return;
-    }
-    const credits = this.consumedSinceGrant;
-    this.consumedSinceGrant = 0;
-    this.receiveCredits += credits;
-    this.options.sendFrame(
-      { kind: "credit", hasBinaryPayload: false, credits },
-      null,
+    this.reconcileLedger();
+    this.maybeSendCredit();
+  }
+
+  /**
+   * Whether this endpoint is waiting for its own queued frames to leave: a
+   * producer paused on debt, a credit frame outstanding, or held-back output.
+   * An owner whose debt signal is a poll (the accepting host's seam) uses it
+   * to decide whether a poll is worth arming.
+   */
+  get awaitingOutboundProgress(): boolean {
+    return (
+      !this.closed &&
+      this.ledger.length > 0 &&
+      (this.needsDrain ||
+        this.creditInFlight !== null ||
+        this.pending.length > 0)
     );
   }
 
@@ -227,6 +264,8 @@ export class TunnelStreamEndpoint {
     if (this.closed) {
       return;
     }
+    this.reconcileLedger();
+    this.maybeSendCredit();
     this.flush();
     this.maybeDrain();
   }
@@ -245,6 +284,11 @@ export class TunnelStreamEndpoint {
       return;
     }
     const frame = parsed.data;
+    // Before anything reads `receiveCredits`: a grant whose frame has left
+    // may already have been answered by the peer, and only reconciling here
+    // stops that honest data from reading as an overrun.
+    this.reconcileLedger();
+    this.maybeSendCredit();
     if (frame.kind === "accept") {
       if (this.options.role !== "opener" || this.accepted) {
         this.fault("unexpected tunnel accept");
@@ -263,13 +307,16 @@ export class TunnelStreamEndpoint {
       return;
     }
     if (frame.kind === "finished") {
-      // Only honest once both halves are done and nothing is left unsent
-      // here; taken early it would CLOSE over bytes still held.
+      // Only honest once both halves are done and nothing of this side's is
+      // left unsent ANYWHERE: `endSent` means END was queued, not delivered,
+      // so the ledger must be empty too - otherwise the CLOSE that follows
+      // would purge data still sitting in the scheduler and report success.
       if (
         this.options.role !== "opener" ||
         !this.endSent ||
         !this.peerEnded ||
-        this.pending.length > 0
+        this.pending.length > 0 ||
+        this.ledger.length > 0
       ) {
         this.fault("premature tunnel finished");
         return;
@@ -342,11 +389,79 @@ export class TunnelStreamEndpoint {
   }
 
   private canSendData(): boolean {
+    if (!this.accepted || this.sendCredits === 0) {
+      return false;
+    }
+    // The reported debt is checked as well as the ledger: they agree whenever
+    // every queued frame on this stream is this endpoint's own, and if that
+    // ever stops being true the larger of the two is the one to respect.
+    const debt = this.reconcileLedger();
     return (
-      this.accepted &&
-      this.sendCredits > 0 &&
-      this.options.outboundDebtBytes() < TUNNEL_STREAM_MAX_OUTBOUND_DEBT_BYTES
+      this.ledger.length < TUNNEL_STREAM_WINDOW_FRAMES &&
+      this.ledgerBytes < TUNNEL_STREAM_MAX_OUTBOUND_DEBT_BYTES &&
+      debt < TUNNEL_STREAM_MAX_OUTBOUND_DEBT_BYTES
     );
+  }
+
+  /** The ONE way a frame leaves this endpoint: recorded, then handed over. */
+  private send(
+    envelope: StreamFrameEnvelope,
+    binaryPayload: Uint8Array | null,
+  ): { readonly bodyBytes: number } {
+    const entry = {
+      bodyBytes: muxMessageBodySize({ ...envelope }, binaryPayload),
+    };
+    this.ledger.push(entry);
+    this.ledgerBytes += entry.bodyBytes;
+    this.options.sendFrame(envelope, binaryPayload);
+    return entry;
+  }
+
+  /**
+   * Drops every ledger entry whose frame has left the scheduler. The queued
+   * frames are a suffix of the ledger, so the oldest entry has left exactly
+   * when the rest of the ledger alone accounts for the reported debt.
+   * Returns the debt it read.
+   */
+  private reconcileLedger(): number {
+    const debt = this.options.outboundDebtBytes();
+    while (
+      this.ledger.length > 0 &&
+      this.ledgerBytes - this.ledger[0].bodyBytes >= debt
+    ) {
+      const left = this.ledger.shift();
+      if (left === undefined) {
+        break;
+      }
+      this.ledgerBytes -= left.bodyBytes;
+      if (this.creditInFlight !== null && this.creditInFlight.entry === left) {
+        // Only NOW is the peer licensed again.
+        this.receiveCredits += this.creditInFlight.credits;
+        this.creditInFlight = null;
+      }
+    }
+    return debt;
+  }
+
+  /** Sends the accumulated grant, unless one credit frame is still outstanding. */
+  private maybeSendCredit(): void {
+    // After the peer's `end` nothing more can arrive, so a grant would only
+    // be a frame for nobody.
+    if (
+      this.closed ||
+      this.peerEnded ||
+      this.creditInFlight !== null ||
+      this.consumedSinceGrant < TUNNEL_STREAM_CREDIT_GRANT_BATCH
+    ) {
+      return;
+    }
+    const credits = this.consumedSinceGrant;
+    this.consumedSinceGrant = 0;
+    const entry = this.send(
+      { kind: "credit", hasBinaryPayload: false, credits },
+      null,
+    );
+    this.creditInFlight = { credits, entry };
   }
 
   private flush(): void {
@@ -359,11 +474,11 @@ export class TunnelStreamEndpoint {
         break;
       }
       this.sendCredits -= 1;
-      this.options.sendFrame(DATA_ENVELOPE, slice);
+      this.send(DATA_ENVELOPE, slice);
     }
     if (this.endRequested && !this.endSent && this.pending.length === 0) {
       this.endSent = true;
-      this.options.sendFrame(END_ENVELOPE, null);
+      this.send(END_ENVELOPE, null);
       this.maybeFinish();
     }
   }
@@ -393,7 +508,7 @@ export class TunnelStreamEndpoint {
       return;
     }
     this.finishedSent = true;
-    this.options.sendFrame(FINISHED_ENVELOPE, null);
+    this.send(FINISHED_ENVELOPE, null);
   }
 
   /**

@@ -2422,9 +2422,11 @@ export class RemoteSession<
       }
       let message: ReassembledMessage | null;
       try {
-        // BEFORE the reassembler: a stream whose method never chunks (a
-        // tunnel) must not be able to accumulate toward the generic message
-        // cap, or pin a frame-sized buffer behind a one-byte payload.
+        // BEFORE the reassembler, and for EVERY mux type on the stream (a
+        // chunked CLOSE accumulates as readily as chunked data): a stream
+        // whose method never chunks (a tunnel) must not be able to accumulate
+        // toward the generic message cap, or pin a frame-sized buffer behind
+        // a one-byte payload.
         const subscribed = this.subscriptions.get(frame.streamId);
         const violation =
           subscribed !== undefined &&

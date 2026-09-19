@@ -174,12 +174,15 @@ export class PriorityScheduler {
    * Remaining body bytes this stream has queued or mid-transfer - the client
    * twin of the host scheduler's `queuedBytesForStream`. A pure read.
    *
-   * A scan rather than tracked accounting, deliberately: its one caller is a
-   * tunnel bounding its own debt to one window, and that bound is what keeps
-   * the scan short - a stream that consults this never holds more than
-   * `TUNNEL_STREAM_WINDOW_FRAMES` (+1) entries here, and a host-to-host
-   * session's queues hold little else. A running total would be a second
-   * copy of the truth for `dropStreamOutbound` and `stop` to keep in step.
+   * A scan rather than tracked accounting, deliberately. Its one caller is a
+   * tunnel endpoint, which bounds what it queues here by FRAME COUNT as well
+   * as bytes: at most `TUNNEL_STREAM_WINDOW_FRAMES` data frames plus three
+   * control frames (one coalesced credit, one end, one finished) per stream,
+   * whatever the slice size. So the scan costs O(tunnels x 35) entries, not
+   * O(bytes), and that holds only because the caller counts frames - a
+   * byte-only bound would let one-byte writes queue tens of thousands of
+   * entries and make this quadratic. A running total would be a second copy
+   * of the truth for `dropStreamOutbound` and `stop` to keep in step.
    */
   queuedBytesForStream(streamId: number): number {
     let total = 0;

@@ -735,9 +735,36 @@ describe("unchunkedStreamFrameViolation", () => {
     );
   });
 
-  it("passes a non-STREAM_FRAME type through untouched, however large", () => {
+  // The rule is applied by callers ONLY to a stream already identified as one
+  // whose method never chunks; on such a stream it covers every mux type,
+  // because the reassembler accumulates a chunked CLOSE as readily as chunked
+  // data. (The non-tunnel control lives with the callers, which never ask.)
+  it.each([
+    ["CLOSE", MuxFrameType.CLOSE],
+    ["FATAL", MuxFrameType.FATAL],
+    ["REQUEST", MuxFrameType.REQUEST],
+  ])("refuses a CHUNKED %s as readily as a chunked STREAM_FRAME", (_, type) => {
     const encoded = encodeMuxFrame({
-      type: MuxFrameType.REQUEST,
+      type,
+      streamId: STREAM_ID,
+      seq: 0,
+      qos: QosClass.INTERACTIVE,
+      chunked: true,
+      chunkFirst: true,
+      chunkLast: false,
+      compressed: false,
+      json: null,
+      binary: new Uint8Array(16),
+    });
+    const frame = decodeMuxFrame(encoded);
+    expect(
+      unchunkedStreamFrameViolation(frame, encoded.byteLength),
+    ).not.toBeNull();
+  });
+
+  it("refuses an oversized unchunked CLOSE", () => {
+    const encoded = encodeMuxFrame({
+      type: MuxFrameType.CLOSE,
       streamId: STREAM_ID,
       seq: 0,
       qos: QosClass.INTERACTIVE,
@@ -745,11 +772,13 @@ describe("unchunkedStreamFrameViolation", () => {
       chunkFirst: false,
       chunkLast: false,
       compressed: false,
-      json: { requestId: "x" },
-      binary: new Uint8Array(BULK_CHUNK_SIZE_BYTES),
+      json: null,
+      binary: new Uint8Array(BULK_CHUNK_SIZE_BYTES + 1),
     });
     const frame = decodeMuxFrame(encoded);
-    expect(unchunkedStreamFrameViolation(frame, encoded.byteLength)).toBeNull();
+    expect(
+      unchunkedStreamFrameViolation(frame, encoded.byteLength),
+    ).not.toBeNull();
   });
 
   it("passes exactly at the bound", () => {

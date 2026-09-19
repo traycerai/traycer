@@ -52,7 +52,7 @@ export interface HostTunnelHandlers {
   readonly onEnd: () => void;
   /** The send window reopened after `write` returned `false`. */
   readonly onDrain: () => void;
-  /** Both directions ended and everything was delivered. Terminal. */
+  /** Both directions ended and nothing of this side's was left unsent, in the endpoint or the scheduler. Terminal. */
   readonly onFinished: () => void;
   /** The tunnel died. Terminal; at most one of `onFinished` / `onReset` fires. */
   readonly onReset: (reason: HostTunnelResetReason) => void;
