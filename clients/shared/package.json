@@ -20,5 +20,10 @@
     "fflate": "catalog:",
     "prettier": "catalog:",
     "yaml": "catalog:"
+  },
+  "nx": {
+    "implicitDependencies": [
+      "@traycer/protocol"
+    ]
   }
 }

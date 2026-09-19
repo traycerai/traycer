@@ -4,12 +4,17 @@
     "build": {
       "dependsOn": ["^build"],
       "cache": true,
-      "inputs": ["default", "sharedGlobals", { "env": "SENTRY_AUTH_TOKEN" }]
+      "inputs": [
+        "default",
+        "^production",
+        "sharedGlobals",
+        { "env": "SENTRY_AUTH_TOKEN" }
+      ]
     },
     "compile": {
       "dependsOn": ["^compile"],
       "cache": true,
-      "inputs": ["default", "sharedGlobals"]
+      "inputs": ["default", "^production", "sharedGlobals"]
     },
     "lint": {
       "cache": true,

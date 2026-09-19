@@ -278,5 +278,12 @@
     }
   },
   "desktopName": "traycer-desktop.desktop",
+  "nx": {
+    "implicitDependencies": [
+      "@traycer/protocol",
+      "@traycer-clients/shared",
+      "traycer-clients-gui-app"
+    ]
+  },
   "productName": "Traycer"
 }
