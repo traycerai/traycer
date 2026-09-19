@@ -724,12 +724,35 @@ export type BrowserReplCaller = z.infer<typeof browserReplCallerSchema>;
  * It is the fence that lets the target tell a straggler from new work, which
  * the owner key alone cannot: a unary call issued before a release can arrive
  * after it, and re-admitting it would resurrect a realm whose credential is
- * already revoked. A tombstoned epoch is refused; a NEW epoch for the same
- * owner key is admitted, and supersedes whatever that key still held - which
- * is why this is an epoch rather than a per-owner tombstone, since the latter
- * cannot tell re-registration from a late call.
+ * already revoked.
+ *
+ * ORDERED rather than opaque, so the target can keep one "highest seen"
+ * number per owner key instead of a set of tombstones with a lifetime. A
+ * lifetime would be a guess about how long a straggler can live, and a call
+ * parked in a role check on the origin can outlive any such guess.
+ *
+ * `incarnation` is a RANDOM id minted once per origin process, deliberately
+ * not a boot timestamp: a wall clock that steps backwards between two
+ * restarts would make every epoch of the newer process look older than the
+ * dead one's, and the target would refuse the live agent forever. Ordering is
+ * never compared across incarnations; the target takes the one it saw FIRST
+ * as current and refuses the rest. `counter` orders realms within one
+ * incarnation.
  */
-const browserRealmEpochSchema = z.string().min(1);
+const browserRealmEpochSchema = z.object({
+  incarnation: z.string().min(1),
+  counter: z.number().int().positive(),
+});
+export type BrowserRealmEpochWire = z.infer<typeof browserRealmEpochSchema>;
+
+/**
+ * Which cell within the epoch. A stop must name the cell it means: a stop the
+ * caller gave up on stays alive in the session (the transport races a call
+ * against a signal, it does not cancel it) and can arrive after the cell it
+ * named has finished, where it would otherwise interrupt that cell's
+ * successor.
+ */
+const browserReplCellSequenceSchema = z.number().int().positive();
 
 export const browserReplRunCellRequestSchema = z.object({
   epicId: z.string().min(1),
@@ -737,6 +760,7 @@ export const browserReplRunCellRequestSchema = z.object({
   code: z.string().min(1),
   caller: browserReplCallerSchema,
   realmEpoch: browserRealmEpochSchema,
+  cellSequence: browserReplCellSequenceSchema,
 });
 export type BrowserReplRunCellRequest = z.infer<
   typeof browserReplRunCellRequestSchema
@@ -794,10 +818,14 @@ export const browserReplRunCellV10 = defineRpcContract({
  *
  * Idempotent, and that is load-bearing rather than merely tidy: the origin
  * keeps owed releases until one is ANSWERED, and retries them against targets
- * that may have restarted or already released. An unknown or
- * already-tombstoned epoch is therefore a success — the obligation is
- * discharged either way — so `released` reports whether this call found a
- * live realm, never whether the caller may stop asking.
+ * that may have restarted or already released. An unknown epoch is therefore
+ * a success — the obligation is discharged either way — so `released` reports
+ * whether this call found a live realm, never whether the caller may stop
+ * asking.
+ *
+ * It is also a FLOOR rather than a tombstone for one value: it retires every
+ * epoch at or below `realmEpoch` for that owner key, whether or not that epoch
+ * ever reached this machine, so nothing below it can execute afterwards.
  */
 export const browserReplReleaseRealmRequestSchema = z.object({
   epicId: z.string().min(1),
@@ -843,6 +871,8 @@ export const browserReplStopCellRequestSchema = z.object({
   epicId: z.string().min(1),
   caller: browserReplCallerSchema,
   realmEpoch: browserRealmEpochSchema,
+  /** The cell this stop means; see {@link browserReplCellSequenceSchema}. */
+  cellSequence: browserReplCellSequenceSchema,
 });
 export type BrowserReplStopCellRequest = z.infer<
   typeof browserReplStopCellRequestSchema
