@@ -19,6 +19,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 
@@ -128,6 +129,7 @@ function resetStores(): void {
   useAuthStore.setState({ status: "signed-in" });
   useOnboardingStore.setState({ completedAt: Date.now(), step: 0 });
   useOnboardingTourOpenStore.getState().setOpen(false);
+  useFirstTaskGuideStore.getState().prepare();
   useFeatureAnnouncementsStore.setState({ consumed: {} });
   window.localStorage.clear();
 }
@@ -211,6 +213,33 @@ describe("<SessionImportAnnouncementController />", () => {
     });
 
     expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds while the first-task guide is active, then shows when it ends", () => {
+    useFirstTaskGuideStore.getState().activate();
+    render(<SessionImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+
+    act(() => {
+      useFirstTaskGuideStore.getState().dismiss();
+    });
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the toast down if the first-task guide activates under it", () => {
+    render(<SessionImportAnnouncementController />);
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useFirstTaskGuideStore.getState().activate();
+    });
+
+    expect(toastMock.dismiss).toHaveBeenCalledWith(
+      "traycer-session-import-announcement",
+    );
   });
 
   it("does not show when signed out", () => {

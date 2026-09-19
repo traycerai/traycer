@@ -467,6 +467,15 @@ export function MobileNavDrawerSurface(
           // task title from turning into a text selection.
           className="pointer-events-auto flex h-full w-full touch-pan-y flex-col border-r bg-popover bg-clip-padding pb-safe-bottom text-popover-foreground shadow-lg outline-none select-none"
           data-testid="mobile-nav-drawer"
+          // What the first-task guide's overlay list reads
+          // (`onboarding/guide-overlays.ts`): a settled-open drawer owns the
+          // screen exactly as a Sheet does, so a coachmark step whose target
+          // is underneath it pauses, and one INSIDE it lifts above it and
+          // drops its dim. Deliberately not `data-slot="sheet-content"`,
+          // which would hand this hand-rolled panel the primitive's surface
+          // and motion CSS. It keys off `settledOpen` for the reason
+          // everything semantic here does: a panel 30% out is not open yet.
+          data-overlay-surface={settledOpen ? "open" : "closed"}
           data-mobile-shell-touch-scope=""
         >
           {children}

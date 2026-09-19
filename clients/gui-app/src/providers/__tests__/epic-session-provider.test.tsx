@@ -211,7 +211,15 @@ vi.mock(
   },
 );
 
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import {
+  closeTestEpicTab,
+  openTestEpicTab,
+  setTestEffectiveHost,
+  setTestEpicSessionHostClientResolver,
+  TEST_EPIC_TAB_NAME,
+} from "@/lib/registries/test-support/epic-session-controller-test-support";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   clearSessionCreatedEpics,
   markEpicCreatedThisSession,
@@ -271,6 +279,22 @@ import {
 import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+
+/**
+ * The stub map answers `unknown` (it is handed to `vi.mock`, which is not
+ * type-checked); the controller's environment is. Narrowed on the members the
+ * controller reads rather than cast.
+ */
+function isStubHostClient(
+  value: unknown,
+): value is HostClient<HostRpcRegistry> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "getActiveHost" in value &&
+    "getRequestContextUserId" in value
+  );
+}
 
 /**
  * The jsdom setup file's coreless worker, captured before this suite can
@@ -474,6 +498,11 @@ function snapshotMeta(roomId: string): SnapshotMetaEpic {
 }
 
 function deliverSnapshot(stream: ControlledEpicStream, roomId: string): void {
+  // Open first, as a real stream does. A session is an authority for its
+  // write-throughs only while LIVE (snapshot loaded, host transport open), so
+  // a fixture that stops at the snapshot describes a session that writes
+  // nothing.
+  stream.callbacks.onConnectionStatus("open", null, false);
   stream.callbacks.onSnapshot(snapshotMeta(roomId), new Uint8Array([0, 0]));
 }
 
@@ -820,13 +849,20 @@ async function readRootEdit(
   return value;
 }
 
-describe("<EpicSessionProvider />", () => {
+describe("<TestEpicSessionTab />", () => {
   beforeEach(() => {
     // Capture unconditionally: even a test that installs no worker factory is
     // followed by an `afterEach`, and restoring an uninitialised sentinel there
     // would erase the jsdom setup file's coreless worker for the next test.
     workerFactoryBeforeTest = getEpicRuntimeWorkerFactoryOverride();
     window.localStorage.clear();
+    // The controller resolves a client for ANY host it re-points to, where
+    // the provider called the (mocked) hook for one. Same stub map, one seam
+    // over.
+    setTestEpicSessionHostClientResolver((hostId) => {
+      const client = resolveSessionHostClient(hostId);
+      return isStubHostClient(client) ? client : null;
+    });
     hostState.id = "host-a";
     hostState.attached = true;
     hostBindingRef.value = null;
@@ -903,9 +939,9 @@ describe("<EpicSessionProvider />", () => {
       installManifestDerivedWorker();
       const seenHandles: OpenEpicStoreHandle[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => {
@@ -938,9 +974,9 @@ describe("<EpicSessionProvider />", () => {
       installManifestDerivedWorker();
       const seenHandles: OpenEpicStoreHandle[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => expect(fixture.opens.state).toBe(1));
@@ -1001,12 +1037,12 @@ describe("<EpicSessionProvider />", () => {
         installManifestDerivedWorker();
         const seenHandles: OpenEpicStoreHandle[] = [];
         const view = render(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-plan-restricted-ladder"
             tabId="epic-plan-restricted-ladder"
           >
             <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
         try {
           await act(() => Promise.resolve());
@@ -1077,7 +1113,7 @@ describe("<EpicSessionProvider />", () => {
         const seenHandles: OpenEpicStoreHandle[] = [];
         const presentations: Array<EpicSessionPresentation | null> = [];
         const view = render(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-plan-restricted-retry-cancel"
             tabId="epic-plan-restricted-retry-cancel"
           >
@@ -1087,7 +1123,7 @@ describe("<EpicSessionProvider />", () => {
                 presentations.push(presentation)
               }
             />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
         try {
           await act(() => Promise.resolve());
@@ -1172,7 +1208,7 @@ describe("<EpicSessionProvider />", () => {
     };
   }
 
-  it("cancels a pending backoff attempt when the provider unmounts, so the stale rung never rebuilds a session with nothing left mounted", async () => {
+  it("closing the tab cancels a pending backoff attempt exactly once; unmounting the provider alone does not, so the stale rung never rebuilds a session with nothing left mounted", async () => {
     vi.useFakeTimers();
     try {
       const fixture = createEpicSessionFixture("lanes");
@@ -1182,12 +1218,12 @@ describe("<EpicSessionProvider />", () => {
         try {
           const seenHandles: OpenEpicStoreHandle[] = [];
           const view = render(
-            <EpicSessionProvider
+            <TestEpicSessionTab
               epicId="epic-plan-restricted-unmount-cancel"
               tabId="epic-plan-restricted-unmount-cancel"
             >
               <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-            </EpicSessionProvider>,
+            </TestEpicSessionTab>,
           );
           await act(() => Promise.resolve());
           fixture.openLaneStreams(0);
@@ -1205,7 +1241,7 @@ describe("<EpicSessionProvider />", () => {
           const retryTransportSpy = vi.spyOn(rebuiltHandle, "retryTransport");
 
           // Denies the rebuilt (not-yet-healthy) handle - delayed, not
-          // immediate, so a pending timer is armed at the moment of unmount.
+          // immediate, so a pending timer is armed before the tab closes.
           act(() => {
             reprobeCallbacks.callbacks.at(1)?.();
           });
@@ -1214,8 +1250,18 @@ describe("<EpicSessionProvider />", () => {
           expect(cancelSpy()).not.toBeNull();
           expect(cancelSpy()).not.toHaveBeenCalled();
 
+          // The tab stays open across the unmount - a backgrounded pane, not
+          // a closed one - so the ladder is scoped to the tab's MEMBERSHIP,
+          // not the provider's mount lifecycle. Unmounting the surface alone
+          // must not cancel it.
           view.unmount();
+          await act(() => Promise.resolve());
+          expect(cancelSpy()).not.toHaveBeenCalled();
 
+          // Closing the epic's last open tab is what cancels the ladder.
+          act(() => {
+            closeTestEpicTab("epic-plan-restricted-unmount-cancel");
+          });
           expect(cancelSpy()).toHaveBeenCalledTimes(1);
 
           await act(async () => {
@@ -1244,12 +1290,12 @@ describe("<EpicSessionProvider />", () => {
         const { cancelSpy, restore } = spyOnPlanRestrictedBackoffCancel();
         const seenHandles: OpenEpicStoreHandle[] = [];
         const view = render(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-plan-restricted-repoint-cancel"
             tabId="epic-plan-restricted-repoint-cancel"
           >
             <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
         try {
           await act(() => Promise.resolve());
@@ -1285,12 +1331,12 @@ describe("<EpicSessionProvider />", () => {
           act(() => {
             hostState.id = "host-plan-restricted-repoint";
             view.rerender(
-              <EpicSessionProvider
+              <TestEpicSessionTab
                 epicId="epic-plan-restricted-repoint-cancel"
                 tabId="epic-plan-restricted-repoint-cancel"
               >
                 <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-              </EpicSessionProvider>,
+              </TestEpicSessionTab>,
             );
           });
           await act(() => Promise.resolve());
@@ -1324,7 +1370,13 @@ describe("<EpicSessionProvider />", () => {
   // `handleHostClients` stamping; imported-unseen `markSeen`" untested list.
   // The stamp is read by imperative callers OUTSIDE this subtree (the DnD
   // reparent commit); nothing in this suite reads it today.
-  it("stamps handleHostClients only after mount (absent during the render that first publishes the handle), and re-stamps it across a re-point", async () => {
+  //
+  // The controller stamps `handleHostClients` itself, SYNCHRONOUSLY, before it
+  // publishes a handle (`restampHostClient` runs before `publishSnapshots`'s
+  // `emit()`), so the stamp is already present in the very render that first
+  // sees a non-null handle - there is no long-mounted provider effect that
+  // has to catch up afterward.
+  it("stamps handleHostClients before the render that first publishes the handle (present, not absent), and re-stamps it across a re-point", async () => {
     const EPIC_ID = "epic-host-client-stamp";
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
@@ -1346,7 +1398,7 @@ describe("<EpicSessionProvider />", () => {
     const renderedHandles: Array<OpenEpicStoreHandle | null> = [];
     let stampedAtFirstHandleRender: unknown = "not-observed-yet";
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <RenderCapturingHandleProbe
           onRender={(handle) => {
             renderedHandles.push(handle);
@@ -1354,14 +1406,14 @@ describe("<EpicSessionProvider />", () => {
               handle !== null &&
               stampedAtFirstHandleRender === "not-observed-yet"
             ) {
-              // Read in the SAME render that first publishes this handle,
-              // before any effect from this commit - including the
-              // provider's own stamping effect - has had a chance to run.
+              // Read in the SAME render that first publishes this handle.
+              // The controller stamps before it publishes, so this is
+              // expected to be PRESENT already, not absent.
               stampedAtFirstHandleRender = handleHostClients.get(handle);
             }
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     try {
       await act(() => Promise.resolve());
@@ -1371,7 +1423,9 @@ describe("<EpicSessionProvider />", () => {
       if (firstHandle === undefined) {
         throw new Error("expected a published handle");
       }
-      expect(stampedAtFirstHandleRender).toBeUndefined();
+      expect(stampedAtFirstHandleRender).toBe(
+        resolveSessionHostClient("host-create"),
+      );
 
       await act(() => Promise.resolve());
       expect(handleHostClients.get(firstHandle)).toBe(
@@ -1381,11 +1435,11 @@ describe("<EpicSessionProvider />", () => {
       act(() => {
         hostState.id = "host-b";
         view.rerender(
-          <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
             <RenderCapturingHandleProbe
               onRender={(handle) => renderedHandles.push(handle)}
             />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
       });
       expect(streams).toHaveLength(2);
@@ -1453,14 +1507,14 @@ describe("<EpicSessionProvider />", () => {
       const seenHandles: OpenEpicStoreHandle[] = [];
       const seenFetchers: ScopedImageBytesFetcher[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
           <ArtifactAttachmentScopeContext.Provider value={scope}>
             <ImageFetcherProbe
               onFetcher={(fetcher) => seenFetchers.push(fetcher)}
             />
           </ArtifactAttachmentScopeContext.Provider>
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => expect(fixture.opens.state).toBe(1));
@@ -1553,7 +1607,7 @@ describe("<EpicSessionProvider />", () => {
     }));
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <SessionHostClientProbe
           onClient={(client) => {
             seenClients.push(client);
@@ -1564,7 +1618,7 @@ describe("<EpicSessionProvider />", () => {
             seenClients.push(client);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1598,13 +1652,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1670,13 +1724,13 @@ describe("<EpicSessionProvider />", () => {
     signInAs("user-alice");
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1747,13 +1801,13 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1816,13 +1870,13 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1859,13 +1913,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -1884,7 +1938,7 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -1893,7 +1947,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -1924,13 +1978,13 @@ describe("<EpicSessionProvider />", () => {
       installManifestDerivedWorker();
       const seenHandles: OpenEpicStoreHandle[] = [];
       const view = render(
-        <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
           <HandleProbe
             onHandle={(handle) => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
       try {
         await waitFor(() => expect(fixture.opens.state).toBe(1));
@@ -1960,13 +2014,13 @@ describe("<EpicSessionProvider />", () => {
         act(() => {
           hostState.id = "host-b";
           view.rerender(
-            <EpicSessionProvider epicId="fixture-epic" tabId="fixture-epic">
+            <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
               <HandleProbe
                 onHandle={(handle) => {
                   seenHandles.push(handle);
                 }}
               />
-            </EpicSessionProvider>,
+            </TestEpicSessionTab>,
           );
         });
 
@@ -2048,9 +2102,9 @@ describe("<EpicSessionProvider />", () => {
       };
     });
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => expect(seenHandles).toHaveLength(1));
@@ -2060,12 +2114,12 @@ describe("<EpicSessionProvider />", () => {
       await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -2089,13 +2143,15 @@ describe("<EpicSessionProvider />", () => {
     ).toBeUndefined();
   });
 
-  it("two mounted tabs of ONE epic re-point once: the loser adopts the winner's handle instead of parking in establishing", async () => {
-    // A duplicated tab mounts a second provider for the same epic; both share
-    // the registry's mounted handle, so both start the A -> B re-point with
-    // their own candidate. `replaceMounted` lets exactly one win. The loser
-    // used to dispose its candidate and return - past a deadline `settled`
-    // had already disarmed - and present `establishing` forever on the old
-    // handle the winner had just disposed.
+  it("two mounted tabs of ONE epic re-point once: exactly one candidate is built, and both tabs land on the same replacement handle without either parking in establishing", async () => {
+    // A duplicated tab mounts a second provider for the same epic, but one
+    // entry per epic means there is exactly ONE controller run per epic: a
+    // host change builds a SINGLE re-point candidate no matter how many
+    // surfaces are attached, and every mounted tab observes that one entry's
+    // published handle. There is no "winner" and no "loser" any more - the
+    // old race (two candidates, one adopting the other's handle, the loser
+    // briefly parking in `establishing` past its own deadline) cannot occur
+    // because only one candidate is ever built.
     const streams: ControlledEpicStream[] = [];
     const handlesA: OpenEpicStoreHandle[] = [];
     const handlesB: OpenEpicStoreHandle[] = [];
@@ -2117,14 +2173,14 @@ describe("<EpicSessionProvider />", () => {
     });
     const body = (): React.JSX.Element => (
       <>
-        <EpicSessionProvider epicId="epic-session-test" tabId="tab-a">
+        <TestEpicSessionTab epicId="epic-session-test" tabId="tab-a">
           <HandleProbe onHandle={(handle) => handlesA.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsA.push(p)} />
-        </EpicSessionProvider>
-        <EpicSessionProvider epicId="epic-session-test" tabId="tab-b">
+        </TestEpicSessionTab>
+        <TestEpicSessionTab epicId="epic-session-test" tabId="tab-b">
           <HandleProbe onHandle={(handle) => handlesB.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsB.push(p)} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </>
     );
     const view = render(body());
@@ -2143,10 +2199,10 @@ describe("<EpicSessionProvider />", () => {
       hostState.id = "host-b";
       view.rerender(body());
     });
-    // Both providers start a candidate toward host-b.
-    await waitFor(() => expect(streams).toHaveLength(3));
+    // Exactly ONE candidate is built for the shared entry toward host-b -
+    // two streams total, never three.
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    // The first candidate to load its snapshot wins the atomic replacement.
     act(() => {
       deliverSnapshot(streams[1], "room-a");
     });
@@ -2154,36 +2210,28 @@ describe("<EpicSessionProvider />", () => {
       expect(handlesA.at(-1)).not.toBe(handlesA[0]);
       expect(handlesB.at(-1)).not.toBe(handlesB[0]);
     });
-    // Both providers publish the SAME replacement, the losing candidate is
-    // disposed, and the registry holds exactly one entry.
+    // Both providers publish the SAME replacement, and the registry holds
+    // exactly one entry.
     expect(handlesB.at(-1)).toBe(handlesA.at(-1));
-    expect(streams[2].closeCount).toBe(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    // Neither tab ever parks in `establishing` on the way to `ready`.
     await waitFor(() => {
       expect(presentationsA.at(-1)?.kind).toBe("ready");
       expect(presentationsB.at(-1)?.kind).toBe("ready");
     });
-    // The losing candidate's snapshot arriving later changes nothing.
-    act(() => {
-      deliverSnapshot(streams[2], "room-a");
-    });
-    await act(() => Promise.resolve());
-    expect(handlesB.at(-1)).toBe(handlesA.at(-1));
-    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
   });
 
-  it("retryRepoint on the LOSER of a sibling re-point adoption reaches the WINNER's client", async () => {
-    // Base (before the fix): `adoptWinner` disposes the loser's own
-    // candidate (clearing its provider-local `epicStreamClientRef`) and then
-    // adopts the sibling's handle without ever writing this provider's ref -
-    // so the loser's silence gate reads "not silent" regardless of what the
-    // WINNER's actual client reports, and Retry on the loser never forces a
-    // reconnect.
-    // ONE FAKE PER OPEN, not one shared across the epic: the claim is that
-    // the loser reaches the WINNER's client, and a single client makes
-    // "reached the winner" and "reached its own disposed candidate"
-    // indistinguishable - which is exactly the wrong implementation this pin
-    // has to exclude.
+  it("retryRepoint from EITHER tab's presentation reaches the one live session's stream client", async () => {
+    // Base (before the fix): two mounted providers each built their own
+    // candidate, `adoptWinner` disposed the loser's without ever writing the
+    // loser provider's own ref, and Retry on the loser never reached the
+    // client the session actually held. One entry per epic removes the
+    // winner/loser distinction entirely: both tabs read the SAME entry, so
+    // a retry issued from EITHER tab's presentation has to reach the one
+    // client the entry holds after the re-point.
+    // ONE FAKE PER OPEN, not one shared across the epic: this still pins that
+    // the client reached is the SESSION's live client, not some incidental
+    // shared default that would pass for the wrong reason.
     const fakes: FakeStreamClient[] = [];
     fakeDurableStreamTransports().opener = (_hostId) => {
       const client = new FakeStreamClient(true);
@@ -2219,14 +2267,14 @@ describe("<EpicSessionProvider />", () => {
     });
     const body = (): React.JSX.Element => (
       <>
-        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-a">
+        <TestEpicSessionTab epicId="epic-retry-sibling-adopt" tabId="tab-a">
           <HandleProbe onHandle={(handle) => handlesA.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsA.push(p)} />
-        </EpicSessionProvider>
-        <EpicSessionProvider epicId="epic-retry-sibling-adopt" tabId="tab-b">
+        </TestEpicSessionTab>
+        <TestEpicSessionTab epicId="epic-retry-sibling-adopt" tabId="tab-b">
           <HandleProbe onHandle={(handle) => handlesB.push(handle)} />
           <PresentationProbe onPresentation={(p) => presentationsB.push(p)} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </>
     );
     const view = render(body());
@@ -2244,10 +2292,9 @@ describe("<EpicSessionProvider />", () => {
       hostState.id = "host-b";
       view.rerender(body());
     });
-    await waitFor(() => expect(streams).toHaveLength(3));
+    // One entry, one candidate: two streams total, never three.
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    // The first candidate (tab-a's, streams[1]) wins; tab-b's (streams[2])
-    // is disposed and ADOPTS tab-a's handle - tab-b is the loser here.
     act(() => {
       deliverSnapshot(streams[1], "room-a");
     });
@@ -2256,46 +2303,39 @@ describe("<EpicSessionProvider />", () => {
       expect(handlesB.at(-1)).not.toBe(handlesB[0]);
     });
     expect(handlesB.at(-1)).toBe(handlesA.at(-1));
-    expect(streams[2].closeCount).toBe(1);
     await waitFor(() => {
       expect(presentationsA.at(-1)?.kind).toBe("ready");
       expect(presentationsB.at(-1)?.kind).toBe("ready");
     });
 
     // Opens happen inside `createHandle`, in the same order as the stream
-    // factory calls above: [0] the original shared handle, [1] tab-a's
-    // candidate (the winner), [2] tab-b's (the loser, whose transport the
-    // adoption closed). The closed flags are asserted rather than assumed.
-    expect(fakes).toHaveLength(3);
-    const winnerClient = fakes[1];
-    const loserClient = fakes[2];
-    expect(loserClient.isClosed()).toBe(true);
-    expect(winnerClient.isClosed()).toBe(false);
-    const winnerReconnect = vi.spyOn(winnerClient, "reconnectAll");
-    const loserReconnect = vi.spyOn(loserClient, "reconnectAll");
+    // factory calls above: [0] the original shared handle, [1] the entry's
+    // one re-point candidate - now the session's only live client.
+    expect(fakes).toHaveLength(2);
+    const liveClient = fakes[1];
+    expect(liveClient.isClosed()).toBe(false);
+    const liveReconnect = vi.spyOn(liveClient, "reconnectAll");
 
-    // BOTH report silent, so a gate that read the loser's own disposed client
-    // would force on it and this pin would catch that too.
-    winnerClient.silentFor = true;
-    loserClient.silentFor = true;
+    // Retry from tab-b's presentation reaches the live client when it
+    // reports silent.
+    liveClient.silentFor = true;
     act(() => {
       presentationsB.at(-1)?.retry();
     });
-    expect(winnerReconnect).toHaveBeenCalledTimes(1);
-    expect(winnerReconnect).toHaveBeenCalledWith("epic-retry", {
+    expect(liveReconnect).toHaveBeenCalledTimes(1);
+    expect(liveReconnect).toHaveBeenCalledWith("epic-retry", {
       probeFirst: false,
       wakeProbe: null,
     });
-    expect(loserReconnect).not.toHaveBeenCalled();
 
-    winnerReconnect.mockClear();
-    winnerClient.silentFor = false;
-    loserClient.silentFor = false;
+    // Retry from tab-a's presentation reaches the SAME live client, and does
+    // not force a reconnect once it no longer reports silent.
+    liveReconnect.mockClear();
+    liveClient.silentFor = false;
     act(() => {
-      presentationsB.at(-1)?.retry();
+      presentationsA.at(-1)?.retry();
     });
-    expect(winnerReconnect).not.toHaveBeenCalled();
-    expect(loserReconnect).not.toHaveBeenCalled();
+    expect(liveReconnect).not.toHaveBeenCalled();
   });
 
   /**
@@ -2323,11 +2363,11 @@ describe("<EpicSessionProvider />", () => {
     // throw propagates out of `render` and this call itself rejects, so the
     // pin fails at the render rather than on an assertion about the fallback.
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
 
@@ -2359,14 +2399,14 @@ describe("<EpicSessionProvider />", () => {
         };
       });
       const view = render(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -2374,7 +2414,7 @@ describe("<EpicSessionProvider />", () => {
       act(() => {
         hostState.id = "host-b";
         view.rerender(
-          <EpicSessionProvider
+          <TestEpicSessionTab
             epicId="epic-session-test"
             tabId="epic-session-test"
           >
@@ -2383,7 +2423,7 @@ describe("<EpicSessionProvider />", () => {
                 presentations.push(presentation)
               }
             />
-          </EpicSessionProvider>,
+          </TestEpicSessionTab>,
         );
       });
       expect(streams).toHaveLength(2);
@@ -2442,7 +2482,7 @@ describe("<EpicSessionProvider />", () => {
       rotateRow("host-b", "pubkey-b0");
 
       const body = () => (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2450,7 +2490,7 @@ describe("<EpicSessionProvider />", () => {
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
       const view = render(body());
       await act(() => Promise.resolve());
@@ -2524,9 +2564,9 @@ describe("<EpicSessionProvider />", () => {
       presentations.push(presentation);
     };
     const tree = () => (
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <PresentationProbe onPresentation={record} />
-      </EpicSessionProvider>
+      </TestEpicSessionTab>
     );
     const view = render(tree());
 
@@ -2560,14 +2600,14 @@ describe("<EpicSessionProvider />", () => {
       hostState.id = null;
       hostState.attached = false;
       render(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -2592,11 +2632,11 @@ describe("<EpicSessionProvider />", () => {
     hostState.id = null;
     hostState.attached = true;
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     // No timer advance anywhere in this case: the authority has spoken, so the
@@ -2615,14 +2655,14 @@ describe("<EpicSessionProvider />", () => {
       hostState.id = null;
       hostState.attached = false;
       render(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -2668,13 +2708,13 @@ describe("<EpicSessionProvider />", () => {
     rotateRow(OWNER_IDENTITY_HOST_ID, "pubkey-a");
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -2727,13 +2767,13 @@ describe("<EpicSessionProvider />", () => {
     // must NOT crash and must NOT create a session.
     hostState.id = null;
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -2748,7 +2788,7 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-a";
       view.rerender(
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2757,7 +2797,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -2833,7 +2873,7 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2842,7 +2882,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
     await waitFor(() => {
@@ -2853,6 +2893,10 @@ describe("<EpicSessionProvider />", () => {
     // A `@1.6` peer's omission is unknown: the cached local home survives.
     act(() => {
       store.setState({
+        // Live: the home write-through speaks only for a session whose
+        // snapshot has loaded on an open host transport.
+        snapshotLoaded: true,
+        hostTransportStatus: "open",
         hasFreshCloudSyncStatus: true,
         durabilityStatusNegotiated: true,
         durabilityLegsNegotiated: true,
@@ -2920,7 +2964,7 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -2929,7 +2973,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
 
@@ -2997,7 +3041,7 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
@@ -3006,7 +3050,7 @@ describe("<EpicSessionProvider />", () => {
               seenHandles.push(handle);
             }}
           />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
 
@@ -3077,13 +3121,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="epic-session-test">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -3116,7 +3160,7 @@ describe("<EpicSessionProvider />", () => {
     });
   });
 
-  it("releases desktop epic ownership when the provider unmounts", async () => {
+  it("releases desktop epic ownership when the tab closes, not when the provider merely unmounts", async () => {
     const calls: {
       readonly claims: string[];
       readonly releases: string[];
@@ -3142,13 +3186,13 @@ describe("<EpicSessionProvider />", () => {
     }));
 
     const view = render(
-      <EpicSessionProvider epicId="epic-session-test" tabId="tab-cleanup">
+      <TestEpicSessionTab epicId="epic-session-test" tabId="tab-cleanup">
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -3156,7 +3200,17 @@ describe("<EpicSessionProvider />", () => {
     });
     expect(calls.claims).toEqual(["tab-cleanup:epic-session-test"]);
 
+    // Desktop ownership is claimed per TAB and released when the tab leaves
+    // `openTabOrder`, not when a surface showing it unmounts - the tab is
+    // still open (a backgrounded pane), so unmounting alone must release
+    // nothing.
     view.unmount();
+    await act(() => Promise.resolve());
+    expect(calls.releases).toEqual([]);
+
+    act(() => {
+      closeTestEpicTab("tab-cleanup");
+    });
 
     await waitFor(() => {
       expect(calls.releases).toEqual(["tab-cleanup"]);
@@ -3190,13 +3244,13 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId="epic-conflict" tabId={conflictTabId}>
+      <TestEpicSessionTab epicId="epic-conflict" tabId={conflictTabId}>
         <HandleProbe
           onHandle={(handle) => {
             seenHandles.push(handle);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -3240,12 +3294,12 @@ describe("<EpicSessionProvider />", () => {
       onHandle: (handle: OpenEpicStoreHandle) => void,
     ): React.JSX.Element {
       return (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <HandleProbe onHandle={onHandle} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
     }
 
@@ -3450,6 +3504,248 @@ describe("<EpicSessionProvider />", () => {
       });
       expect(streams).toHaveLength(3);
     });
+
+    /**
+     * The opposite of the late-row test above: host-b's row is published
+     * BEFORE the re-point even starts, so nothing ever notifies the
+     * completion into place - the commit's own follow-up reconcile
+     * (`scheduleOwnerIdentityCompletion`) has to read the already-published
+     * row on its own. A rebuild here would mean the tuple was left
+     * honest-absent even though a real reading was available the whole
+     * time, and the NEXT genuine rotation on host-b has to prove the
+     * completion actually recorded a key rather than silently doing
+     * nothing that happened to look the same.
+     */
+    it("completes the replacement's owner identity with no extra notification, so the next rotation is enforced", async () => {
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      rotateRow("host-b", "pubkey-b0");
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(providerBody((handle) => seenHandles.push(handle)));
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      await act(async () => {
+        deliverSnapshot(streams[0], "room-a");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(providerBody((handle) => seenHandles.push(handle)));
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-a");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      const mergedHandle = seenHandles.at(-1);
+      await act(() => Promise.resolve());
+
+      // No further `rotateRow` call for host-b: the tuple must already have
+      // been completed from the row published before render, purely from
+      // the commit's own internal reconcile.
+      act(() => {
+        rotateRow("host-b", "pubkey-b1");
+      });
+      await waitFor(() => {
+        expect(seenHandles.at(-1)).not.toBe(mergedHandle);
+      });
+      expect(streams).toHaveLength(3);
+      expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    });
+
+    it("a re-point MOVES the write-throughs: the OLD handle writes nothing, the NEW handle writes both", async () => {
+      const queryClient = new QueryClient();
+      const cloudTasksUserId = "alice@example.com";
+      const queryKey = cloudEpicTasksQueryKey(
+        "host-a",
+        cloudTasksUserId,
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      queryClient.setQueryData<ListTasksResponse>(queryKey, {
+        tasks: [makeHistoryTask("epic-session-test", "", cloudTasksUserId)],
+        hasMore: false,
+      });
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          {providerBody((handle) => seenHandles.push(handle))}
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+      });
+
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            {providerBody((handle) => seenHandles.push(handle))}
+          </QueryClientProvider>,
+        );
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-b");
+      });
+      await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+      const secondHandle = seenHandles.at(-1);
+      if (secondHandle === undefined) {
+        throw new Error("expected a replacement handle after the re-point");
+      }
+      await act(() => Promise.resolve());
+
+      // A title landing on the OLD handle after the commit reaches neither
+      // the tab record nor the History row: the re-point MOVED the
+      // subscriptions to the replacement, and the old handle's store is no
+      // longer observed by anything this module attached.
+      // Forced LIVE in the same write: the replaced handle's transport may
+      // have closed, and a handle that is merely not live writes nothing
+      // either - the MOVE has to be the only thing stopping this title.
+      act(() => {
+        firstHandle.store.setState((state) => ({
+          snapshotLoaded: true,
+          hostTransportStatus: "open",
+          epic: { ...state.epic, title: "Old Handle Title" },
+        }));
+      });
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(
+        useEpicCanvasStore.getState().tabsById["epic-session-test"]?.name,
+      ).toBe(TEST_EPIC_TAB_NAME);
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("");
+
+      // The NEW handle's title reaches both.
+      act(() => {
+        secondHandle.store.setState((state) => ({
+          epic: { ...state.epic, title: "New Handle Title" },
+        }));
+      });
+      expect(
+        useEpicCanvasStore.getState().tabsById["epic-session-test"]?.name,
+      ).toBe("New Handle Title");
+      await waitFor(() => {
+        expect(
+          queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+            ?.light?.title,
+        ).toBe("New Handle Title");
+      });
+    });
+
+    it("a re-point during an active hold still writes the first title before the session can be evicted", async () => {
+      const EPIC_ID = "epic-session-test";
+      const queryClient = new QueryClient();
+      const cloudTasksUserId = "alice@example.com";
+      const queryKey = cloudEpicTasksQueryKey(
+        "host-a",
+        cloudTasksUserId,
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      queryClient.setQueryData<ListTasksResponse>(queryKey, {
+        tasks: [makeHistoryTask(EPIC_ID, "", cloudTasksUserId)],
+        hasMore: false,
+      });
+      const streams: ControlledEpicStream[] = [];
+      installControlledFactory(streams);
+      const controller = getEpicSessionController();
+
+      // UNNAMED before the harness opens it (which keeps an existing record),
+      // so the surfaced epic also carries a metadata hold. Opening a tab is an
+      // acquisition, so the effective host is seeded first - the harness only
+      // mirrors it on render, and an earlier test's host would otherwise be
+      // what this session is built against.
+      setTestEffectiveHost("host-a", true);
+      openTestEpicTab(EPIC_ID, EPIC_ID, "");
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          {providerBody((handle) => seenHandles.push(handle))}
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(seenHandles).toHaveLength(1));
+      const firstHandle = seenHandles[0];
+      act(() => {
+        deliverSnapshot(streams[0], "room-a");
+      });
+      expect(controller.readEntryStatusForTests(EPIC_ID)?.metadataHold).toBe(
+        true,
+      );
+
+      // Re-point while the hold is running; the replacement loads untitled.
+      act(() => {
+        hostState.id = "host-b";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            {providerBody((handle) => seenHandles.push(handle))}
+          </QueryClientProvider>,
+        );
+      });
+      await waitFor(() => expect(streams).toHaveLength(2));
+      act(() => {
+        deliverSnapshot(streams[1], "room-b");
+      });
+      // Read off the registry, not the probe: what this test is about happens
+      // after the surface is gone, so no React read is part of it.
+      await waitFor(() => {
+        const mounted = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+        expect(mounted).not.toBeNull();
+        expect(mounted).not.toBe(firstHandle);
+      });
+      const secondHandle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+      if (secondHandle === null) {
+        throw new Error("expected a replacement handle after the re-point");
+      }
+      await act(() => Promise.resolve());
+      // The hold moved to the replacement with it.
+      expect(controller.readEntryStatusForTests(EPIC_ID)?.metadataHold).toBe(
+        true,
+      );
+
+      // The surface leaves: the hold is now the only demand. And the registry
+      // is at its cap with this epic the only idle candidate, so the instant
+      // the hold releases that demand the session is evicted - detaching its
+      // write-throughs inside the very notification that carries the title.
+      view.unmount();
+      act(() => {
+        for (let i = 0; i < 5; i += 1) {
+          const otherId = `epic-session-repoint-hold-other-${i}`;
+          openTestEpicTab(otherId, otherId, `Other ${i}`);
+          controller.attachSurface(otherId, otherId);
+        }
+      });
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(secondHandle);
+
+      act(() => {
+        secondHandle.store.setState((state) => ({
+          epic: { ...state.epic, title: "First Title After Re-point" },
+        }));
+      });
+
+      expect(controller.readEntryStatusForTests(EPIC_ID)?.metadataHold).toBe(
+        false,
+      );
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBeNull();
+      expect(useEpicCanvasStore.getState().tabsById[EPIC_ID]?.name).toBe(
+        "First Title After Re-point",
+      );
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("First Title After Re-point");
+    });
   });
 
   describe("warm-handle adoption after a provider remount (F1)", () => {
@@ -3474,12 +3770,12 @@ describe("<EpicSessionProvider />", () => {
       onHandle: (handle: OpenEpicStoreHandle) => void,
     ): React.JSX.Element {
       return (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
           <HandleProbe onHandle={onHandle} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
     }
 
@@ -3658,13 +3954,13 @@ describe("<EpicSessionProvider />", () => {
 
     const seenClients: unknown[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <SessionHostClientProbe
           onClient={(client) => {
             seenClients.push(client);
           }}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     const createHostClient = resolveSessionHostClient("host-create");
@@ -3706,9 +4002,9 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => expect(seenHandles).toHaveLength(1));
@@ -3718,9 +4014,9 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
 
@@ -3767,9 +4063,9 @@ describe("<EpicSessionProvider />", () => {
 
     const seenHandles: OpenEpicStoreHandle[] = [];
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     // The seed answers regardless of the authority being detached:
@@ -3785,9 +4081,9 @@ describe("<EpicSessionProvider />", () => {
       hostState.attached = true;
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
     // Give any erroneous re-point effect a chance to start.
@@ -3837,12 +4133,12 @@ describe("<EpicSessionProvider />", () => {
       const seenHandles: OpenEpicStoreHandle[] = [];
       const presentations: Array<EpicSessionPresentation | null> = [];
       render(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
           <PresentationProbe
             onPresentation={(presentation) => presentations.push(presentation)}
           />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
 
       await act(() => Promise.resolve());
@@ -3926,14 +4222,14 @@ describe("<EpicSessionProvider />", () => {
 
     const presentations: Array<EpicSessionPresentation | null> = [];
     render(
-      <EpicSessionProvider
+      <TestEpicSessionTab
         epicId="epic-retry-silence"
         tabId="epic-retry-silence"
       >
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
     await waitFor(() => {
@@ -3989,13 +4285,13 @@ describe("<EpicSessionProvider />", () => {
       onPresentation: (presentation: EpicSessionPresentation | null) => void,
     ): React.JSX.Element {
       return (
-        <EpicSessionProvider
+        <TestEpicSessionTab
           epicId="epic-retry-warm-remount"
           tabId="epic-retry-warm-remount"
         >
           <HandleProbe onHandle={onHandle} />
           <PresentationProbe onPresentation={onPresentation} />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       );
     }
 
@@ -4078,12 +4374,12 @@ describe("<EpicSessionProvider />", () => {
     const seenHandles: OpenEpicStoreHandle[] = [];
     const presentations: Array<EpicSessionPresentation | null> = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
 
@@ -4145,12 +4441,12 @@ describe("<EpicSessionProvider />", () => {
     const firstSurface: OpenEpicStoreHandle[] = [];
     const presentations: Array<EpicSessionPresentation | null> = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-1`}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-1`}>
         <HandleProbe onHandle={(handle) => firstSurface.push(handle)} />
         <PresentationProbe
           onPresentation={(presentation) => presentations.push(presentation)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
     expect(firstSurface).toHaveLength(1);
@@ -4170,9 +4466,9 @@ describe("<EpicSessionProvider />", () => {
     // exactly what makes it take the acquire path rather than any re-point arm.
     const secondSurface: OpenEpicStoreHandle[] = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-2`}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-2`}>
         <HandleProbe onHandle={(handle) => secondSurface.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await act(() => Promise.resolve());
 
@@ -4208,9 +4504,9 @@ describe("<EpicSessionProvider />", () => {
     });
 
     const view = render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
     await waitFor(() => {
       expect(seenHandles).toHaveLength(1);
@@ -4232,9 +4528,9 @@ describe("<EpicSessionProvider />", () => {
     act(() => {
       hostState.id = "host-b";
       view.rerender(
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </EpicSessionProvider>,
+        </TestEpicSessionTab>,
       );
     });
     await waitFor(() => {
@@ -4321,9 +4617,9 @@ describe("<EpicSessionProvider />", () => {
     });
 
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -4410,11 +4706,11 @@ describe("<EpicSessionProvider />", () => {
 
     const renderedHandles: Array<OpenEpicStoreHandle | null> = [];
     render(
-      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
         <RenderCapturingHandleProbe
           onRender={(handle) => renderedHandles.push(handle)}
         />
-      </EpicSessionProvider>,
+      </TestEpicSessionTab>,
     );
 
     await waitFor(() => {
@@ -4531,11 +4827,11 @@ describe("<EpicSessionProvider />", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
           <EpicSessionGate fallback={null}>
             <CommentPollProbe />
           </EpicSessionGate>
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </QueryClientProvider>,
     );
 
