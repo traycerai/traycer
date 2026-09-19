@@ -4,28 +4,56 @@
  * when they close. This avoids the dead-shortcut window a single-slot registry
  * creates when its winning registration unmounts.
  */
-type DraftsControlAction = () => void;
+import type { AnalyticsDraftEntryPoint } from "@/lib/analytics";
+
+export type DraftsControlEntryPoint = Extract<
+  AnalyticsDraftEntryPoint,
+  "shortcut" | "palette"
+>;
+type DraftsControlAction = (entryPoint: DraftsControlEntryPoint) => void;
 
 const stack: DraftsControlAction[] = [];
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const listener of listeners) listener();
+}
 
 export function registerActiveDraftsControl(
   action: DraftsControlAction,
 ): () => void {
   stack.push(action);
+  notify();
   return () => {
     const index = stack.indexOf(action);
-    if (index !== -1) stack.splice(index, 1);
+    if (index === -1) return;
+    stack.splice(index, 1);
+    notify();
   };
 }
 
-export function openActiveDraftsControl(): boolean {
+export function hasActiveDraftsControl(): boolean {
+  return stack.length > 0;
+}
+
+export function subscribeActiveDraftsControl(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function openActiveDraftsControl(
+  entryPoint: DraftsControlEntryPoint,
+): boolean {
   const action = stack.at(-1);
   if (action === undefined) return false;
-  action();
+  action(entryPoint);
   return true;
 }
 
 /** Test-only: prevent registrations leaking between isolated tests. */
 export function resetActiveDraftsControlForTests(): void {
   stack.length = 0;
+  listeners.clear();
 }
