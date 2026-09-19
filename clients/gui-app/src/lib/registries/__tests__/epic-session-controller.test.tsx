@@ -93,6 +93,7 @@ import {
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { cloudQueryKeys } from "@/lib/query-keys";
 
 // ── Mocks needed only by the React mount test ───────────────────────────────
 // `TestEpicSessionTab` renders the real `<EpicSessionProvider>`, which reads
@@ -1527,6 +1528,102 @@ describe("session-owned write-throughs", () => {
         "First Title",
       );
     });
+  });
+
+  describe("the per-host pin reading (Current tasks local rows) takes the same title write-through", () => {
+    function pinReadingKey(
+      session: LiveWriteThroughSession,
+    ): readonly unknown[] {
+      return cloudQueryKeys.epicPinReading(
+        WRITE_THROUGH_CACHE_HOST_ID,
+        session.userId,
+        LIST_CLOUD_TASKS_REQUEST,
+        [session.epicId],
+      );
+    }
+
+    function fillPinReading(
+      session: LiveWriteThroughSession,
+      title: string,
+    ): void {
+      session.queryClient.setQueryData<ListTasksResponse>(
+        pinReadingKey(session),
+        {
+          tasks: [
+            {
+              ...makeWriteThroughHistoryTask(
+                session.epicId,
+                title,
+                session.userId,
+              ),
+              home: "local",
+            },
+          ],
+          hasMore: false,
+        },
+      );
+    }
+
+    function readPinReadingTitle(
+      session: LiveWriteThroughSession,
+    ): string | undefined {
+      return readHistoryTitle(session.queryClient, pinReadingKey(session));
+    }
+
+    it("a title generated AFTER the reading was filled is patched into it", () => {
+      const session = acquireLiveUntitledSession(
+        "epic-write-through-pin-reading-fill",
+        "tab-write-through-pin-reading-fill",
+        "alice@example.com",
+      );
+      fillPinReading(session, "");
+
+      session.handle.store.setState((state) => ({
+        epic: { ...state.epic, title: "First Title" },
+      }));
+
+      expect(readPinReadingTitle(session)).toBe("First Title");
+    });
+
+    it.each([
+      [
+        "pin reading",
+        (session: LiveWriteThroughSession): readonly unknown[] =>
+          pinReadingKey(session),
+      ],
+      [
+        "Current tasks pin tail",
+        (session: LiveWriteThroughSession): readonly unknown[] =>
+          cloudQueryKeys.currentTasksPinTail(
+            WRITE_THROUGH_CACHE_HOST_ID,
+            session.userId,
+            "cursor-1",
+          ),
+      ],
+    ])(
+      "a stale %s delivered AFTER the live title is re-patched back to it",
+      async (_name, keyFor) => {
+        const session = acquireLiveTitledSession(
+          "epic-write-through-late-derived",
+          "tab-write-through-late-derived",
+          "alice@example.com",
+        );
+        const key = keyFor(session);
+
+        session.queryClient.setQueryData<ListTasksResponse>(key, {
+          tasks: [
+            makeWriteThroughHistoryTask(session.epicId, "", session.userId),
+          ],
+          hasMore: false,
+        });
+
+        await waitFor(() => {
+          expect(readHistoryTitle(session.queryClient, key)).toBe(
+            "First Title",
+          );
+        });
+      },
+    );
   });
 
   it("a warm, suspended session keeps writing after its metadata hold ends", () => {

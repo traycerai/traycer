@@ -103,7 +103,7 @@ function ReadyMessageHitList(props: {
       </ul>
       <SectionContinuation
         error={status.loadMoreError}
-        label="Show more"
+        label="Show more matches"
         disabled={status.loadingMore}
         onShowMore={status.showMore}
       />

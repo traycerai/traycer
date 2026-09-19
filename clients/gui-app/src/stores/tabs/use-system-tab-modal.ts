@@ -25,6 +25,8 @@ import {
   type SystemTabOverlayView,
 } from "@/lib/system-tab-overlay-search";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { historyScopeToParams } from "@/lib/history-scope";
+import { consumeHistoryScopeForPromotion } from "@/lib/history-scope-handoff";
 import { historySearchToParams } from "@/lib/history-search";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import {
@@ -270,7 +272,10 @@ function useNavigateToTabClearingOverlay(): (
       // snapshot instead.
       const historySearch =
         target.kind === "history" && source === "promote-modal"
-          ? historySearchToParams(useHistorySearchStore.getState().search)
+          ? {
+              ...historySearchToParams(useHistorySearchStore.getState().search),
+              ...historyScopeToParams(consumeHistoryScopeForPromotion()),
+            }
           : null;
       activateTabIntent(router.navigate, target, {
         search: (prev) => ({

@@ -179,6 +179,8 @@ export type ChatSearchExpansionStatus =
   | {
       readonly kind: "ready";
       readonly messages: ReadonlyArray<ChatSearchMessageHit>;
+      /** Total from the expansion snapshot, when its chat group is present. */
+      readonly matchCount: number | null;
       readonly nextCursor: string | null;
       readonly loadingMore: boolean;
       /** A later page that failed; the rows before it stay. */
@@ -244,6 +246,10 @@ export function useChatSearchMessageRows(args: {
       return {
         kind: "ready",
         messages: merged.messages,
+        matchCount:
+          first.data.messageMatches.find(
+            (match) => match.chatId === chatId && match.epicId === epicId,
+          )?.matchCount ?? null,
         nextCursor: merged.nextCursor,
         loadingMore: rest.some(
           (result) => result.data === undefined && !result.isError,

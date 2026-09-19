@@ -36,6 +36,9 @@ const testState = vi.hoisted(() => {
     taskContexts: new Map<string, ListTaskLight>(),
     localHomedTaskIds: new Set<string>(),
     taskContextsError: null as Error | null,
+    // `useEpicGetTaskContexts`'s `isFetching`, so a test can hold context
+    // hydration outstanding independently of the cloud query.
+    taskContextsFetching: false,
     chatHostSupport: "supported",
     // The cloud hook's GUARDED refresh - the one `useHistoryQuery` must expose.
     refetch: vi.fn(),
@@ -160,7 +163,7 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       // because the projection now READS it - a context-only hit is the one path
       // where nothing else can say the epic is local-homed.
       localHomedTaskIds: testState.localHomedTaskIds,
-      isFetching: false,
+      isFetching: testState.taskContextsFetching,
       error: testState.taskContextsError,
     };
   },
@@ -186,6 +189,7 @@ describe("useHistoryQuery", () => {
     testState.activityError = null;
     testState.taskContexts = new Map();
     testState.taskContextsError = null;
+    testState.taskContextsFetching = false;
     testState.localHomedTaskIds = new Set<string>();
     testState.chatHostSupport = "supported";
     testState.refetch.mockReset();
@@ -615,6 +619,89 @@ describe("useHistoryQuery", () => {
     });
   });
 
+  describe("count pending", () => {
+    const countPending = (): string =>
+      screen.getByTestId("count-pending").textContent;
+
+    it("is false for a settled page", () => {
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(countPending()).toBe("false");
+    });
+
+    it("is true while a new query debounces, though the cached rows project locally", () => {
+      const { rerender } = render(
+        <HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />,
+      );
+
+      rerender(
+        <HistoryQueryHarness
+          search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+            query: "beta ",
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId("pending").textContent).toBe("false");
+      expect(countPending()).toBe("true");
+    });
+
+    it("is true while placeholder data answers the previous request", () => {
+      testState.isFetching = true;
+      testState.isPlaceholderData = true;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(screen.getByTestId("pending").textContent).toBe("false");
+      expect(countPending()).toBe("true");
+    });
+
+    it("stays false through a same-query background refresh", () => {
+      testState.isFetching = true;
+      testState.isPlaceholderData = false;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(screen.getByTestId("fetching").textContent).toBe("true");
+      expect(countPending()).toBe("false");
+    });
+
+    it("is true while the query has no data yet", () => {
+      testState.queryIsPending = true;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(countPending()).toBe("true");
+    });
+
+    it("is true while the cloud page's follow-up is outstanding", () => {
+      testState.isCloudPagePending = true;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(countPending()).toBe("true");
+    });
+
+    it("is true while task-context hydration is outstanding", () => {
+      testState.taskContextsFetching = true;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(screen.getByTestId("pending").textContent).toBe("false");
+      expect(countPending()).toBe("true");
+    });
+
+    it("is false for a refused initial leg, whatever the never-run query reports", () => {
+      testState.initialLegRefused = true;
+      testState.queryIsPending = true;
+      testState.isPlaceholderData = true;
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(countPending()).toBe("false");
+    });
+  });
+
   describe("completeness union", () => {
     // T5b: `data.completeness` must be the union `useCloudEpicTasksQuery`
     // computes across the first page AND every retained "Show more" tail
@@ -1013,6 +1100,7 @@ function HistoryQueryHarness(props: {
           "",
         )}
       </div>
+      <div data-testid="count-pending">{String(result.isCountPending)}</div>
       <div data-testid="cloud-page-pending">
         {String(result.cloudPagePending)}
       </div>

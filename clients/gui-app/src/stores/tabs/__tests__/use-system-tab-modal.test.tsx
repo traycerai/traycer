@@ -30,6 +30,13 @@ import {
   DEFAULT_HISTORY_SEARCH,
   historySearchParamsSchema,
 } from "@/lib/history-search";
+import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
+import { historyScopeToParams, parseHistoryScope } from "@/lib/history-scope";
+import {
+  consumeHistoryScopeForPromotion,
+  prepareHistoryScopeForPromotion,
+  registerHistoryModalScope,
+} from "@/lib/history-scope-handoff";
 
 function GuardedRoot() {
   useSystemTabModalRefreshGuard();
@@ -326,6 +333,185 @@ describe("settings section is store-backed, not URL-backed", () => {
       historyOwnership: ["mine"],
     });
     expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
+});
+
+// Same shape as the real `/epics/` route: history params plus the scope param.
+function buildScopedModalRouter() {
+  const rootRoute = createRootRoute({
+    validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
+    component: () => (
+      <>
+        <TabNavigationRouteBridge />
+        <ModalProbe />
+        <Outlet />
+      </>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => <div data-testid="home" />,
+  });
+  const historyRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics",
+    validateSearch: (raw: Record<string, unknown>) => ({
+      ...historySearchParamsSchema.parse(raw),
+      ...historyScopeToParams(parseHistoryScope(raw)),
+    }),
+    component: () => <div data-testid="history" />,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, historyRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+}
+
+describe("history scope survives promotion", () => {
+  beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
+    resetSystemTabModalColdLoadForTests();
+    modalProbe.current = null;
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+  afterEach(() => {
+    cleanup();
+    prepareHistoryScopeForPromotion();
+    consumeHistoryScopeForPromotion();
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+
+  // Mounts the real route observer beside the modal controller, so the tab
+  // navigation controller sees committed routes exactly as it does in the app.
+  async function mountWithHistoryModalOpen() {
+    const router = buildScopedModalRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        historyOverlay: true,
+      }),
+    );
+    return router;
+  }
+
+  // The modal body is not mounted in this harness, so the handoff registration
+  // stands in for the selection a mounted modal would make.
+  function promoteWithScope(scope: "all" | "tasks" | "messages") {
+    const unregister = registerHistoryModalScope(scope);
+    act(() => {
+      // What `SystemTabModalHost` does right before it promotes.
+      prepareHistoryScopeForPromotion();
+      modalProbe.current?.promoteToTab();
+    });
+    return unregister;
+  }
+
+  it("carries a non-default scope into the History tab URL", async () => {
+    const router = await mountWithHistoryModalOpen();
+
+    const unregister = promoteWithScope("messages");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "messages",
+    });
+    expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
+
+  it("omits the param when the modal was on the default scope", async () => {
+    const router = await mountWithHistoryModalOpen();
+
+    const unregister = promoteWithScope("all");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+
+    expect(router.state.location.search).not.toHaveProperty("historyScope");
+  });
+
+  it("clears the handoff so the next promotion does not reuse it", async () => {
+    const router = await mountWithHistoryModalOpen();
+
+    const unregister = promoteWithScope("tasks");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "tasks",
+    });
+
+    // Reopen the modal (no tab yet) and promote WITHOUT a new capture: the
+    // consumed scope must not come back.
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    await act(async () => {
+      await router.navigate({ to: "/" });
+    });
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        historyOverlay: true,
+      }),
+    );
+    act(() => {
+      modalProbe.current?.promoteToTab();
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    expect(router.state.location.search).not.toHaveProperty("historyScope");
+  });
+
+  it("focusing the existing History tab from another route restores its scope", async () => {
+    const router = await mountWithHistoryModalOpen();
+    const unregister = promoteWithScope("messages");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+    expect(useTabsStore.getState().systemTabs.history).not.toBeNull();
+
+    // Leave History for an unrelated route, then reopen it.
+    await act(async () => {
+      await router.navigate({ to: "/" });
+    });
+    expect(router.state.location.pathname).toBe("/");
+
+    // A stale capture must not be applied by the focus path either.
+    const stale = registerHistoryModalScope("tasks");
+    prepareHistoryScopeForPromotion();
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    stale();
+
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "messages",
+    });
+    expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
+
+  it("focusing the History tab while it is already active leaves its scope alone", async () => {
+    const router = await mountWithHistoryModalOpen();
+    const unregister = promoteWithScope("messages");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+
+    const stale = registerHistoryModalScope("tasks");
+    prepareHistoryScopeForPromotion();
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    stale();
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "messages",
+    });
   });
 });
 
