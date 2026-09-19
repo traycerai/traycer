@@ -1,21 +1,31 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import ts from "typescript";
+import {
+  formatHit,
+  gitListedFiles,
+  hitsOf,
+  isUnanalysedHit,
+  scanThunkRules,
+  unanalysedLabelsOf,
+  UNANALYSED_KIND,
+  type ThunkScanResult,
+} from "./lazy-schema-thunk-rules-scanner";
 
 /**
- * AST scan of every `lazySchema(` thunk in protocol/src and clients/.
+ * AST scan of every `lazySchema(` thunk in protocol/src and clients/. The
+ * scanner is `lazy-schema-thunk-rules-scanner.ts`, shared with the host twin
+ * (`traycer-host/src/__tests__/lazy-schema-thunk-rules-scan.test.ts`); every
+ * planted control lives here, once.
  *
  * R1 outermost `.describe(`/`.meta(`/`.register(` of a returned expression
  * R2 outermost `z.instanceof(`
  * R3 outermost `z.json(`
  * R4 returned identifier bound to a thunk-local const that a nested function
  *    (getter / z.lazy arrow) references
- * R5 side effects while the thunk runs (S1 assign / S2 ++-- / S3 delete /
- *    S4 mutator or Object/Reflect mutator on a non-local root / Z registry
- *    write), interprocedural through imports
+ * R5 side effects while the thunk runs, interprocedural through imports, and
+ *    fail-closed: what the walk cannot follow is a `U unanalysed` finding
+ * R6 returned expression is an existing value the thunk does not declare
  */
 
 const PROTOCOL_ROOT = path.join(
@@ -29,171 +39,90 @@ const COMMON_SRC = path.join(REPO_ROOT, "packages/common/src");
 
 const SCAN_PREFIXES = ["protocol/src/", "clients/"] as const;
 
-const SKIP_DIR_NAMES = new Set([
-  "node_modules",
-  "dist",
-  ".git",
-  "__tests__",
-  "__fixtures__",
-  "__mocks__",
+/**
+ * The unanalysed calls production holds today, one label each, with the
+ * reason it is pure. The production scan must produce EXACTLY these labels: a
+ * new label is a call the scan cannot follow and someone must judge, and a
+ * label that no longer appears is stale and must go.
+ */
+const ALLOWED_UNANALYSED: ReadonlyMap<string, string> = new Map([
+  [
+    "method-on-unknown-provenance keys.at (protocol/src/framework/versioned-record.ts)",
+    "getSortedNumberKeys returns Object.keys(values).map(Number).sort(..), a fresh array, and `.at(-1)` only reads it",
+  ],
+  [
+    "parse-runs-callbacks absoluteHostPathSchema.safeParse",
+    "the schema is z.string().min(1).regex(ABSOLUTE_HOST_PATH, ..) with no refine or transform callback and a regex with no g or y flag; the call sits in a superRefine callback, so it runs at parse time, not at build (host/workspace/unary-schemas.ts:721)",
+  ],
+  [
+    "method-on-non-schema SEMVER_PATTERN.test (protocol/src/config/installation-records.ts)",
+    "a regex literal with no g or y flag, so `.test` keeps no lastIndex",
+  ],
+  [
+    "method-on-non-schema queueSteerNowClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+  ],
+  [
+    "method-on-non-schema queueSettingsUpdateClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+  ],
+  [
+    "method-on-non-schema queueSettingsRestampClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+  ],
+  [
+    "method-on-non-schema activePermissionModeUpdateClientFrameSchemaPreAuto.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    "an element destructured at module scope from chatSubscribeClientFrameSchemaMiddleOptions, the tail of chatSubscribeClientFrameSchemaOptionsBeforeInterview (an array of zod schemas); `.extend` clones",
+  ],
+  [
+    "method-on-non-schema chatSubscribeClientFrameSchemaOptionsBeforeInterview.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    "an array of stand-ins; `.extend` clones the element",
+  ],
+  [
+    "method-on-non-schema chatSubscribeClientFrameSchemaV17ToV19Options.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    "an array of stand-ins; `.extend` clones the element",
+  ],
+  [
+    "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.catch (protocol/src/host/provider-schemas.ts)",
+    "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.catch` clones",
+  ],
+  [
+    "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.optional (protocol/src/host/provider-schemas.ts)",
+    "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.optional` clones",
+  ],
+  [
+    "method-on-non-schema SHA256_HEX.test (protocol/src/config/installation-records.ts)",
+    "/^[a-f0-9]{64}$/ has no g or y flag, so `.test` keeps no lastIndex",
+  ],
+  [
+    "method-on-non-schema SURVIVING_CONTROL_CHARACTER.test (protocol/src/persistence/epic/role-claims.ts)",
+    "the regex has the u flag only, so `.test` keeps no lastIndex",
+  ],
+  [
+    "method-on-non-schema BROWSER_VIEWPORT_MAX_PIXELS.toLocaleString (protocol/src/host/browser/viewport.ts)",
+    "a number; `toLocaleString` reads it",
+  ],
+  [
+    "method-on-non-schema hostStatusV13.extend (protocol/src/host/status/contracts.ts)",
+    "a contract object; `.responseSchema.extend` clones",
+  ],
+  [
+    "method-on-non-schema hostStatusV14.extend (protocol/src/host/status/contracts.ts)",
+    "a contract object; `.responseSchema.extend` clones",
+  ],
+  [
+    "method-on-non-schema worktreeListAllForHostRequestSchemaV12.extend (protocol/src/host/worktree-schemas.ts)",
+    "an alias of an earlier schema; `.extend` clones",
+  ],
 ]);
-
-const MUTATORS = new Set([
-  "push",
-  "pop",
-  "shift",
-  "unshift",
-  "splice",
-  "sort",
-  "reverse",
-  "fill",
-  "copyWithin",
-  "set",
-  "add",
-  "delete",
-  "clear",
-]);
-const OBJ_MUTATORS = new Set([
-  "assign",
-  "defineProperty",
-  "defineProperties",
-  "setPrototypeOf",
-  "freeze",
-  "seal",
-  "preventExtensions",
-  "set",
-  "deleteProperty",
-]);
-const ZOD_REG = new Set(["register", "meta", "describe"]);
-const PURE_GLOBALS = new Set([
-  "Object",
-  "Array",
-  "JSON",
-  "Math",
-  "Number",
-  "String",
-  "Symbol",
-  "Reflect",
-  "Boolean",
-  "Date",
-  "RegExp",
-  "Map",
-  "Set",
-  "WeakMap",
-  "WeakSet",
-  "Error",
-  "TypeError",
-  "RangeError",
-  "Promise",
-  "BigInt",
-  "URL",
-  "Buffer",
-  "Proxy",
-  "globalThis",
-  "Uint8Array",
-  "Intl",
-  "console",
-  "encodeURIComponent",
-  "decodeURIComponent",
-  "parseInt",
-  "parseFloat",
-  "isFinite",
-  "isNaN",
-  "structuredClone",
-]);
-const FRESH_RETURNING = new Set([
-  "keys",
-  "values",
-  "entries",
-  "fromEntries",
-  "from",
-  "of",
-  "map",
-  "filter",
-  "slice",
-  "concat",
-  "flat",
-  "flatMap",
-  "toSorted",
-  "toReversed",
-  "toSpliced",
-  "split",
-  "getOwnPropertyNames",
-  "getOwnPropertySymbols",
-]);
-
-const FRESH = { kind: "fresh" } as const;
-
-type RuleId = "R1" | "R2" | "R3" | "R4" | "R5";
-
-type ThunkRuleHit = {
-  readonly rule: RuleId;
-  readonly file: string;
-  readonly line: number;
-  readonly bindingName: string | undefined;
-  readonly kind: string;
-  readonly detail: string;
-};
-
-type ThunkScanResult = {
-  readonly thunkCount: number;
-  readonly hits: readonly ThunkRuleHit[];
-};
-
-type ScanInput = {
-  readonly files: readonly string[];
-  readonly overlay: ReadonlyMap<string, string>;
-  readonly protoSrc: string;
-  readonly commonSrc: string;
-  readonly contentRoot: string;
-};
-
-type LoadedFile = {
-  readonly sf: ts.SourceFile;
-  readonly text: string;
-};
-
-type ImportBinding = {
-  readonly spec: string;
-  readonly orig: string;
-};
-
-type Reexport = {
-  readonly name: string;
-  readonly orig: string;
-  readonly spec: string;
-};
-
-type TopDecls = {
-  readonly decls: Map<string, ts.Node>;
-  readonly imports: Map<string, ImportBinding>;
-  readonly reexports: Reexport[];
-  readonly star: string[];
-};
-
-type ResolvedName =
-  | { readonly kind: "local"; readonly abs: string; readonly node: ts.Node }
-  | { readonly kind: "zod" }
-  | { readonly kind: "external"; readonly spec: string }
-  | { readonly kind: "unresolved"; readonly spec: string }
-  | { readonly kind: "namespace"; readonly abs: string };
-
-type SpecResolution =
-  | { readonly abs: string }
-  | { readonly external: string }
-  | { readonly unresolved: string };
-
-type SideEffectFinding = {
-  readonly kind: string;
-  readonly at: string;
-  readonly detail: string;
-  readonly via: string | undefined;
-};
 
 const PLANTED_HELPER_SOURCE = `export const helperLog: string[] = [];
 export function pushingHelper(name: string) { helperLog.push(name); return name; }
 export function pureHelper(name: string) { const local: string[] = []; local.push(name); return local; }
 export class Registering { constructor(name: string) { helperLog.push(name); } }
+function hiddenPush(name: string) { helperLog.push(name); return name; }
+export const helperSchema = z.string();
+export function declareHidden() { return () => hiddenPush("h"); }
 `;
 
 const PLANTED_PLANTED_SOURCE = `import { z } from "zod";
@@ -216,7 +145,6 @@ export const P_S4_mapset = lazySchema(() => { registry.set("a", 1); return z.str
 export const P_S4_setadd = lazySchema(() => { seen.add("a"); return z.string(); });
 export const P_S4_push = lazySchema(() => { list.push("a"); return z.string(); });
 export const P_S4_objassign = lazySchema(() => { Object.assign(holder, { a: 1 }); return z.string(); });
-export const P_Z_describe_nested = lazySchema(() => z.object({ a: z.string().describe("x") }));
 export const P_Z_meta = lazySchema(() => z.string().meta({ id: "x" }));
 export const P_inter_helper = lazySchema(() => z.literal(pushingHelper("a")));
 export const P_inter_namespace = lazySchema(() => z.literal(helpers.pushingHelper("a")));
@@ -231,6 +159,207 @@ export const N_returned_closure = lazySchema(() => z.string().transform(() => "x
 export const N_zod_set = lazySchema(() => z.set(z.string()));
 `;
 
+/**
+ * Shapes the first version of R5 missed (B1 to B18 of the second cold
+ * review), one thunk each, plus the unanalysed categories. The module scope
+ * is the state the thunks reach.
+ */
+const PLANTED_SHAPES_SOURCE = `import { z, parse as zodParse } from "zod";
+import { lazySchema } from "../framework/lazy-schema";
+import { pushingHelper, declareHidden } from "./helper";
+import * as helpers from "./helper";
+import { ExternalBase, ExtClass, extCall } from "external-pkg";
+import * as extNs from "external-pkg";
+import { missingFn } from "./not-there";
+let counter = 0;
+let lastSeen = "";
+const list: string[] = [];
+const registry = new Map<string, number>();
+function pushIt(id: string) { list.push(id); }
+function tagPush(strings: TemplateStringsArray) { list.push(strings[0] ?? ""); return "t"; }
+function withDefault(x = pushingHelper("d")) { return x; }
+function withDefaultPure(x = "d") { return x; }
+function makeNoter() { return (id: string) => { list.push(id); }; }
+function makeRegistrar() { return { note(id: string) { list.push(id); } }; }
+function pushCb(v: string) { list.push(v); }
+const noteFn = makeNoter();
+const put = registry.set.bind(registry);
+const registrar = makeRegistrar();
+const holderObj = { note(id: string) { list.push(id); return id; }, quiet(id: string) { return id; } };
+const holderG = { get x() { counter++; return 1; } };
+const holderQuiet = { get x() { return 1; } };
+class Service { run() { counter++; } }
+class SubService extends Service {}
+class WithGetter { get y() { counter++; return 1; } }
+class FieldInit { n = counter++; }
+class FieldPure { n = 1; }
+class Base { constructor() { list.push("b"); } }
+class Derived extends Base {}
+class DerivedExt extends ExternalBase {}
+class Plain {}
+class PlainDerived extends Plain {}
+const svc = new Service();
+const sub = new SubService();
+const instG = new WithGetter();
+const shapeSchema = z.object({});
+const nested: string[][] = [[]];
+const rec: Record<string, number> = {};
+function fill(t: string[]) { t.push("a"); }
+function rebindOnly(t: string[]) { t = ["a"]; return t; }
+function outer(x: string[]) { fill(x); }
+function setProp(t: Record<string, number>) { t.x = 1; }
+function bump(t: Record<string, number>) { t.n++; }
+function dropProp(t: Record<string, number>) { delete t.x; }
+function assignInto(t: Record<string, number>) { Object.assign(t, { a: 1 }); }
+function viaCallback(t: string[]) { ["1"].forEach(() => { t.push("a"); }); }
+function methodOnParam(o: { go(): void }) { o.go(); }
+function wrapSchema(s: z.ZodType) { return s.extend({}); }
+function parseIt(s: z.ZodType, v: string) { return s.parse(v); }
+function makeList() { return list; }
+function viaLocalFn(t: string[]) { const inner = () => { t.push("a"); }; inner(); }
+const [destructuredA] = [z.object({})];
+// B1: a local function or arrow called by name, in the thunk and in a callback
+export const P_B1_arrow = lazySchema(() => { const reg = (id: string) => { list.push(id); }; reg("a"); return z.string(); });
+export const P_B1_declaration = lazySchema(() => { function reg() { counter++; } reg(); return z.string(); });
+export const P_B1_closure = lazySchema(() => z.enum(["a"].map((v) => { const inner = () => { counter++; }; inner(); return v; }) as ["a"]));
+// B2: a method on a non-local receiver: walked when the receiver is an object literal or class
+export const P_B2_object_method = lazySchema(() => { holderObj.note("a"); return z.string(); });
+export const P_B2_local_object_method = lazySchema(() => { const r = { note(id: string) { list.push(id); } }; r.note("a"); return z.string(); });
+export const P_B2_class_method = lazySchema(() => { svc.run(); return z.string(); });
+export const P_B2_inherited_method = lazySchema(() => { sub.run(); return z.string(); });
+export const P_B2_destructured_receiver = lazySchema(() => { destructuredA.extend({}); return z.string(); });
+export const P_B2_unresolvable = lazySchema(() => { registrar.note("a"); return z.string(); });
+// B3: a parameter initialiser of a walked callee
+export const P_B3_param_init = lazySchema(() => { withDefault(); return z.string(); });
+// B4: a tagged template, the tag is the callee
+export const P_B4_tagged = lazySchema(() => { tagPush\`a\`; return z.string(); });
+// B5, B6: new walks field initialisers and base classes
+export const P_B5_field_init = lazySchema(() => { new FieldInit(); return z.string(); });
+export const P_B6_inherited_ctor = lazySchema(() => { new Derived(); return z.string(); });
+export const P_B6_unresolvable_base = lazySchema(() => { new DerivedExt(); return z.string(); });
+// B7: a getter on an object literal or class instance
+export const P_B7_object_getter = lazySchema(() => { holderG.x; return z.string(); });
+export const P_B7_class_getter = lazySchema(() => { instG.y; return z.string(); });
+// B9: call, apply and bind run a function the walk cannot name
+export const P_B9_call = lazySchema(() => { pushIt.call(null, "a"); return z.string(); });
+export const P_B9_apply = lazySchema(() => { pushIt.apply(null, ["a"]); return z.string(); });
+export const P_B9_bind = lazySchema(() => { pushIt.bind(null); return z.string(); });
+// B10, B11: a callee bound to something that is not a function literal
+export const P_B10_factory_result = lazySchema(() => { noteFn("a"); return z.string(); });
+export const P_B11_bound = lazySchema(() => { put("a", 1); return z.string(); });
+export const P_B10_local_factory_result = lazySchema(() => { const f = makeNoter(); f("a"); return z.string(); });
+// B13: a for head that assigns to a binding it does not declare
+export const P_B13_for_of = lazySchema(() => { for (lastSeen of ["a"]) { list.length; } return z.string(); });
+export const P_B13_for_in = lazySchema(() => { for (lastSeen in { a: 1 }) { list.length; } return z.string(); });
+export const P_B13_destructure = lazySchema(() => { for ([lastSeen] of [["a"]]) { list.length; } return z.string(); });
+// B14: an element-access call
+export const P_B14_element_call = lazySchema(() => { list["push"]("a"); return z.string(); });
+// B17, B18: a prototype method through call, and Reflect.apply
+export const P_B17_prototype_call = lazySchema(() => { Array.prototype.push.call(list, "a"); return z.string(); });
+export const P_B18_reflect_apply = lazySchema(() => { Reflect.apply(list.push, list, ["a"]); return z.string(); });
+export const P_Uf_reflect_construct = lazySchema(() => { Reflect.construct(Base, []); return z.string(); });
+export const P_Uf_object_unlisted = lazySchema(() => { Object.mystery(list); return z.string(); });
+// a receiver that is no identifier, a new of a local class or a function, and namespace members
+export const P_Uc_this_receiver = lazySchema(function () { this.run(); return z.string(); });
+export const P_B5_local_class = lazySchema(() => { class Local { constructor() { counter++; } } new Local(); return z.string(); });
+export const P_new_local_function = lazySchema(() => { function Ctor() { counter++; } new Ctor(); return z.string(); });
+export const P_new_module_function = lazySchema(() => { new pushIt("a"); return z.string(); });
+export const P_ns_member_not_function = lazySchema(() => { helpers.helperLog(); return z.string(); });
+export const P_ns_nonschema_chain = lazySchema(() => { helpers.helperLog.join(""); return z.string(); });
+// a factory defined in another file: its callees resolve against that file
+export const P_factory_other_file = lazySchema(declareHidden());
+// a function passed by name runs during the call
+export const P_callback_ident = lazySchema(() => { ["a"].forEach(pushCb); return z.string(); });
+// unanalysed (a): unresolved or external callees
+export const P_Ua_unresolved_ident = lazySchema(() => { mysteryFn(); return z.string(); });
+export const P_Ua_external_call = lazySchema(() => { extCall(); return z.string(); });
+export const P_Ua_external_member = lazySchema(() => { extNs.go(); return z.string(); });
+export const P_Ua_unresolved_module = lazySchema(() => { missingFn(); return z.string(); });
+export const P_Ua_namespace_call = lazySchema(() => { helpers(); return z.string(); });
+export const P_Ua_new_external = lazySchema(() => { new ExtClass(); return z.string(); });
+export const P_Ua_new_unresolved = lazySchema(() => { new Mystery(); return z.string(); });
+export const P_Ua_dynamic_callee = lazySchema(() => { makeNoter()("a"); return z.string(); });
+export const P_Ua_dynamic_import = lazySchema(() => { import("./helper"); return z.string(); });
+// A: a helper that writes through a parameter, called with a module value
+export const P_A_fill_module = lazySchema(() => { fill(list); return z.string(); });
+export const P_A_transitive = lazySchema(() => { outer(list); return z.string(); });
+export const P_A_prop_assign = lazySchema(() => { setProp(rec); return z.string(); });
+export const P_A_update = lazySchema(() => { bump(rec); return z.string(); });
+export const P_A_delete = lazySchema(() => { dropProp(rec); return z.string(); });
+export const P_A_object_assign = lazySchema(() => { assignInto(rec); return z.string(); });
+export const P_A_callback_param = lazySchema(() => { viaCallback(list); return z.string(); });
+export const P_A_param_method = lazySchema(() => { methodOnParam(registrar); return z.string(); });
+export const P_A_local_fn_closure = lazySchema(() => { viaLocalFn(list); return z.string(); });
+export const P_A_unknown_arg = lazySchema(() => { const x = makeList(); fill(x); return z.string(); });
+// B: a local that aliases a module value, or holds a call result of unknown provenance
+export const P_B_alias = lazySchema(() => { const x = list; x.push("a"); return z.string(); });
+export const P_B_alias_transitive = lazySchema(() => { const x = list; const y = x; y.push("a"); return z.string(); });
+export const P_B_destructured = lazySchema(() => { const [first] = nested; first.push("a"); return z.string(); });
+export const P_B_unknown_mutation = lazySchema(() => { const x = makeList(); x.push("a"); return z.string(); });
+export const P_B_unknown_method = lazySchema(() => { const r = makeList(); r.join(","); return z.string(); });
+// C: logging and Promise statics are effects
+export const P_C_console = lazySchema(() => { console.log("x"); return z.string(); });
+export const P_C_promise = lazySchema(() => { Promise.reject(1); return z.string(); });
+// D: the parse family on a schema that is not built in the thunk
+export const P_D_parse_module = lazySchema(() => { shapeSchema.parse("x"); return z.string(); });
+export const P_D_safeparse_alias = lazySchema(() => { const s = shapeSchema; s.safeParse("x"); return z.string(); });
+export const P_D_z_parse = lazySchema(() => { z.parse(shapeSchema, "x"); return z.string(); });
+export const P_D_imported_parse = lazySchema(() => { zodParse(shapeSchema, "x"); return z.string(); });
+export const P_D_param_parse = lazySchema(() => { parseIt(shapeSchema, "x"); return z.string(); });
+// NEGATIVES
+export const N_A_fill_local = lazySchema(() => { const local: string[] = []; fill(local); return z.string(); });
+export const N_A_fill_fresh = lazySchema(() => { fill([]); return z.string(); });
+export const N_A_transitive_local = lazySchema(() => { outer([]); return z.string(); });
+export const N_A_param_method_local = lazySchema(() => { const l = { go() {} }; methodOnParam(l); return z.string(); });
+export const N_A_param_method_schema = lazySchema(() => { wrapSchema(shapeSchema); return z.string(); });
+export const N_A_rebind_only = lazySchema(() => { rebindOnly(list); return z.string(); });
+export const N_A_superrefine = lazySchema(() => z.string().superRefine((v, ctx) => { ctx.addIssue({ code: "custom", message: "x" }); }));
+export const N_B_fresh_alias = lazySchema(() => { const x = [...list]; x.push("a"); return z.string(); });
+export const N_B_zod_local = lazySchema(() => { const e = z.object({}); e.extend({}); return z.string(); });
+export const N_B_fresh_returning = lazySchema(() => { const ks = Object.keys(rec); ks.sort(); return z.string(); });
+export const N_B_pure_global_local = lazySchema(() => { const p = String(1); p.trim(); const d = Date.now(); d.toFixed(); return z.string(); });
+export const N_B_schema_clone_local = lazySchema(() => { const c = shapeSchema.extend({}); c.extend({}); return z.string(); });
+export const N_B_alias_schema = lazySchema(() => { const s = shapeSchema; s.extend({}); return z.string(); });
+export const N_D_chain_parse = lazySchema(() => { z.string().parse("x"); return z.string(); });
+export const N_D_z_parse_fresh = lazySchema(() => { z.parse(z.string(), "x"); return z.string(); });
+export const N_D_local_parse = lazySchema(() => { const s = z.string(); s.parse("x"); return z.string(); });
+export const N_D_param_parse_fresh = lazySchema(() => { parseIt(z.string(), "x"); return z.string(); });
+export const N_B1_local_pure = lazySchema(() => { const reg = () => { const xs: string[] = []; xs.push("a"); return xs; }; reg(); return z.string(); });
+export const N_B2_quiet_method = lazySchema(() => { holderObj.quiet("a"); return z.string(); });
+export const N_B3_pure_param_init = lazySchema(() => { withDefaultPure(); return z.string(); });
+export const N_B5_pure_field = lazySchema(() => { new FieldPure(); return z.string(); });
+export const N_B6_pure_base = lazySchema(() => { new PlainDerived(); return z.string(); });
+export const N_B7_plain_getter = lazySchema(() => { holderQuiet.x; return z.string(); });
+export const N_B13_local_head = lazySchema(() => { let k = ""; for (k of ["a"]) { list.length; } return z.string(); });
+export const N_B13_declared_head = lazySchema(() => { for (const k of ["a"]) { list.length; } return z.string(); });
+export const N_pure_globals = lazySchema(() => { const keys = Object.keys({ a: 1 }); Array.isArray(keys); Math.max(1, 2); JSON.stringify(keys); String(1).trim(); Number.isInteger(1); Object.freeze(keys); Reflect.ownKeys(keys); Reflect.get(keys, "a"); atob("x"); URL.canParse("x"); return z.string(); });
+export const N_ns_schema_chain = lazySchema(() => { helpers.helperSchema.min(1); return z.string(); });
+export const N_B2_conditional_local = lazySchema(() => { const v = "a"; const w = (counter === 0 ? v : v.slice(1)).trim(); return z.literal(w); });
+export const P_B2_conditional_module = lazySchema(() => { (counter === 0 ? registrar : registrar).note("a"); return z.string(); });
+export const N_pure_new = lazySchema(() => { new Set(); new Map(); new URL("http://x"); new RegExp("x"); new Date(); new Error("x"); return z.string(); });
+`;
+
+const PLANTED_ZOD_SOURCE = `import { z, meta, describe as zodDescribe } from "zod";
+import { lazySchema } from "../framework/lazy-schema";
+const dynamicObj = { id: "d" };
+const moduleSchema = z.string();
+const titled = z.meta({ title: "T" });
+// POSITIVES: a registry write observable apart from the thunk's own fresh schema
+export const P_Z_with_meta_id = lazySchema(() => z.string().with(z.meta({ id: "x" })));
+export const P_Z_meta_dynamic = lazySchema(() => z.string().with(meta(dynamicObj)));
+export const P_Z_meta_spread = lazySchema(() => z.string().with(z.meta({ ...dynamicObj })));
+export const P_Z_register_inner_id = lazySchema(() => z.object({ a: z.string().register(z.globalRegistry, { id: "x" }) }));
+export const P_Z_register_module = lazySchema(() => z.object({ a: moduleSchema.register(z.globalRegistry) }));
+// NEGATIVES: metadata with no id, the inner form, the check forms
+export const N_Z_describe_nested = lazySchema(() => z.object({ a: z.string().describe("x") }));
+export const N_Z_meta_title_inner = lazySchema(() => z.object({ a: z.string().meta({ title: "t" }) }));
+export const N_Z_check_describe = lazySchema(() => z.string().check(z.describe("x")));
+export const N_Z_with_meta_imported = lazySchema(() => z.string().with(meta({ title: "t" })));
+export const N_Z_check_imported_describe = lazySchema(() => z.string().check(zodDescribe("x")));
+export const N_Z_check_module_titled = lazySchema(() => z.string().check(titled));
+export const N_Z_register_inner_no_id = lazySchema(() => z.object({ a: z.string().register(z.globalRegistry) }));
+`;
+
 const PLANTED_HISTORICAL_SOURCE = `const residualList: string[] = [];
 function withResidualCapture(id: string, shape: object) {
   residualList.push(id);
@@ -243,6 +372,8 @@ export const historical = lazySchema(() => withResidualCapture("x", shape));
 const PLANTED_RULES_SOURCE = `import { z } from "zod";
 import { lazySchema } from "../framework/lazy-schema";
 class Foo {}
+const base = z.object({});
+const contract = { requestSchema: z.string() };
 export const P_R1_describe = lazySchema(() => z.string().describe("x"));
 export const P_R1_meta = lazySchema(() => z.string().meta({ id: "x" }));
 export const P_R1_register = lazySchema(() => z.string().register(z.globalRegistry));
@@ -273,35 +404,52 @@ export const N_R4_plain_local = lazySchema(() => {
   const node = z.string();
   return node;
 });
-export const N_R4_module_ident = lazySchema(() => P_R3_json);
+export const P_R6_module_ident = lazySchema(() => P_R3_json);
+export const P_R6_property_chain = lazySchema(() => contract.requestSchema);
+export const P_R6_element_chain = lazySchema(() => contract["requestSchema"]);
+export const P_R6_block_return = lazySchema(() => {
+  return base;
+});
+export const N_R6_call = lazySchema(() => base.extend({}));
+export const N_R6_thunk_local = lazySchema(() => {
+  const own = z.string();
+  return own.optional();
+});
+export const N_R6_thunk_local_ident = lazySchema(() => {
+  const own = z.string();
+  return own;
+});
 `;
 
 const PLANTED_DIR = path.join(PROTOCOL_SRC, "sweepctl");
 const PLANTED_PLANTED_ABS = path.join(PLANTED_DIR, "planted.ts");
 const PLANTED_HELPER_ABS = path.join(PLANTED_DIR, "helper.ts");
+const PLANTED_SHAPES_ABS = path.join(PLANTED_DIR, "shapes.ts");
+const PLANTED_ZOD_ABS = path.join(PLANTED_DIR, "zplanted.ts");
 const PLANTED_HISTORICAL_ABS = path.join(PLANTED_DIR, "historical.ts");
 const PLANTED_RULES_ABS = path.join(PLANTED_DIR, "rules.ts");
 
-const R5_POSITIVES: readonly {
+type Expectation = {
   readonly name: string;
-  readonly kind: string;
-}[] = [
-  { name: "P_S1_assign", kind: "S1 assign" },
-  { name: "P_S1_prop", kind: "S1 assign" },
-  { name: "P_S1_destructure", kind: "S1 destructuring-assign" },
-  { name: "P_S2_update", kind: "S2 update" },
-  { name: "P_S3_delete", kind: "S3 delete" },
-  { name: "P_S4_mapset", kind: "S4 mutator" },
-  { name: "P_S4_setadd", kind: "S4 mutator" },
-  { name: "P_S4_push", kind: "S4 mutator" },
-  { name: "P_S4_objassign", kind: "S4 object-mutator" },
-  { name: "P_Z_describe_nested", kind: "Z registry" },
-  { name: "P_Z_meta", kind: "Z registry" },
-  { name: "P_inter_helper", kind: "S4 mutator" },
-  { name: "P_inter_namespace", kind: "S4 mutator" },
-  { name: "P_callback", kind: "S4 mutator" },
-  { name: "P_iife", kind: "S1 assign" },
-  { name: "P_new", kind: "S4 mutator" },
+  readonly kinds: readonly string[];
+};
+
+const R5_POSITIVES: readonly Expectation[] = [
+  { name: "P_S1_assign", kinds: ["S1 assign"] },
+  { name: "P_S1_prop", kinds: ["S1 assign"] },
+  { name: "P_S1_destructure", kinds: ["S1 destructuring-assign"] },
+  { name: "P_S2_update", kinds: ["S2 update"] },
+  { name: "P_S3_delete", kinds: ["S3 delete"] },
+  { name: "P_S4_mapset", kinds: ["S4 mutator"] },
+  { name: "P_S4_setadd", kinds: ["S4 mutator"] },
+  { name: "P_S4_push", kinds: ["S4 mutator"] },
+  { name: "P_S4_objassign", kinds: ["S4 object-mutator"] },
+  { name: "P_Z_meta", kinds: ["Z registry"] },
+  { name: "P_inter_helper", kinds: ["S4 mutator"] },
+  { name: "P_inter_namespace", kinds: ["S4 mutator"] },
+  { name: "P_callback", kinds: ["S4 mutator"] },
+  { name: "P_iife", kinds: ["S1 assign"] },
+  { name: "P_new", kinds: ["S4 mutator"] },
 ];
 
 const R5_NEGATIVES: readonly string[] = [
@@ -312,1061 +460,131 @@ const R5_NEGATIVES: readonly string[] = [
   "N_zod_set",
 ];
 
-function shouldSkipListedPath(relative: string): boolean {
-  const posix = relative.split(path.sep).join("/");
-  const segments = posix.split("/");
-  for (const segment of segments) {
-    if (SKIP_DIR_NAMES.has(segment)) {
-      return true;
-    }
-  }
-  const base = segments[segments.length - 1];
-  if (base === undefined) {
-    return true;
-  }
-  return (
-    base.endsWith(".d.ts") ||
-    base.endsWith(".test.ts") ||
-    base.endsWith(".test.tsx") ||
-    base.endsWith(".spec.ts") ||
-    base.endsWith(".spec.tsx")
-  );
-}
+const SHAPE_POSITIVES: readonly Expectation[] = [
+  { name: "P_B1_arrow", kinds: ["S4 mutator"] },
+  { name: "P_B1_declaration", kinds: ["S2 update"] },
+  { name: "P_B1_closure", kinds: ["S2 update"] },
+  { name: "P_B2_object_method", kinds: ["S4 mutator"] },
+  { name: "P_B2_local_object_method", kinds: ["S4 mutator"] },
+  { name: "P_B2_class_method", kinds: ["S2 update"] },
+  { name: "P_B2_inherited_method", kinds: ["S2 update"] },
+  { name: "P_B2_destructured_receiver", kinds: [UNANALYSED_KIND] },
+  { name: "P_B2_unresolvable", kinds: [UNANALYSED_KIND] },
+  { name: "P_factory_other_file", kinds: ["S4 mutator"] },
+  { name: "P_B3_param_init", kinds: ["S4 mutator"] },
+  { name: "P_B4_tagged", kinds: ["S4 mutator"] },
+  { name: "P_B5_field_init", kinds: ["S2 update"] },
+  { name: "P_B6_inherited_ctor", kinds: ["S4 mutator"] },
+  { name: "P_B6_unresolvable_base", kinds: [UNANALYSED_KIND] },
+  { name: "P_B7_object_getter", kinds: ["S2 update"] },
+  { name: "P_B7_class_getter", kinds: ["S2 update"] },
+  { name: "P_B9_call", kinds: [UNANALYSED_KIND] },
+  { name: "P_B9_apply", kinds: [UNANALYSED_KIND] },
+  { name: "P_B9_bind", kinds: [UNANALYSED_KIND] },
+  { name: "P_B10_factory_result", kinds: [UNANALYSED_KIND] },
+  { name: "P_B11_bound", kinds: [UNANALYSED_KIND] },
+  { name: "P_B10_local_factory_result", kinds: [UNANALYSED_KIND] },
+  { name: "P_B13_for_of", kinds: ["S1 assign"] },
+  { name: "P_B13_for_in", kinds: ["S1 assign"] },
+  { name: "P_B13_destructure", kinds: ["S1 destructuring-assign"] },
+  { name: "P_B14_element_call", kinds: [UNANALYSED_KIND] },
+  { name: "P_B17_prototype_call", kinds: [UNANALYSED_KIND] },
+  { name: "P_B18_reflect_apply", kinds: [UNANALYSED_KIND] },
+  { name: "P_Uf_reflect_construct", kinds: [UNANALYSED_KIND] },
+  { name: "P_Uf_object_unlisted", kinds: [UNANALYSED_KIND] },
+  { name: "P_callback_ident", kinds: ["S4 mutator"] },
+  { name: "P_A_fill_module", kinds: ["S4 mutator"] },
+  { name: "P_A_transitive", kinds: ["S4 mutator"] },
+  { name: "P_A_prop_assign", kinds: ["S1 assign"] },
+  { name: "P_A_update", kinds: ["S2 update"] },
+  { name: "P_A_delete", kinds: ["S3 delete"] },
+  { name: "P_A_object_assign", kinds: ["S4 object-mutator"] },
+  { name: "P_A_callback_param", kinds: ["S4 mutator"] },
+  { name: "P_A_param_method", kinds: [UNANALYSED_KIND] },
+  { name: "P_A_local_fn_closure", kinds: ["S4 mutator"] },
+  { name: "P_A_unknown_arg", kinds: [UNANALYSED_KIND] },
+  { name: "P_B_alias", kinds: ["S4 mutator"] },
+  { name: "P_B_alias_transitive", kinds: ["S4 mutator"] },
+  { name: "P_B_destructured", kinds: ["S4 mutator"] },
+  { name: "P_B_unknown_mutation", kinds: [UNANALYSED_KIND] },
+  { name: "P_B_unknown_method", kinds: [UNANALYSED_KIND] },
+  { name: "P_C_console", kinds: [UNANALYSED_KIND] },
+  { name: "P_C_promise", kinds: [UNANALYSED_KIND] },
+  { name: "P_D_parse_module", kinds: [UNANALYSED_KIND] },
+  { name: "P_D_safeparse_alias", kinds: [UNANALYSED_KIND] },
+  { name: "P_D_z_parse", kinds: [UNANALYSED_KIND] },
+  { name: "P_D_imported_parse", kinds: [UNANALYSED_KIND] },
+  { name: "P_D_param_parse", kinds: [UNANALYSED_KIND] },
+  { name: "P_Uc_this_receiver", kinds: [UNANALYSED_KIND] },
+  { name: "P_B5_local_class", kinds: ["S2 update"] },
+  { name: "P_new_local_function", kinds: ["S2 update"] },
+  { name: "P_new_module_function", kinds: ["S4 mutator"] },
+  { name: "P_ns_member_not_function", kinds: [UNANALYSED_KIND] },
+  { name: "P_ns_nonschema_chain", kinds: [UNANALYSED_KIND] },
+  {
+    name: "P_B2_conditional_module",
+    kinds: [UNANALYSED_KIND, UNANALYSED_KIND],
+  },
+  { name: "P_Ua_unresolved_ident", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_external_call", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_external_member", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_unresolved_module", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_namespace_call", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_new_external", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_new_unresolved", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_dynamic_callee", kinds: [UNANALYSED_KIND] },
+  { name: "P_Ua_dynamic_import", kinds: [UNANALYSED_KIND] },
+];
 
-function gitListedFiles(
-  gitRoot: string,
-  prefixes: readonly string[],
-): string[] {
-  const listing = execFileSync(
-    "git",
-    [
-      "ls-files",
-      "-z",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "--",
-      "*.ts",
-      "*.tsx",
-    ],
-    { cwd: gitRoot, encoding: "utf8" },
-  );
-  const files: string[] = [];
-  for (const relative of listing.split("\0")) {
-    if (relative.length === 0 || shouldSkipListedPath(relative)) {
-      continue;
-    }
-    const posix = relative.split(path.sep).join("/");
-    if (!prefixes.some((prefix) => posix.startsWith(prefix))) {
-      continue;
-    }
-    const full = path.join(gitRoot, relative);
-    if (!existsSync(full)) {
-      continue;
-    }
-    files.push(full);
-  }
-  return files;
-}
+const SHAPE_NEGATIVES: readonly string[] = [
+  "N_B1_local_pure",
+  "N_B2_quiet_method",
+  "N_B3_pure_param_init",
+  "N_B5_pure_field",
+  "N_B6_pure_base",
+  "N_B7_plain_getter",
+  "N_B13_local_head",
+  "N_B13_declared_head",
+  "N_A_fill_local",
+  "N_A_fill_fresh",
+  "N_A_transitive_local",
+  "N_A_param_method_local",
+  "N_A_param_method_schema",
+  "N_A_rebind_only",
+  "N_A_superrefine",
+  "N_B_fresh_alias",
+  "N_B_zod_local",
+  "N_B_fresh_returning",
+  "N_B_alias_schema",
+  "N_B_pure_global_local",
+  "N_B_schema_clone_local",
+  "N_D_chain_parse",
+  "N_D_z_parse_fresh",
+  "N_D_local_parse",
+  "N_D_param_parse_fresh",
+  "N_ns_schema_chain",
+  "N_B2_conditional_local",
+  "N_pure_globals",
+  "N_pure_new",
+];
 
-function strip(expression: ts.Expression): ts.Expression {
-  let current = expression;
-  for (;;) {
-    if (ts.isParenthesizedExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isAsExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isSatisfiesExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isNonNullExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isTypeAssertionExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    return current;
-  }
-}
+const ZOD_POSITIVES: readonly string[] = [
+  "P_Z_with_meta_id",
+  "P_Z_meta_dynamic",
+  "P_Z_meta_spread",
+  "P_Z_register_inner_id",
+  "P_Z_register_module",
+];
 
-function moduleSpecText(node: ts.Expression): string | undefined {
-  if (ts.isStringLiteral(node)) {
-    return node.text;
-  }
-  return undefined;
-}
-
-function bindingNames(name: ts.BindingName, out: Set<string>): void {
-  if (ts.isIdentifier(name)) {
-    out.add(name.text);
-    return;
-  }
-  for (const element of name.elements) {
-    if (ts.isBindingElement(element)) {
-      bindingNames(element.name, out);
-    }
-  }
-}
-
-function isZodSpec(spec: string): boolean {
-  return spec === "zod" || spec.startsWith("zod/");
-}
-
-function isFreshRoot(root: ts.Expression | typeof FRESH): root is typeof FRESH {
-  return root === FRESH;
-}
-
-function rootOf(expression: ts.Expression): ts.Expression | typeof FRESH {
-  let current = strip(expression);
-  for (;;) {
-    if (
-      ts.isPropertyAccessExpression(current) ||
-      ts.isElementAccessExpression(current)
-    ) {
-      current = strip(current.expression);
-      continue;
-    }
-    if (ts.isCallExpression(current)) {
-      const callee = strip(current.expression);
-      if (
-        ts.isPropertyAccessExpression(callee) &&
-        FRESH_RETURNING.has(callee.name.text)
-      ) {
-        return FRESH;
-      }
-      current = callee;
-      continue;
-    }
-    return current;
-  }
-}
-
-function localsOf(fn: ts.SignatureDeclaration): Set<string> {
-  const out = new Set<string>();
-  for (const parameter of fn.parameters) {
-    bindingNames(parameter.name, out);
-  }
-  const visit = (node: ts.Node): void => {
-    if (node !== fn && ts.isFunctionLike(node)) {
-      if (
-        (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) &&
-        node.name !== undefined
-      ) {
-        out.add(node.name.text);
-      }
-      return;
-    }
-    if (ts.isVariableDeclaration(node)) {
-      bindingNames(node.name, out);
-    }
-    if (ts.isClassDeclaration(node) && node.name !== undefined) {
-      out.add(node.name.text);
-    }
-    if (ts.isCatchClause(node) && node.variableDeclaration !== undefined) {
-      bindingNames(node.variableDeclaration.name, out);
-    }
-    ts.forEachChild(node, visit);
-  };
-  const body = "body" in fn ? fn.body : undefined;
-  if (body !== undefined) {
-    visit(body);
-  }
-  return out;
-}
-
-function functionBody(fn: ts.SignatureDeclaration): ts.ConciseBody | undefined {
-  if (!("body" in fn)) {
-    return undefined;
-  }
-  const body = fn.body;
-  if (body === undefined) {
-    return undefined;
-  }
-  return body;
-}
-
-function targetFn(node: ts.Node): ts.SignatureDeclaration | undefined {
-  if (ts.isFunctionDeclaration(node)) {
-    return node;
-  }
-  if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
-    const initializer = strip(node.initializer);
-    if (
-      ts.isArrowFunction(initializer) ||
-      ts.isFunctionExpression(initializer)
-    ) {
-      return initializer;
-    }
-  }
-  return undefined;
-}
-
-function isSchemaLike(node: ts.Node): boolean {
-  if (!ts.isVariableDeclaration(node) || node.initializer === undefined) {
-    return false;
-  }
-  const root = rootOf(node.initializer);
-  return (
-    !isFreshRoot(root) &&
-    ts.isIdentifier(root) &&
-    (root.text === "z" ||
-      root.text === "lazySchema" ||
-      /Schema$/.test(root.text))
-  );
-}
-
-function returnedExpressions(fn: ts.SignatureDeclaration): ts.Expression[] {
-  const body = functionBody(fn);
-  if (body === undefined) {
-    return [];
-  }
-  if (!ts.isBlock(body)) {
-    return [body];
-  }
-  const out: ts.Expression[] = [];
-  const visit = (node: ts.Node): void => {
-    if (node !== fn && ts.isFunctionLike(node)) {
-      return;
-    }
-    if (ts.isReturnStatement(node) && node.expression !== undefined) {
-      out.push(node.expression);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(body);
-  return out;
-}
-
-function thunkConstNames(fn: ts.SignatureDeclaration): Set<string> {
-  const names = new Set<string>();
-  const body = functionBody(fn);
-  if (body === undefined) {
-    return names;
-  }
-  const visit = (node: ts.Node): void => {
-    if (node !== fn && ts.isFunctionLike(node)) {
-      return;
-    }
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-      const list = node.parent;
-      if (
-        ts.isVariableDeclarationList(list) &&
-        (list.flags & ts.NodeFlags.Const) !== 0
-      ) {
-        names.add(node.name.text);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(body);
-  return names;
-}
-
-function isValueReference(id: ts.Identifier): boolean {
-  const parent = id.parent;
-  if (ts.isPropertyAccessExpression(parent) && parent.name === id) {
-    return false;
-  }
-  if (ts.isPropertyAssignment(parent) && parent.name === id) {
-    return false;
-  }
-  if (ts.isShorthandPropertyAssignment(parent) && parent.name === id) {
-    return true;
-  }
-  if (ts.isMethodDeclaration(parent) && parent.name === id) {
-    return false;
-  }
-  if (ts.isGetAccessorDeclaration(parent) && parent.name === id) {
-    return false;
-  }
-  if (ts.isSetAccessorDeclaration(parent) && parent.name === id) {
-    return false;
-  }
-  if (ts.isParameter(parent) && parent.name === id) {
-    return false;
-  }
-  if (ts.isVariableDeclaration(parent) && parent.name === id) {
-    return false;
-  }
-  if (ts.isFunctionDeclaration(parent) && parent.name === id) {
-    return false;
-  }
-  return true;
-}
-
-function nestedFunctionReferencesName(
-  fn: ts.SignatureDeclaration,
-  name: string,
-): boolean {
-  let found = false;
-  const visit = (node: ts.Node, insideNested: boolean): void => {
-    if (found) {
-      return;
-    }
-    if (node !== fn && ts.isFunctionLike(node)) {
-      ts.forEachChild(node, (child) => visit(child, true));
-      return;
-    }
-    if (
-      insideNested &&
-      ts.isIdentifier(node) &&
-      node.text === name &&
-      isValueReference(node)
-    ) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(node, (child) => visit(child, insideNested));
-  };
-  const body = functionBody(fn);
-  if (body !== undefined) {
-    visit(body, false);
-  }
-  return found;
-}
-
-function outermostRegistryMethod(
-  expression: ts.Expression,
-): string | undefined {
-  const inner = strip(expression);
-  if (!ts.isCallExpression(inner)) {
-    return undefined;
-  }
-  const callee = inner.expression;
-  if (!ts.isPropertyAccessExpression(callee)) {
-    return undefined;
-  }
-  const name = callee.name.text;
-  if (name === "describe" || name === "meta" || name === "register") {
-    return name;
-  }
-  return undefined;
-}
-
-function outermostZodFactory(expression: ts.Expression): string | undefined {
-  const inner = strip(expression);
-  if (!ts.isCallExpression(inner)) {
-    return undefined;
-  }
-  const callee = inner.expression;
-  if (!ts.isPropertyAccessExpression(callee)) {
-    return undefined;
-  }
-  const name = callee.name.text;
-  if (name !== "instanceof" && name !== "json") {
-    return undefined;
-  }
-  const recv = strip(callee.expression);
-  if (!ts.isIdentifier(recv) || (recv.text !== "z" && recv.text !== "zod")) {
-    return undefined;
-  }
-  return name;
-}
-
-function bindingNameOfLazySchemaCall(
-  call: ts.CallExpression,
-): string | undefined {
-  const parent = call.parent;
-  if (
-    ts.isVariableDeclaration(parent) &&
-    ts.isIdentifier(parent.name) &&
-    parent.initializer !== undefined &&
-    strip(parent.initializer) === call
-  ) {
-    return parent.name.text;
-  }
-  return undefined;
-}
-
-function snippet(node: ts.Node, max: number): string {
-  const text = node.getText().replace(/\s+/g, " ");
-  if (text.length <= max) {
-    return text;
-  }
-  return text.slice(0, max);
-}
-
-function factoryReturnedFunctions(
-  target: ts.SignatureDeclaration,
-): ts.SignatureDeclaration[] {
-  const returned: ts.SignatureDeclaration[] = [];
-  const body = functionBody(target);
-  if (body === undefined) {
-    return returned;
-  }
-  if (
-    ts.isArrowFunction(target) &&
-    !ts.isBlock(target.body) &&
-    ts.isFunctionLike(target.body)
-  ) {
-    returned.push(target.body);
-    return returned;
-  }
-  const visit = (node: ts.Node): void => {
-    if (node !== target && ts.isFunctionLike(node)) {
-      const parent = node.parent;
-      if (
-        ts.isReturnStatement(parent) ||
-        (ts.isArrowFunction(parent) &&
-          parent.body === node &&
-          parent === target)
-      ) {
-        returned.push(node);
-      }
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(body);
-  return returned;
-}
-
-function scanThunkRules(input: ScanInput): ThunkScanResult {
-  const loadCache = new Map<string, LoadedFile>();
-  const declCache = new Map<string, TopDecls>();
-  const fnMemo = new Map<ts.SignatureDeclaration, SideEffectFinding[]>();
-  const inProgress = new Set<ts.SignatureDeclaration>();
-
-  const load = (abs: string): LoadedFile | undefined => {
-    const cached = loadCache.get(abs);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const overlayText = input.overlay.get(abs);
-    let text: string;
-    if (overlayText !== undefined) {
-      text = overlayText;
-    } else if (existsSync(abs)) {
-      text = readFileSync(abs, "utf8");
-    } else {
-      return undefined;
-    }
-    const sf = ts.createSourceFile(
-      abs,
-      text,
-      ts.ScriptTarget.Latest,
-      true,
-      abs.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    );
-    const loaded = { sf, text };
-    loadCache.set(abs, loaded);
-    return loaded;
-  };
-
-  const lineOf = (abs: string, node: ts.Node): number => {
-    const loaded = load(abs);
-    if (loaded === undefined) {
-      return 0;
-    }
-    return (
-      loaded.sf.getLineAndCharacterOfPosition(node.getStart(loaded.sf)).line + 1
-    );
-  };
-
-  const rel = (abs: string): string => {
-    const relative = path.relative(input.contentRoot, abs);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      return abs.split(path.sep).join("/");
-    }
-    return relative.split(path.sep).join("/");
-  };
-
-  const resolveSpec = (fromAbs: string, spec: string): SpecResolution => {
-    let base: string;
-    if (spec.startsWith(".")) {
-      base = path.resolve(path.dirname(fromAbs), spec);
-    } else if (spec.startsWith("@traycer/protocol/")) {
-      base = path.join(input.protoSrc, spec.slice("@traycer/protocol/".length));
-    } else if (spec === "@traycer/protocol") {
-      base = path.join(input.protoSrc, "index");
-    } else if (spec.startsWith("@traycerai/common/")) {
-      base = path.join(
-        input.commonSrc,
-        spec.slice("@traycerai/common/".length),
-      );
-    } else {
-      return { external: spec };
-    }
-    base = base.replace(/\.(js|ts)$/, "");
-    const candidates = [
-      base + ".ts",
-      base + ".tsx",
-      path.join(base, "index.ts"),
-    ];
-    for (const candidate of candidates) {
-      if (input.overlay.has(candidate) || existsSync(candidate)) {
-        return { abs: candidate };
-      }
-    }
-    return { unresolved: spec };
-  };
-
-  const topDecls = (abs: string): TopDecls => {
-    const cached = declCache.get(abs);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const out: TopDecls = {
-      decls: new Map(),
-      imports: new Map(),
-      reexports: [],
-      star: [],
-    };
-    declCache.set(abs, out);
-    const loaded = load(abs);
-    if (loaded === undefined) {
-      return out;
-    }
-    for (const st of loaded.sf.statements) {
-      if (ts.isFunctionDeclaration(st) && st.name !== undefined) {
-        out.decls.set(st.name.text, st);
-      } else if (ts.isClassDeclaration(st) && st.name !== undefined) {
-        out.decls.set(st.name.text, st);
-      } else if (ts.isVariableStatement(st)) {
-        for (const decl of st.declarationList.declarations) {
-          if (ts.isIdentifier(decl.name)) {
-            out.decls.set(decl.name.text, decl);
-          }
-        }
-      } else if (
-        ts.isImportDeclaration(st) &&
-        st.importClause !== undefined &&
-        !st.importClause.isTypeOnly
-      ) {
-        const spec = moduleSpecText(st.moduleSpecifier);
-        if (spec === undefined) {
-          continue;
-        }
-        const ic = st.importClause;
-        if (ic.name !== undefined) {
-          out.imports.set(ic.name.text, { spec, orig: "default" });
-        }
-        const nb = ic.namedBindings;
-        if (nb !== undefined && ts.isNamespaceImport(nb)) {
-          out.imports.set(nb.name.text, { spec, orig: "*" });
-        }
-        if (nb !== undefined && ts.isNamedImports(nb)) {
-          for (const el of nb.elements) {
-            if (el.isTypeOnly) {
-              continue;
-            }
-            out.imports.set(el.name.text, {
-              spec,
-              orig: (el.propertyName ?? el.name).text,
-            });
-          }
-        }
-      } else if (
-        ts.isExportDeclaration(st) &&
-        st.moduleSpecifier !== undefined &&
-        !st.isTypeOnly
-      ) {
-        const spec = moduleSpecText(st.moduleSpecifier);
-        if (spec === undefined) {
-          continue;
-        }
-        if (st.exportClause === undefined) {
-          out.star.push(spec);
-        } else if (ts.isNamedExports(st.exportClause)) {
-          for (const el of st.exportClause.elements) {
-            out.reexports.push({
-              name: el.name.text,
-              orig: (el.propertyName ?? el.name).text,
-              spec,
-            });
-          }
-        }
-      }
-    }
-    return out;
-  };
-
-  const resolveImport = (
-    fromAbs: string,
-    spec: string,
-    orig: string,
-    seen: Set<string>,
-  ): ResolvedName | undefined => {
-    if (isZodSpec(spec)) {
-      return { kind: "zod" };
-    }
-    const resolved = resolveSpec(fromAbs, spec);
-    if ("external" in resolved) {
-      return { kind: "external", spec: resolved.external };
-    }
-    if ("unresolved" in resolved) {
-      return { kind: "unresolved", spec: resolved.unresolved };
-    }
-    if (orig === "*") {
-      return { kind: "namespace", abs: resolved.abs };
-    }
-    return resolveExport(resolved.abs, orig, seen);
-  };
-
-  const resolveExport = (
-    abs: string,
-    name: string,
-    seen: Set<string>,
-  ): ResolvedName | undefined => {
-    const t = topDecls(abs);
-    const decl = t.decls.get(name);
-    if (decl !== undefined) {
-      return { kind: "local", abs, node: decl };
-    }
-    for (const re of t.reexports) {
-      if (re.name === name) {
-        return resolveImport(abs, re.spec, re.orig, seen);
-      }
-    }
-    if (t.imports.has(name)) {
-      return resolveName(abs, name, seen);
-    }
-    for (const spec of t.star) {
-      const resolved = resolveSpec(abs, spec);
-      if (!("abs" in resolved)) {
-        continue;
-      }
-      const got = resolveExport(resolved.abs, name, seen);
-      if (got !== undefined) {
-        return got;
-      }
-    }
-    return undefined;
-  };
-
-  const resolveName = (
-    abs: string,
-    name: string,
-    seen: Set<string>,
-  ): ResolvedName | undefined => {
-    const key = abs + "#" + name;
-    if (seen.has(key)) {
-      return undefined;
-    }
-    seen.add(key);
-    const t = topDecls(abs);
-    const decl = t.decls.get(name);
-    if (decl !== undefined) {
-      return { kind: "local", abs, node: decl };
-    }
-    const imp = t.imports.get(name);
-    if (imp !== undefined) {
-      return resolveImport(abs, imp.spec, imp.orig, seen);
-    }
-    return undefined;
-  };
-
-  const walkFn = (
-    abs: string,
-    fn: ts.SignatureDeclaration,
-    extraLocals: readonly string[],
-  ): SideEffectFinding[] => {
-    const memoised = fnMemo.get(fn);
-    if (memoised !== undefined) {
-      return memoised;
-    }
-    if (inProgress.has(fn)) {
-      return [];
-    }
-    inProgress.add(fn);
-    const locals = localsOf(fn);
-    for (const extra of extraLocals) {
-      locals.add(extra);
-    }
-    const findings: SideEffectFinding[] = [];
-    const isLocalRoot = (expression: ts.Expression): boolean => {
-      const root = rootOf(expression);
-      if (isFreshRoot(root)) {
-        return true;
-      }
-      if (ts.isIdentifier(root)) {
-        return locals.has(root.text);
-      }
-      return (
-        ts.isArrayLiteralExpression(root) ||
-        ts.isObjectLiteralExpression(root) ||
-        ts.isNewExpression(root) ||
-        ts.isStringLiteral(root) ||
-        ts.isTemplateExpression(root)
-      );
-    };
-    const add = (kind: string, node: ts.Node, detail: string): void => {
-      findings.push({
-        kind,
-        at: `${rel(abs)}:${String(lineOf(abs, node))}`,
-        detail,
-        via: undefined,
-      });
-    };
-    const callee = (abs2: string, name: string, node: ts.Node): void => {
-      const resolved = resolveName(abs2, name, new Set());
-      if (resolved === undefined) {
-        return;
-      }
-      if (resolved.kind === "zod") {
-        return;
-      }
-      if (
-        resolved.kind === "external" ||
-        resolved.kind === "unresolved" ||
-        resolved.kind === "namespace"
-      ) {
-        return;
-      }
-      const target = targetFn(resolved.node);
-      if (target === undefined) {
-        return;
-      }
-      for (const finding of walkFn(resolved.abs, target, [])) {
-        const viaPrefix = `${name} <- ${rel(abs)}:${String(lineOf(abs, node))}`;
-        findings.push({
-          kind: finding.kind,
-          at: finding.at,
-          detail: finding.detail,
-          via:
-            finding.via !== undefined
-              ? `${viaPrefix} <- ${finding.via}`
-              : viaPrefix,
-        });
-      }
-    };
-    const visit = (node: ts.Node): void => {
-      if (node !== fn && ts.isFunctionLike(node)) {
-        const parent = node.parent;
-        const parenIife =
-          ts.isParenthesizedExpression(parent) &&
-          !ts.isCallExpression(strip(parent)) &&
-          ts.isCallExpression(parent.parent) &&
-          parent.parent.expression === parent;
-        const directIife =
-          ts.isCallExpression(parent) && parent.expression === node;
-        let asArg = false;
-        if (
-          (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
-          parent.arguments !== undefined
-        ) {
-          for (const arg of parent.arguments) {
-            if (arg === node) {
-              asArg = true;
-            }
-          }
-        }
-        if (parenIife || directIife || asArg) {
-          for (const finding of walkFn(abs, node, [...locals])) {
-            findings.push(finding);
-          }
-        }
-        return;
-      }
-      if (
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-      ) {
-        const left = strip(node.left);
-        if (
-          ts.isArrayLiteralExpression(left) ||
-          ts.isObjectLiteralExpression(left)
-        ) {
-          add("S1 destructuring-assign", node, snippet(node, 80));
-        } else if (!isLocalRoot(left)) {
-          add("S1 assign", node, snippet(node, 80));
-        }
-      }
-      if (
-        (ts.isPrefixUnaryExpression(node) ||
-          ts.isPostfixUnaryExpression(node)) &&
-        (node.operator === ts.SyntaxKind.PlusPlusToken ||
-          node.operator === ts.SyntaxKind.MinusMinusToken) &&
-        !isLocalRoot(node.operand)
-      ) {
-        add("S2 update", node, snippet(node, 80));
-      }
-      if (ts.isDeleteExpression(node) && !isLocalRoot(node.expression)) {
-        add("S3 delete", node, snippet(node, 80));
-      }
-      if (ts.isCallExpression(node)) {
-        const ce = strip(node.expression);
-        if (ts.isPropertyAccessExpression(ce)) {
-          const method = ce.name.text;
-          const recvRoot = rootOf(ce.expression);
-          const recvName =
-            !isFreshRoot(recvRoot) && ts.isIdentifier(recvRoot)
-              ? recvRoot.text
-              : undefined;
-          if (ZOD_REG.has(method)) {
-            add("Z registry", node, snippet(node, 80));
-          }
-          if (
-            (recvName === "Object" || recvName === "Reflect") &&
-            ts.isIdentifier(strip(ce.expression)) &&
-            OBJ_MUTATORS.has(method)
-          ) {
-            const first = node.arguments[0];
-            if (first !== undefined && !isLocalRoot(first)) {
-              add("S4 object-mutator", node, snippet(node, 80));
-            }
-          } else if (MUTATORS.has(method)) {
-            let recvIsZod = false;
-            if (recvName !== undefined) {
-              const resolved = resolveName(abs, recvName, new Set());
-              recvIsZod = resolved !== undefined && resolved.kind === "zod";
-            }
-            if (!recvIsZod && !isLocalRoot(ce.expression)) {
-              add("S4 mutator", node, snippet(node, 80));
-            }
-          } else if (
-            recvName !== undefined &&
-            !locals.has(recvName) &&
-            !PURE_GLOBALS.has(recvName)
-          ) {
-            const resolved = resolveName(abs, recvName, new Set());
-            if (resolved !== undefined && resolved.kind === "namespace") {
-              const inner = resolveExport(resolved.abs, method, new Set());
-              const target =
-                inner !== undefined && inner.kind === "local"
-                  ? targetFn(inner.node)
-                  : undefined;
-              if (
-                inner !== undefined &&
-                inner.kind === "local" &&
-                target !== undefined
-              ) {
-                for (const finding of walkFn(inner.abs, target, [])) {
-                  const viaPrefix = `${recvName}.${method} <- ${rel(abs)}:${String(lineOf(abs, node))}`;
-                  findings.push({
-                    kind: finding.kind,
-                    at: finding.at,
-                    detail: finding.detail,
-                    via:
-                      finding.via !== undefined
-                        ? `${viaPrefix} <- ${finding.via}`
-                        : viaPrefix,
-                  });
-                }
-              }
-            }
-          }
-        } else if (ts.isIdentifier(ce) && !locals.has(ce.text)) {
-          callee(abs, ce.text, node);
-        }
-      }
-      if (ts.isNewExpression(node)) {
-        const ce = strip(node.expression);
-        if (
-          ts.isIdentifier(ce) &&
-          !locals.has(ce.text) &&
-          !PURE_GLOBALS.has(ce.text)
-        ) {
-          const resolved = resolveName(abs, ce.text, new Set());
-          if (
-            resolved !== undefined &&
-            resolved.kind === "local" &&
-            ts.isClassDeclaration(resolved.node)
-          ) {
-            for (const mem of resolved.node.members) {
-              if (ts.isConstructorDeclaration(mem)) {
-                for (const finding of walkFn(resolved.abs, mem, [])) {
-                  findings.push({
-                    kind: finding.kind,
-                    at: finding.at,
-                    detail: finding.detail,
-                    via: `new ${ce.text} <- ${rel(abs)}:${String(lineOf(abs, node))}`,
-                  });
-                }
-              }
-            }
-          }
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    const body = functionBody(fn);
-    if (body !== undefined) {
-      visit(body);
-    }
-    inProgress.delete(fn);
-    fnMemo.set(fn, findings);
-    return findings;
-  };
-
-  type ThunkFn = {
-    readonly abs: string;
-    readonly call: ts.CallExpression;
-    readonly fn: ts.SignatureDeclaration;
-    readonly extraLocals: readonly string[];
-    readonly bindingName: string | undefined;
-  };
-
-  const thunkFns: ThunkFn[] = [];
-  let thunkCount = 0;
-  for (const abs of input.files) {
-    const loaded = load(abs);
-    if (loaded === undefined || !loaded.text.includes("lazySchema(")) {
-      continue;
-    }
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isCallExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === "lazySchema" &&
-        node.arguments.length > 0
-      ) {
-        const first = node.arguments[0];
-        if (first === undefined) {
-          ts.forEachChild(node, visit);
-          return;
-        }
-        thunkCount += 1;
-        const arg = strip(first);
-        const bindingName = bindingNameOfLazySchemaCall(node);
-        if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) {
-          thunkFns.push({
-            abs,
-            call: node,
-            fn: arg,
-            extraLocals: [],
-            bindingName,
-          });
-        } else if (
-          ts.isCallExpression(arg) &&
-          ts.isIdentifier(arg.expression)
-        ) {
-          const resolved = resolveName(abs, arg.expression.text, new Set());
-          const target =
-            resolved !== undefined && resolved.kind === "local"
-              ? targetFn(resolved.node)
-              : undefined;
-          if (
-            resolved !== undefined &&
-            resolved.kind === "local" &&
-            target !== undefined
-          ) {
-            const factoryLocals = [...localsOf(target)];
-            for (const returned of factoryReturnedFunctions(target)) {
-              thunkFns.push({
-                abs,
-                call: node,
-                fn: returned,
-                extraLocals: factoryLocals,
-                bindingName,
-              });
-            }
-          }
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(loaded.sf);
-  }
-
-  const hits: ThunkRuleHit[] = [];
-  const pushHit = (
-    rule: RuleId,
-    abs: string,
-    call: ts.CallExpression,
-    bindingName: string | undefined,
-    kind: string,
-    detail: string,
-  ): void => {
-    hits.push({
-      rule,
-      file: rel(abs),
-      line: lineOf(abs, call),
-      bindingName,
-      kind,
-      detail,
-    });
-  };
-
-  for (const thunk of thunkFns) {
-    for (const returned of returnedExpressions(thunk.fn)) {
-      const registry = outermostRegistryMethod(returned);
-      if (registry !== undefined) {
-        pushHit(
-          "R1",
-          thunk.abs,
-          thunk.call,
-          thunk.bindingName,
-          registry,
-          snippet(strip(returned), 80),
-        );
-      }
-      const factory = outermostZodFactory(returned);
-      if (factory === "instanceof") {
-        pushHit(
-          "R2",
-          thunk.abs,
-          thunk.call,
-          thunk.bindingName,
-          factory,
-          snippet(strip(returned), 80),
-        );
-      }
-      if (factory === "json") {
-        pushHit(
-          "R3",
-          thunk.abs,
-          thunk.call,
-          thunk.bindingName,
-          factory,
-          snippet(strip(returned), 80),
-        );
-      }
-      const inner = strip(returned);
-      if (ts.isIdentifier(inner)) {
-        const consts = thunkConstNames(thunk.fn);
-        if (
-          consts.has(inner.text) &&
-          nestedFunctionReferencesName(thunk.fn, inner.text)
-        ) {
-          pushHit(
-            "R4",
-            thunk.abs,
-            thunk.call,
-            thunk.bindingName,
-            "self-ref",
-            inner.text,
-          );
-        }
-      }
-    }
-    for (const finding of walkFn(thunk.abs, thunk.fn, thunk.extraLocals)) {
-      pushHit(
-        "R5",
-        thunk.abs,
-        thunk.call,
-        thunk.bindingName,
-        finding.kind,
-        finding.detail,
-      );
-    }
-  }
-
-  return { thunkCount, hits };
-}
-
-function hitsOf(
-  result: ThunkScanResult,
-  rule: RuleId,
-  bindingName: string,
-): readonly ThunkRuleHit[] {
-  return result.hits.filter(
-    (hit) => hit.rule === rule && hit.bindingName === bindingName,
-  );
-}
-
-function formatHit(hit: ThunkRuleHit): string {
-  const name = hit.bindingName !== undefined ? ` ${hit.bindingName}` : "";
-  return `${hit.rule} ${hit.file}:${String(hit.line)}${name} ${hit.kind} ${hit.detail}`;
-}
+const ZOD_NEGATIVES: readonly string[] = [
+  "N_Z_describe_nested",
+  "N_Z_meta_title_inner",
+  "N_Z_check_describe",
+  "N_Z_with_meta_imported",
+  "N_Z_check_imported_describe",
+  "N_Z_check_module_titled",
+  "N_Z_register_inner_no_id",
+];
 
 function scanOverlay(
   files: readonly string[],
@@ -1398,11 +616,56 @@ function scanR5Planted(): ThunkScanResult {
   );
 }
 
+function scanShapesPlanted(): ThunkScanResult {
+  return scanOverlay(
+    [PLANTED_SHAPES_ABS],
+    new Map([
+      [PLANTED_SHAPES_ABS, PLANTED_SHAPES_SOURCE],
+      [PLANTED_HELPER_ABS, PLANTED_HELPER_SOURCE],
+    ]),
+  );
+}
+
+function scanZodPlanted(): ThunkScanResult {
+  return scanOverlay(
+    [PLANTED_ZOD_ABS],
+    new Map([[PLANTED_ZOD_ABS, PLANTED_ZOD_SOURCE]]),
+  );
+}
+
 function scanHistoricalPlanted(): ThunkScanResult {
   return scanOverlay(
     [PLANTED_HISTORICAL_ABS],
     new Map([[PLANTED_HISTORICAL_ABS, PLANTED_HISTORICAL_SOURCE]]),
   );
+}
+
+function r5Kinds(result: ThunkScanResult, name: string): string[] {
+  return hitsOf(result, "R5", name).map((hit) => hit.kind);
+}
+
+/** One line per control whose R5 kinds differ from the expectation, so a single broken branch names every control it breaks. */
+function r5Mismatches(
+  result: ThunkScanResult,
+  positives: readonly Expectation[],
+  negatives: readonly string[],
+): string[] {
+  const out: string[] = [];
+  for (const positive of positives) {
+    const got = r5Kinds(result, positive.name);
+    if (JSON.stringify(got) !== JSON.stringify(positive.kinds)) {
+      out.push(
+        `${positive.name}: expected ${JSON.stringify(positive.kinds)}, got ${JSON.stringify(got)}`,
+      );
+    }
+  }
+  for (const name of negatives) {
+    const got = r5Kinds(result, name);
+    if (got.length > 0) {
+      out.push(`${name}: expected no R5 hit, got ${JSON.stringify(got)}`);
+    }
+  }
+  return out;
 }
 
 describe("lazySchema thunk rules scan", () => {
@@ -1435,7 +698,11 @@ describe("lazySchema thunk rules scan", () => {
     expect(hitsOf(r5, "R1", "P_Z_meta").map((hit) => hit.kind)).toEqual([
       "meta",
     ]);
-    expect(hitsOf(r5, "R1", "P_Z_describe_nested")).toEqual([]);
+
+    const zod = scanZodPlanted();
+    for (const name of ZOD_POSITIVES.concat(ZOD_NEGATIVES)) {
+      expect(hitsOf(zod, "R1", name), name).toEqual([]);
+    }
   });
 
   it("R2 flags outermost z.instanceof and ignores nested instanceof", () => {
@@ -1465,22 +732,111 @@ describe("lazySchema thunk rules scan", () => {
       "self-ref",
     ]);
     expect(hitsOf(result, "R4", "N_R4_plain_local")).toEqual([]);
-    expect(hitsOf(result, "R4", "N_R4_module_ident")).toEqual([]);
+    expect(hitsOf(result, "R4", "P_R6_module_ident")).toEqual([]);
     expect(hitsOf(result, "R4", "P_R1_describe")).toEqual([]);
+  });
+
+  it("R6 flags a thunk that returns an existing value: an identifier or a property chain the thunk does not declare", () => {
+    const result = scanRulesPlanted();
+    for (const name of [
+      "P_R6_module_ident",
+      "P_R6_property_chain",
+      "P_R6_element_chain",
+      "P_R6_block_return",
+    ]) {
+      expect(
+        hitsOf(result, "R6", name).map((hit) => hit.kind),
+        name,
+      ).toEqual(["alias"]);
+    }
+    for (const name of [
+      "N_R6_call",
+      "N_R6_thunk_local",
+      "N_R6_thunk_local_ident",
+      "N_R4_plain_local",
+      "P_R1_describe",
+      "P_R3_json",
+    ]) {
+      expect(hitsOf(result, "R6", name), name).toEqual([]);
+    }
   });
 
   it("R5 flags each planted side-effect branch and ignores the planted negatives", () => {
     const result = scanR5Planted();
     expect(result.thunkCount).toBe(R5_POSITIVES.length + R5_NEGATIVES.length);
-    for (const positive of R5_POSITIVES) {
-      expect(
-        hitsOf(result, "R5", positive.name).map((hit) => hit.kind),
-        positive.name,
-      ).toContain(positive.kind);
-    }
-    for (const name of R5_NEGATIVES) {
-      expect(hitsOf(result, "R5", name), name).toEqual([]);
-    }
+    expect(r5Mismatches(result, R5_POSITIVES, R5_NEGATIVES)).toEqual([]);
+  });
+
+  it("R5 catches the shapes the first walker missed, and reports what it cannot follow as unanalysed", () => {
+    const result = scanShapesPlanted();
+    expect(result.thunkCount).toBe(
+      SHAPE_POSITIVES.length + SHAPE_NEGATIVES.length,
+    );
+    expect(r5Mismatches(result, SHAPE_POSITIVES, SHAPE_NEGATIVES)).toEqual([]);
+  });
+
+  it("R5 names each unanalysed call with a stable label", () => {
+    const result = scanShapesPlanted();
+    const label = (name: string): string[] =>
+      hitsOf(result, "R5", name)
+        .filter(isUnanalysedHit)
+        .map((hit) => hit.detail);
+    expect(label("P_B2_unresolvable")).toEqual([
+      "method-on-non-schema registrar.note (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_B2_destructured_receiver")).toEqual([
+      "method-on-non-schema destructuredA.extend (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_A_param_method")).toEqual([
+      "param-method o.go (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_A_unknown_arg")).toEqual([
+      "argument-of-unknown-provenance t (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_B_unknown_mutation")).toEqual([
+      "mutation-on-unknown-provenance x (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_D_parse_module")).toEqual([
+      "parse-runs-callbacks shapeSchema.parse",
+    ]);
+    expect(label("P_D_z_parse")).toEqual(["parse-runs-callbacks z.parse"]);
+    expect(label("P_D_param_parse")).toEqual(["parse-runs-callbacks s.parse"]);
+    expect(label("P_C_console")).toEqual([
+      "method-on-unresolved console.log (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_B9_call")).toEqual([
+      "call-apply-bind pushIt.call (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_B10_factory_result")).toEqual([
+      "callee-not-function noteFn (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_B14_element_call")).toEqual([
+      'element-access-call list["push"] (protocol/src/sweepctl/shapes.ts)',
+    ]);
+    expect(label("P_B18_reflect_apply")).toEqual([
+      "call-apply-bind Reflect.apply (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_Uf_reflect_construct")).toEqual([
+      "method-on-unresolved Reflect.construct (protocol/src/sweepctl/shapes.ts)",
+    ]);
+    expect(label("P_Ua_external_call")).toEqual([
+      "external external-pkg:extCall",
+    ]);
+    expect(label("P_B6_unresolvable_base")).toEqual([
+      "class-base ExternalBase (protocol/src/sweepctl/shapes.ts)",
+    ]);
+  });
+
+  it("R5-Z flags only a registry write observable apart from the thunk's own fresh schema", () => {
+    const result = scanZodPlanted();
+    expect(result.thunkCount).toBe(ZOD_POSITIVES.length + ZOD_NEGATIVES.length);
+    expect(
+      r5Mismatches(
+        result,
+        ZOD_POSITIVES.map((name) => ({ name, kinds: ["Z registry"] })),
+        ZOD_NEGATIVES,
+      ),
+    ).toEqual([]);
   });
 
   it("R5 flags the historical withResidualCapture-inside-thunk form", () => {
@@ -1491,7 +847,7 @@ describe("lazySchema thunk rules scan", () => {
     );
   });
 
-  it("production protocol and OSS client sources have zero R1-R5 hits and at least 3000 thunks", () => {
+  it("production protocol and OSS client sources have zero R1-R6 hits, unanalysed calls exactly the allow-list, and at least 3000 thunks", () => {
     const files = gitListedFiles(TRAYCER_ROOT, SCAN_PREFIXES);
     expect(files.length).toBeGreaterThan(0);
     const result = scanThunkRules({
@@ -1502,6 +858,17 @@ describe("lazySchema thunk rules scan", () => {
       contentRoot: TRAYCER_ROOT,
     });
     expect(result.thunkCount).toBeGreaterThanOrEqual(3000);
-    expect(result.hits.map(formatHit)).toEqual([]);
+    expect(
+      result.hits.filter((hit) => !isUnanalysedHit(hit)).map(formatHit),
+    ).toEqual([]);
+    const labels = unanalysedLabelsOf(result);
+    expect(
+      labels.filter((label) => !ALLOWED_UNANALYSED.has(label)),
+      "an unanalysed call the scan cannot follow: judge it, and add it to ALLOWED_UNANALYSED with a reason only if it is pure",
+    ).toEqual([]);
+    expect(
+      [...ALLOWED_UNANALYSED.keys()].filter((label) => !labels.includes(label)),
+      "stale ALLOWED_UNANALYSED entry: remove it",
+    ).toEqual([]);
   }, 60_000);
 });
