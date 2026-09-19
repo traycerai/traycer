@@ -21,6 +21,8 @@ import {
   hostFileTransferReadChunkV10,
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
+  browserReplReleaseRealmV10,
+  browserReplRunCellV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
 import {
   managedCommandConfigureV10,
@@ -48,6 +50,8 @@ const NEW_METHODS = [
   hostFileTransferReadChunkV10.method,
   hostFileTransferCloseV10.method,
   hostAgentCreateFromRemoteSenderV10.method,
+  browserReplRunCellV10.method,
+  browserReplReleaseRealmV10.method,
 ] as const;
 
 describe("host-agent capability contracts", () => {

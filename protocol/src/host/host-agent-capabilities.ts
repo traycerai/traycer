@@ -18,6 +18,7 @@
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
+import { browserSessionReferenceSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   chatRunSettingsStrictSchema,
   tuiHarnessIdSchema,
@@ -692,4 +693,109 @@ export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
   // warnings. The caller briefs it with `agent.sendMessage`, which already
   // routes cross-host.
   responseSchema: createAgentResponseSchema,
+});
+
+/**
+ * Which A2A registration a routed browser cell belongs to, as claims.
+ *
+ * The target REBUILDS the caller's registration key from `sessionKeyTag` plus
+ * `chatId` with the same tagged constructors the origin used, rather than
+ * accepting a composed key on the wire: that key is the namespace deciding
+ * which realm a cell enters, and a peer able to spell one directly could name
+ * another registration's realm. `chatId` is the bare id both tagged
+ * constructors take — a GUI chat's id, or a terminal agent's id — and the
+ * origin proves that before it dials by rebuilding the key and comparing it
+ * with the one it holds.
+ *
+ * `userId` and the origin host id are NOT here: both come from the dialed
+ * session's principal, never from the request.
+ */
+export const browserReplCallerSchema = z.object({
+  sessionKeyTag: z.enum(["chat", "terminal-agent"]),
+  chatId: z.string().min(1),
+  agentRunId: z.string().nullable(),
+});
+export type BrowserReplCaller = z.infer<typeof browserReplCallerSchema>;
+
+export const browserReplRunCellRequestSchema = z.object({
+  epicId: z.string().min(1),
+  title: z.string().min(1),
+  code: z.string().min(1),
+  caller: browserReplCallerSchema,
+});
+export type BrowserReplRunCellRequest = z.infer<
+  typeof browserReplRunCellRequestSchema
+>;
+
+/**
+ * One block of the cell's `CallToolResult`, carried verbatim so the agent's
+ * host re-emits what the browser's host produced rather than re-rendering it.
+ * The MCP result has exactly these two block kinds on this path: the text
+ * block (cell output plus its `[hint]` / `[notice]` / `[state]` lines) and the
+ * screenshot attachments.
+ */
+export const browserReplCellContentSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({
+    type: z.literal("image"),
+    data: z.string(),
+    mimeType: z.string().min(1),
+  }),
+]);
+export type BrowserReplCellContent = z.infer<
+  typeof browserReplCellContentSchema
+>;
+
+/**
+ * `sessionsUsed` exists because `onSessionUsed` cannot run on the target: it
+ * writes a reference into the AGENT'S chat, which lives on the origin host.
+ * The references are collected here and written there, already stamped with
+ * this host's `hostId` — a session id is host-local, so the stamp is what
+ * makes the reference resolvable at all.
+ */
+export const browserReplRunCellResponseSchema = z.object({
+  content: z.array(browserReplCellContentSchema),
+  isError: z.boolean(),
+  sessionsUsed: z.array(browserSessionReferenceSchema),
+  /** How this host names itself, for the `[state]` line the agent reads. */
+  machineName: z.string().min(1),
+});
+export type BrowserReplRunCellResponse = z.infer<
+  typeof browserReplRunCellResponseSchema
+>;
+
+export const browserReplRunCellV10 = defineRpcContract({
+  method: "browser.repl.runCell",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplRunCellRequestSchema,
+  responseSchema: browserReplRunCellResponseSchema,
+});
+
+/**
+ * Retires a routed realm on the browser's host: context, adapters, tab leases
+ * and the cell child process. Sent when the agent's A2A registration is
+ * released, which is the same deterministic signal a local realm is retired
+ * on. Idempotent — a realm that is already gone is a success, so a release
+ * racing an expiry is not an error either side has to reconcile.
+ */
+export const browserReplReleaseRealmRequestSchema = z.object({
+  epicId: z.string().min(1),
+  caller: browserReplCallerSchema,
+});
+export type BrowserReplReleaseRealmRequest = z.infer<
+  typeof browserReplReleaseRealmRequestSchema
+>;
+
+export const browserReplReleaseRealmResponseSchema = z.object({
+  released: z.boolean(),
+});
+export type BrowserReplReleaseRealmResponse = z.infer<
+  typeof browserReplReleaseRealmResponseSchema
+>;
+
+export const browserReplReleaseRealmV10 = defineRpcContract({
+  method: "browser.repl.releaseRealm",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserReplReleaseRealmRequestSchema,
+  responseSchema: browserReplReleaseRealmResponseSchema,
 });

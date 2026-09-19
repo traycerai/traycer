@@ -902,6 +902,21 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dial-only, like `host.agent.createFromRemoteSender` below: the agent's
+  // host calls these on the machine its browser realm lives on, never the
+  // renderer. They are here because this table is exhaustive over the
+  // registry. `fifo` for both - a cell is a side-effecting script and a
+  // release retires a realm, so neither may be coalesced with another call.
+  "browser.repl.runCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.releaseRealm": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Dial-only: one host calls this on another, never the renderer. It is here
   // because this table is exhaustive over the registry, not because the GUI
   // has a caller. `fifo` matches `agent.create`, whose effect it shares -
