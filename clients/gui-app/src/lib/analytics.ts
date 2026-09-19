@@ -2294,6 +2294,23 @@ function analyticsOutcomeBlockerPairIsValid(
   );
 }
 
+const DRAFTS_LIST_ENTRY_POINTS_BY_SURFACE = new Map<string, ReadonlySet<string>>([
+  ["start_page", new Set(["button", "shortcut", "palette"])],
+  ["avatar_menu", new Set(["menu", "palette"])],
+]);
+
+function analyticsDraftsListOpenedPairIsValid(
+  properties: Record<string, unknown>,
+): boolean {
+  const surface = properties.surface;
+  const entryPoint = properties.entry_point;
+  return (
+    typeof surface === "string" &&
+    typeof entryPoint === "string" &&
+    (DRAFTS_LIST_ENTRY_POINTS_BY_SURFACE.get(surface)?.has(entryPoint) ?? false)
+  );
+}
+
 function analyticsPropertiesAreRelationallyValid(
   event: AnalyticsEvent,
   properties: Record<string, unknown>,
@@ -2328,19 +2345,7 @@ function analyticsPropertiesAreRelationallyValid(
     );
   }
   if (event === AnalyticsEvent.DraftsListOpened) {
-    const surface = properties.surface;
-    const entryPoint = properties.entry_point;
-    if (surface === "start_page") {
-      return (
-        entryPoint === "button" ||
-        entryPoint === "shortcut" ||
-        entryPoint === "palette"
-      );
-    }
-    if (surface === "avatar_menu") {
-      return entryPoint === "menu" || entryPoint === "palette";
-    }
-    return false;
+    return analyticsDraftsListOpenedPairIsValid(properties);
   }
   return true;
 }
