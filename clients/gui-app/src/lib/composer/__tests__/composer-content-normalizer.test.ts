@@ -244,6 +244,7 @@ function imageNode(id: string): JsonContent {
       b64content: id,
       mimeType: "image/png",
       size: id.length,
+      byHashEligible: true,
     },
   };
 }

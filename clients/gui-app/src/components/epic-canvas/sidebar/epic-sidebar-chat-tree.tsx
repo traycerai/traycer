@@ -1,4 +1,3 @@
-import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Chat/terminal-agent tree body for the sidebar. Renders the tree of chat nodes
@@ -21,7 +20,6 @@ import {
   chatOpensPublishedCopy,
   makeChatOpenTileRef,
 } from "@/lib/chats/chat-open-tile-ref";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
@@ -132,7 +130,6 @@ import {
   type NodeSortClock,
 } from "@/lib/epic-sort";
 import {
-  findOpenTileInTab,
   useActiveEpicArtifactId,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
@@ -267,6 +264,7 @@ import {
 } from "./use-chat-archive-hidden-ids";
 import {
   chatFilterEmptyStateDescription,
+  chatSearchEmptyStateDescription,
   FILTERED_EMPTY_TITLE,
   useChatFilterMatchIds,
 } from "./epic-sidebar-panel-filters";
@@ -280,6 +278,7 @@ import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-sou
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { ChatSearchHeaderInput } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-search";
+import type { ChatTreeMessageHits } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import {
   chatSearchMatchIds,
   expandMatchesToVisibleIds,
@@ -317,6 +316,18 @@ import {
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
   readonly tabId: string;
+  /**
+   * The message-hit section that follows this tree, built by the mount point
+   * and placed here so it lands inside the tree's own scroll container, right
+   * under the rows rather than pinned to the bottom of the panel. It stays a
+   * SIBLING of `role="tree"` - a hit is not a row of this tree.
+   *
+   * Its `state` is also the one thing the tree needs from it: whether the
+   * search matched anything down there, which decides what this panel's empty
+   * state may still claim. Passed rather than read here so the request is made
+   * once - see `useEpicSidebarMessageHits`.
+   */
+  readonly messageHits: ChatTreeMessageHits;
 }
 
 type TreeFilterFn = (type: string | null | undefined) => boolean;
@@ -646,7 +657,11 @@ function cloudRowMatchesOwnershipFilter(
 // a stable order; child row complexity is isolated below.
 // eslint-disable-next-line complexity
 export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
-  const { epicId, tabId } = props;
+  const { epicId, messageHits, tabId } = props;
+  // The section found something, or is still looking: either way the search
+  // has not come up empty yet, whatever the tree's own rows say.
+  const messageHitsMatched =
+    messageHits.state === "hits" || messageHits.state === "loading";
   const shouldReduceMotion = useReducedMotion() === true;
   const panelId: RootCreatePanelId = "chats";
   const sort = useChatSort(epicId);
@@ -1265,15 +1280,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     // Search is the narrowing the user is actively driving, so it owns the
     // empty state even when a filter is also on - blaming the filter chips for
     // a query that matches nothing would send them to the wrong control.
-    panelContent = (
+    //
+    // Unless the message hits below have something, or are still fetching it:
+    // the search DID match then, and "No agents match your search." is simply
+    // false. The section is the content in that case, so this renders nothing
+    // rather than falling through to the filter's empty state.
+    panelContent = messageHitsMatched ? null : (
       <SidebarPanelEmptyState
         icon={SearchX}
         title="No agents match your search."
-        description={
-          isChatFilterActive(chatFilter)
-            ? "The current filters may also be hiding matches."
-            : null
-        }
+        description={chatSearchEmptyStateDescription(
+          isChatFilterActive(chatFilter),
+          messageHits.state === "empty",
+        )}
         testId="epic-chat-sidebar-search-empty"
       />
     );
@@ -1307,7 +1326,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         ) : (
           <m.div
             key="tree"
-            className="flex min-h-0 flex-1 flex-col"
+            // The tree fills the panel, which is what puts its empty space
+            // below the rows where a drop un-nests to root. With a section
+            // following it that space would fall BETWEEN the rows and the
+            // section, so the rows shrink to their own height and the hits sit
+            // directly under them.
+            className={cn(
+              "flex min-h-0 flex-col",
+              messageHits.node === null ? "flex-1" : "shrink-0",
+            )}
             exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
             transition={{ duration: shouldReduceMotion ? 0 : 0.16 }}
           >
@@ -1412,6 +1439,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                       data-testid="epic-chat-tree-region"
                     >
                       {panelContent}
+                      {messageHits.node}
                     </SidebarGroupContent>
                   </SidebarGroup>
                 </SidebarContent>
@@ -1546,14 +1574,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const { expandedIds, toggleExpanded } = expansion;
   const node = useChatRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
-  const navigateNested = useEpicNestedFocusNavigation();
   const { openTile } = useEpicTileNavigation();
   // Non-null only where this tree is mounted on a surface that cannot express
   // the desktop open gestures - see `ChatTreeSurface`.
   const surface = useChatTreeSurface();
-  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareCloseCanvasTabFocusTarget,
-  );
   const markArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.markArtifactSelfDeleted,
   );
@@ -1846,7 +1870,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         // verdict is a round trip. A promise here is truthy, so the branch
         // would be taken even for a write that failed.
         if (await epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
-          renameArtifactInTab(tabId, nodeId, trimmed);
+          renameArtifactInTab(tabId, nodeId, trimmed, null);
         }
         return;
       }
@@ -1879,7 +1903,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
           .getState()
           .isLatestRenameStamp(nodeId, requestId))
       ) {
-        renameArtifactInTab(tabId, nodeId, trimmed);
+        renameArtifactInTab(tabId, nodeId, trimmed, mutationHostId);
       }
     };
     const failed = async (): Promise<void> => {
@@ -1888,7 +1912,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     if (artifactType === "chat") {
       settleDetachedEpicMutation(
         renameChat
-          .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+          .mutateAsync({
+            epicId,
+            chatId: nodeId,
+            title: trimmed,
+            hostId: mutationHostId,
+          })
           .then(landed, failed),
         "sidebar tree",
         "chat rename settlement",
@@ -1896,7 +1925,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     } else if (artifactType === "terminal-agent") {
       settleDetachedEpicMutation(
         renameTerminalAgent
-          .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+          .mutateAsync({
+            epicId,
+            tuiAgentId: nodeId,
+            title: trimmed,
+            hostId: mutationHostId,
+          })
           .then(landed, failed),
         "sidebar tree",
         "terminal-agent rename settlement",
@@ -1922,6 +1956,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     renameChat,
     renameTerminalAgent,
     renameValue,
+    mutationHostId,
     setIsRenaming,
     tabId,
   ]);
@@ -1959,26 +1994,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       "sidebar tree",
       "local delete projection",
     );
-    markArtifactSelfDeleted(nodeId);
+    if (artifactType !== "terminal-agent") markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
-      // The tab for THIS row's host - closing the clone's twin would leave
-      // the deleted chat's own tab open and shut a live one.
-      const found = findOpenTileInTab(tabId, openRef());
-      if (found !== null) {
-        navigateNested(epicId, tabId, () =>
-          withoutTabRecovery(() =>
-            prepareCloseCanvasTabFocusTarget(
-              tabId,
-              found.paneId,
-              found.instanceId,
-            ),
-          ),
-        );
-      }
     };
     const handleDeleteError = () => {
-      unmarkArtifactSelfDeleted(nodeId);
+      if (artifactType !== "terminal-agent") unmarkArtifactSelfDeleted(nodeId);
     };
     if (artifactType === "chat") {
       deleteChat.mutate(
@@ -1987,7 +2008,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       );
     } else if (artifactType === "terminal-agent") {
       deleteTerminalAgent.mutate(
-        { epicId, tuiAgentId: nodeId },
+        { epicId, tuiAgentId: nodeId, hostId: mutationHostId },
         { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
       );
     }

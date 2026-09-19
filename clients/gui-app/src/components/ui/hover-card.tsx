@@ -49,14 +49,22 @@ function HoverCardTrigger({
 // closes it). So any action placed here must also have a keyboard-reachable
 // home elsewhere: copy-path lives on the click-open folder rows (`FolderRow`),
 // and the PR link is also in the Epic history list.
+type HoverCardContentProps = React.ComponentProps<
+  typeof HoverCardPrimitive.Content
+> & {
+  /** Compact path disclosures share label-tooltip colors but allow actions. */
+  readonly appearance?: "preview" | "tooltip";
+};
+
 function HoverCardContent({
   ref,
   className,
+  appearance = "preview",
   align = "start",
   sideOffset = 4,
   collisionPadding,
   ...props
-}: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
+}: HoverCardContentProps) {
   // Concealed region (see `portal-concealment-context`): un-present with the
   // region — the anchor is display:none and cannot deliver the close events.
   const concealed = usePortalConcealed();
@@ -72,12 +80,15 @@ function HoverCardContent({
       <HoverCardPrimitive.Content
         ref={ref}
         data-slot="hover-card-content"
+        data-appearance={appearance}
         align={align}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
           "z-50 origin-(--radix-hover-card-content-transform-origin) outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          HOVER_PREVIEW_SURFACE_CLASS,
+          appearance === "tooltip"
+            ? "rounded-md bg-foreground text-background shadow-sm"
+            : HOVER_PREVIEW_SURFACE_CLASS,
           // Last of the primitive-owned classes, so the shared surface class
           // can never displace the cap while a caller's `max-w-*` still can.
           "max-w-safe-dvw",

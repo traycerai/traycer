@@ -97,7 +97,7 @@ function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {
         )}
         style={{ width: sidebarWidthPx }}
       >
-        {mainCollapsed ? null : <SidebarArtwork />}
+        <SidebarArtwork />
         <SidebarProvider defaultOpen className="h-full min-h-0 w-full flex-col">
           {mainCollapsed ? null : (
             <ColumnRail

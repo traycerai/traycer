@@ -25,6 +25,17 @@ import type { InitialChatHandoff } from "@/stores/epics/initial-chat-handoff-sto
  *   any state + failedSendRestoration matches → "markFailedByAction"
  *   failedSendRestoration exists → "restoreAndAckFailed" (idempotent;
  *      the chat-session-store's ackFailedSendRestoration clears the slot)
+ *
+ * ASYNC WORKTREE PROVISIONING adds no state and no transition, and the reason
+ * is worth stating because the failure it would otherwise leave is invisible.
+ * A deferred `epic.create` seeds the initial message as a QUEUED item at the
+ * commit point, so this resend always meets a non-empty queue and the host
+ * takes its queue-only duplicate path - which still acks the `send`. That ack
+ * is the "sending" + acceptedAction("send") → "consume" row above. So even a
+ * provision failure the user walks away from (card showing Retry, row still
+ * queued, turn never run) leaves NO handoff entry stuck in `sending`: the
+ * handoff was consumed seconds after the create, by the duplicate's ack, and
+ * the 60 s orphan deadline never has to fire.
  */
 export type HandoffStep =
   | { readonly kind: "noop" }

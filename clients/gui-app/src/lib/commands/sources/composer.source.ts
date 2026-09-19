@@ -42,14 +42,17 @@ import type {
   CommandSubpage,
   ReactCommandSource,
 } from "@/lib/commands/types";
+import {
+  hasActiveDraftsControl,
+  subscribeActiveDraftsControl,
+} from "@/lib/commands/active-drafts-control-registry";
+import { openDrafts } from "@/lib/keybindings/dispatch";
 import type { ChordString } from "@/lib/keybindings/chord";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useMemo, useSyncExternalStore } from "react";
-
-const NO_ITEMS: ReadonlyArray<CommandItem> = [];
 
 function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const kind = ctx.focusedComposerKind;
@@ -58,8 +61,16 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const modelPickerShortcut = useKeybindingStore(
     (state) => state.bindings["composer.model-picker.toggle"],
   );
-  const stashShortcut = useKeybindingStore(
-    (state) => state.bindings["composer.stash"],
+  const draftsShortcut = useKeybindingStore(
+    (state) => state.bindings["composer.drafts"],
+  );
+  // Cmd+S only opens the start-page control. Advertise that chord on the
+  // palette row only while a control is registered; otherwise the row still
+  // opens the avatar dialog, but showing the shortcut would lie.
+  const draftsControlActive = useSyncExternalStore(
+    subscribeActiveDraftsControl,
+    hasActiveDraftsControl,
+    hasActiveDraftsControl,
   );
   // Live snapshot of the active composer picker - the top-of-stack controller,
   // or null. The "Change model…" row dispatches `composer.model-picker.toggle`,
@@ -81,8 +92,10 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   // render, so opening the top-level palette does not eagerly hit SDKs.
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
-    if (kind === null) return NO_ITEMS;
-    const items: Array<CommandItem> = [buildStashPromptItem(stashShortcut)];
+    const items: Array<CommandItem> = [
+      buildDraftsItem(draftsControlActive ? draftsShortcut : null),
+    ];
+    if (kind === null) return items;
     if (activeModelPicker !== null) {
       items.push(
         buildChangeModelItem(
@@ -109,7 +122,8 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     ctx.activeEpicId,
     ctx.activeTabId,
     modelPickerShortcut,
-    stashShortcut,
+    draftsShortcut,
+    draftsControlActive,
     activeModelPicker,
   ]);
 }
@@ -119,18 +133,20 @@ export const composerSource: ReactCommandSource = {
   useItems: useComposerItems,
 };
 
-function buildStashPromptItem(shortcut: ChordString | null): CommandItem {
+function buildDraftsItem(shortcut: ChordString | null): CommandItem {
   return {
-    id: "composer:stash-prompt",
-    label: "Stash prompt",
-    description: "Save this prompt so it can be restored in any composer.",
-    keywords: ["stash", "save", "prompt", "draft"],
+    id: "composer:drafts",
+    label: "Drafts",
+    description: "Browse saved drafts.",
+    keywords: ["drafts", "saved", "prompt"],
     group: "suggested",
     scope: "actions",
     shortcut,
-    actionId: "composer.stash",
+    actionId: null,
     subpage: null,
-    run: () => undefined,
+    run: () => {
+      openDrafts("palette");
+    },
   };
 }
 

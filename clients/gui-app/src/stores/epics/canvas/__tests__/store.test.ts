@@ -1512,7 +1512,7 @@ describe("makeSelectTabActivation", () => {
   });
 });
 
-describe("closeConfirmedDeletedChatTiles", () => {
+describe("closeConfirmedDeletedAgentTiles", () => {
   it("closes every matching chat tile after a confirmed host deletion without touching same-id peers", () => {
     const store = useEpicCanvasStore.getState();
     const firstTabId = store.openEpicTab("epic-deleted-chat", "First");
@@ -1541,10 +1541,11 @@ describe("closeConfirmedDeletedChatTiles", () => {
     store.openTileInTab(secondTabId, targetB);
     store.openTileInTab(otherEpicTabId, sameIdOtherEpic);
 
-    store.closeConfirmedDeletedChatTiles(
+    store.closeConfirmedDeletedAgentTiles(
       "epic-deleted-chat",
       CHAT_A.id,
       TEST_HOST_ID,
+      "chat",
     );
 
     expect(

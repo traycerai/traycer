@@ -56,7 +56,7 @@ import {
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
@@ -117,11 +117,21 @@ const HASH_A = "a".repeat(64);
 const GATE_HOST = "host-t5-followups";
 const GATE_OWNER = "owner-t5-followups";
 
+// BOTH members, and `requestWithOptions` is the load-bearing one: `drafts.putBlob`
+// rides it, never the plain `request`, because it needs an idempotency key and a
+// budget the default 30s unary one cannot give a multi-megabyte body. A fake
+// carrying only `request` does not just fail to typecheck - the upload throws on
+// an undefined member, nothing is ever confirmed, and every gate assertion below
+// reads "not host-held" for a reason that has nothing to do with the gate.
 const OK_CLIENT: DraftBlobClient = {
   request: ((_method, _params) =>
     Promise.resolve({
       ok: true as const,
     })) as HostRequester<HostRpcRegistry>["request"],
+  requestWithOptions: ((_method, _params, _options) =>
+    Promise.resolve({
+      ok: true as const,
+    })) as HostRequester<HostRpcRegistry>["requestWithOptions"],
 };
 
 async function seedConfirmedHash(): Promise<string> {

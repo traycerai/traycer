@@ -10,7 +10,6 @@ const flushActiveDesktopPerWindowProjection = vi.fn<() => Promise<void>>(() =>
 const drainDesktopTabsPersistence = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
-const publishPromptStashReset = vi.fn<() => void>();
 const resetTabRecoveryHistory = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
@@ -20,9 +19,6 @@ vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
 }));
 vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
   drainDesktopTabsPersistence: () => drainDesktopTabsPersistence(),
-}));
-vi.mock("@/lib/composer/prompt-stash-channel", () => ({
-  publishPromptStashReset: () => publishPromptStashReset(),
 }));
 vi.mock("@/lib/tab-recovery/history", () => ({
   resetTabRecoveryHistory: () => resetTabRecoveryHistory(),
@@ -47,6 +43,7 @@ vi.mock("@/lib/appearance/appearance-cache", () => ({
 }));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
+import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
 function createMockStorage(seed: Record<string, string>): Storage {
@@ -130,7 +127,6 @@ let reloadSpy: Mock<() => void>;
 beforeEach(() => {
   flushActiveDesktopPerWindowProjection.mockClear();
   drainDesktopTabsPersistence.mockClear();
-  publishPromptStashReset.mockClear();
   resetTabRecoveryHistory.mockReset();
   resetTabRecoveryHistory.mockResolvedValue(undefined);
   clearAppearanceCache.mockClear();
@@ -347,20 +343,20 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     return { deleted };
   }
 
-  it("deletes only known renderer dbs (landing-image, file-edit-recovery, prompt-stash, tab-recovery); same-prefix + unrelated dbs survive", async () => {
+  it("deletes only known renderer dbs (landing-image, file-edit-recovery, legacy stash, tab-recovery); same-prefix + unrelated dbs survive", async () => {
     const { deleted } = installIndexedDB({
       databases: () => Promise.resolve(DB_NAMES.map((name) => ({ name }))),
     });
 
     await clearAllPersistedStores({ hostClear: null });
 
-    // Landing partitions come from enumeration; prompt-stash and the fixed
-    // appearance db are always deleted by exact name even when enumeration
-    // never lists them.
+    // Landing partitions come from enumeration; the legacy stash db and the
+    // fixed appearance db are always deleted by exact name even when
+    // enumeration never lists them.
     expect(deleted.sort()).toEqual(
       [
         "traycer-gui-app:default:landing-images",
-        "traycer-gui-app:prompt-stash",
+        STASH_DB_NAME,
         "traycer-gui-app:appearance",
         "traycer-gui-app:window-7:landing-images",
         "traycer-gui-app:default:file-edit-recovery",
@@ -369,7 +365,6 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
-    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
   });
 
   it("clears the appearance cache during the wipe", async () => {
@@ -427,36 +422,6 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
 
     expect(order[0]).toBe("appearance-clear");
     expect(order[order.length - 1]).toBe("reload");
-  });
-
-  it("notifies peer windows only after the prompt-stash database is deleted", async () => {
-    const order: string[] = [];
-    const value = {
-      databases: vi.fn(() => Promise.resolve([])),
-      deleteDatabase: vi.fn((name: string) => {
-        const { request, fire } = fakeDeleteRequest();
-        queueMicrotask(() => {
-          order.push(`deleted:${name}`);
-          fire();
-        });
-        return request;
-      }),
-    };
-    Object.defineProperty(globalThis, "indexedDB", {
-      configurable: true,
-      writable: true,
-      value,
-    });
-    publishPromptStashReset.mockImplementation(() => order.push("reset"));
-
-    await clearAllPersistedStores({ hostClear: null });
-
-    expect(order).toEqual([
-      "deleted:traycer-gui-app:prompt-stash",
-      "deleted:traycer-gui-app:tab-recovery",
-      "deleted:traycer-gui-app:appearance",
-      "reset",
-    ]);
   });
 
   it("drops the dbs AFTER the storage sweep and BEFORE the reload", async () => {
@@ -531,7 +496,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("still deletes the fixed prompt-stash db when `indexedDB.databases` is absent", async () => {
+  it("still deletes the fixed legacy stash db when `indexedDB.databases` is absent", async () => {
     const deleteDatabase = vi.fn((_name: string) => {
       const { request, fire } = fakeDeleteRequest();
       queueMicrotask(fire);
@@ -549,12 +514,19 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     ).resolves.toBeUndefined();
 
     // Without enumeration, landing partitions cannot be found - accepted gap -
-    // but the single known prompt-stash name is always deleted.
+    // but the single known legacy stash name is always deleted.
+    //
+    // Deliberately the LITERAL historical name, not `STASH_DB_NAME`: this is
+    // the one assertion that pins what the retired prompt-stash repository
+    // actually wrote. Production, the migration reader and every other
+    // assertion here share that constant, so a typo in it would leave the real
+    // db on disk untouched while all of them still agreed with each other.
     expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
+    expect(STASH_DB_NAME).toBe("traycer-gui-app:prompt-stash");
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("still deletes prompt stash and reloads when database enumeration rejects", async () => {
+  it("still deletes the legacy stash db and reloads when database enumeration rejects", async () => {
     const deleteDatabase = vi.fn((_name: string) => {
       const { request, fire } = fakeDeleteRequest();
       queueMicrotask(fire);
@@ -573,8 +545,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
       clearAllPersistedStores({ hostClear: null }),
     ).resolves.toBeUndefined();
 
-    expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
-    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
+    expect(deleteDatabase).toHaveBeenCalledWith(STASH_DB_NAME);
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 

@@ -5,8 +5,9 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { DraftHeadReaderRecord } from "@traycer/protocol/persistence/draft/schemas";
 import { DRAFT_HEAD_SCHEMA_VERSION } from "@traycer/protocol/persistence/draft/version";
 import type { DraftDocument } from "@traycer/protocol/host";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { draftDocumentFromCloudHead } from "@/lib/drafts/cloud-draft-apply";
@@ -15,11 +16,11 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import {
   acquireDraftMirrorSession,
   ingestCloudDraftSummary,
-  stashBlobsThatCanRestore,
   releaseDraftMirrorSession,
   resetDraftMirrorCoordinatorForTests,
 } from "@/lib/drafts/draft-mirror-coordinator";
-import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
+import { resetStashMigrationForTests } from "@/lib/drafts/stash-migration";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 
 const INGESTING_HOST = "host-a";
@@ -95,6 +96,8 @@ function newChatDocument(
 function stashDocument(
   cloudSummary: CloudChatSummary,
   hashes: readonly string[],
+  mimeType: string,
+  byteLength: number,
 ): DraftDocument {
   const record: DraftHeadReaderRecord = {
     dialect: "draft/v1",
@@ -104,13 +107,41 @@ function stashDocument(
     target: { epicId: null, chatId: null, blockId: null },
     hostLocal: { hostId: OWNER_HOST, workspace: null },
     portable: {
-      content: EMPTY_DOC,
+      content: stashContent(hashes, mimeType, byteLength),
       blobHashes: [...hashes],
       createdAt: 1,
       annotations: [],
     },
   };
   return draftDocumentFromCloudHead(cloudSummary, record);
+}
+
+/**
+ * A stash document's content, with one image node per hash. The conversion
+ * imports what the CONTENT names, not what `blobHashes` lists, so a hash with
+ * no node in the document is never read for.
+ */
+function stashContent(
+  hashes: readonly string[],
+  mimeType: string,
+  byteLength: number,
+): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      ...hashes.map((hash, index) => ({
+        type: "imageAttachment",
+        attrs: {
+          id: `image-${String(index)}`,
+          fileName: "shot.gif",
+          mimeType,
+          size: byteLength,
+          hash,
+        },
+      })),
+      { type: "paragraph", content: [{ type: "text", text: "stashed words" }] },
+    ],
+  };
 }
 
 async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
@@ -170,6 +201,9 @@ function mountIngestingHostSession(
 
 beforeEach(() => {
   installFreshIndexedDb();
+  window.localStorage.clear();
+  resetStashMigrationForTests();
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useAuthStore.setState({
     status: "signed-in",
     // The store guarantees non-null `contextMetadata` in every signed-in
@@ -183,7 +217,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDraftMirrorCoordinatorForTests();
-  usePromptStashStore.setState({ rows: [] });
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   // A dirty new-chat row makes every later apply keep its local content, so
   // leaving one behind silently disarms the tests that follow.
   useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
@@ -283,43 +317,23 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
     expect(await getImageBytes(hash)).toBeUndefined();
   });
 
-  it("hands a stash document's images to the ingest, fetched BEFORE the apply", async () => {
+  it("hands a stash document's images to the conversion, fetched BEFORE the apply", async () => {
     // Stash rows were once excluded from cloud recovery, deliberately: recovery
-    // ran AFTER the apply and wrote into this window's image partition, which is
-    // not where a stash row's bytes live. `ingestRemote` carries them in the SAME
-    // durable write as the row and returns early once the row exists, so "after
-    // the apply" was never late for a stash entry - it was never.
+    // ran AFTER the apply and wrote into this window's image partition, which
+    // is not where a stash row's bytes lived. They now go exactly there - the
+    // conversion installs a start-page draft whose images ARE landing images -
+    // so the fetch has to happen before the apply, while the map it produces is
+    // still the conversion's only way to read them.
     //
-    // Asserted at the handover rather than through the repository: this file's
-    // harness cannot drive the real prompt-stash IndexedDB (`hydrate()` answers
-    // "This browser does not support IndexedDB" here), and the repository's own
-    // durability is covered by `prompt-stash-store` and the real-repository
-    // handoff suite. What is new HERE is that a populated map reaches the ingest
-    // at all, and reaches it before the row is written.
-    //
-    // Bytes unique to this test. The case this replaces reused `bytesA()`, which
-    // an earlier test in this file had already stored, so the hash was in the
-    // partition before the ingest ran and NO fetch was issued whatever the rule
-    // was - it asserted "no payload read" and would have passed just the same
-    // with the exclusion removed.
     // A real GIF87a header. Two things ride on it. The blob must SNIFF to a
-    // canonical type at all - the ingest gate drops one whose bytes disagree
-    // with their label, because the stash's restore predicate would later call
-    // that record corrupt. And the type must not be the `image/png` the
-    // transport falls back to, or the assertion below would hold just as well
-    // with the sniff removed.
+    // canonical type at all - the fetch refuses to mint a label it cannot
+    // justify. And the type must not be the `image/png` the transport falls
+    // back to, or the assertion below would hold just as well with the sniff
+    // removed.
     const stashBytes = new Uint8Array([
       0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01, 0x00,
     ]);
     const stashHash = await sha256HexOf(stashBytes);
-    const handed: Array<ReadonlyMap<string, { readonly mimeType: string }>> =
-      [];
-    usePromptStashStore.setState({
-      ingestRemote: (_entry, imagesByHash) => {
-        handed.push(imagesByHash);
-        return Promise.resolve();
-      },
-    });
 
     const calls = mountIngestingHostSession((method) => {
       if (method === "epic.readCloudChatPayload") {
@@ -341,32 +355,38 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
       // Captured where the head read was issued.
       readOwner: OWNER,
       summary: cloudSummary,
-      document: stashDocument(cloudSummary, [stashHash]),
+      document: stashDocument(
+        cloudSummary,
+        [stashHash],
+        "image/gif",
+        stashBytes.byteLength,
+      ),
     });
 
     expect(
       calls.some((call) => call.method === "epic.readCloudChatPayload"),
     ).toBe(true);
-    expect(handed).toHaveLength(1);
-    expect([...(handed[0]?.keys() ?? [])]).toEqual([stashHash]);
-    // GIF, from the BYTES - not the `image/png` the document's attr declares
-    // and not the `image/png` the transport falls back to, so this discriminates
-    // the sniff from both.
-    expect(handed[0]?.get(stashHash)?.mimeType).toBe("image/gif");
+    const drafts = useLandingDraftStore.getState().drafts;
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.closed).toBe(true);
+    // The image node survived the conversion, and its bytes are RESIDENT in
+    // this window's landing partition - which is only reachable if the fetched
+    // map reached the import. Without it `importImagesIntoLanding` throws
+    // `ImageBlobMissingError` and the original content is installed with a
+    // hash nothing holds. (The landing hash equals the source hash here: both
+    // are the sha256 of the same bytes, so residency is the discriminator, not
+    // a rewrite.)
+    expect(JSON.stringify(drafts[0]?.content)).toContain("imageAttachment");
+    expect(await getImageBytes(stashHash)).toEqual(stashBytes);
   });
 
-  it("still applies a stash document when the image fetch fails", async () => {
-    // A stash entry that lands without its images is the status quo and still
-    // restores its text. One that does not land AT ALL because a blob read threw
-    // would be a regression, so the fetch is never fatal to the apply.
-    const missingHash = await sha256HexOf(new Uint8Array([71, 72, 73, 74]));
-    const handed: Array<ReadonlyMap<string, unknown>> = [];
-    usePromptStashStore.setState({
-      ingestRemote: (_entry, imagesByHash) => {
-        handed.push(imagesByHash);
-        return Promise.resolve();
-      },
-    });
+  it("still converts a stash document when the image fetch fails", async () => {
+    // A converted draft that lands without its images still carries its text,
+    // and a hash whose bytes never arrived renders as unavailable. One that
+    // does not land AT ALL because a blob read threw would be a regression, so
+    // the fetch is never fatal to the apply.
+    const missingBytes = new Uint8Array([71, 72, 73, 74]);
+    const missingHash = await sha256HexOf(missingBytes);
 
     mountIngestingHostSession((method) => {
       if (method === "epic.readCloudChatPayload") {
@@ -382,58 +402,27 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
       // Captured where the head read was issued.
       readOwner: OWNER,
       summary: cloudSummary,
-      document: stashDocument(cloudSummary, [missingHash]),
+      document: stashDocument(
+        cloudSummary,
+        [missingHash],
+        "image/png",
+        missingBytes.byteLength,
+      ),
     });
 
-    // The row was still ingested - with an empty map, which is the pre-existing
-    // behaviour for a stash entry whose bytes cannot be found.
-    expect(handed).toHaveLength(1);
-    expect(handed[0]?.size).toBe(0);
+    const drafts = useLandingDraftStore.getState().drafts;
+    expect(drafts).toHaveLength(1);
+    expect(JSON.stringify(drafts[0]?.content)).toContain("stashed words");
+    // The original hash, un-rewritten: nothing was imported.
+    expect(JSON.stringify(drafts[0]?.content)).toContain(missingHash);
   });
 
-  it("drops a stash blob whose bytes disagree with their label", () => {
-    // The REJECTING half of the ingest gate, which nothing else here reaches.
-    // Its live producer is the MIRROR path: `readDraftBlobs` labels bytes that
-    // sniff to nothing as `"image/png"`, which suits the landing partition and
-    // is exactly what the stash's `isValidStashBlobRecord` calls corrupt. The
-    // cloud fetch cannot produce such a pair by construction - it sniffs and
-    // skips what will not answer - so this exercises the gate directly.
-    const gif = new Uint8Array([
-      0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01, 0x00,
-    ]);
-    const unsniffable = new Uint8Array([1, 2, 3, 4]);
-
-    const kept = stashBlobsThatCanRestore(
-      new Map([
-        // Agrees with its bytes: survives.
-        ["hash-gif", { bytes: gif, mimeType: "image/gif" }],
-        // The transport's fallback over bytes that sniff to nothing: dropped,
-        // because it could only ever be stored as a record that reads back as
-        // damaged.
-        ["hash-mislabelled", { bytes: unsniffable, mimeType: "image/png" }],
-        // A real image under the WRONG canonical type - the same disagreement,
-        // and the one a shape check alone would miss.
-        ["hash-wrong-type", { bytes: gif, mimeType: "image/png" }],
-      ]),
-    );
-
-    expect([...kept.keys()]).toEqual(["hash-gif"]);
-  });
-
-  it("hands over nothing when the cloud's bytes are not a decodable image", async () => {
-    // The other side of the same rule, on the path this PR adds: the fetch
-    // itself refuses to mint a label it cannot justify, so a stash row whose
-    // cloud bytes sniff to nothing arrives with an EMPTY map rather than a
-    // mislabelled blob for the gate to catch later.
+  it("converts with no images when the cloud's bytes are not a decodable image", async () => {
+    // The fetch refuses to mint a label it cannot justify, so a stash row whose
+    // cloud bytes sniff to nothing arrives with an EMPTY map - and the
+    // conversion installs the original content rather than failing outright.
     const junk = new Uint8Array([1, 2, 3, 4]);
     const junkHash = await sha256HexOf(junk);
-    const handed: Array<ReadonlyMap<string, unknown>> = [];
-    usePromptStashStore.setState({
-      ingestRemote: (_entry, imagesByHash) => {
-        handed.push(imagesByHash);
-        return Promise.resolve();
-      },
-    });
 
     mountIngestingHostSession((method) => {
       if (method === "epic.readCloudChatPayload") {
@@ -455,11 +444,17 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
       // Captured where the head read was issued.
       readOwner: OWNER,
       summary: cloudSummary,
-      document: stashDocument(cloudSummary, [junkHash]),
+      document: stashDocument(
+        cloudSummary,
+        [junkHash],
+        "image/png",
+        junk.byteLength,
+      ),
     });
 
-    expect(handed).toHaveLength(1);
-    expect(handed[0]?.size).toBe(0);
+    const drafts = useLandingDraftStore.getState().drafts;
+    expect(drafts).toHaveLength(1);
+    expect(JSON.stringify(drafts[0]?.content)).toContain(junkHash);
   });
 
   it("memoizes a host that withholds the payload read, and re-probes it on a new mirror session", async () => {

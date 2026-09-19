@@ -725,12 +725,15 @@ function InlineUserMessageEditor({
     runnerHost.fileDrops,
     resolvedMentionRoots,
   );
-  const { ingestPastedComposerImages, reingestPendingImages } =
-    useComposerPendingImageIngest({
-      editorRef,
-      runPendingImageJob,
-      draftId: null,
-    });
+  const {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  } = useComposerPendingImageIngest({
+    editorRef,
+    runPendingImageJob,
+    draftId: null,
+  });
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
@@ -794,9 +797,12 @@ function InlineUserMessageEditor({
   const onDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       editing.onSnapshot(content, selection);
+      // See `chat-composer.tsx` for why an on-change caller is needed at all:
+      // a b64 node can enter long after mount without going through a paste.
+      noteContentImages(content);
       scheduleVisibilityCheck();
     },
-    [editing, scheduleVisibilityCheck],
+    [editing, noteContentImages, scheduleVisibilityCheck],
   );
 
   // Inline message editing tracks no persisted selection of its own (unlike

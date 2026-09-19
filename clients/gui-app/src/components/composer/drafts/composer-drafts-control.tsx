@@ -1,0 +1,448 @@
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { LayersPlus } from "lucide-react";
+import { useStore } from "zustand";
+
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsCountBucket,
+  type AnalyticsDraftEntryPoint,
+  type AnalyticsDraftInput,
+} from "@/lib/analytics";
+import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import {
+  DRAFT_ROW_SELECTOR,
+  DraftRow,
+} from "@/components/composer/drafts/draft-row";
+import { Button } from "@/components/ui/button";
+import { Command, CommandGroup, CommandList } from "@/components/ui/command";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@/components/ui/drawer";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { useDraftInventory } from "@/hooks/drafts/use-draft-inventory";
+import { useDraftInventoryActions } from "@/hooks/drafts/use-draft-inventory-actions";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import {
+  registerActiveDraftsControl,
+  type DraftsControlEntryPoint,
+} from "@/lib/commands/active-drafts-control-registry";
+import {
+  neighbourRowId,
+  resolveSelectedId,
+  type DraftInventoryRow,
+  type DraftInventoryScope,
+} from "@/lib/drafts/draft-inventory";
+import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
+
+export interface ComposerDraftsControlProps {
+  readonly scope: DraftInventoryScope;
+  /** The SURFACE's host - what a start-page row is deleted through. */
+  readonly hostId: string | null;
+  readonly pickerStore: ComposerPickerStore;
+  readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
+  /** Whether this start-page composer currently owns Cmd+S. */
+  readonly active: boolean;
+}
+
+/**
+ * Force-close is one-directional: the signal going away never reopens the
+ * control, so calling this every render costs nothing once `open` is already
+ * `false`. Shared by the picker and surface-inactive closes below so the
+ * render-phase adjustment (React's documented "adjusting state when a prop
+ * changes" pattern, not `react-hooks/set-state-in-effect`'s forbidden
+ * synchronous-effect setState) only has to be written once.
+ */
+function closeIfOpen(
+  open: boolean,
+  shouldClose: boolean,
+  setOpenState: (open: boolean) => void,
+): void {
+  if (shouldClose && open) setOpenState(false);
+}
+
+function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
+  const { scope, hostId, pickerStore, editorRef, active } = props;
+  const mobile = useIsMobileViewport();
+  const [open, setOpenState] = useState(false);
+  const openRef = useRef(open);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const restoreEditorFocusRef = useRef(false);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const pickerOpen = useStore(pickerStore, (state) => state.open);
+
+  const rows = useDraftInventory(scope, "current");
+  const currentCount = rows.length;
+  const { openRow, copyRow, deleteRow } = useDraftInventoryActions(
+    hostId,
+    "start_page",
+  );
+
+  const selectedId = resolveSelectedId(rows, highlightedId);
+  const selectedRow = rows.find((row) => row.id === selectedId);
+
+  const setOpen = useCallback(
+    (nextOpen: boolean, entryPoint: AnalyticsDraftEntryPoint) => {
+      if (nextOpen && !openRef.current) {
+        Analytics.getInstance().track(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: entryPoint,
+          draft_count: analyticsCountBucket(currentCount),
+        });
+        restoreEditorFocusRef.current = editorRef.current?.hasFocus() ?? false;
+        setHighlightedId(null);
+      }
+      openRef.current = nextOpen;
+      setOpenState(nextOpen);
+    },
+    [editorRef, currentCount],
+  );
+
+  const focusEditor = useCallback(() => {
+    editorRef.current?.focus();
+  }, [editorRef]);
+
+  // Registry commands ensure the list is open; explicit dismissals still close it.
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+  const openList = useCallback(
+    (entryPoint: DraftsControlEntryPoint) => {
+      setOpen(true, entryPoint);
+    },
+    [setOpen],
+  );
+  useEffect(() => {
+    if (!active) return;
+    return registerActiveDraftsControl(openList);
+  }, [active, openList]);
+
+  // The picker popover and this one anchor to the same composer card; only one
+  // of them can own the keyboard.
+  closeIfOpen(open, pickerOpen, setOpenState);
+
+  const scrollRowIntoView = useCallback((rowId: string) => {
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+    }
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const elements =
+        listRef.current?.querySelectorAll<HTMLElement>(DRAFT_ROW_SELECTOR) ??
+        [];
+      const element = Array.from(elements).find(
+        (candidate) => candidate.dataset.draftRowId === rowId,
+      );
+      element?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      if (scrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+      }
+    },
+    [],
+  );
+
+  const handleOpenRow = useCallback(
+    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
+      restoreEditorFocusRef.current = false;
+      setOpenState(false);
+      openRow(row, input, false);
+    },
+    [openRow],
+  );
+  // Delete keeps the list open on the NEXT row (the deleted one is about to
+  // leave the projection), so a run of deletions needs one keystroke each.
+  const handleDeleteRow = useCallback(
+    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
+      setHighlightedId(neighbourRowId(rows, row.id));
+      deleteRow(row, input);
+    },
+    [deleteRow, rows],
+  );
+
+  const claimCopyKey = useBareKeyClaimer("c", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (selectedRow === undefined) return;
+    copyRow(selectedRow, "keyboard");
+  });
+  const claimDeleteKey = useBareKeyClaimer("d", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (selectedRow === undefined) return;
+    handleDeleteRow(selectedRow, "keyboard");
+  });
+  const rowHighlighted = selectedRow !== undefined;
+  // `active` is the SURFACE's own focus, and it gates the keys as well as the
+  // chord. `PopoverContent` un-presents its portal when the pane loses focus
+  // or is concealed while leaving the root open (`usePaneAwareContentGuard`),
+  // so a pane switch with the list open otherwise leaves an INVISIBLE control
+  // still eating arrows and Enter and still holding `c`/`d` - and `d`
+  // deletes a draft while the user is typing in the pane they moved to.
+  const keysActive = open && active && !mobile && rowHighlighted;
+  useEffect(
+    () => (keysActive ? claimCopyKey() : undefined),
+    [claimCopyKey, keysActive],
+  );
+  useEffect(
+    () => (keysActive ? claimDeleteKey() : undefined),
+    [claimDeleteKey, keysActive],
+  );
+  // Closing is the other half: a list the user cannot see must not still be
+  // open when they come back to this surface, and the gates above only stop
+  // it acting. `setOpenState`, not `setOpen` - there is no editor here to
+  // hand focus back to.
+  closeIfOpen(open, !active, setOpenState);
+
+  useEffect(() => {
+    if (!open || !active || mobile) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      // An IME confirming a candidate reports Enter too; it is the composer's
+      // to consume, not a request to open the highlighted row. 229 is the
+      // keyCode browsers report for a key an IME has swallowed.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false, "button");
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (rows.length === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const nextRow = rows.at(
+          nextRowIndex(
+            rows.findIndex((row) => row.id === selectedId),
+            event.key === "ArrowDown" ? "down" : "up",
+            rows.length,
+          ),
+        );
+        if (nextRow === undefined) return;
+        setHighlightedId(nextRow.id);
+        scrollRowIntoView(nextRow.id);
+        return;
+      }
+      if (isPlainPrintableKeydown(event)) {
+        // Not consumed and not prevented: the claimer's own window listener
+        // runs in the bubble phase and answers it.
+        if (isClaimedRowLetter(event, rowHighlighted)) return;
+        setOpen(false, "button");
+        return;
+      }
+      if (event.key === "Enter") {
+        // Consumed whether or not a row is highlighted. The popover keeps
+        // editor focus on purpose, so an Enter that fell through would SUBMIT
+        // the composer behind it - and the two states where nothing is
+        // highlighted are ordinary ones: the list opens with zero rows, and it
+        // stays open after the last row is deleted.
+        event.preventDefault();
+        event.stopPropagation();
+        if (selectedRow === undefined) return;
+        handleOpenRow(selectedRow, "keyboard");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [
+    active,
+    handleOpenRow,
+    mobile,
+    open,
+    rowHighlighted,
+    rows,
+    scrollRowIntoView,
+    selectedId,
+    selectedRow,
+    setOpen,
+  ]);
+
+  const list = (
+    <Command
+      loop
+      variant="embedded"
+      value={selectedId ?? ""}
+      onValueChange={setHighlightedId}
+      className="max-h-full min-h-0"
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 px-2.5 py-1.5">
+        <span className="text-ui-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Drafts
+        </span>
+      </div>
+      <CommandList ref={listRef} className="max-h-none min-h-0">
+        {rows.length === 0 ? (
+          <p className="px-2.5 py-6 text-center text-ui-sm text-muted-foreground">
+            No drafts here yet
+          </p>
+        ) : (
+          <CommandGroup>
+            {rows.map((row) => (
+              <DraftRow
+                key={row.id}
+                row={row}
+                sourceChip={null}
+                mobile={mobile}
+                onHighlight={() => setHighlightedId(row.id)}
+                onOpen={(input) => handleOpenRow(row, input)}
+                onCopy={(input) => copyRow(row, input)}
+                onDelete={(input) => handleDeleteRow(row, input)}
+              />
+            ))}
+          </CommandGroup>
+        )}
+      </CommandList>
+    </Command>
+  );
+
+  // A `Button` ELEMENT, not a wrapper component: `asChild` merges the
+  // trigger's props (including its ref and `onClick`) onto whatever element it
+  // is given, and a component that does not spread them would swallow them.
+  const trigger = (
+    <Button
+      type="button"
+      variant="muted-outline"
+      size="xs"
+      aria-label={draftsTriggerLabel(currentCount)}
+      className="rounded-full shadow-sm"
+      // Desktop keeps the editor focused behind the open list; vaul needs the
+      // pointer sequence it would otherwise lose (critique G6).
+      onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
+    >
+      <LayersPlus className="size-3.5" aria-hidden />
+      <span>Drafts</span>
+      {currentCount === 0 ? null : (
+        <span className="rounded-full bg-foreground/8 px-1.5 font-medium tabular-nums">
+          {currentCount}
+        </span>
+      )}
+    </Button>
+  );
+
+  if (mobile) {
+    return (
+      <Drawer
+        open={open}
+        onOpenChange={(nextOpen) => setOpen(nextOpen, "button")}
+        direction="bottom"
+      >
+        <DraftsTriggerRail>
+          <DrawerTrigger asChild>{trigger}</DrawerTrigger>
+        </DraftsTriggerRail>
+        {/* A drawer is portalled and `fixed`, so `#root`'s reservation never
+            reaches it, and the edge it is anchored to is the one it has to pad
+            itself: without this the last row's tap targets sit under the home
+            indicator. */}
+        <DrawerContent className="max-h-[min(80dvh,40rem)] gap-0 overflow-hidden pb-safe-bottom">
+          <DrawerTitle className="sr-only">Drafts</DrawerTitle>
+          {list}
+        </DrawerContent>
+      </Drawer>
+    );
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => setOpen(nextOpen, "button")}
+    >
+      <DraftsTriggerRail>
+        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      </DraftsTriggerRail>
+      {open ? (
+        <PopoverContent
+          side="top"
+          align="end"
+          sideOffset={6}
+          layout="bare"
+          className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg overflow-hidden"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            const shouldRestore = restoreEditorFocusRef.current;
+            restoreEditorFocusRef.current = false;
+            if (shouldRestore) focusEditor();
+          }}
+        >
+          {list}
+        </PopoverContent>
+      ) : null}
+    </Popover>
+  );
+}
+
+function DraftsTriggerRail(props: { readonly children: ReactNode }) {
+  return (
+    <div data-composer-utility-rail="" className="relative shrink-0">
+      {props.children}
+    </div>
+  );
+}
+
+function draftsTriggerLabel(count: number): string {
+  if (count === 0) return "Drafts";
+  return `Drafts: ${String(count)}. Open drafts.`;
+}
+
+function nextRowIndex(
+  currentIndex: number,
+  direction: "up" | "down",
+  length: number,
+): number {
+  const offset = direction === "down" ? 1 : -1;
+  const fallbackIndex = offset === 1 ? -1 : 0;
+  return (
+    ((currentIndex < 0 ? fallbackIndex : currentIndex) + offset + length) %
+    length
+  );
+}
+
+function isPlainPrintableKeydown(event: KeyboardEvent): boolean {
+  return (
+    event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey
+  );
+}
+
+/**
+ * The letters the open list owns while a row is highlighted. Everything else
+ * printable closes the list and reaches the still-focused editor, which is how
+ * the prompt stash behaved and why typing never got trapped behind it.
+ * `useBareKeyClaimer` arbitrates WHO answers a claimed letter; this predicate
+ * is what stops the close-on-printable branch from firing first (critique D6),
+ * which is precisely the bug a hardcoded `d` left in the stash.
+ *
+ * Read from `key`, not `code`, on purpose: these are accelerators on the
+ * VISIBLE labels beside each row, so the character the reader's layout
+ * produces is the request. `chord-matchers-derive-from-code.test.ts` inventories
+ * the pair for that reason - keep the comparisons literal so it can see them.
+ */
+function isClaimedRowLetter(
+  event: KeyboardEvent,
+  rowHighlighted: boolean,
+): boolean {
+  if (!rowHighlighted || event.shiftKey) return false;
+  return event.key.toLowerCase() === "c" || event.key.toLowerCase() === "d";
+}
+
+export const ComposerDraftsControl = memo(ComposerDraftsControlImpl);

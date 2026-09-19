@@ -82,3 +82,58 @@ describe("chat search store: date anchor", () => {
     expect(lowerBound()).toBe(null);
   });
 });
+
+describe("chat search store: dialog hand-off", () => {
+  it("parks the query, opens the dialog, and re-anchors the date presets", () => {
+    store().openWith({ query: "release notes", scope: "current-task" }, MONDAY);
+
+    expect(store().open).toBe(true);
+    expect(store().scope).toBe("current-task");
+    expect(store().dateAnchorMs).toBe(MONDAY);
+    expect(store().initialQuery).toBe("release notes");
+  });
+
+  it("clears the parked query on consumeInitialQuery, leaving open and scope alone", () => {
+    store().openWith({ query: "release notes", scope: "current-task" }, MONDAY);
+    store().consumeInitialQuery();
+
+    expect(store().initialQuery).toBeNull();
+    expect(store().open).toBe(true);
+    expect(store().scope).toBe("current-task");
+  });
+
+  it("never parks a query through toggleOpen or setOpen", () => {
+    store().setOpen(true, MONDAY);
+    expect(store().initialQuery).toBeNull();
+
+    store().setOpen(false, MONDAY + 60_000);
+    expect(store().initialQuery).toBeNull();
+
+    store().toggleOpen(MONDAY + 2 * DAY_MS);
+    expect(store().initialQuery).toBeNull();
+  });
+
+  it("parks a new query and re-anchors even while the dialog is already open", () => {
+    store().setOpen(true, MONDAY);
+    store().setDatePreset("day", MONDAY);
+
+    const wednesday = MONDAY + 2 * DAY_MS;
+    store().openWith(
+      { query: "second query", scope: "all-accessible-tasks" },
+      wednesday,
+    );
+
+    expect(store().open).toBe(true);
+    expect(store().scope).toBe("all-accessible-tasks");
+    expect(store().dateAnchorMs).toBe(wednesday);
+    expect(store().initialQuery).toBe("second query");
+    expect(lowerBound()).toBe(wednesday - DAY_MS);
+  });
+
+  it("clears a parked query on resetForTests", () => {
+    store().openWith({ query: "release notes", scope: "current-task" }, MONDAY);
+    store().resetForTests();
+
+    expect(store().initialQuery).toBeNull();
+  });
+});

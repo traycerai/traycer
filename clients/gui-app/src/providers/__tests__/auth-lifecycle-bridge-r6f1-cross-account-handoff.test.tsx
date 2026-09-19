@@ -1,24 +1,31 @@
 /**
- * R6F1 (P1, cross-account leak): the durable handoff must NOT write the
- * outgoing account's prompt into the prompt stash on sign-out / user-switch.
+ * R6F1 (P1, cross-account leak): the durable handoff must NOT install the
+ * outgoing account's prompt as a start-page draft on sign-out / user-switch.
  *
  * `disposingForIdentityTeardown` wraps the WHOLE bridge teardown in a module
  * flag; `dispose()` in chat-session-store checks it and skips
  * `handOffUnrecordedPromptToStash` while it is set - matching the bridge's
  * existing policy of dismissing the retained-draft toast on the same
- * boundary. The prompt stash is ONE IndexedDB database with no per-account
- * partition, so without this a prompt written during a sign-out/user-switch
- * is a prompt the NEXT identity's composer finds.
+ * boundary. The landing draft store is keyed per WINDOW with no account of its
+ * own, so without this a draft installed during a sign-out/user-switch is a
+ * draft the NEXT identity finds in their Drafts list.
+ *
+ * R7F1 is the half the flag cannot cover: an ORDINARY disposal whose image
+ * read is still in flight when the account changes. The flag is `false`
+ * throughout that one, and `identityGeneration` - re-asked synchronously
+ * immediately before the install - is what fences it.
  *
  * This drives the transition through the ACTUAL bridge (mounted, real
  * `useAuthStore` transition), not by calling the internal flag/function
  * directly - matching `src/providers/__tests__/auth-lifecycle-bridge.test.tsx`'s
- * existing pattern - and uses the REAL prompt-stash store/repository (fake
- * IndexedDB) rather than a mock, so both the in-memory rows and durable
- * storage are checked.
+ * existing pattern - and reads the REAL landing draft store rather than a
+ * mock, which is where the handoff's durable row now lands.
+ *
+ * The retired prompt stash's own mechanisms - a queued transaction (R9F1), an
+ * aborted live one (R10F1) and a hydrate-time switch (R8F1) - had their suites
+ * deleted with it: the install is synchronous now, so none of those phases
+ * exists to fence.
  */
-import "./install-fresh-indexeddb-eagerly";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -37,8 +44,11 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
-import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
-import { loadPromptStashSnapshot } from "@/lib/composer/prompt-stash-repository";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  handedOffDrafts,
+  resetHandedOffDrafts,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
@@ -64,6 +74,22 @@ vi.mock("@/lib/drafts/resolve-draft-image-bytes", () => ({
     });
   },
 }));
+
+/**
+ * Waits until the handoff has actually reached the held read. The handoff runs
+ * several awaits before it gets there (it materializes any inline images
+ * first), so a single microtask tick is not enough - and a `deferred` that is
+ * still `null` would make the tests below pass for the wrong reason, by
+ * timing out into the text-only path instead of exercising the fence.
+ */
+async function waitForHeldRead(): Promise<{ resolve: () => void }> {
+  await vi.waitFor(() => {
+    expect(imageResolver.deferred).not.toBeNull();
+  });
+  const deferred = imageResolver.deferred;
+  if (deferred === null) throw new Error("expected a held read");
+  return deferred;
+}
 
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
@@ -222,7 +248,10 @@ function hashOnlyContent(text: string): JsonContent {
           fileName: "shot.png",
           mimeType: "image/png",
           size: 64,
-          hash: "hash-r7f1-held",
+          // A real 64-char hex digest: anything else is filtered out as a
+          // non-hash before the resolver is ever consulted, and the handoff
+          // would take the text-only path without holding anything open.
+          hash: "a".repeat(64),
         },
       },
       { type: "paragraph", content: [{ type: "text", text }] },
@@ -280,30 +309,21 @@ function resetAuth(
   useAuthStore.setState({ status, profile: null, contextMetadata: null });
 }
 
-async function stashRows(): Promise<ReadonlyArray<unknown>> {
-  await usePromptStashStore.getState().hydrate();
-  return usePromptStashStore.getState().rows;
-}
-
-async function stashContainsText(text: string): Promise<boolean> {
-  const [memoryRows, { rows: durableRows }] = await Promise.all([
-    stashRows(),
-    loadPromptStashSnapshot(),
-  ]);
-  const inMemory = memoryRows.some((row) => JSON.stringify(row).includes(text));
-  const durable = durableRows.some((row) => JSON.stringify(row).includes(text));
-  return inMemory || durable;
+/** Whether the handoff's durable destination holds a draft carrying `text`. */
+function draftsContainText(text: string): boolean {
+  return handedOffDrafts().some((draft) =>
+    JSON.stringify(draft.content).includes(text),
+  );
 }
 
 let harnesses: Harness[] = [];
 
 beforeEach(() => {
-  // Deliberately NOT re-installing a fresh IndexedDB per test: the real
-  // `usePromptStashStore` module already opened (and cached) its connection
-  // against the database `install-fresh-indexeddb-eagerly` set up at import
-  // time - see that module's doc comment. Swapping `globalThis.indexedDB`
-  // again here would not move the already-open connection, so the tests
-  // below share one database and rely on distinct TEXT markers instead.
+  // A fresh factory per test is fine now: the destination is the landing draft
+  // store, and nothing here opens a connection at module load. The retired
+  // stash store did, which is why this file used to need an eager fixture.
+  installFreshIndexedDb();
+  resetHandedOffDrafts();
   resetAuth("signed-in", "alice@example.com", "user-alice-r6f1");
   __getOpenEpicRegistryForTests().disposeAll();
   __getChatSessionRegistryForTests().disposeAll();
@@ -317,11 +337,12 @@ afterEach(() => {
   __getChatSessionRegistryForTests().disposeAll();
   resetAuth("signed-out", null, null);
   resetDraftBlobTransportForTests();
+  resetHandedOffDrafts();
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
 
 describe("R6F1: the cross-account identity teardown drops the outgoing account's unrecorded prompt", () => {
-  it("a sign-out never writes the outgoing account's prompt to the stash, even after the handoff's own timeout (DRIVE RED)", async () => {
+  it("a sign-out never installs the outgoing account's prompt as a draft, even after the handoff's own timeout (DRIVE RED)", async () => {
     const chatRegistry = __getChatSessionRegistryForTests();
     const epicId = "epic-r6f1-signout";
     const chatId = "chat-r6f1-signout";
@@ -357,7 +378,7 @@ describe("R6F1: the cross-account identity teardown drops the outgoing account's
     });
 
     // Immediately after the transition: not present.
-    expect(await stashContainsText(TEXT)).toBe(false);
+    expect(draftsContainText(TEXT)).toBe(false);
 
     // AND it stays absent past the handoff's own resolution window - the
     // handoff is async/fire-and-forget, so a check right after the
@@ -365,10 +386,10 @@ describe("R6F1: the cross-account identity teardown drops the outgoing account's
     await new Promise((resolve) =>
       setTimeout(resolve, HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500),
     );
-    expect(await stashContainsText(TEXT)).toBe(false);
+    expect(draftsContainText(TEXT)).toBe(false);
   });
 
-  it("a user-switch never writes the outgoing account's prompt to the stash, even after the handoff's own timeout (DRIVE RED)", async () => {
+  it("a user-switch never installs the outgoing account's prompt as a draft, even after the handoff's own timeout (DRIVE RED)", async () => {
     const chatRegistry = __getChatSessionRegistryForTests();
     const epicId = "epic-r6f1-switch";
     const chatId = "chat-r6f1-switch";
@@ -403,10 +424,10 @@ describe("R6F1: the cross-account identity teardown drops the outgoing account's
     await new Promise((resolve) =>
       setTimeout(resolve, HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500),
     );
-    expect(await stashContainsText(TEXT)).toBe(false);
+    expect(draftsContainText(TEXT)).toBe(false);
   });
 
-  it("positive control: an ORDINARY disposal (not an identity transition) still stashes the prompt normally", async () => {
+  it("positive control: an ORDINARY disposal (not an identity transition) still installs the prompt normally", async () => {
     const epicId = "epic-r6f1-control";
     const chatId = "chat-r6f1-control";
     const TEXT = "alice's unsent prompt, ordinary disposal";
@@ -427,8 +448,8 @@ describe("R6F1: the cross-account identity teardown drops the outgoing account's
     harness.handle.dispose();
 
     await vi.waitFor(
-      async () => {
-        expect(await stashContainsText(TEXT)).toBe(true);
+      () => {
+        expect(draftsContainText(TEXT)).toBe(true);
       },
       { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
     );
@@ -441,7 +462,7 @@ describe("R7F1: a capture already in flight when the account changes is fenced b
     imageResolver.deferred = null;
   });
 
-  it("an ORDINARY disposal whose image read is still pending when the user signs out does not write the outgoing account's prompt (DRIVE RED)", async () => {
+  it("an ORDINARY disposal whose image read is still pending when the user signs out does not install the outgoing account's prompt (DRIVE RED)", async () => {
     const epicId = "epic-r7f1-inflight";
     const chatId = "chat-r7f1-inflight";
     const TEXT = "alice's prompt captured before the switch";
@@ -468,8 +489,7 @@ describe("R7F1: a capture already in flight when the account changes is fenced b
     // the case it cannot see.
     imageResolver.hold = true;
     harness.handle.dispose();
-    await Promise.resolve();
-    expect(imageResolver.deferred).not.toBeNull();
+    await waitForHeldRead();
 
     // The account changes while that read is still outstanding.
     act(() => {
@@ -483,10 +503,10 @@ describe("R7F1: a capture already in flight when the account changes is fenced b
       setTimeout(resolve, HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500),
     );
 
-    expect(await stashContainsText(TEXT)).toBe(false);
+    expect(draftsContainText(TEXT)).toBe(false);
   });
 
-  it("positive control: the same in-flight capture DOES save when no identity change happens", async () => {
+  it("positive control: the same in-flight capture DOES install when no identity change happens", async () => {
     const epicId = "epic-r7f1-control";
     const chatId = "chat-r7f1-control";
     const TEXT = "alice's prompt with nobody signing out";
@@ -504,132 +524,12 @@ describe("R7F1: a capture already in flight when the account changes is fenced b
 
     imageResolver.hold = true;
     harness.handle.dispose();
-    await Promise.resolve();
-    imageResolver.deferred?.resolve();
+    const heldRead = await waitForHeldRead();
+    heldRead.resolve();
 
     await vi.waitFor(
-      async () => {
-        expect(await stashContainsText(TEXT)).toBe(true);
-      },
-      { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 2_000 },
-    );
-  });
-});
-
-/**
- * SUBSUMED, and kept deliberately. These cases were written when the check
- * right after `await get().hydrate()` was the guarantee; R9F1 then moved the
- * real fence INSIDE the repository transaction, which is reached on every
- * path, so reverting the hydrate line alone no longer turns any of this red.
- *
- * That does not make the scenario worthless - "an identity change lands during
- * hydration and nothing is written" is still a behaviour worth pinning, and it
- * is pinned here. What it is no longer is a drive-red for the hydrate check
- * specifically, so the name does not claim to be one. The hydrate check earns
- * its place as a cheap early exit, not as the guarantee, and its own comment
- * says so. The guarantee's drive-red lives in
- * `auth-lifecycle-bridge-r9f1-transaction-queued-across-identity-switch.test.tsx`.
- */
-describe("R8F1: an identity change during hydration writes nothing (guarantee now enforced in-transaction by R9F1)", () => {
-  afterEach(() => {
-    imageResolver.hold = false;
-    imageResolver.deferred = null;
-  });
-
-  it("an identity change landing DURING the stash's hydrate does not write the outgoing account's prompt", async () => {
-    const epicId = "epic-r8f1-hydrate";
-    const chatId = "chat-r8f1-hydrate";
-    const TEXT = "alice's prompt caught inside hydrate";
-
-    const harness = createHarness(epicId, chatId, "alice@example.com");
-    harnesses.push(harness);
-    emitOwnerSnapshot(harness.callbacks(), epicId, chatId, "alice@example.com");
-    sendAndRejectUnrecordedPrompt({
-      harness,
-      epicId,
-      chatId,
-      ownerId: "alice@example.com",
-      text: TEXT,
-    });
-
-    render(
-      <EpicSessionLifecycleBridge>
-        <div />
-      </EpicSessionLifecycleBridge>,
-    );
-
-    // Hold HYDRATION, not the image read. This is the gap a pre-call check
-    // cannot see: the generation was current when `save` was invoked, and the
-    // account changes while `save` is still awaiting `hydrate()`.
-    let releaseHydrate: () => void = () => undefined;
-    const realHydrate = usePromptStashStore.getState().hydrate;
-    const held = new Promise<void>((resolve) => {
-      releaseHydrate = () => {
-        resolve();
-      };
-    });
-    usePromptStashStore.setState({
-      hydrate: async () => {
-        await held;
-        await realHydrate();
-      },
-    });
-
-    // An ORDINARY disposal - the teardown flag is false throughout.
-    harness.handle.dispose();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    act(() => {
-      resetAuth("signed-out", null, null);
-    });
-
-    releaseHydrate();
-    usePromptStashStore.setState({ hydrate: realHydrate });
-    await new Promise((resolve) =>
-      setTimeout(resolve, HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 500),
-    );
-
-    expect(await stashContainsText(TEXT)).toBe(false);
-  });
-
-  it("positive control: the same held hydration DOES save when no identity change happens", async () => {
-    const epicId = "epic-r8f1-control";
-    const chatId = "chat-r8f1-control";
-    const TEXT = "alice's prompt through a slow but uneventful hydrate";
-
-    const harness = createHarness(epicId, chatId, "alice@example.com");
-    harnesses.push(harness);
-    emitOwnerSnapshot(harness.callbacks(), epicId, chatId, "alice@example.com");
-    sendAndRejectUnrecordedPrompt({
-      harness,
-      epicId,
-      chatId,
-      ownerId: "alice@example.com",
-      text: TEXT,
-    });
-
-    let releaseHydrate: () => void = () => undefined;
-    const realHydrate = usePromptStashStore.getState().hydrate;
-    const held = new Promise<void>((resolve) => {
-      releaseHydrate = () => {
-        resolve();
-      };
-    });
-    usePromptStashStore.setState({
-      hydrate: async () => {
-        await held;
-        await realHydrate();
-      },
-    });
-
-    harness.handle.dispose();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    releaseHydrate();
-    usePromptStashStore.setState({ hydrate: realHydrate });
-
-    await vi.waitFor(
-      async () => {
-        expect(await stashContainsText(TEXT)).toBe(true);
+      () => {
+        expect(draftsContainText(TEXT)).toBe(true);
       },
       { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 2_000 },
     );

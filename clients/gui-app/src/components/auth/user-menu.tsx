@@ -15,7 +15,8 @@ import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
-import { ExternalLink, LogOut, Settings } from "lucide-react";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { ExternalLink, LayersPlus, LogOut, Settings } from "lucide-react";
 import { useState } from "react";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
@@ -102,6 +103,15 @@ export function UserMenu(props: UserMenuProps) {
             </span>
           </div>
           <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => {
+              setOpen(false);
+              useDesktopDialogStore.getState().openDrafts("menu");
+            }}
+          >
+            <LayersPlus className="size-3.5" />
+            Drafts
+          </DropdownMenuItem>
           {props.showAppSettings ? (
             <DropdownMenuItem
               data-testid="user-menu-app-settings"

@@ -21,6 +21,7 @@ function event(overrides: Partial<CommGraphEvent>): CommGraphEvent {
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }

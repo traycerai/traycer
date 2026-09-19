@@ -38,6 +38,8 @@ import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-reg
 import { selectLandingTerminalSurfaceActive } from "@/components/home/terminal-panel/landing-terminal-surface-binding";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { isTextHistoryShortcut } from "@traycer-clients/shared/keybindings/text-history-shortcut";
+import { focusBrowserAddressForShortcut } from "@/lib/browser-view/tiles/browser-address-shortcut";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -108,7 +110,8 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
      * (`reservedBrowserChordsFor`), filtered to the app-forwarded rows - the
      * ones whose `command` is null. Browser-scoped rows are deliberately
      * absent: `mod+t` / `mod+w` / `mod+l` / `mod+r` belong to the tile, and
-     * the screencast controller is what claims them. Deriving from that one
+     * the tile claims them (address focus is routed to its chrome before the
+     * armed gate below). Deriving from that one
      * table is the whole point - a chord the native path replays and the
      * streamed path swallows is the defect this closes, and two lists would
      * grow one back.
@@ -357,6 +360,20 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         else resetHintSession(pathname);
         return true;
       }
+      // The start page has no guest, and returning to it can leave an armed
+      // stream with focus on the body. Address focus belongs to the tile's
+      // chrome in either case, before mod+l can become an editor action.
+      if (
+        !event.defaultPrevented &&
+        !isTextHistoryShortcut(event, isMac()) &&
+        focusBrowserAddressForShortcut(event)
+      ) {
+        spendHintSession(pathname);
+        resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
       if (!armedRef.current) return false;
       // The one exemption, and it is the streamed half of the reserved-chord
       // policy rather than a new rule: a native tile's app-forwarded chords
@@ -383,7 +400,11 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // whenever the panel is open with a tab - which a focused panel browser
       // guest, the state this exemption exists for, IS.
       const chord = resolveMatchingChord(event);
-      if (chord !== null && readForwardedChords().has(chord)) {
+      if (
+        !isTextHistoryShortcut(event, isMac()) &&
+        chord !== null &&
+        readForwardedChords().has(chord)
+      ) {
         useScreencastArmedStore.getState().releasePageKeys?.();
         return false;
       }

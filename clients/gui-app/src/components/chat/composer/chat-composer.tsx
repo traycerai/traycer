@@ -26,6 +26,9 @@ import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pen
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useMaybeEpicStore } from "@/hooks/use-epic-store";
+import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -95,17 +98,7 @@ import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
-import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
-import type { ImageBytes } from "@/lib/attachments/image-bytes";
-import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
-import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
-import {
-  useChatPromptStashDestination,
-  useChatPromptStashSource,
-} from "./use-chat-prompt-stash-adapters";
-import { PromptStashControl } from "./prompt-stash-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -254,36 +247,12 @@ export interface ChatComposerSubmitInput {
   readonly restore: ChatSendRestore;
 }
 
-function composerUtilityNeedsClearance(args: {
-  readonly rowCount: number;
-  readonly saving: boolean;
-  readonly connectedUpperSurface: boolean;
-}): boolean {
-  const triggerVisible = args.rowCount > 0 || args.saving;
-  return triggerVisible && args.connectedUpperSurface;
-}
-
 /** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
 function composerAttachmentPending(
   pastePending: boolean,
   annotationPreparationPending: boolean,
 ): boolean {
   return pastePending || annotationPreparationPending;
-}
-
-function ComposerUtilityClearanceFill(props: {
-  readonly visible: boolean;
-}): ReactNode {
-  if (!props.visible) return null;
-  return (
-    <div
-      aria-hidden
-      data-composer-utility-clearance-fill=""
-      className="pointer-events-none absolute inset-x-3 top-0 h-3 border-x border-border bg-muted/30"
-    >
-      <div className="size-full bg-muted/30" />
-    </div>
-  );
 }
 
 function ProfileDisabledRecovery(props: {
@@ -397,6 +366,21 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pickerStore.getState().close();
   }, [focused, pickerStore]);
 
+  // Display snapshots for the drafts list, recorded on this chat's draft row
+  // (they are not on the wire). Read TOLERANTLY: this composer also mounts
+  // outside an `<EpicSessionProvider>` (the mobile standalone chat view),
+  // where the strict `useEpicStore` read would throw.
+  const selectChatTitle = useCallback(
+    (state: OpenEpicState) => {
+      if (!Object.hasOwn(state.chats.byId, taskId)) return null;
+      const title = state.chats.byId[taskId].title;
+      return title.length > 0 ? title : null;
+    },
+    [taskId],
+  );
+  const chatTitle = useMaybeEpicStore(selectChatTitle, null);
+  const epicTitle = useRegisteredEpicTitle(currentEpicId);
+
   const {
     initialContent,
     initialSelection,
@@ -411,6 +395,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     hostId: tabHostId,
     editorRef,
     editorReadyTick,
+    chatTitle,
+    epicTitle,
   });
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
@@ -573,12 +559,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // nodes must keep their positions, so they go in with bytes and flip in
   // place) and every draft that still holds inline bytes - including ones
   // written by a build that had no rewrite at all.
-  const { ingestPastedComposerImages, reingestPendingImages } =
-    useComposerPendingImageIngest({
-      editorRef,
-      runPendingImageJob,
-      draftId: null,
-    });
+  const {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  } = useComposerPendingImageIngest({
+    editorRef,
+    runPendingImageJob,
+    draftId: null,
+  });
   // Restarts the rewrite on editor readiness AND on every host-document
   // replacement; see the hook for why readiness alone left a dead end. Called
   // AFTER `useChatComposerDraft` so the reset bridge has already installed the
@@ -593,45 +582,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isResolvingFilePaths,
   });
 
-  // Chat-plane read with the reader's own bound, which replaces the old
-  // `hasAttachmentBytes` pre-check: the bytes may live on this host's disk or
-  // in the cloud now, so presence is no longer answerable synchronously, and
-  // the bound is what keeps a stash save from hanging on an unreachable image.
-  // A capture deliberately survives composer unmount, so this read is not
-  // coupled to component-lifecycle cancellation.
-  const readChatAttachmentBytes = useChatAttachmentByteReader();
-  // The chat reader above answers for a SENT image; a hash this composer is
-  // still holding is in neither the chat plane nor the epic doc, so the stash
-  // would refuse to capture exactly the drafts it exists to hold. Chat-first,
-  // because that leg fails fast and this one is purely additive behind it.
-  const readPromptStashImage = useCallback(
-    async (hash: string): Promise<ImageBytes | null> => {
-      const fromChat = await readChatAttachmentBytes(hash);
-      if (fromChat !== null) return fromChat;
-      return resolveDraftImageBytes(
-        hash,
-        draftImageByteTargetForHost(tabHostId),
-      );
-    },
-    [readChatAttachmentBytes, tabHostId],
-  );
-  const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
-  // Chat writes the draft store, but restore still requires the exact ready
-  // editor generation that started the restore - a remount under the same
-  // taskId must not consume the stash into a different editor instance.
-  const promptStashDestination = useChatPromptStashDestination(
-    taskId,
-    editorRef,
-  );
-  const promptStash = usePromptStash({
-    active: focused,
-    disabled: pastePending,
-    editorRef,
-    readHashImage: readPromptStashImage,
-    source: promptStashSource,
-    destination: promptStashDestination,
-    hostId: tabHostId,
-  });
   const authority = useChatComposerDraftAuthority({
     chatId: taskId,
     tabHostId,
@@ -643,8 +593,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     (content: JsonContent, selection: { from: number; to: number }): void => {
       authority.noteEdit();
       handleDocumentChange(content, selection);
+      // The document is the queue, and mount-time re-entry cannot see a node
+      // that did not exist at mount. The browser-preview screenshot the mention
+      // extension appends asynchronously is exactly that node, and it enters
+      // through no paste. Edge-triggered in the hook - a node whose job has
+      // started is never looked at again this mount - so this costs one scan.
+      noteContentImages(content);
     },
-    [authority, handleDocumentChange],
+    [authority, handleDocumentChange, noteContentImages],
   );
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
@@ -732,11 +688,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
-  const utilityClearanceVisible = composerUtilityNeedsClearance({
-    rowCount: promptStash.rows.length,
-    saving: promptStash.saving,
-    connectedUpperSurface: topSpacing === "connected",
-  });
 
   return (
     <>
@@ -823,16 +774,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
             />
           ) : null}
           {topSlot}
-          <div
-            data-composer-utility-clearance={
-              utilityClearanceVisible ? "" : undefined
-            }
-            className={cn(
-              "relative flex flex-col gap-3",
-              utilityClearanceVisible && "pt-3",
-            )}
-          >
-            <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
+          <div className="relative flex flex-col gap-3">
             <ComposerAttachmentDropZone
               viewTabId={viewTabId}
               hostId={tabHostId}
@@ -845,12 +787,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onDragEnter={onDragEnter}
                 onDragLeave={onDragLeave}
                 dragOverlayVariant={dragOverlayVariant}
-                utilityRail={
-                  <PromptStashControl
-                    controller={promptStash}
-                    pickerStore={pickerStore}
-                  />
-                }
+                utilityRail={null}
                 attachmentsStrip={
                   <ChatComposerAttachmentsStrip
                     taskId={taskId}

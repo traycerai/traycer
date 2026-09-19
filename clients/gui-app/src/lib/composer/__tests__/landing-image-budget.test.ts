@@ -12,16 +12,18 @@ import {
   LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
   registerExtraImageRootSource,
   reserveLandingImageBudget,
+  tryReserveLandingImageBudget,
   tryReserveLandingImageResidency,
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   awaitLandingImageSizes,
   imageHashKeys,
   imageStore,
   putImage,
   setLandingImageSizesHydratedForTests,
+  __resetMeasuredLandingImageSizesForTests,
 } from "@/lib/composer/landing-image-store";
 import { set as idbSet } from "idb-keyval";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
@@ -817,5 +819,89 @@ describe("landing-image-budget module isolation", () => {
     // Sanity: re-importing the store is still possible after isolation; this
     // does not assert registration timing (covered in import-cycle suite).
     budget.resetLandingImageBudgetReservationsForTesting();
+  });
+});
+
+/**
+ * §3.1: an unmeasured resident root is charged the per-image ceiling, measured
+ * at the last free byte rather than asserted as a refusal - a wrong constant
+ * fails as surely as a missing one.
+ *
+ * The ceiling is `LANDING_IMAGE_MAX_BYTES_PER_IMAGE` and this reads it from the
+ * budget module ON PURPOSE. An earlier version of this case hard-named
+ * `PREPARED_IMAGE_MAX_BYTES`, on the premise that preparation resizes rather
+ * than refusing so the largest thing that can BE in the partition is the paste
+ * ceiling. That premise is false: `landing-image-import.ts` writes a stash
+ * blob straight through with no ceiling of its own, and the stash keeps an
+ * animated GIF/WebP VERBATIM up to `LEGACY_STASH_IMAGE_MAX_BYTES` because it
+ * cannot re-encode one frame-faithfully. Naming one writer's ceiling in the
+ * pin is what let the merge substitute it in the module without a red.
+ *
+ * What this asserts is the RELATIONSHIP - charged exactly the ceiling, not
+ * more and not less - which is the part that must hold whatever the number is.
+ * The number itself is pinned where it is derived, by
+ * `landing-image-budget-ceiling-covers-every-writer.test.ts`.
+ */
+describe("image byte budget: an unmeasured root on a cold start", () => {
+  // The suite's own idiom, and for the reason its comment above gives:
+  // `registerExtraImageRootSource` has no withdrawal, so ONE source is
+  // installed and each case drives it by filling and emptying the array.
+  //
+  // The first version of these two cases registered a fresh source per case
+  // AND read the module through `await import(...)`. Both halves were wrong
+  // and they hid each other. The dynamic import lands on a different module
+  // instance than the statically-imported `registerExtraImageRootSource`
+  // (the isolation case above calls `vi.resetModules()`), so the root was
+  // registered on one instance and the reservation asked of another - nothing
+  // was charged, and the case passed for no reason. The un-withdrawable
+  // registrations then leaked into every later case in the file.
+  const coldStartRoots: string[] = [];
+  registerExtraImageRootSource({ hashes: () => coldStartRoots });
+
+  afterEach(() => {
+    coldStartRoots.length = 0;
+    setLandingImageSizesHydratedForTests(true);
+    resetLandingImageBudgetReservationsForTesting();
+  });
+
+  it("is charged the per-image ceiling, and one byte more is refused", async () => {
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    // Bytes present, size not yet measured, hydration pass not finished: the
+    // "unknown because we have not looked yet" case. The measured map is
+    // cleared AFTER the write, because `putImage` records the size it just
+    // wrote and a measured root never reaches the hydration branch at all.
+    coldStartRoots.push(await putImage(new Uint8Array([1, 2, 3])));
+    __resetMeasuredLandingImageSizesForTests();
+    setLandingImageSizesHydratedForTests(false);
+
+    const free = LANDING_IMAGE_BUDGET_BYTES - LANDING_IMAGE_MAX_BYTES_PER_IMAGE;
+    const exact = tryReserveLandingImageBudget([{ hash: null, bytes: free }]);
+    expect(exact).not.toBeNull();
+    exact?.release();
+    const overBy1 = tryReserveLandingImageBudget([
+      { hash: null, bytes: free + 1 },
+    ]);
+    expect(overBy1).toBeNull();
+    overBy1?.release();
+  });
+
+  it("is charged ZERO once hydrated and the bytes are demonstrably absent", async () => {
+    // The second arm, and the reason the first cannot stand alone: with the
+    // hydration gate deleted, a cold store and an absent hash look identical
+    // from the outside, so the pin above would still pass. Here the partition
+    // has looked and found nothing, and an absent root must cost nothing -
+    // charging the ceiling for bytes nobody holds is a tax no measurement can
+    // ever retire.
+    installFreshIndexedDb();
+    await awaitLandingImageSizes();
+    coldStartRoots.push("f".repeat(64));
+    setLandingImageSizesHydratedForTests(true);
+
+    const whole = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(whole).not.toBeNull();
+    whole?.release();
   });
 });
