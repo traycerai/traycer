@@ -268,7 +268,12 @@ export function useOnboardingHorizontalDrag(
       if (reducedMotionRef.current) return;
       // The slop is spent, not paid twice: subtracting it keeps the surface
       // under the finger rather than starting 8px behind it.
-      const pulled = travelX - Math.sign(travelX) * AXIS_LOCK_PX;
+      // Clamped to the travel that exists: a finger coming back through its
+      // start point would otherwise flip the compensation's sign and jump the
+      // surface by twice the slop in one frame.
+      const pulled =
+        travelX -
+        Math.sign(travelX) * Math.min(Math.abs(travelX), AXIS_LOCK_PX);
       const wanted = started.bankedPx + pulled;
       const live = optionsRef.current;
       if (live.canCommit(directionOf(pulled))) {
@@ -283,7 +288,12 @@ export function useOnboardingHorizontalDrag(
       if (started === null) return;
       if (event.pointerId !== started.pointerId) return;
       tracking = null;
-      if (started.axis !== "x") return;
+      if (started.axis !== "x") {
+        // A tap that took over a running settle froze the surface where it
+        // was; with no drag to answer, nothing else would bring it home.
+        if (offset.get() !== 0) settleHome(0);
+        return;
+      }
       const samples = [
         ...started.samples,
         { x: event.clientX, at: event.timeStamp },

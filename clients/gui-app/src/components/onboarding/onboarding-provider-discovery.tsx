@@ -117,9 +117,15 @@ function DiscoveryCounts(props: {
 }) {
   const { skills, plugins } = props;
   if (skills?.isPending === true || plugins?.isPending === true) return null;
+  const readySkills = skills?.data?.skills.filter((skill) => !skill.conflict);
+  const enabledPlugins = plugins?.data?.plugins.filter(
+    (plugin) => plugin.enabled,
+  );
+  // A settled-empty list is `[]`, not `undefined`, so each zero is dropped
+  // here: " · 0 skills" is the noise the comment above rules out.
   const summary = discoverySummary({
-    skills: skills?.data?.skills.filter((skill) => !skill.conflict),
-    plugins: plugins?.data?.plugins.filter((plugin) => plugin.enabled),
+    skills: readySkills?.length === 0 ? undefined : readySkills,
+    plugins: enabledPlugins?.length === 0 ? undefined : enabledPlugins,
     compact: true,
   });
   if (summary === "") return null;

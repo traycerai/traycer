@@ -393,7 +393,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   font-size: 0.8125rem;
 }
 /* The switch row spans the sheet, label leading and switch trailing, so the

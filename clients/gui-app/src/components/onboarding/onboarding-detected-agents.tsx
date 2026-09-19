@@ -134,7 +134,10 @@ function phoneStatusFor(input: {
   )
     return PHONE_STATUS.terminalLoginOff;
   const { auth } = state;
-  if (auth.status === "authenticated") return PHONE_STATUS.authenticated;
+  // The shared predicate, not `auth.status` alone: an ambient profile can be
+  // authenticated while the top-level status still reads "configured", and
+  // that row is signed in, not "Set up, unverified".
+  if (isProviderAmbientAuthenticated(state)) return PHONE_STATUS.authenticated;
   if (auth.status === "configured") return PHONE_STATUS.configured;
   if (auth.status === "unavailable") return PHONE_STATUS.statusUnavailable;
   if (state.apiKey.configured) return PHONE_STATUS.apiKey;

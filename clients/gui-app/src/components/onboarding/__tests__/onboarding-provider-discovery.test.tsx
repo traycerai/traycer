@@ -253,6 +253,32 @@ describe("OnboardingProviderDiscovery", () => {
     expect(screen.getByText("Plugins · 0 enabled")).toBeTruthy();
   });
 
+  it("keeps the phone row's counts silent for a settled-empty list", () => {
+    // A settled empty list is `[]`, not `undefined`, so the zero has to be
+    // dropped on purpose or the row reads "Signed in · 0 skills · 0 plugins".
+    queryMocks.skills = { skills: [] };
+    queryMocks.plugins = { plugins: [] };
+    const state = providerState(true, false);
+    const { unmount } = render(
+      <OnboardingProviderDiscovery state={state} visible presentation="text" />,
+    );
+    expect(
+      screen.queryByTestId("onboarding-provider-discovery-counts"),
+    ).toBeNull();
+    unmount();
+
+    // One side with something to say still says it, alone.
+    queryMocks.plugins = {
+      plugins: [plugin({ enabled: true })],
+    };
+    render(
+      <OnboardingProviderDiscovery state={state} visible presentation="text" />,
+    );
+    expect(
+      screen.getByTestId("onboarding-provider-discovery-counts").textContent,
+    ).toBe(" · 1 plugin");
+  });
+
   it("shows errors as unavailable instead of reporting false zero counts", () => {
     queryMocks.skillsError = true;
     queryMocks.pluginsError = true;
