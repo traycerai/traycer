@@ -110,12 +110,13 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
-  "browser-session": ({ node, viewTabId, tileId, epicId }) => (
+  "browser-session": ({ node, viewTabId, tileId, epicId, isActive }) => (
     <BrowserSessionTile
       node={node}
       viewTabId={viewTabId}
       paneId={tileId}
       epicId={epicId}
+      isActive={isActive}
     />
   ),
   "workspace-file": ({ node, viewTabId, isActive }) => (
