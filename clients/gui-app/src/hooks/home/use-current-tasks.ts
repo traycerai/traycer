@@ -101,7 +101,10 @@ export function useCurrentTasks(): CurrentTasks {
   return {
     groups,
     pinsComplete: pins.pinsComplete,
-    activityCoverage,
+    activityCoverage:
+      activityCoverage === "fleet" && hydration.hasOwnerReadError
+        ? "partial"
+        : activityCoverage,
     isPending: pins.isPending || hydration.isFetching,
   };
 }
@@ -250,6 +253,7 @@ function samePinScan(
 function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {
   readonly items: readonly HistoryItem[];
   readonly isFetching: boolean;
+  readonly hasOwnerReadError: boolean;
 } {
   const localRows = useLocalHomedOpenTaskRows(input.openEpicIds, input.userId);
   const cloudAuthorized = useAuthStore((state) =>
@@ -306,7 +310,11 @@ function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {
       localRows.hostIds,
     ],
   );
-  return { items, isFetching: taskContexts.isFetching || localRows.isFetching };
+  return {
+    items,
+    isFetching: taskContexts.isFetching || localRows.isFetching,
+    hasOwnerReadError: localRows.hasError,
+  };
 }
 
 function currentTaskPinTailQueryOptions(scope: PinTailScope, enabled: boolean) {

@@ -40,6 +40,14 @@ import { cloudQueryKeys } from "@/lib/query-keys";
 import { useEpicSetPinned } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useCloudEpicTasksPagesStore } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import {
+  noteAgentActivityConnectionStatus,
+  TEST_LOCAL_ACTIVITY_HOST_ID,
+} from "@/stores/agent-activity-store";
+import {
+  publishAgentActivity,
+  resetAgentActivity,
+} from "@/__tests__/agent-activity-harness";
 
 const HOST_ID = "host-1";
 const USER_ID = "user-1";
@@ -59,6 +67,8 @@ interface LocalRowsReading {
   readonly pinnedStates: ReadonlyMap<string, boolean>;
   readonly hostIds: ReadonlyMap<string, string>;
   readonly isFetching: boolean;
+  /** Some owner host's local read failed (no data is NOT the same as a miss). */
+  readonly hasError: boolean;
 }
 
 const NO_LOCAL_ROWS: LocalRowsReading = {
@@ -66,6 +76,7 @@ const NO_LOCAL_ROWS: LocalRowsReading = {
   pinnedStates: new Map(),
   hostIds: new Map(),
   isFetching: false,
+  hasError: false,
 };
 
 const testState = vi.hoisted(() => {
@@ -96,6 +107,7 @@ const testState = vi.hoisted(() => {
       pinnedStates: new Map(),
       hostIds: new Map(),
       isFetching: false,
+      hasError: false,
     },
   };
   return state;
@@ -1219,6 +1231,7 @@ describe("useCurrentTasks open task owned by another host", () => {
       pinnedStates: new Map([["open-b", false]]),
       hostIds: new Map([["open-b", HOST_B]]),
       isFetching: false,
+      hasError: false,
     };
 
     const { result } = renderHook(() => useCurrentTasks(), {
@@ -1252,6 +1265,7 @@ describe("useCurrentTasks open task owned by another host", () => {
       pinnedStates: new Map(),
       hostIds: new Map([["open-b", HOST_B]]),
       isFetching: false,
+      hasError: false,
     };
 
     const { result } = renderHook(() => useCurrentTasks(), {
@@ -1263,6 +1277,58 @@ describe("useCurrentTasks open task owned by another host", () => {
     });
     expect(result.current.groups.open).toEqual([]);
   });
+});
+
+describe("useCurrentTasks when an owner host's local read fails", () => {
+  const HOST_B = "host-b";
+
+  beforeEach(() => {
+    // A healthy cloud union: activity coverage reads "fleet" unless something
+    // downgrades it, which is what these cases are about.
+    noteAgentActivityConnectionStatus(
+      TEST_LOCAL_ACTIVITY_HOST_ID,
+      "open",
+      null,
+    );
+    publishAgentActivity([]);
+  });
+
+  afterEach(() => {
+    resetAgentActivity();
+  });
+
+  it.each([
+    ["the owner read FAILED", "partial", true, true],
+    ["the owner read succeeded and simply lacks the row", "fleet", true, false],
+    ["no owner is known for the open tab yet", "fleet", false, false],
+  ] as const)(
+    "%s: coverage is %s (owner known: %s, read errored: %s), with no row and no fallback to the effective host",
+    async (_name, expectedCoverage, ownerKnown, hasError) => {
+      testState.firstPage = page([], null, SETTLED);
+      testState.openEpicIds = ["open-b"];
+      testState.localRows = {
+        ...NO_LOCAL_ROWS,
+        hostIds: ownerKnown ? new Map([["open-b", HOST_B]]) : new Map(),
+        hasError,
+      };
+
+      const { result } = renderHook(() => useCurrentTasks(), {
+        wrapper: wrapperFor(newQueryClient()),
+      });
+
+      await waitFor(() => {
+        expect(result.current.pinsComplete).toBe(true);
+      });
+      expect(result.current.activityCoverage).toBe(expectedCoverage);
+      expect(result.current.groups.open).toEqual([]);
+      if (ownerKnown) {
+        // A known owner is never second-guessed by asking the effective host.
+        for (const ids of taskContextRequests) {
+          expect(ids).not.toContain("open-b");
+        }
+      }
+    },
+  );
 });
 
 describe("useCurrentTasks pin tail under an unverified session", () => {

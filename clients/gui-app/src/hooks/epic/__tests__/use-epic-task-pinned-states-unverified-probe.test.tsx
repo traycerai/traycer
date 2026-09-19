@@ -87,6 +87,8 @@ const transport = vi.hoisted(() => {
      * rather than on behaviour.
      */
     heldHostIds: Set<string>;
+    /** Hosts whose list dispatch REJECTS (the transport fails, not "no row"). */
+    failingHostIds: Set<string>;
     parkedByHostId: Map<string, Array<(response: unknown) => void>>;
   } = {
     dispatched: [],
@@ -96,6 +98,7 @@ const transport = vi.hoisted(() => {
     listenersByHostId: new Map(),
     mutations: [],
     heldHostIds: new Set(),
+    failingHostIds: new Set(),
     parkedByHostId: new Map(),
   };
   return state;
@@ -131,6 +134,9 @@ function arriveRequestContext(hostId: string, userId: string | null): void {
  * RELEASE, which is what a host that learns about an epic mid-flight does.
  */
 function listResponseFor(hostId: string): Promise<unknown> {
+  if (transport.failingHostIds.has(hostId)) {
+    return Promise.reject(new Error("owner host unreachable"));
+  }
   if (!transport.heldHostIds.has(hostId)) {
     return Promise.resolve(transport.responseByHostId.get(hostId));
   }
@@ -874,6 +880,7 @@ describe("useLocalHomedOpenTaskRows reads each open epic from its owner", () => 
   });
 
   afterEach(() => {
+    transport.failingHostIds.clear();
     cleanup();
     useAuthStore.getState().setSignedOut();
   });
@@ -905,6 +912,37 @@ describe("useLocalHomedOpenTaskRows reads each open epic from its owner", () => 
     expect(result.current.pinnedStates.get(EPIC_LOCAL)).toBe(true);
     expect(result.current.pinnedStates.get(EPIC_ON_OTHER_HOST)).toBe(false);
     expect(dispatchesTo(WINDOW_HOST_ID)).toEqual([]);
+  });
+
+  it("reports hasError, not an empty answer, when an owner host's read rejects; the other host's rows still arrive", async () => {
+    transport.failingHostIds.add(OWNER_HOST_ID);
+    const { result } = renderRows(USER_ID);
+
+    await waitFor(() => {
+      expect(result.current.hasError).toBe(true);
+    });
+    await waitFor(() => {
+      expect(result.current.isFetching).toBe(false);
+    });
+    expect(result.current.tasks.map(({ hostId }) => hostId)).toEqual([
+      OTHER_HOST_ID,
+    ]);
+    // Ownership is still known: an error must not make the epic ownerless.
+    expect(result.current.hostIds.get(EPIC_LOCAL)).toBe(OWNER_HOST_ID);
+  });
+
+  it("does NOT report hasError when the owner answers and simply lacks the row", async () => {
+    transport.responseByHostId.set(OWNER_HOST_ID, page([]));
+    const { result } = renderRows(USER_ID);
+
+    await waitFor(() => {
+      expect(result.current.tasks).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(result.current.isFetching).toBe(false);
+    });
+    expect(result.current.hasError).toBe(false);
+    expect(result.current.hostIds.get(EPIC_LOCAL)).toBe(OWNER_HOST_ID);
   });
 
   it("dispatches nothing and returns no rows without a user id", () => {

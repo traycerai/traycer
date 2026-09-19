@@ -261,6 +261,7 @@ export function useLocalHomedOpenTaskRows(
     tasks: localRows.tasks,
     pinnedStates: localRows.pinnedStates,
     isFetching: localRows.isFetching,
+    hasError: localRows.hasError,
     hostIds: localHomedByHost,
   };
 }
@@ -278,6 +279,7 @@ function combineLocalTaskRows(
     ),
     pinnedStates: combineLocalPinReadings(results),
     isFetching: results.some((result) => result.isFetching),
+    hasError: results.some((result) => result.isError),
   };
 }
 
