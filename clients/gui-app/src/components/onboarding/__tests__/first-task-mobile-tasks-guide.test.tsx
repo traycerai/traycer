@@ -47,7 +47,10 @@ vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
 /** Only the four fields this branch reads off `useHistoryQuery`. */
 interface HistoryStub {
   readonly data:
-    | { readonly items: ReadonlyArray<{ readonly id: string }> }
+    | {
+        readonly items: ReadonlyArray<{ readonly id: string }>;
+        readonly hostRequiresCloudToList: boolean;
+      }
     | undefined;
   readonly isPending: boolean;
   readonly cloudPagePending: boolean;
@@ -55,7 +58,7 @@ interface HistoryStub {
 }
 
 const TASKS: HistoryStub = {
-  data: { items: [{ id: "epic-1" }] },
+  data: { items: [{ id: "epic-1" }], hostRequiresCloudToList: false },
   isPending: false,
   cloudPagePending: false,
   error: null,
@@ -64,7 +67,7 @@ const TASKS: HistoryStub = {
 const history = vi.hoisted(() => {
   const state: { current: HistoryStub } = {
     current: {
-      data: { items: [{ id: "epic-1" }] },
+      data: { items: [{ id: "epic-1" }], hostRequiresCloudToList: false },
       isPending: false,
       cloudPagePending: false,
       error: null,
@@ -355,8 +358,26 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     await expectCardTitle("Your tasks live here");
   });
 
+  it("stays on the menu step when the host could not list tasks at all", async () => {
+    // No items because nothing was fetched, not because there are none.
+    history.current = {
+      ...TASKS,
+      data: { items: [], hostRequiresCloudToList: true },
+    };
+    mountTrigger();
+    render(<Harness />);
+    makeVisible(screen.getByTestId("folder-add"));
+    fireEvent(window, new Event("resize"));
+
+    await expectCardTitle("Your tasks live here");
+  });
+
   it("stays on the menu step while only the cloud page is pending", async () => {
-    history.current = { ...TASKS, data: { items: [] }, cloudPagePending: true };
+    history.current = {
+      ...TASKS,
+      data: { items: [], hostRequiresCloudToList: false },
+      cloudPagePending: true,
+    };
     mountTrigger();
     render(<Harness />);
     makeVisible(screen.getByTestId("folder-add"));
@@ -406,7 +427,10 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
   });
 
   it("falls through to the folder flow for an account with no tasks", async () => {
-    history.current = { ...TASKS, data: { items: [] } };
+    history.current = {
+      ...TASKS,
+      data: { items: [], hostRequiresCloudToList: false },
+    };
     mountTrigger();
     render(<Harness />);
     makeVisible(screen.getByTestId("folder-add"));

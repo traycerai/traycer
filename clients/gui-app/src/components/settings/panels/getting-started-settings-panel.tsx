@@ -224,10 +224,19 @@ export function GettingStartedSettingsPanel() {
                     // that only leads back to it. A tab intent, not a route
                     // navigation: Settings is a tab here, and a bare navigate
                     // to the draft route leaves the user looking at Settings.
+                    // Armed only once the tab has actually changed: a refused
+                    // activation would otherwise leave a live guide running
+                    // behind a Settings page that never went away.
                     const guide = useFirstTaskGuideStore.getState();
                     guide.prepare();
-                    guide.activate();
-                    activateTabIntent(navigate, openNewEpicIntent(), undefined);
+                    if (
+                      activateTabIntent(
+                        navigate,
+                        openNewEpicIntent(),
+                        undefined,
+                      )
+                    )
+                      guide.activate();
                     return;
                   }
                   useOnboardingStore.getState().restart();

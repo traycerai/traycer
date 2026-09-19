@@ -63,6 +63,19 @@ describe("GettingStartedSettingsPanel", () => {
     mobileApp.value = false;
   });
 
+  it("leaves the guide unarmed when the tab activation is refused", () => {
+    mobileApp.value = true;
+    activateTabIntentMock.mockReturnValueOnce(false);
+    useOnboardingStore.setState({ completedAt: 123 });
+    render(<GettingStartedSettingsPanel />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Guided tour, Complete" }),
+    );
+
+    expect(useFirstTaskGuideStore.getState().status).not.toBe("active");
+  });
+
   it("starts the guided tour from the card on the mobile app", () => {
     mobileApp.value = true;
     useOnboardingStore.setState({ completedAt: 123 });

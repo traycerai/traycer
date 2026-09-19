@@ -157,7 +157,13 @@ function MobileTasksGuide(props: { readonly fallback: ReactNode }) {
   // this branch has tasks (they ran the desktop app first), so the menu step
   // shows at once and only a settled answer of "none" or an error falls back
   // to the add-folder flow.
-  const settledEmpty = !loading && (history.data?.items.length ?? 0) === 0;
+  // "Could not list" is not "has none": a host that needs the cloud to list
+  // returns no items because nothing was fetched, and that user may well have
+  // tasks, so it stays on the menu step rather than being told to add a folder.
+  const settledEmpty =
+    !loading &&
+    history.data?.hostRequiresCloudToList !== true &&
+    (history.data?.items.length ?? 0) === 0;
   if (history.error !== null || settledEmpty) return props.fallback;
   const step = drawerOpen ? "tasks-pick" : "tasks-menu";
   return (
