@@ -133,6 +133,14 @@ try {
   // Discover the states and presets from the fixture itself, so a preset
   // added to the registry is covered without touching this driver.
   await navigate(client, `${baseUrl}?state=desktop-rest`);
+  // The fixture publishes these when its module evaluates, which a cold Vite
+  // transform on a slow runner can finish after `navigate` returns. Reading
+  // them straight away was `undefined.flatMap` in CI while passing locally.
+  await waitFor(
+    client,
+    "the fixture to publish its probes",
+    "Array.isArray(window.__probeStates) && Array.isArray(window.__probePresets)",
+  );
   const states = await evaluate(client, "window.__probeStates");
   const presets = await evaluate(client, "window.__probePresets");
   const themes = presets.flatMap((preset) => [

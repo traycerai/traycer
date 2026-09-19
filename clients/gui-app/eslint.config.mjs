@@ -1676,6 +1676,15 @@ const restyleExemptions = [
         pattern: "^SelectTrigger$",
         allow: ["color", "shape", "spacing", "effects"],
       },
+      // The phone filter sheet's hook for the act's own stylesheet
+      // (onboarding-import.css), which resizes the scan-window pill, the
+      // provider pills and the view toggle to the 44pt a thumb needs. Those
+      // are three DESCENDANTS of the sheet, styled from one place because they
+      // are one decision - no prop on `SheetContent` reaches them, and the
+      // same shape is why `PopoverContent` carries
+      // `onboarding-discovery-popover` below. The sheet's own box (side,
+      // height, scroll) stays in `layout`-shaped utilities beside it.
+      { pattern: "^SheetContent$", allow: ["onboarding-import-filter-sheet"] },
     ],
   },
   {
@@ -2840,8 +2849,10 @@ export default tseslint.config(
             "diorama-*", // src/components/onboarding/onboarding-diorama.css
             "session-import-*", // src/components/onboarding/onboarding-import.css
             // src/components/settings/panels/getting-started-settings.css -
-            // a <progress>, whose fill and track are pseudo-elements.
+            // a <progress>, whose fill and track are pseudo-elements, and a
+            // card whose `scroll-margin-top` lives behind a media query.
             "settings-setup-meter",
+            "settings-setup-card",
 
             // Class names owned by a library, not by us.
             "not-prose", // @tailwindcss/typography, loaded via @plugin
