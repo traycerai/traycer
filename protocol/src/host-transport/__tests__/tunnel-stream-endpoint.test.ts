@@ -89,7 +89,10 @@ describe("TunnelStreamEndpoint", () => {
 
     expect(opener.acceptCount()).toBe(1);
     expect(opener.sent).toEqual([
-      { envelope: { kind: "data", hasBinaryPayload: true }, binaryPayload: bytes },
+      {
+        envelope: { kind: "data", hasBinaryPayload: true },
+        binaryPayload: bytes,
+      },
     ]);
     // Nothing was pending when the window opened up, and credits remain, so
     // the held write both flushed and released the caller.
@@ -110,7 +113,9 @@ describe("TunnelStreamEndpoint", () => {
 
     // Three slices fit well within the 32-frame window, so nothing is held.
     expect(writable).toBe(true);
-    const dataFrames = sender.sent.filter((frame) => frame.envelope.kind === "data");
+    const dataFrames = sender.sent.filter(
+      (frame) => frame.envelope.kind === "data",
+    );
     expect(dataFrames).toHaveLength(3);
     expect(dataFrames.map((frame) => frame.binaryPayload?.byteLength)).toEqual([
       TUNNEL_MAX_DATA_BYTES,

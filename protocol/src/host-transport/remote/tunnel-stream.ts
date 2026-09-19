@@ -233,7 +233,10 @@ export class TunnelStreamEndpoint {
       this.maybeFinish();
       return;
     }
-    if (binaryPayload === null || binaryPayload.length > TUNNEL_MAX_DATA_BYTES) {
+    if (
+      binaryPayload === null ||
+      binaryPayload.length > TUNNEL_MAX_DATA_BYTES
+    ) {
       this.violate("tunnel data frame has no payload or exceeds the slice cap");
       return;
     }

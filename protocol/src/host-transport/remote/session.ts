@@ -3496,7 +3496,10 @@ export class RemoteSession<
             blocking: "host-missing-method",
           },
         ],
-        upgradeGuidance: { clientShouldUpgrade: false, hostShouldUpgrade: true },
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
       });
       this.subscriptions.delete(stream.streamId);
       return;
