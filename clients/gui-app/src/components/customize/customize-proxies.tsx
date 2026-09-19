@@ -100,7 +100,7 @@ function Proxy({
             instance.condition ? `${instance.key}-condition` : undefined
           }
           className={cn(
-            "pointer-events-auto fixed min-h-6 min-w-6 rounded-sm border border-dashed border-foreground bg-transparent outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring forced-colors:outline",
+            "pointer-events-auto fixed rounded-sm border border-dashed border-foreground bg-transparent outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring forced-colors:outline",
             active && "border-solid ring-2 ring-ring",
             options?.drag && "touch-none",
           )}
@@ -108,10 +108,10 @@ function Proxy({
             transform: transform
               ? `translate(${transform.x}px, ${transform.y}px)`
               : undefined,
-            left: rect.left + (rect.width - Math.max(24, rect.width)) / 2,
-            top: rect.top + (rect.height - Math.max(24, rect.height)) / 2,
-            width: Math.max(24, rect.width),
-            height: Math.max(24, rect.height),
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
           }}
           onFocus={() => {
             setFocused(true);

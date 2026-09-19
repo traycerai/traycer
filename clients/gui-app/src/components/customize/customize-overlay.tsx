@@ -187,7 +187,7 @@ function LiveOverlay({ pointerEntry }: { pointerEntry: boolean }) {
           .map((slot) => (
             <CustomizeDropTarget key={slot.id} slot={slot} />
           ))}
-        <CustomizeProxies instances={selected} rects={measurements.rects} />
+        <CustomizeProxies instances={selected} rects={measurements.hitRects} />
       </CustomizeDnd>
       <CustomizePopover rects={measurements.rects} />
       <CustomizeBar unreachable={measurements.unreachable} />

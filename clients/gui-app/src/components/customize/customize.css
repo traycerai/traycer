@@ -112,3 +112,9 @@
     animation-duration: 0ms;
   }
 }
+
+/* Radix menu items are divs, so they need the same strong focus boundary. */
+[data-customize-editor] [role="menuitem"]:focus {
+  outline: 2px solid var(--foreground);
+  outline-offset: -2px;
+}

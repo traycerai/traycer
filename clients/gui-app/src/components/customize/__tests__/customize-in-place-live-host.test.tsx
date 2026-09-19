@@ -2,7 +2,9 @@ import { CustomizeOverlay } from "@/components/customize/customize-overlay";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { ComposerToolbar } from "@/components/home/toolbar/composer-toolbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import * as modelPickerRegistry from "@/lib/commands/active-model-picker-registry";
 import { getActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import * as controlsRegistry from "@/lib/commands/composer-controls-registry";
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
 import { exitCustomize } from "@/lib/customize/enter-exit";
 import { undo } from "@/lib/customize/history";
@@ -104,9 +106,9 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 // Every accessor a live piece can reach the host through resolves to the one
 // fixture client (same seams `harness-model-picker-intent-rpc.test.tsx` and the
 // wave-4 studio suite use).
-const hostBindingMock = vi.hoisted(() => ({
-  current: null as { readonly hostClient: unknown } | null,
-}));
+const hostBindingMock = vi.hoisted<{
+  current: { readonly hostClient: unknown } | null;
+}>(() => ({ current: null }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostBinding: () => hostBindingMock.current,
@@ -254,6 +256,45 @@ afterEach(() => {
 
 describe("Customize in-place session over the live composer toolbar", () => {
   it("adds no host request, query or action handler across enter, model form, mic form, change, Undo and exit", async () => {
+    const modelRegistrations = vi.spyOn(
+      modelPickerRegistry,
+      "registerActiveModelPicker",
+    );
+    const controlRegistrations = vi.spyOn(
+      controlsRegistry,
+      "registerFocusedComposerControls",
+    );
+    // Positive control: a real extra owner must be observable even over a
+    // pre-existing owner. Dispose it before measuring the mounted toolbar.
+    const probe = { toggle: () => {}, getSelectionSummary: () => null };
+    const previousOwner = getActiveModelPicker();
+    const disposeProbe = modelPickerRegistry.registerActiveModelPicker(probe);
+    expect(modelRegistrations).toHaveBeenCalledWith(probe);
+    expect(getActiveModelPicker()).toBe(probe);
+    disposeProbe();
+    expect(getActiveModelPicker()).toBe(previousOwner);
+    modelRegistrations.mockClear();
+    const probeControls: controlsRegistry.ComposerControls = {
+      setReasoning: () => {},
+      setServiceTier: () => {},
+      setPermission: () => {},
+      switchHarness: () => {},
+      selectModel: () => {},
+    };
+    const disposeControls = controlsRegistry.registerFocusedComposerControls(
+      "landing",
+      probeControls,
+      null,
+    );
+    expect(controlRegistrations).toHaveBeenCalledWith(
+      "landing",
+      probeControls,
+      null,
+    );
+    expect(getFocusedComposerControls()?.controls).toBe(probeControls);
+    disposeControls();
+    controlRegistrations.mockClear();
+
     const { queryClient, messenger } = createRecordingHost();
     const runnerHost = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -337,21 +378,26 @@ describe("Customize in-place session over the live composer toolbar", () => {
         .getAll()
         .map((query) => JSON.stringify(query.queryKey))
         .sort(),
-      modelPickerRegistered: getActiveModelPicker() !== null,
-      composerControlsRegistered: getFocusedComposerControls() !== null,
+      modelPickerOwner: getActiveModelPicker(),
+      modelRegistrations: modelRegistrations.mock.calls.length,
+      composerControlsOwner: getFocusedComposerControls(),
+      controlRegistrations: controlRegistrations.mock.calls.length,
     });
     const before = observe();
     const assertNoDelta = (step: string): void => {
       const now = observe();
       expect(now.rpc, `${step}: host requests`).toEqual(before.rpc);
       expect(now.queryKeys, `${step}: queries`).toEqual(before.queryKeys);
-      // A registration the baseline did not have would be an editor-added
-      // dynamic handler. (One the baseline has may legitimately go away while
-      // editing - that is not an addition.)
-      if (!before.modelPickerRegistered)
-        expect(now.modelPickerRegistered, `${step}: model picker`).toBe(false);
-      if (!before.composerControlsRegistered)
-        expect(now.composerControlsRegistered, `${step}: controls`).toBe(false);
+      expect(now.modelRegistrations, `${step}: model registrations`).toBe(
+        before.modelRegistrations,
+      );
+      expect(now.controlRegistrations, `${step}: control registrations`).toBe(
+        before.controlRegistrations,
+      );
+      if (now.modelPickerOwner !== null)
+        expect(now.modelPickerOwner).toBe(before.modelPickerOwner);
+      if (now.composerControlsOwner !== null)
+        expect(now.composerControlsOwner).toBe(before.composerControlsOwner);
       expect(
         screen.getByTestId("toolbar-item-send"),
         `${step}: same nodes`,

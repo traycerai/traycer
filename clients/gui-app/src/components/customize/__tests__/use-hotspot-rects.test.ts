@@ -8,7 +8,10 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { useHotspotRects } from "@/components/customize/use-hotspot-rects";
+import {
+  type HotspotRects,
+  useHotspotRects,
+} from "@/components/customize/use-hotspot-rects";
 import type { HotspotInstance } from "@/stores/customize/customize-store";
 
 // jsdom does no layout, so a plain `document.createElement` measures as an
@@ -102,6 +105,7 @@ describe("useHotspotRects", () => {
 
     expect(result.current.unreachable.has("a")).toBe(false);
     expect(result.current.rects.get("a")?.width).toBe(24);
+    expect(result.current.hitRects.get("a")?.width).toBe(24);
   });
 
   it("a ResizeObserver callback firing re-measures and reports the new rect", async () => {
@@ -329,22 +333,25 @@ describe("useHotspotRects - frame coalescing", () => {
 });
 
 // Clipping. A hotspot inside a horizontally/vertically clipped ancestor (a
-// provider chip cut off by the strip beside it) must not report its raw
-// box: the overlay's proxy would be expanded to 24px and cross the clip edge
-// onto the neighbouring control. The reported rect is the node's box
-// intersected with the viewport and every clipping ancestor's box; less than
-// 24px visible on either axis is "unreachable".
+// provider chip cut off by the strip beside it) must neither report its raw
+// box nor be given a hit target that crosses the clip edge onto a neighbour.
 //
-// ASSUMPTIONS the production fix must satisfy (adjust here if it differs):
+// CONTRACT under test:
+// - `rects` is the SOURCE rectangle: the node's box intersected with the
+//   viewport and every clipping ancestor's padding box (scrim cut-out and
+//   popover anchor use it). Any positive visible area is reachable - there is
+//   no minimum fragment size; only "clipped away entirely" is unreachable.
+// - `hitRects` is what the proxy paints, exactly: per axis, the visible extent
+//   expanded to at least 24px but never beyond the clip's own extent on that
+//   axis, positioned around the visible rect and shifted to stay inside the
+//   cumulative clip.
 // - an ancestor clips an axis when its computed `overflow-x`/`overflow-y` is
 //   hidden, clip, auto or scroll; `visible` never clips;
-// - the ancestor's clip box is its padding box: `getBoundingClientRect()`
+// - the clip box is the ancestor's padding box: `getBoundingClientRect()`
 //   origin plus `clientLeft`/`clientTop`, sized `clientWidth`/`clientHeight`
-//   (so borders and scrollbars are excluded; stubbed below);
-// - the viewport is `window.innerWidth`/`innerHeight`;
-// - 24 visible px is reachable (`>=`), 23.x is not - but only when the rect
-//   was actually clipped: a tiny, wholly visible hotspot stays reachable and
-//   keeps its own box (the overlay expands it to 24px, per the existing spec).
+//   (borders and scrollbars excluded; stubbed below);
+// - the viewport is `window.innerWidth`/`innerHeight` and is part of the
+//   cumulative clip.
 interface Box {
   readonly x: number;
   readonly y: number;
@@ -366,8 +373,8 @@ const NO_INSET: Inset = { left: 0, top: 0, right: 0, bottom: 0 };
 
 /**
  * An element with the given clip style and box, appended into `parent`. Its
- * clip (padding) box defaults to the whole border box; pass `inset` to model a
- * border (`left`/`top`) and a scrollbar/border (`right`/`bottom`).
+ * clip (padding) box is the border box less `inset` - a border on
+ * `left`/`top`, a border or scrollbar on `right`/`bottom`.
  */
 function clipper(
   parent: HTMLElement,
@@ -380,8 +387,12 @@ function clipper(
   element.style.setProperty("overflow-y", style.overflowY);
   parent.appendChild(element);
   stubRect(element, rect);
-  // jsdom does no layout, so the client* metrics the hook reads are stubbed
-  // alongside the bounding box.
+  restubClient(element, rect, inset);
+  return element;
+}
+
+/** jsdom does no layout, so the client* metrics the hook reads are stubbed. */
+function restubClient(element: HTMLElement, rect: Box, inset: Inset): void {
   const metrics: Record<string, number> = {
     clientLeft: inset.left,
     clientTop: inset.top,
@@ -390,7 +401,6 @@ function clipper(
   };
   for (const [name, value] of Object.entries(metrics))
     Object.defineProperty(element, name, { configurable: true, value });
-  return element;
 }
 
 function nodeIn(parent: HTMLElement, rect: Box): HTMLElement {
@@ -405,10 +415,18 @@ function measure(node: HTMLElement) {
   return renderHook(() => useHotspotRects(instances));
 }
 
+/** Both published rectangles for the one hotspot the tests mount. */
+function published(result: { readonly current: HotspotRects }) {
+  return {
+    source: box(result.current.rects.get("a")),
+    hit: box(result.current.hitRects.get("a")),
+  };
+}
+
 const CLIPPING = ["hidden", "clip", "auto", "scroll"] as const;
 
 describe("useHotspotRects - clipping ancestors and viewport", () => {
-  it("reports the raw box for a node whose ancestors do not clip", () => {
+  it("reports the raw box, and a hit box equal to it, when no ancestor clips", () => {
     const parent = clipper(
       document.body,
       { overflowX: "visible", overflowY: "visible" },
@@ -419,16 +437,12 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
 
     const { result } = measure(node);
 
-    expect(box(result.current.rects.get("a"))).toEqual({
-      x: 70,
-      y: 10,
-      width: 60,
-      height: 30,
-    });
+    const raw = { x: 70, y: 10, width: 60, height: 30 };
+    expect(published(result)).toEqual({ source: raw, hit: raw });
   });
 
   it.each(CLIPPING)(
-    "a %s ancestor clips the reported rect to its own box when at least 24px stay visible",
+    "a %s ancestor clips the source rect to its own box; a hit box already 24px both ways is unchanged",
     (overflow) => {
       const parent = clipper(
         document.body,
@@ -440,35 +454,115 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
 
       const { result } = measure(node);
 
+      const clipped = { x: 70, y: 10, width: 30, height: 30 };
       expect(result.current.unreachable.has("a")).toBe(false);
-      expect(box(result.current.rects.get("a"))).toEqual({
-        x: 70,
-        y: 10,
-        width: 30,
-        height: 30,
-      });
+      expect(published(result)).toEqual({ source: clipped, hit: clipped });
     },
   );
 
-  it("treats exactly 24px visible as reachable and less as unavailable", () => {
+  it("expands a short clipped source to 24px vertically without leaving the clip", () => {
+    // Source 70..120 x 10..26; clip 0..100 x 10..50 -> visible 30 x 16.
+    const parent = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 10, width: 100, height: 40 },
+      NO_INSET,
+    );
+    const node = nodeIn(parent, { x: 70, y: 10, width: 50, height: 16 });
+
+    const { result } = measure(node);
+
+    expect(published(result)).toEqual({
+      source: { x: 70, y: 10, width: 30, height: 16 },
+      hit: { x: 70, y: 10, width: 30, height: 24 },
+    });
+  });
+
+  it("expands a narrow clipped source to 24px horizontally without leaving the clip (mirror)", () => {
+    // Source 10..26 x 70..120; clip 10..50 x 0..100 -> visible 16 x 30.
+    const parent = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 10, y: 0, width: 40, height: 100 },
+      NO_INSET,
+    );
+    const node = nodeIn(parent, { x: 10, y: 70, width: 16, height: 50 });
+
+    const { result } = measure(node);
+
+    expect(published(result)).toEqual({
+      source: { x: 10, y: 70, width: 16, height: 30 },
+      hit: { x: 10, y: 70, width: 24, height: 30 },
+    });
+  });
+
+  it("never expands past a clip smaller than 24px on that axis", () => {
+    // Same source as above, but the clip is only 20px tall (y 10..30).
+    const vertical = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 10, width: 100, height: 20 },
+      NO_INSET,
+    );
+    const tall = nodeIn(vertical, { x: 70, y: 10, width: 50, height: 16 });
+    // Mirror: a 20px wide clip (x 10..30).
+    const horizontal = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 10, y: 0, width: 20, height: 100 },
+      NO_INSET,
+    );
+    const wide = nodeIn(horizontal, { x: 10, y: 70, width: 16, height: 50 });
+
+    const shortClip = measure(tall);
+    const narrowClip = measure(wide);
+
+    expect(published(shortClip.result).hit).toEqual({
+      x: 70,
+      y: 10,
+      width: 30,
+      height: 20,
+    });
+    expect(published(narrowClip.result).hit).toEqual({
+      x: 10,
+      y: 70,
+      width: 20,
+      height: 30,
+    });
+  });
+
+  it("a sliver of any size is reachable: source is the sliver, hit is 24px shifted back inside the clip", () => {
     const parent = clipper(
       document.body,
       { overflowX: "hidden", overflowY: "visible" },
       { x: 0, y: 0, width: 100, height: 100 },
       NO_INSET,
     );
-    const exact = nodeIn(parent, { x: 76, y: 10, width: 40, height: 30 });
-    const short = nodeIn(parent, { x: 77, y: 10, width: 40, height: 30 });
+    const ten = nodeIn(parent, { x: 90, y: 10, width: 40, height: 30 });
+    const twentyThree = nodeIn(parent, { x: 77, y: 10, width: 40, height: 30 });
+    const exactly24 = nodeIn(parent, { x: 76, y: 10, width: 40, height: 30 });
 
-    const shown = measure(exact);
-    const hidden = measure(short);
+    const sliver = measure(ten);
+    const almost = measure(twentyThree);
+    const exact = measure(exactly24);
 
-    expect(shown.result.current.rects.get("a")?.width).toBe(24);
-    expect(hidden.result.current.unreachable.has("a")).toBe(true);
-    expect(hidden.result.current.rects.has("a")).toBe(false);
+    // Visible 10 / 23 / 24px: all reachable, all get the same 24px target
+    // ending flush with the clip's right edge (x 76..100).
+    expect(published(sliver.result)).toEqual({
+      source: { x: 90, y: 10, width: 10, height: 30 },
+      hit: { x: 76, y: 10, width: 24, height: 30 },
+    });
+    expect(published(almost.result)).toEqual({
+      source: { x: 77, y: 10, width: 23, height: 30 },
+      hit: { x: 76, y: 10, width: 24, height: 30 },
+    });
+    expect(published(exact.result)).toEqual({
+      source: { x: 76, y: 10, width: 24, height: 30 },
+      hit: { x: 76, y: 10, width: 24, height: 30 },
+    });
   });
 
-  it("a node clipped entirely away is unavailable, never a zero or negative rect", () => {
+  it("a node clipped entirely away is unreachable, never a zero or negative rect", () => {
     const parent = clipper(
       document.body,
       { overflowX: "hidden", overflowY: "hidden" },
@@ -481,6 +575,7 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
 
     expect(result.current.unreachable.has("a")).toBe(true);
     expect(result.current.rects.has("a")).toBe(false);
+    expect(result.current.hitRects.has("a")).toBe(false);
   });
 
   it("clips only the axis the ancestor clips", () => {
@@ -495,12 +590,8 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
 
     const { result } = measure(node);
 
-    expect(box(result.current.rects.get("a"))).toEqual({
-      x: 300,
-      y: 70,
-      width: 60,
-      height: 30,
-    });
+    const clipped = { x: 300, y: 70, width: 60, height: 30 };
+    expect(published(result)).toEqual({ source: clipped, hit: clipped });
   });
 
   it("intersects nested ancestors that clip different axes", () => {
@@ -532,17 +623,17 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
     });
 
     const clipped = measure(wide);
-    const tooShort = measure(shortAfterClip);
+    const short = measure(shortAfterClip);
 
     // x is cut by the outer box (200), y by the inner box (60): 50 x 40.
-    expect(box(clipped.result.current.rects.get("a"))).toEqual({
-      x: 150,
-      y: 20,
-      width: 50,
-      height: 40,
+    const both = { x: 150, y: 20, width: 50, height: 40 };
+    expect(published(clipped.result)).toEqual({ source: both, hit: both });
+    // Only 20px of height survives the inner box: the source stays 20px, the
+    // hit box grows to 24px and is shifted up to end at the inner clip's edge.
+    expect(published(short.result)).toEqual({
+      source: { x: 150, y: 40, width: 50, height: 20 },
+      hit: { x: 150, y: 36, width: 50, height: 24 },
     });
-    // Only 20px of height survives the inner box -> unavailable.
-    expect(tooShort.result.current.unreachable.has("a")).toBe(true);
   });
 
   it("clips to the padding box: a border and a scrollbar are not visible area", () => {
@@ -563,15 +654,19 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
     });
 
     const shown = measure(node);
-    const hidden = measure(underScrollbar);
+    const narrow = measure(underScrollbar);
 
-    // 60..92 = 32px, not 40 (which the border box would give).
-    expect(shown.result.current.rects.get("a")?.width).toBe(32);
-    // 70..92 = 22px < 24 -> unavailable, though the border box would allow 30.
-    expect(hidden.result.current.unreachable.has("a")).toBe(true);
+    // 60..92 = 32px, not the 40 the border box would give.
+    const padded = { x: 60, y: 10, width: 32, height: 30 };
+    expect(published(shown.result)).toEqual({ source: padded, hit: padded });
+    // 70..92 = 22px: reachable, expanded to 24 ending at the padding edge.
+    expect(published(narrow.result)).toEqual({
+      source: { x: 70, y: 10, width: 22, height: 30 },
+      hit: { x: 68, y: 10, width: 24, height: 30 },
+    });
   });
 
-  it("a small hotspot that is wholly visible inside a clipping ancestor stays reachable with its own box", () => {
+  it("a small hotspot wholly visible inside a clipping ancestor keeps its own source box and is expanded to 24px inside the clip", () => {
     const parent = clipper(
       document.body,
       { overflowX: "hidden", overflowY: "hidden" },
@@ -583,11 +678,9 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
     const { result } = measure(node);
 
     expect(result.current.unreachable.has("a")).toBe(false);
-    expect(box(result.current.rects.get("a"))).toEqual({
-      x: 10,
-      y: 10,
-      width: 10,
-      height: 12,
+    expect(published(result)).toEqual({
+      source: { x: 10, y: 10, width: 10, height: 12 },
+      hit: { x: 3, y: 4, width: 24, height: 24 },
     });
   });
 
@@ -617,10 +710,17 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
       });
 
       const shown = measure(partly);
-      const hidden = measure(barely);
+      const sliver = measure(barely);
 
-      expect(shown.result.current.rects.get("a")?.width).toBe(40);
-      expect(hidden.result.current.unreachable.has("a")).toBe(true);
+      const visible = { x: 60, y: 10, width: 40, height: 30 };
+      expect(published(shown.result)).toEqual({
+        source: visible,
+        hit: visible,
+      });
+      expect(published(sliver.result)).toEqual({
+        source: { x: 90, y: 10, width: 10, height: 30 },
+        hit: { x: 76, y: 10, width: 24, height: 30 },
+      });
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -633,7 +733,7 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
     }
   });
 
-  it("a scroll inside the clipping ancestor re-measures the clipped rect", async () => {
+  it("a scroll inside the clipping ancestor re-measures both rectangles", async () => {
     const parent = clipper(
       document.body,
       { overflowX: "auto", overflowY: "visible" },
@@ -649,21 +749,155 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
     act(() => {
       parent.dispatchEvent(new Event("scroll"));
     });
-
+    const inside = { x: 10, y: 10, width: 60, height: 30 };
     await waitFor(() =>
-      expect(box(result.current.rects.get("a"))).toEqual({
-        x: 10,
-        y: 10,
-        width: 60,
-        height: 30,
-      }),
+      expect(published(result)).toEqual({ source: inside, hit: inside }),
     );
 
-    // ...and scrolling it back out past the edge makes it unavailable.
+    // Scrolled almost out: a 5px sliver, still reachable with a 24px target.
     stubRect(node, { x: 95, y: 10, width: 60, height: 30 });
     act(() => {
       parent.dispatchEvent(new Event("scroll"));
     });
+    await waitFor(() =>
+      expect(published(result)).toEqual({
+        source: { x: 95, y: 10, width: 5, height: 30 },
+        hit: { x: 76, y: 10, width: 24, height: 30 },
+      }),
+    );
+
+    // ...and scrolled fully out it is unreachable.
+    stubRect(node, { x: 150, y: 10, width: 60, height: 30 });
+    act(() => {
+      parent.dispatchEvent(new Event("scroll"));
+    });
     await waitFor(() => expect(result.current.unreachable.has("a")).toBe(true));
+    expect(result.current.hitRects.has("a")).toBe(false);
+  });
+});
+
+// One clip walk per measurement pass. Many hotspots share the same scroller
+// (a provider strip full of chips); the scroller's computed style and box are
+// read once per pass and shared, not once per chip, and a NEW pass never
+// serves the previous pass's numbers.
+describe("useHotspotRects - shared ancestor reads per pass", () => {
+  function spyStyleReads(): Map<Element, number> {
+    const original = window.getComputedStyle.bind(window);
+    const reads = new Map<Element, number>();
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element, pseudo) => {
+        reads.set(element, (reads.get(element) ?? 0) + 1);
+        return original(element, pseudo);
+      },
+    );
+    return reads;
+  }
+
+  it("N hotspots under one scroller read each ancestor's style once and the scroller's box once per pass", async () => {
+    const reads = spyStyleReads();
+    const scroller = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "visible" },
+      { x: 0, y: 0, width: 100, height: 100 },
+      NO_INSET,
+    );
+    const scrollerBox = vi.spyOn(scroller, "getBoundingClientRect");
+    const instances = new Map<string, HotspotInstance>();
+    for (let index = 0; index < 8; index += 1) {
+      const key = `chip-${index}`;
+      instances.set(
+        key,
+        makeInstance(
+          key,
+          nodeIn(scroller, { x: index * 10, y: 10, width: 24, height: 24 }),
+        ),
+      );
+    }
+
+    const { result } = renderHook(() => useHotspotRects(instances));
+
+    // Pass 1 (mount).
+    expect(reads.get(scroller)).toBe(1);
+    expect(scrollerBox).toHaveBeenCalledTimes(1);
+    for (const [element, count] of reads)
+      expect(count, element.tagName).toBeLessThanOrEqual(1);
+    expect(result.current.hitRects.size).toBe(8);
+    // chip-7 spans 70..94: inside the scroller's 0..100.
+    expect(result.current.rects.get("chip-7")?.width).toBe(24);
+
+    // Pass 2: the scroller narrows. A stale cache would keep the old box.
+    reads.clear();
+    scrollerBox.mockClear();
+    const narrower = { x: 0, y: 0, width: 50, height: 100 };
+    scrollerBox.mockReturnValue(
+      new DOMRect(narrower.x, narrower.y, narrower.width, narrower.height),
+    );
+    restubClient(scroller, narrower, NO_INSET);
+    const versionBefore = result.current.version;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    await waitFor(() =>
+      expect(result.current.version).toBeGreaterThan(versionBefore),
+    );
+
+    expect(result.current.version).toBe(versionBefore + 1);
+    expect(reads.get(scroller)).toBe(1);
+    expect(scrollerBox).toHaveBeenCalledTimes(1);
+    for (const [element, count] of reads)
+      expect(count, element.tagName).toBeLessThanOrEqual(1);
+    // chip-4 spans 40..64 -> clipped to 40..50; chip-7 (70..94) is gone.
+    expect(box(result.current.rects.get("chip-4"))).toEqual({
+      x: 40,
+      y: 10,
+      width: 10,
+      height: 24,
+    });
+    expect(result.current.unreachable.has("chip-7")).toBe(true);
+  });
+
+  it("rejects a hidden or disconnected hotspot before walking any of its ancestors", () => {
+    const reads = spyStyleReads();
+    const hiddenScroller = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 0, width: 100, height: 100 },
+      NO_INSET,
+    );
+    const hiddenWrapper = document.createElement("div");
+    hiddenWrapper.hidden = true;
+    hiddenScroller.appendChild(hiddenWrapper);
+    const hiddenNode = nodeIn(hiddenWrapper, {
+      x: 10,
+      y: 10,
+      width: 24,
+      height: 24,
+    });
+    // A subtree that was never attached to the document.
+    const detachedScroller = clipper(
+      document.createElement("div"),
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 0, width: 100, height: 100 },
+      NO_INSET,
+    );
+    const detachedNode = nodeIn(detachedScroller, {
+      x: 10,
+      y: 10,
+      width: 24,
+      height: 24,
+    });
+    const instances = new Map<string, HotspotInstance>([
+      ["hidden", makeInstance("hidden", hiddenNode)],
+      ["detached", makeInstance("detached", detachedNode)],
+    ]);
+
+    const { result } = renderHook(() => useHotspotRects(instances));
+
+    expect(result.current.unreachable.has("hidden")).toBe(true);
+    expect(result.current.unreachable.has("detached")).toBe(true);
+    expect(result.current.hitRects.size).toBe(0);
+    expect(reads.has(hiddenWrapper)).toBe(false);
+    expect(reads.has(hiddenScroller)).toBe(false);
+    expect(reads.has(detachedScroller)).toBe(false);
   });
 });

@@ -2975,7 +2975,7 @@ describe("ChatMessages scroll policy", () => {
             <CustomizeDnd>
               <CustomizeProxies
                 instances={[...instances.values()]}
-                rects={measurements.rects}
+                rects={measurements.hitRects}
               />
             </CustomizeDnd>
           </TooltipProvider>

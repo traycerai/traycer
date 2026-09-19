@@ -199,6 +199,19 @@ const FOCUS_OUTLINE = themeToken(
   )?.[1] ?? "",
 );
 
+/**
+ * The focused menu item (portalled dropdown rows): an INSET outline, so it is
+ * drawn over the item's own `focus:bg-accent` fill with the menu's popover
+ * surface just outside it.
+ */
+const isMenuItemFocus = (selector: string): boolean =>
+  selector.includes("menuitem") && selector.endsWith(":focus");
+const MENU_ITEM_OUTLINE_VALUE = cssValue(isMenuItemFocus, "outline");
+const MENU_ITEM_OUTLINE = themeToken(
+  /(var\(--[a-z-]+\))/.exec(MENU_ITEM_OUTLINE_VALUE)?.[1] ?? "",
+);
+const MENU_ITEM_OUTLINE_OFFSET = cssValue(isMenuItemFocus, "outline-offset");
+
 /** A theme token as seen from inside an editor control (scope applied). */
 const inControl = (testCase: Case, token: ThemeToken): string =>
   resolve(testCase.palette, SCOPE.get(token) ?? token);
@@ -245,6 +258,8 @@ describe("customize.css is read, not assumed", () => {
     expect(OUTLINE.light).not.toBe(OUTLINE.dark);
     expect(GHOST_ALPHA).toBeGreaterThan(0);
     expect(GHOST_ALPHA).toBeLessThanOrEqual(1);
+    expect(MENU_ITEM_OUTLINE_VALUE).toMatch(/^2px solid /);
+    expect(MENU_ITEM_OUTLINE_OFFSET).toBe("-2px");
     expect(ACTIVE_RESULT_WASH).toBeGreaterThan(0);
     expect(EXPANDED_WASH).toBeGreaterThan(0);
     for (const token of ["primary", "primary-foreground", "ring"] as const)
@@ -324,6 +339,24 @@ describe("Customize editor contrast across built-in palettes", () => {
           popover,
           NON_TEXT,
         );
+      }),
+    ).toEqual([]);
+  });
+
+  it("the focused menu item's inset outline holds 3:1 against both the popover edge and the focused accent fill", () => {
+    expect(
+      violations((testCase, need) => {
+        const outline = resolve(testCase.palette, MENU_ITEM_OUTLINE);
+        const popover = resolve(testCase.palette, "popover");
+        // `ui/dropdown-menu` item: `focus:bg-accent`. The token may carry
+        // its own alpha, so composite it over the menu surface it lands on.
+        const accent = composite(
+          resolve(testCase.palette, "accent"),
+          popover,
+          1,
+        );
+        need("menu item outline on popover", outline, popover, NON_TEXT);
+        need("menu item outline on focused accent", outline, accent, NON_TEXT);
       }),
     ).toEqual([]);
   });

@@ -14,44 +14,76 @@ export interface HotspotRects {
   readonly slots: ReadonlyArray<DropSlotRect>;
   readonly source: ReadonlyMap<InstanceKey, HotspotInstance>;
   readonly rects: ReadonlyMap<InstanceKey, DOMRect>;
+  readonly hitRects: ReadonlyMap<InstanceKey, DOMRect>;
   readonly unreachable: ReadonlySet<InstanceKey>;
   readonly version: number;
 }
-// Portalled proxies must respect the clipping of their source surfaces.
-function visibleHotspotRect(node: HTMLElement, rect: DOMRect): DOMRect {
-  let left = Math.max(0, rect.left);
-  let top = Math.max(0, rect.top);
-  let right = Math.min(window.innerWidth, rect.right);
-  let bottom = Math.min(window.innerHeight, rect.bottom);
-  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
-    const style = getComputedStyle(parent);
-    const clipsX = /^(auto|scroll|hidden|clip)$/.test(style.overflowX);
-    const clipsY = /^(auto|scroll|hidden|clip)$/.test(style.overflowY);
-    if (!clipsX && !clipsY) continue;
-    const bounds = parent.getBoundingClientRect();
+// Cache cumulative clipping within a measurement pass: shared ancestors are
+// read once even when a scroller contains many hotspots.
+function ancestorClip(
+  node: HTMLElement | null,
+  viewport: DOMRect,
+  cache: Map<HTMLElement, DOMRect>,
+): DOMRect {
+  if (!node) return viewport;
+  const cached = cache.get(node);
+  if (cached) return cached;
+  const inherited = ancestorClip(node.parentElement, viewport, cache);
+  const style = getComputedStyle(node);
+  const clipsX = /^(auto|scroll|hidden|clip)$/.test(style.overflowX);
+  const clipsY = /^(auto|scroll|hidden|clip)$/.test(style.overflowY);
+  let left = inherited.left,
+    right = inherited.right;
+  let top = inherited.top,
+    bottom = inherited.bottom;
+  if (clipsX || clipsY) {
+    const bounds = node.getBoundingClientRect();
     if (clipsX) {
-      left = Math.max(left, bounds.left + parent.clientLeft);
-      right = Math.min(
-        right,
-        bounds.left + parent.clientLeft + parent.clientWidth,
-      );
+      left = Math.max(left, bounds.left + node.clientLeft);
+      right = Math.min(right, bounds.left + node.clientLeft + node.clientWidth);
     }
     if (clipsY) {
-      top = Math.max(top, bounds.top + parent.clientTop);
+      top = Math.max(top, bounds.top + node.clientTop);
       bottom = Math.min(
         bottom,
-        bounds.top + parent.clientTop + parent.clientHeight,
+        bounds.top + node.clientTop + node.clientHeight,
       );
     }
   }
-  // A clipped fragment cannot host the editor's minimum 24px hit target.
-  const width = right - left;
-  const height = bottom - top;
+  const clip = new DOMRect(
+    left,
+    top,
+    Math.max(0, right - left),
+    Math.max(0, bottom - top),
+  );
+  cache.set(node, clip);
+  return clip;
+}
+function intersect(rect: DOMRect, clip: DOMRect): DOMRect {
+  const left = Math.max(rect.left, clip.left);
+  const top = Math.max(rect.top, clip.top);
   return new DOMRect(
     left,
     top,
-    width < rect.width && width < 24 ? 0 : width,
-    height < rect.height && height < 24 ? 0 : height,
+    Math.max(0, Math.min(rect.right, clip.right) - left),
+    Math.max(0, Math.min(rect.bottom, clip.bottom) - top),
+  );
+}
+// The final hit floor belongs here, while the source clip is still known.
+function hitRect(rect: DOMRect, clip: DOMRect): DOMRect {
+  const width = Math.min(clip.width, Math.max(24, rect.width));
+  const height = Math.min(clip.height, Math.max(24, rect.height));
+  return new DOMRect(
+    Math.max(
+      clip.left,
+      Math.min(rect.left + (rect.width - width) / 2, clip.right - width),
+    ),
+    Math.max(
+      clip.top,
+      Math.min(rect.top + (rect.height - height) / 2, clip.bottom - height),
+    ),
+    width,
+    height,
   );
 }
 export function useHotspotRects(
@@ -61,6 +93,7 @@ export function useHotspotRects(
     source: instances,
     slots: [],
     rects: new Map(),
+    hitRects: new Map(),
     unreachable: new Set(),
     version: 0,
   });
@@ -70,20 +103,31 @@ export function useHotspotRects(
       frame = 0;
       const rects = new Map<InstanceKey, DOMRect>();
       const unreachable = new Set<InstanceKey>();
+      const hitRects = new Map<InstanceKey, DOMRect>();
+      const clips = new Map<HTMLElement, DOMRect>();
+      const viewport = new DOMRect(0, 0, window.innerWidth, window.innerHeight);
       for (const [key, instance] of instances) {
-        const rect = visibleHotspotRect(
-          instance.node,
-          instance.node.getBoundingClientRect(),
-        );
+        const node = instance.node;
         if (
-          !instance.node.isConnected ||
-          !instance.node.getClientRects().length ||
-          rect.width <= 0 ||
-          rect.height <= 0 ||
-          instance.node.closest('[hidden], [aria-hidden="true"]')
-        )
+          !node.isConnected ||
+          node.closest('[hidden], [aria-hidden="true"]') ||
+          !node.getClientRects().length
+        ) {
           unreachable.add(key);
-        else rects.set(key, rect);
+          continue;
+        }
+        const source = node.getBoundingClientRect();
+        if (Math.min(source.width, source.height) <= 0) {
+          unreachable.add(key);
+          continue;
+        }
+        const clip = ancestorClip(node.parentElement, viewport, clips);
+        const rect = intersect(source, clip);
+        if (rect.width <= 0 || rect.height <= 0) unreachable.add(key);
+        else {
+          rects.set(key, rect);
+          hitRects.set(key, hitRect(rect, clip));
+        }
       }
       const slots: DropSlotRect[] = [];
       for (const node of document.querySelectorAll<HTMLElement>(
@@ -113,6 +157,7 @@ export function useHotspotRects(
         source: instances,
         slots,
         rects,
+        hitRects,
         unreachable,
         version: previous.version + 1,
       }));
