@@ -102,6 +102,7 @@ function DitheredWallpaper(props: {
   // for the ramp the canvas bakes in. It bumps after the palette has reached
   // the cascade, and covers the OS flip under `theme: "system"` as well.
   const themeRevision = useThemeRevision();
+  const tintThemeRevision = tintWithAccent ? themeRevision : 0;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -109,21 +110,42 @@ function DitheredWallpaper(props: {
     let controller: AbortController | null = null;
     const image = new Image();
     let timer: number | null = null;
+    let painted = false;
     const paint = (): void => {
       controller?.abort();
-      controller = new AbortController();
+      if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
+        return;
+      }
+      // ResizeObserver also reports initial layout and hide/show. Reuse the
+      // retained bitmap when the raster dimensions have not changed.
+      if (
+        painted &&
+        canvas.width === Math.round(canvas.clientWidth / CELL) &&
+        canvas.height === Math.round(canvas.clientHeight / CELL)
+      ) {
+        return;
+      }
+      const pass = new AbortController();
+      controller = pass;
       void renderDither(
         canvas,
         image,
         { intensity, tint, tintWithAccent },
-        controller.signal,
+        pass.signal,
       )
+        .then((complete) => {
+          if (complete && !pass.signal.aborted) painted = true;
+        })
         // Aborts (unmount, a newer pass) and a canvas-less environment are the
         // only failures here, and both mean "leave the last frame up".
         .catch(() => undefined);
     };
     const schedule = (): void => {
       if (timer !== null) clearTimeout(timer);
+      if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
+        controller?.abort();
+        return;
+      }
       timer = window.setTimeout(paint, RESIZE_DEBOUNCE_MS);
     };
     image.onload = paint;
@@ -142,7 +164,7 @@ function DitheredWallpaper(props: {
       image.onload = null;
       image.onerror = null;
     };
-  }, [url, intensity, tint, tintWithAccent, themeRevision]);
+  }, [url, intensity, tint, tintWithAccent, tintThemeRevision]);
 
   return (
     <canvas ref={canvasRef} className="appearance-wallpaper-canvas size-full" />
@@ -158,23 +180,26 @@ async function renderDither(
     readonly tintWithAccent: boolean;
   },
   signal: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
   signal.throwIfAborted();
   const width = Math.max(1, Math.round(canvas.clientWidth / CELL));
   const height = Math.max(1, Math.round(canvas.clientHeight / CELL));
-  if (image.naturalWidth === 0 || image.naturalHeight === 0) return;
-  const context = canvas.getContext("2d");
-  if (context === null) return;
+  if (image.naturalWidth === 0 || image.naturalHeight === 0) return false;
+  // Process offscreen: yielding between bands must never expose the raw
+  // photo or a partly dithered frame on the visible canvas.
+  const buffer = document.createElement("canvas");
+  buffer.width = width;
+  buffer.height = height;
+  const context = buffer.getContext("2d", { willReadFrequently: true });
+  if (context === null) return false;
   // Tint is off by default (`ramp` stays `null`, meaning "dither each RGB
   // channel"); only bail when a tint was actually requested but couldn't be
   // resolved, tested once rather than twice.
   let ramp: AppearanceRamp | null = null;
   if (style.tintWithAccent) {
     ramp = resolveRamp(canvas, style.tint);
-    if (ramp === null) return;
+    if (ramp === null) return false;
   }
-  canvas.width = width;
-  canvas.height = height;
   const cover = Math.max(
     width / image.naturalWidth,
     height / image.naturalHeight,
@@ -195,19 +220,32 @@ async function renderDither(
     const pixels = context.getImageData(0, 0, width, height);
     ditherPixels(pixels, levels, ramp);
     context.putImageData(pixels, 0, 0);
-    return;
+  } else {
+    for (let row = 0; row < height; row += BAND_ROWS) {
+      await yieldImageWork(signal);
+      const band = context.getImageData(
+        0,
+        row,
+        width,
+        Math.min(BAND_ROWS, height - row),
+      );
+      ditherPixels(band, levels, ramp);
+      context.putImageData(band, 0, row);
+    }
   }
-  for (let row = 0; row < height; row += BAND_ROWS) {
-    await yieldImageWork(signal);
-    const band = context.getImageData(
-      0,
-      row,
-      width,
-      Math.min(BAND_ROWS, height - row),
-    );
-    ditherPixels(band, levels, ramp);
-    context.putImageData(band, 0, row);
+  signal.throwIfAborted();
+  if (
+    Math.round(canvas.clientWidth / CELL) !== width ||
+    Math.round(canvas.clientHeight / CELL) !== height
+  ) {
+    return false;
   }
+  const target = canvas.getContext("2d");
+  if (target === null) return false;
+  canvas.width = width;
+  canvas.height = height;
+  target.drawImage(buffer, 0, 0);
+  return true;
 }
 
 /** With a ramp the tones are accent-tinted; without one each channel dithers. */
