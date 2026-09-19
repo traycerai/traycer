@@ -30,6 +30,15 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 
 export const HOST_TUNNEL_OPEN_METHOD = "host.tunnel.open";
 
+/**
+ * Whether `method`'s stream frames are never chunked. Both peers check this
+ * before reassembly (`unchunkedStreamFrameViolation` in `chunking.ts`) and
+ * reset the STREAM, never the session, on a violation.
+ */
+export function streamMethodForbidsChunking(method: string): boolean {
+  return method === HOST_TUNNEL_OPEN_METHOD;
+}
+
 export const hostTunnelOpenRequestSchema = z.object({
   /** The task the lease belongs to; the accepting host checks editor access on it. */
   epicId: z.string().min(1),

@@ -519,6 +519,54 @@ export class ChunkSequenceMismatchError extends ChunkReassemblyError {
   }
 }
 
+/** Wire code for {@link StreamFrameNotAllowedError}; the same word on both peers' logs. */
+export const STREAM_FRAME_NOT_ALLOWED_CODE = "STREAM_FRAME_NOT_ALLOWED";
+
+/**
+ * Thrown for a frame its stream's method forbids outright (see
+ * {@link unchunkedStreamFrameViolation}). A `ChunkReassemblyError` so it takes
+ * the existing per-stream recovery route; distinguished so it surfaces under
+ * its own code rather than as a reassembly fault, which it is not - nothing
+ * was reassembled.
+ */
+export class StreamFrameNotAllowedError extends ChunkReassemblyError {
+  constructor(message: string) {
+    super(message);
+    this.name = "StreamFrameNotAllowedError";
+  }
+}
+
+/**
+ * The frame rule for a stream whose method never chunks (a tunnel): one
+ * STREAM_FRAME is one whole message, and its WHOLE encoded length - header,
+ * body header, json and binary together - fits one chunk. Returns the
+ * violation, or `null`.
+ *
+ * Checked on the raw decrypted frame, BEFORE the reassembler sees it. That
+ * position is the point: past it a chunk sequence accumulates toward the
+ * generic 512 MiB message cap and the session-wide reassembly budget, neither
+ * of which a byte tunnel has any business reaching, and an unchunked frame
+ * padded in its JSON section would hand the consumer a small view pinning a
+ * frame-sized backing buffer. Bounding the whole frame bounds that pin to one
+ * chunk per frame.
+ */
+export function unchunkedStreamFrameViolation(
+  frame: MuxFrame,
+  encodedFrameBytes: number,
+): string | null {
+  if (frame.type !== MuxFrameType.STREAM_FRAME) {
+    return null;
+  }
+  if (frame.chunked) {
+    return `chunked frame on stream ${frame.streamId}, whose method never chunks`;
+  }
+  const maxFrameBytes = MUX_FRAME_HEADER_LEN + BULK_CHUNK_SIZE_BYTES;
+  if (encodedFrameBytes > maxFrameBytes) {
+    return `frame of ${encodedFrameBytes} bytes on stream ${frame.streamId} exceeds the ${maxFrameBytes}-byte bound for its method`;
+  }
+  return null;
+}
+
 interface StreamAccumulator {
   readonly type: MuxFrameTypeValue;
   readonly startSeq: number;

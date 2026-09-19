@@ -16,7 +16,10 @@ import {
   SERVES_EVERY_INSTALLED_MAJOR,
 } from "@traycer/protocol/framework/capability-manifest";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
-import { HOST_TUNNEL_OPEN_METHOD } from "@traycer/protocol/host/tunnel-stream";
+import {
+  HOST_TUNNEL_OPEN_METHOD,
+  streamMethodForbidsChunking,
+} from "@traycer/protocol/host/tunnel-stream";
 import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
@@ -121,6 +124,9 @@ import {
 import {
   ChunkReassembler,
   ChunkReassemblyError,
+  STREAM_FRAME_NOT_ALLOWED_CODE,
+  StreamFrameNotAllowedError,
+  unchunkedStreamFrameViolation,
   OutboundChunkSource,
   type OutboundMessage,
   type ReassembledMessage,
@@ -2112,6 +2118,10 @@ export class RemoteSession<
     );
   }
 
+  streamOutboundDebtBytes(streamId: number): number {
+    return this.connection?.scheduler.queuedBytesForStream(streamId) ?? 0;
+  }
+
   closeStream(streamId: number, reason: string): void {
     const connection = this.connection;
     this.subscriptions.delete(streamId);
@@ -2240,6 +2250,8 @@ export class RemoteSession<
       initialBulkCredits: INITIAL_BULK_SEND_CREDITS,
       now: undefined,
     });
+    scheduler.onFrameWritten = (streamId) =>
+      this.subscriptions.get(streamId)?.notifyOutboundProgress();
     const noise = await NoiseChannel.begin(this.options.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
@@ -2410,6 +2422,18 @@ export class RemoteSession<
       }
       let message: ReassembledMessage | null;
       try {
+        // BEFORE the reassembler: a stream whose method never chunks (a
+        // tunnel) must not be able to accumulate toward the generic message
+        // cap, or pin a frame-sized buffer behind a one-byte payload.
+        const subscribed = this.subscriptions.get(frame.streamId);
+        const violation =
+          subscribed !== undefined &&
+          streamMethodForbidsChunking(subscribed.method)
+            ? unchunkedStreamFrameViolation(frame, muxBytes.length)
+            : null;
+        if (violation !== null) {
+          throw new StreamFrameNotAllowedError(violation);
+        }
         message = connection.reassembler.accept(frame);
       } catch (error) {
         if (this.failStreamOnInboundError(generation, frame, error)) {
@@ -5710,7 +5734,11 @@ function streamInboundFailureCode(
 ):
   | "STREAM_MESSAGE_TOO_LARGE"
   | "STREAM_BODY_DECODE_FAILED"
-  | "STREAM_CHUNK_REASSEMBLY_FAILED" {
+  | "STREAM_CHUNK_REASSEMBLY_FAILED"
+  | typeof STREAM_FRAME_NOT_ALLOWED_CODE {
+  if (error instanceof StreamFrameNotAllowedError) {
+    return STREAM_FRAME_NOT_ALLOWED_CODE;
+  }
   if (error instanceof MuxMessageSizeError) {
     return "STREAM_MESSAGE_TOO_LARGE";
   }

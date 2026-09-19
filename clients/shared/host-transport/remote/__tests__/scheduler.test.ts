@@ -475,6 +475,134 @@ describe("PriorityScheduler", () => {
   });
 });
 
+describe("PriorityScheduler.queuedBytesForStream / onFrameWritten", () => {
+  it("sums only the named stream across both queues and drops to 0 after dropStreamOutbound", async () => {
+    const scheduler = new PriorityScheduler({
+      write: async () => undefined,
+      onWriteError: () => undefined,
+      initialBulkCredits: 0,
+      now: undefined,
+    });
+
+    const bulkOnStream1 = messageSource(1, QosClass.BULK);
+    const interactiveOnStream1 = messageSource(1, QosClass.INTERACTIVE);
+    const onStream2 = messageSource(2, QosClass.INTERACTIVE);
+    const stream1Bytes =
+      bulkOnStream1.remainingBytes + interactiveOnStream1.remainingBytes;
+
+    // No credits at all, so nothing drains and every source stays queued -
+    // the sum below is read against a known, held state.
+    scheduler.enqueue(bulkOnStream1);
+    scheduler.enqueue(interactiveOnStream1);
+    scheduler.enqueue(onStream2);
+
+    expect(scheduler.queuedBytesForStream(1)).toBe(stream1Bytes);
+    expect(scheduler.queuedBytesForStream(2)).toBe(onStream2.remainingBytes);
+    expect(scheduler.queuedBytesForStream(999)).toBe(0);
+
+    scheduler.dropStreamOutbound(1);
+    expect(scheduler.queuedBytesForStream(1)).toBe(0);
+    expect(scheduler.queuedBytesForStream(2)).toBe(onStream2.remainingBytes);
+  });
+
+  it("fires onFrameWritten once per written frame, with that frame's streamId, after the write resolves", async () => {
+    const writeOrder: string[] = [];
+    // A holder, not a `let`: an assignment inside the promise executor is
+    // invisible to TypeScript, which would narrow a bare variable to `null`.
+    const firstWrite: { resolve: (() => void) | null } = { resolve: null };
+    const scheduler = new PriorityScheduler({
+      write: async (frame) => {
+        writeOrder.push(`write-start:${frame.streamId}`);
+        if (frame.streamId === 1) {
+          await new Promise<void>((resolve) => {
+            firstWrite.resolve = resolve;
+          });
+        }
+        writeOrder.push(`write-done:${frame.streamId}`);
+      },
+      onWriteError: () => undefined,
+      initialBulkCredits: 0,
+      now: undefined,
+    });
+    const written: number[] = [];
+    scheduler.onFrameWritten = (streamId) => {
+      writeOrder.push(`notified:${streamId}`);
+      written.push(streamId);
+    };
+
+    scheduler.enqueue(messageSource(1, QosClass.INTERACTIVE));
+    await flush();
+    // The write is deliberately held open: onFrameWritten must not fire
+    // before it resolves.
+    expect(written).toEqual([]);
+    expect(writeOrder).toEqual(["write-start:1"]);
+
+    const resolve = firstWrite.resolve;
+    if (resolve === null) {
+      throw new Error("expected the first write to be pending");
+    }
+    resolve();
+    await flush();
+
+    expect(written).toEqual([1]);
+    expect(writeOrder).toEqual(["write-start:1", "write-done:1", "notified:1"]);
+  });
+
+  it("lets a listener that enqueues another message from inside the callback append without corrupting FIFO order", async () => {
+    const written: number[] = [];
+    let enqueuedFollowUp = false;
+    const scheduler = new PriorityScheduler({
+      write: async (frame) => {
+        written.push(frame.streamId);
+      },
+      onWriteError: () => undefined,
+      initialBulkCredits: 0,
+      now: undefined,
+    });
+    scheduler.onFrameWritten = (streamId) => {
+      if (streamId === 1 && !enqueuedFollowUp) {
+        enqueuedFollowUp = true;
+        // A tunnel releasing bytes it had held back, from inside the very
+        // callback that told it progress was made.
+        scheduler.enqueue(messageSource(2, QosClass.INTERACTIVE));
+      }
+    };
+
+    scheduler.enqueue(messageSource(1, QosClass.INTERACTIVE));
+    await flush();
+
+    // Both messages actually got written, in FIFO order: the follow-up
+    // appended to a queue nobody was mid-iteration over, and the pump's own
+    // "already pumping" guard let its nested call return immediately rather
+    // than double-drive the loop.
+    expect(written).toEqual([1, 2]);
+  });
+
+  it("does not let a throwing listener trigger onWriteError", async () => {
+    const writeErrors: unknown[] = [];
+    const written: number[] = [];
+    const scheduler = new PriorityScheduler({
+      write: async (frame) => {
+        written.push(frame.streamId);
+      },
+      onWriteError: (error) => {
+        writeErrors.push(error);
+      },
+      initialBulkCredits: 0,
+      now: undefined,
+    });
+    scheduler.onFrameWritten = () => {
+      throw new Error("listener blew up");
+    };
+
+    scheduler.enqueue(messageSource(1, QosClass.INTERACTIVE));
+    await flush();
+
+    expect(written).toEqual([1]);
+    expect(writeErrors).toEqual([]);
+  });
+});
+
 describe("InboundCreditTracker", () => {
   it("grants a batch of credits back after enough bulk frames are consumed", () => {
     const tracker = new InboundCreditTracker();

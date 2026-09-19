@@ -11,6 +11,7 @@ vi.mock("fflate", async (importOriginal) => {
 import {
   decodeMuxFrame,
   encodeMuxFrame,
+  MUX_FRAME_HEADER_LEN,
   type MuxFrame,
   MuxFrameDecodeError,
   MuxFrameType,
@@ -32,6 +33,7 @@ import {
   encodeMuxMessageBody,
   type ReassembledMessage,
   OutboundChunkSource,
+  unchunkedStreamFrameViolation,
 } from "../chunking";
 import { runChunkReassemblerConformanceSpec } from "./chunk-reassembler-conformance";
 
@@ -683,5 +685,87 @@ describe("ChunkReassembler.retainedBytes", () => {
     reassembler.reset();
     expect(reassembler.retainedBytes).toBe(0);
     expect(reassembler.pendingStreamCount).toBe(0);
+  });
+});
+
+describe("unchunkedStreamFrameViolation", () => {
+  const STREAM_ID = 42;
+
+  function streamFrame(input: {
+    readonly chunked: boolean;
+    readonly binaryLength: number;
+  }): { readonly frame: MuxFrame; readonly encodedFrameBytes: number } {
+    const encoded = encodeMuxFrame({
+      type: MuxFrameType.STREAM_FRAME,
+      streamId: STREAM_ID,
+      seq: 0,
+      qos: QosClass.INTERACTIVE,
+      chunked: input.chunked,
+      chunkFirst: input.chunked,
+      chunkLast: input.chunked,
+      compressed: false,
+      json: { kind: "data", hasBinaryPayload: true },
+      binary: new Uint8Array(input.binaryLength),
+    });
+    return {
+      frame: decodeMuxFrame(encoded),
+      encodedFrameBytes: encoded.byteLength,
+    };
+  }
+
+  it("flags a chunked frame on a stream whose method never chunks", () => {
+    const { frame, encodedFrameBytes } = streamFrame({
+      chunked: true,
+      binaryLength: 10,
+    });
+    expect(unchunkedStreamFrameViolation(frame, encodedFrameBytes)).toBe(
+      `chunked frame on stream ${STREAM_ID}, whose method never chunks`,
+    );
+  });
+
+  it("flags an unchunked frame whose whole encoded length exceeds the one-chunk bound", () => {
+    const { frame, encodedFrameBytes } = streamFrame({
+      chunked: false,
+      binaryLength: BULK_CHUNK_SIZE_BYTES,
+    });
+    const maxFrameBytes = MUX_FRAME_HEADER_LEN + BULK_CHUNK_SIZE_BYTES;
+    expect(encodedFrameBytes).toBeGreaterThan(maxFrameBytes);
+    expect(unchunkedStreamFrameViolation(frame, encodedFrameBytes)).toBe(
+      `frame of ${encodedFrameBytes} bytes on stream ${STREAM_ID} exceeds the ${maxFrameBytes}-byte bound for its method`,
+    );
+  });
+
+  it("passes a non-STREAM_FRAME type through untouched, however large", () => {
+    const encoded = encodeMuxFrame({
+      type: MuxFrameType.REQUEST,
+      streamId: STREAM_ID,
+      seq: 0,
+      qos: QosClass.INTERACTIVE,
+      chunked: false,
+      chunkFirst: false,
+      chunkLast: false,
+      compressed: false,
+      json: { requestId: "x" },
+      binary: new Uint8Array(BULK_CHUNK_SIZE_BYTES),
+    });
+    const frame = decodeMuxFrame(encoded);
+    expect(unchunkedStreamFrameViolation(frame, encoded.byteLength)).toBeNull();
+  });
+
+  it("passes exactly at the bound", () => {
+    const maxFrameBytes = MUX_FRAME_HEADER_LEN + BULK_CHUNK_SIZE_BYTES;
+    // The json section is a fixed size for this fixture, so the encoded
+    // frame's byte length is linear in the binary length - measure the
+    // fixed overhead once and solve for the binary length that lands
+    // exactly on the bound, rather than guessing and iterating.
+    const probe = streamFrame({ chunked: false, binaryLength: 100 });
+    const overhead = probe.encodedFrameBytes - 100;
+    const exactBinaryLength = maxFrameBytes - overhead;
+    const { frame, encodedFrameBytes } = streamFrame({
+      chunked: false,
+      binaryLength: exactBinaryLength,
+    });
+    expect(encodedFrameBytes).toBe(maxFrameBytes);
+    expect(unchunkedStreamFrameViolation(frame, encodedFrameBytes)).toBeNull();
   });
 });
