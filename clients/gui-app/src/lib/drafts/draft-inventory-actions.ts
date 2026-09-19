@@ -465,8 +465,9 @@ export function deleteNewChatDraftRow(
     deleted: true,
     undo: () => {
       if (
-        useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId] !==
-        cleared
+        useNewConversationModalStore.getState().draftPatchesByEpicId[
+          row.epicId
+        ] !== cleared
       ) {
         return false;
       }

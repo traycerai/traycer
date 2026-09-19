@@ -45,14 +45,14 @@ import { useTabsStore } from "@/stores/tabs/store";
 // surface can bind WHILE the upload is still in flight - the exact race the
 // `stillUnmounted` re-check exists for.
 const draftBlobTransportMocks = vi.hoisted(() => ({
-  putDraftBlobsForWrite: vi.fn<
-    typeof import("@/lib/drafts/draft-blob-transport").putDraftBlobsForWrite
-  >(),
+  putDraftBlobsForWrite:
+    vi.fn<
+      typeof import("@/lib/drafts/draft-blob-transport").putDraftBlobsForWrite
+    >(),
 }));
 vi.mock("@/lib/drafts/draft-blob-transport", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("@/lib/drafts/draft-blob-transport")
-  >();
+  const actual =
+    await importOriginal<typeof import("@/lib/drafts/draft-blob-transport")>();
   draftBlobTransportMocks.putDraftBlobsForWrite.mockImplementation(
     actual.putDraftBlobsForWrite,
   );
@@ -665,9 +665,10 @@ describe("openNewChatDraftRow requires the row's owner host (review finding 3)",
 
     expect(opened).toBe(true);
     expect(nav.calls).toHaveLength(1);
-    expect(useNewConversationModalOpenStore.getState().request).toMatchObject(
-      { epicId: EPIC_ID, hostId: OTHER_HOST_ID },
-    );
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: EPIC_ID,
+      hostId: OTHER_HOST_ID,
+    });
   });
 });
 
@@ -770,9 +771,9 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
     bindComposerDraftHost(CHAT_ID, HOST_ID);
     resolveBlobs();
     await vi.waitFor(() => {
-      expect(
-        draftBlobTransportMocks.putDraftBlobsForWrite,
-      ).toHaveResolvedTimes(1);
+      expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveResolvedTimes(
+        1,
+      );
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -825,9 +826,9 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
     bindNewChatDraftHost(EPIC_ID, HOST_ID);
     resolveBlobs();
     await vi.waitFor(() => {
-      expect(
-        draftBlobTransportMocks.putDraftBlobsForWrite,
-      ).toHaveResolvedTimes(1);
+      expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveResolvedTimes(
+        1,
+      );
     });
     await Promise.resolve();
     await Promise.resolve();
