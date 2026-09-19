@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   downgradeRecordAcrossMajors,
+  getRecordSchema,
   loadRecord,
   validateVersionedRecordRegistry,
   validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
-import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
+import {
+  chatHeadRecordV150,
+  chatShardRecordV150,
+  persistenceRecordRegistry,
+} from "@traycer/protocol/persistence/registry";
+import {
+  chatHeadRecordV150 as chatSyncHeadContract,
+  chatShardRecordV150 as chatSyncShardContract,
+  chatSyncRecordRegistry,
+} from "@traycer/protocol/persistence/chat-sync-registry";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 
 /**
@@ -34,6 +44,33 @@ describe("seeded protocol registries", () => {
     expect(() =>
       validateVersionedRecordRegistry(persistenceRecordRegistry),
     ).not.toThrow();
+  });
+
+  it("chat-sync record registry validates", () => {
+    expect(() =>
+      validateVersionedRecordRegistry(chatSyncRecordRegistry),
+    ).not.toThrow();
+  });
+
+  it("chat-sync and persistence registries resolve the same schema instances", () => {
+    // The contracts are defined once in chat-sync-registry.ts and re-exported
+    // / re-registered by registry.ts, so a worker that imports only the
+    // narrow registry still hashes the same schema object the host uses.
+    expect(getRecordSchema(chatSyncRecordRegistry, "chat-head", "latest")).toBe(
+      getRecordSchema(persistenceRecordRegistry, "chat-head", "latest"),
+    );
+    expect(
+      getRecordSchema(chatSyncRecordRegistry, "chat-shard", "latest"),
+    ).toBe(getRecordSchema(persistenceRecordRegistry, "chat-shard", "latest"));
+    expect(chatHeadRecordV150).toBe(chatSyncHeadContract);
+    expect(chatShardRecordV150).toBe(chatSyncShardContract);
+  });
+
+  it("chat-sync record registry has only the two publication records", () => {
+    expect(Object.keys(chatSyncRecordRegistry)).toEqual([
+      "chat-head",
+      "chat-shard",
+    ]);
   });
 
   it("versions the shared Reasonix harness id as a new record major", () => {
