@@ -225,18 +225,24 @@ function beginInPlaceSession(): void {
 
 beforeEach(() => {
   hostBindingMock.current = null;
-  // jsdom does no layout: every element measures as the same reachable box, so
-  // real hotspot nodes - including ones a form change re-registers - get
-  // proxies without per-node stubbing.
+  // jsdom does no layout. Give registered hotspots distinct boxes so this
+  // passivity harness does not manufacture collisions between toolbar items.
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-    () => new DOMRect(20, 20, 40, 24),
+    function (this: Element) {
+      const index = [
+        ...useCustomizeStore.getState().instances.values(),
+      ].findIndex((instance) => instance.node === this);
+      return new DOMRect(20 + Math.max(0, index) * 50, 20, 40, 24);
+    },
   );
-  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(() => {
-    const measured = new DOMRect(20, 20, 40, 24);
-    return Object.assign([measured], {
-      item: (index: number) => (index === 0 ? measured : null),
-    });
-  });
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(
+    function (this: Element) {
+      const measured = this.getBoundingClientRect();
+      return Object.assign([measured], {
+        item: (index: number) => (index === 0 ? measured : null),
+      });
+    },
+  );
   useThemeLibraryStore.setState({ panelAnimations: false });
   useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
   useSettingsStore.setState({ visualLayoutEditorEnabled: true });

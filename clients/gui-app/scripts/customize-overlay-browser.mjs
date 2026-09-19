@@ -102,6 +102,7 @@ try {
   const failures = [];
   async function scenario(name, run) {
     if (process.argv[2] && !name.includes(process.argv[2])) return;
+    client.stage = name;
     try {
       await run();
       console.log(`PASS ${name}`);
@@ -113,6 +114,7 @@ try {
       // Bound the debugging: what the page logged, and what it looked like.
       try {
         const file = `/tmp/w6-customize-fail-${failures.length}.png`;
+        client.stage = `${name}: failure screenshot`;
         await screenshot(file);
         console.error(`  screenshot: ${file}`);
         for (const line of client.logs.slice(-20))
@@ -1120,13 +1122,22 @@ function connectCdp(url) {
       clearTimeout(connectTimer);
       resolve({
         logs,
+        stage: "setup",
         send(method, params) {
+          const stage = this.stage;
+          const expression =
+            method === "Runtime.evaluate"
+              ? String(params.expression).replace(/\s+/g, " ").slice(0, 240)
+              : method;
+          const started = Date.now();
           return new Promise((requestResolve, requestReject) => {
             const id = ++nextId;
             const timer = setTimeout(() => {
               pending.delete(id);
               requestReject(
-                new Error(`Timed out sending CDP command ${method}`),
+                new Error(
+                  `Timed out sending CDP command ${method}; stage=${stage}; expression=${expression}; elapsed=${Date.now() - started}ms`,
+                ),
               );
             }, 15_000);
             pending.set(id, {

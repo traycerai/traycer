@@ -33,6 +33,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 
 interface CdpClient {
   readonly logs: string[];
+  stage: string;
   send(method: string, params: unknown): Promise<unknown>;
   close(): void;
 }
@@ -81,6 +82,7 @@ function loadConnectCdp(): (url: string) => Promise<CdpClient> {
     clearTimeout: (id: number | NodeJS.Timeout | undefined) => {
       globalThis.clearTimeout(id);
     },
+    Date: { now: () => globalThis.Date.now() },
     // Host builtins, so errors and promises share this realm's identity.
     Error,
     Promise,
@@ -104,6 +106,8 @@ function isClient(value: unknown): value is CdpClient {
   return (
     typeof value === "object" &&
     value !== null &&
+    "stage" in value &&
+    typeof value.stage === "string" &&
     "send" in value &&
     typeof value.send === "function" &&
     "close" in value &&
@@ -167,8 +171,11 @@ describe("customize browser driver CDP client", () => {
 
   it("times a silent request out, then ignores its late reply", async () => {
     const { client, socket } = await openClient();
-    const request = expect(client.send("Page.navigate", {})).rejects.toThrow(
-      "Timed out sending CDP command Page.navigate",
+    client.stage = "scenario: silent stage";
+    const request = expect(
+      client.send("Runtime.evaluate", { expression: "document\n   .title" }),
+    ).rejects.toThrow(
+      "Timed out sending CDP command Runtime.evaluate; stage=scenario: silent stage; expression=document .title; elapsed=15000ms",
     );
     await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
     await request;

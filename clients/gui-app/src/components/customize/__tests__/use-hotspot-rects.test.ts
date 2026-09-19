@@ -339,12 +339,20 @@ describe("useHotspotRects - frame coalescing", () => {
 // CONTRACT under test:
 // - `rects` is the SOURCE rectangle: the node's box intersected with the
 //   viewport and every clipping ancestor's padding box (scrim cut-out and
-//   popover anchor use it). Any positive visible area is reachable - there is
-//   no minimum fragment size; only "clipped away entirely" is unreachable.
+//   popover anchor use it).
+// - a hotspot is unreachable when it is clipped away entirely, OR when its
+//   cumulative clip is under 24px on either axis (a 24px target cannot fit
+//   without crossing the clip edge).
 // - `hitRects` is what the proxy paints, exactly: per axis, the visible extent
-//   expanded to at least 24px but never beyond the clip's own extent on that
-//   axis, positioned around the visible rect and shifted to stay inside the
+//   expanded to at least 24px (the clip is >= 24px, so it always fits),
+//   positioned around the visible rect and shifted to stay inside the
 //   cumulative clip.
+// - a CLIPPED hotspot (visible area < source area) is only reachable if its
+//   hit box overlaps no hotspot already accepted. Candidates are considered
+//   least-clipped first (visible/source area ratio, descending), then in
+//   DOCUMENT order - never registration order.
+// - `rects`, `hitRects` and `unreachable` always agree: a key is in `rects`
+//   and `hitRects` exactly when it is not in `unreachable`.
 // - an ancestor clips an axis when its computed `overflow-x`/`overflow-y` is
 //   hidden, clip, auto or scroll; `visible` never clips;
 // - the clip box is the ancestor's padding box: `getBoundingClientRect()`
@@ -413,6 +421,28 @@ function nodeIn(parent: HTMLElement, rect: Box): HTMLElement {
 function measure(node: HTMLElement) {
   const instances = new Map([["a", makeInstance("a", node)]]);
   return renderHook(() => useHotspotRects(instances));
+}
+
+/** A hook over several hotspots, registered in the given order. */
+function measureAll(entries: ReadonlyArray<readonly [string, HTMLElement]>) {
+  const instances = new Map<string, HotspotInstance>();
+  for (const [key, node] of entries)
+    instances.set(key, makeInstance(key, node));
+  return renderHook(() => useHotspotRects(instances));
+}
+
+/** `rects`, `hitRects` and `unreachable` tell the same story for each key. */
+function expectConsistent(
+  result: { readonly current: HotspotRects },
+  keys: ReadonlyArray<string>,
+): void {
+  for (const key of keys) {
+    const reachable = result.current.rects.has(key);
+    expect(result.current.hitRects.has(key), `${key} hitRects`).toBe(reachable);
+    expect(result.current.unreachable.has(key), `${key} unreachable`).toBe(
+      !reachable,
+    );
+  }
 }
 
 /** Both published rectangles for the one hotspot the tests mount. */
@@ -496,8 +526,8 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
     });
   });
 
-  it("never expands past a clip smaller than 24px on that axis", () => {
-    // Same source as above, but the clip is only 20px tall (y 10..30).
+  it("a clip under 24px on either axis makes the hotspot unreachable, even a wholly visible one", () => {
+    // 20px tall clip (y 10..30) around a source that would otherwise expand.
     const vertical = clipper(
       document.body,
       { overflowX: "hidden", overflowY: "hidden" },
@@ -513,25 +543,43 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
       NO_INSET,
     );
     const wide = nodeIn(horizontal, { x: 10, y: 70, width: 16, height: 50 });
+    // Wholly visible inside a 20px clip: still no room for a 24px target.
+    const snug = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 200, width: 100, height: 20 },
+      NO_INSET,
+    );
+    const tiny = nodeIn(snug, { x: 10, y: 205, width: 10, height: 10 });
 
     const shortClip = measure(tall);
     const narrowClip = measure(wide);
+    const wholly = measure(tiny);
 
-    expect(published(shortClip.result).hit).toEqual({
-      x: 70,
-      y: 10,
-      width: 30,
-      height: 20,
-    });
-    expect(published(narrowClip.result).hit).toEqual({
-      x: 10,
-      y: 70,
-      width: 20,
-      height: 30,
+    for (const hook of [shortClip, narrowClip, wholly]) {
+      expect(hook.result.current.unreachable.has("a")).toBe(true);
+      expectConsistent(hook.result, ["a"]);
+    }
+  });
+
+  it("just reaching 24px on the clip's tighter axis stays reachable", () => {
+    const parent = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 10, width: 100, height: 24 },
+      NO_INSET,
+    );
+    const node = nodeIn(parent, { x: 70, y: 10, width: 50, height: 16 });
+
+    const { result } = measure(node);
+
+    expect(published(result)).toEqual({
+      source: { x: 70, y: 10, width: 30, height: 16 },
+      hit: { x: 70, y: 10, width: 30, height: 24 },
     });
   });
 
-  it("a sliver of any size is reachable: source is the sliver, hit is 24px shifted back inside the clip", () => {
+  it("a lone clipped sliver of any size is reachable: source is the sliver, hit is 24px shifted back inside the clip", () => {
     const parent = clipper(
       document.body,
       { overflowX: "hidden", overflowY: "visible" },
@@ -776,6 +824,146 @@ describe("useHotspotRects - clipping ancestors and viewport", () => {
   });
 });
 
+// Overlap policy. A clipped sliver's expanded hit box can land on top of its
+// neighbour; it may only exist where it covers no hotspot already accepted.
+describe("useHotspotRects - clipped hotspots never overlap an accepted one", () => {
+  function pairInClip() {
+    const parent = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 0, width: 100, height: 100 },
+      NO_INSET,
+    );
+    // B is created (and so sits) BEFORE A in the document, so a pass that
+    // fell back to document order would wrongly favour it.
+    const b = nodeIn(parent, { x: 90, y: 10, width: 40, height: 30 });
+    const a = nodeIn(parent, { x: 50, y: 10, width: 36, height: 30 });
+    return { a, b };
+  }
+
+  it.each([
+    ["A registered first", ["A", "B"]],
+    ["B registered first", ["B", "A"]],
+  ] as const)(
+    "the wholly visible neighbour wins over the clipped sliver (%s)",
+    (_name, order) => {
+      const { a, b } = pairInClip();
+      const nodes = { A: a, B: b };
+
+      const { result } = measureAll(
+        order.map((key): readonly [string, HTMLElement] => [key, nodes[key]]),
+      );
+
+      // A (ratio 1) is unchanged; B (10 of 40px visible, hit 76..100) would
+      // cover A's 50..86, so it is unreachable.
+      expect(result.current.rects.get("A")).toBeDefined();
+      expect(box(result.current.hitRects.get("A"))).toEqual({
+        x: 50,
+        y: 10,
+        width: 36,
+        height: 30,
+      });
+      expect(box(result.current.rects.get("A"))).toEqual({
+        x: 50,
+        y: 10,
+        width: 36,
+        height: 30,
+      });
+      expect(result.current.unreachable.has("B")).toBe(true);
+      expectConsistent(result, ["A", "B"]);
+    },
+  );
+
+  it.each([
+    ["P registered first", ["P", "Q"]],
+    ["Q registered first", ["Q", "P"]],
+  ] as const)(
+    "equally clipped candidates go by document order, not registration order (%s)",
+    (_name, order) => {
+      const parent = clipper(
+        document.body,
+        { overflowX: "hidden", overflowY: "hidden" },
+        { x: 0, y: 0, width: 100, height: 100 },
+        NO_INSET,
+      );
+      // Identical boxes -> identical ratio and a guaranteed overlap.
+      const p = nodeIn(parent, { x: 90, y: 10, width: 40, height: 30 });
+      const q = nodeIn(parent, { x: 90, y: 10, width: 40, height: 30 });
+      const nodes = { P: p, Q: q };
+
+      const { result } = measureAll(
+        order.map((key): readonly [string, HTMLElement] => [key, nodes[key]]),
+      );
+
+      expect(box(result.current.hitRects.get("P"))).toEqual({
+        x: 76,
+        y: 10,
+        width: 24,
+        height: 30,
+      });
+      expect(result.current.unreachable.has("Q")).toBe(true);
+      expectConsistent(result, ["P", "Q"]);
+    },
+  );
+
+  it("a less clipped candidate beats a more clipped one that comes first in the document", () => {
+    const parent = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 0, width: 100, height: 100 },
+      NO_INSET,
+    );
+    // Both are clipped; `wide` keeps 20 of 40px (ratio .5), `narrow` 10 of 40
+    // (.25). `narrow` is first in the document AND registered first.
+    const narrow = nodeIn(parent, { x: 90, y: 10, width: 40, height: 30 });
+    const wide = nodeIn(parent, { x: 80, y: 10, width: 40, height: 30 });
+
+    const { result } = measureAll([
+      ["narrow", narrow],
+      ["wide", wide],
+    ]);
+
+    expect(result.current.unreachable.has("narrow")).toBe(true);
+    expect(box(result.current.hitRects.get("wide"))).toEqual({
+      x: 76,
+      y: 10,
+      width: 24,
+      height: 30,
+    });
+    expectConsistent(result, ["narrow", "wide"]);
+  });
+
+  it("a clipped sliver that overlaps nothing accepted stays reachable next to one that does not touch it", () => {
+    const parent = clipper(
+      document.body,
+      { overflowX: "hidden", overflowY: "hidden" },
+      { x: 0, y: 0, width: 100, height: 100 },
+      NO_INSET,
+    );
+    const far = nodeIn(parent, { x: 0, y: 10, width: 36, height: 30 });
+    const sliver = nodeIn(parent, { x: 90, y: 10, width: 40, height: 30 });
+
+    const { result } = measureAll([
+      ["far", far],
+      ["sliver", sliver],
+    ]);
+
+    expect(box(result.current.hitRects.get("far"))).toEqual({
+      x: 0,
+      y: 10,
+      width: 36,
+      height: 30,
+    });
+    expect(box(result.current.hitRects.get("sliver"))).toEqual({
+      x: 76,
+      y: 10,
+      width: 24,
+      height: 30,
+    });
+    expectConsistent(result, ["far", "sliver"]);
+  });
+});
+
 // One clip walk per measurement pass. Many hotspots share the same scroller
 // (a provider strip full of chips); the scroller's computed style and box are
 // read once per pass and shared, not once per chip, and a NEW pass never
@@ -798,37 +986,40 @@ describe("useHotspotRects - shared ancestor reads per pass", () => {
     const scroller = clipper(
       document.body,
       { overflowX: "hidden", overflowY: "visible" },
-      { x: 0, y: 0, width: 100, height: 100 },
+      { x: 0, y: 0, width: 300, height: 100 },
       NO_INSET,
     );
     const scrollerBox = vi.spyOn(scroller, "getBoundingClientRect");
     const instances = new Map<string, HotspotInstance>();
+    const keys: string[] = [];
+    // 24px chips on a 30px pitch: side by side, never overlapping unclipped.
     for (let index = 0; index < 8; index += 1) {
       const key = `chip-${index}`;
+      keys.push(key);
       instances.set(
         key,
         makeInstance(
           key,
-          nodeIn(scroller, { x: index * 10, y: 10, width: 24, height: 24 }),
+          nodeIn(scroller, { x: index * 30, y: 10, width: 24, height: 24 }),
         ),
       );
     }
 
     const { result } = renderHook(() => useHotspotRects(instances));
 
-    // Pass 1 (mount).
+    // Pass 1 (mount): every chip fits the 300px scroller.
     expect(reads.get(scroller)).toBe(1);
     expect(scrollerBox).toHaveBeenCalledTimes(1);
     for (const [element, count] of reads)
       expect(count, element.tagName).toBeLessThanOrEqual(1);
     expect(result.current.hitRects.size).toBe(8);
-    // chip-7 spans 70..94: inside the scroller's 0..100.
     expect(result.current.rects.get("chip-7")?.width).toBe(24);
+    expectConsistent(result, keys);
 
-    // Pass 2: the scroller narrows. A stale cache would keep the old box.
+    // Pass 2: the scroller narrows to 100px. A stale cache would keep 300.
     reads.clear();
     scrollerBox.mockClear();
-    const narrower = { x: 0, y: 0, width: 50, height: 100 };
+    const narrower = { x: 0, y: 0, width: 100, height: 100 };
     scrollerBox.mockReturnValue(
       new DOMRect(narrower.x, narrower.y, narrower.width, narrower.height),
     );
@@ -846,14 +1037,18 @@ describe("useHotspotRects - shared ancestor reads per pass", () => {
     expect(scrollerBox).toHaveBeenCalledTimes(1);
     for (const [element, count] of reads)
       expect(count, element.tagName).toBeLessThanOrEqual(1);
-    // chip-4 spans 40..64 -> clipped to 40..50; chip-7 (70..94) is gone.
-    expect(box(result.current.rects.get("chip-4"))).toEqual({
-      x: 40,
+    // chip-2 (60..84) is whole and stays. chip-3 (90..114) keeps 10px; its
+    // 24px hit box (76..100) would cover chip-2, so it is unreachable now.
+    // chip-4.. (120+) are clipped away entirely.
+    expect(box(result.current.rects.get("chip-2"))).toEqual({
+      x: 60,
       y: 10,
-      width: 10,
+      width: 24,
       height: 24,
     });
+    expect(result.current.unreachable.has("chip-3")).toBe(true);
     expect(result.current.unreachable.has("chip-7")).toBe(true);
+    expectConsistent(result, keys);
   });
 
   it("rejects a hidden or disconnected hotspot before walking any of its ancestors", () => {

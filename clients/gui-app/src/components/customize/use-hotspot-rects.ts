@@ -71,8 +71,8 @@ function intersect(rect: DOMRect, clip: DOMRect): DOMRect {
 }
 // The final hit floor belongs here, while the source clip is still known.
 function hitRect(rect: DOMRect, clip: DOMRect): DOMRect {
-  const width = Math.min(clip.width, Math.max(24, rect.width));
-  const height = Math.min(clip.height, Math.max(24, rect.height));
+  const width = Math.max(24, rect.width);
+  const height = Math.max(24, rect.height);
   return new DOMRect(
     Math.max(
       clip.left,
@@ -85,6 +85,49 @@ function hitRect(rect: DOMRect, clip: DOMRect): DOMRect {
     width,
     height,
   );
+}
+function fitsHit(rect: DOMRect, clip: DOMRect): boolean {
+  return (
+    Math.min(rect.width, rect.height) > 0 &&
+    Math.min(clip.width, clip.height) >= 24
+  );
+}
+interface Candidate {
+  readonly key: InstanceKey;
+  readonly node: HTMLElement;
+  readonly rect: DOMRect;
+  readonly hit: DOMRect;
+  readonly visibleFraction: number;
+}
+function compareCandidates(a: Candidate, b: Candidate): number {
+  const clipping = b.visibleFraction - a.visibleFraction;
+  if (clipping) return clipping;
+  const position = a.node.compareDocumentPosition(b.node);
+  if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+  if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+  return a.key.localeCompare(b.key);
+}
+function overlaps(a: DOMRect, b: DOMRect): boolean {
+  return (
+    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+  );
+}
+function publishCandidates(
+  candidates: Candidate[],
+  rects: Map<InstanceKey, DOMRect>,
+  hitRects: Map<InstanceKey, DOMRect>,
+  unreachable: Set<InstanceKey>,
+): void {
+  // Prefer intact sources, then document order, regardless of registration order.
+  // ponytail: pairwise checks suit the small hotspot set; spatial indexing if it grows.
+  for (const candidate of candidates.sort(compareCandidates)) {
+    if ([...hitRects.values()].some((hit) => overlaps(hit, candidate.hit))) {
+      unreachable.add(candidate.key);
+      continue;
+    }
+    rects.set(candidate.key, candidate.rect);
+    hitRects.set(candidate.key, candidate.hit);
+  }
 }
 export function useHotspotRects(
   instances: ReadonlyMap<InstanceKey, HotspotInstance>,
@@ -105,6 +148,7 @@ export function useHotspotRects(
       const unreachable = new Set<InstanceKey>();
       const hitRects = new Map<InstanceKey, DOMRect>();
       const clips = new Map<HTMLElement, DOMRect>();
+      const candidates: Candidate[] = [];
       const viewport = new DOMRect(0, 0, window.innerWidth, window.innerHeight);
       for (const [key, instance] of instances) {
         const node = instance.node;
@@ -123,12 +167,19 @@ export function useHotspotRects(
         }
         const clip = ancestorClip(node.parentElement, viewport, clips);
         const rect = intersect(source, clip);
-        if (rect.width <= 0 || rect.height <= 0) unreachable.add(key);
+        if (!fitsHit(rect, clip)) unreachable.add(key);
         else {
-          rects.set(key, rect);
-          hitRects.set(key, hitRect(rect, clip));
+          candidates.push({
+            key,
+            node,
+            rect,
+            hit: hitRect(rect, clip),
+            visibleFraction:
+              (rect.width * rect.height) / (source.width * source.height),
+          });
         }
       }
+      publishCandidates(candidates, rects, hitRects, unreachable);
       const slots: DropSlotRect[] = [];
       for (const node of document.querySelectorAll<HTMLElement>(
         "[data-customize-drop-slot]",
