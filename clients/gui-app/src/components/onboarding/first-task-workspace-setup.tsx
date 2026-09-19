@@ -63,7 +63,6 @@ export function FirstTaskWorkspaceSetup(props: {
               : "Your task will run right here."
           }
           progress={{ step: 2, total: 3 }}
-          cardAnchor={null}
           onTarget={null}
           back={null}
           onClose={() => {

@@ -2,8 +2,24 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
 const navigateMock = vi.hoisted(() => vi.fn());
+const mobileApp = vi.hoisted(() => ({ value: false }));
+
+const activateTabIntentMock = vi.hoisted(() =>
+  vi.fn((_navigate: unknown, _intent: unknown, _options: unknown) => true),
+);
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return { ...actual, activateTabIntent: activateTabIntentMock };
+});
+
+vi.mock("@/lib/mobile-app", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/mobile-app")>();
+  return { ...actual, isMobileApp: () => mobileApp.value };
+});
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
@@ -32,6 +48,7 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
 describe("GettingStartedSettingsPanel", () => {
   beforeEach(() => {
     navigateMock.mockReset();
+    activateTabIntentMock.mockClear();
     setSectionMock.mockReset();
     useOnboardingStore.setState({
       completedAt: null,
@@ -43,6 +60,27 @@ describe("GettingStartedSettingsPanel", () => {
 
   afterEach(() => {
     cleanup();
+    mobileApp.value = false;
+  });
+
+  it("starts the guided tour from the card on the mobile app", () => {
+    mobileApp.value = true;
+    useOnboardingStore.setState({ completedAt: 123 });
+    useFirstTaskGuideStore.getState().dismiss();
+    render(<GettingStartedSettingsPanel />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Guided tour, Complete" }),
+    );
+
+    // Not the welcome replay: the phone's tour is the guided one on the start
+    // page, so the card arms it and goes there.
+    expect(useFirstTaskGuideStore.getState().status).toBe("active");
+    // Through the tab controller: Settings is a tab on the phone, and a route
+    // navigation alone left the user sitting on it.
+    expect(activateTabIntentMock).toHaveBeenCalledOnce();
+    expect(activateTabIntentMock.mock.calls[0]?.[0]).toBe(navigateMock);
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("shows initial tour progress and replays a completed tour", () => {

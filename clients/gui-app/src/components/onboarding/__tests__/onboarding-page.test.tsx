@@ -617,6 +617,22 @@ describe("OnboardingPage", () => {
     );
   });
 
+  it("spends the import announcement only once the import act is on screen", async () => {
+    renderPage(false);
+
+    // Still owed: someone who skips from here never saw the act, so the toast
+    // is how they hear about importing.
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toBeUndefined();
+
+    await advanceToStep("session-import");
+
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toEqual(expect.any(Number));
+  });
+
   it("does not consume the login import announcement when onboarding is replayed", () => {
     renderPage(true);
 
@@ -863,6 +879,11 @@ describe("OnboardingPage on the installed mobile app", () => {
         expect.any(Number),
       );
       expect(useFirstTaskGuideStore.getState().status).toBe("active");
+      // The phone has no import act, so nothing is left for the import toast
+      // to follow up on.
+      expect(
+        useFeatureAnnouncementsStore.getState().consumed["session-import"],
+      ).toEqual(expect.any(Number));
       expect(navigateMock).toHaveBeenCalledWith({
         to: "/draft/new",
         replace: true,

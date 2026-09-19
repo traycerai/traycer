@@ -179,6 +179,10 @@ function OnboardingWelcomeRun(props: { readonly replay: boolean }) {
       useFirstTaskGuideStore.getState().prepare();
       // Browser setup stays in Getting started instead of interrupting the first task.
       useFeatureAnnouncementsStore.getState().consume("login-import");
+      // The phone has no import act by design (its users imported on the
+      // desktop), so the toast that announces importing has nothing to follow
+      // up on here.
+      useFeatureAnnouncementsStore.getState().consume("session-import");
     }
   }, [restart, replay]);
 
@@ -358,6 +362,15 @@ function OnboardingTour(props: {
       useFeatureAnnouncementsStore.getState().consume("login-import");
     }
   }, [restart, replay]);
+
+  // Reaching the import act IS the announcement, so the "Bring your work with
+  // you" toast is spent the moment the act is on screen. Someone who skipped
+  // the tour before this act, or whose host could not offer it, never consumed
+  // it and still gets the toast once they are in the app.
+  useEffect(() => {
+    if (!replay && step.id === "session-import")
+      useFeatureAnnouncementsStore.getState().consume("session-import");
+  }, [replay, step.id]);
 
   useEffect(() => {
     if (welcomePhase !== "ready") return;

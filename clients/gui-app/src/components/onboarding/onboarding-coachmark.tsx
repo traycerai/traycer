@@ -41,12 +41,6 @@ interface CoachmarkProgress {
   readonly total: number;
 }
 
-/** See `CoachmarkProps.cardAnchor`. */
-export interface CoachmarkCardAnchor {
-  readonly selector: string;
-  readonly placement: "top-start" | "bottom-start";
-}
-
 interface CoachmarkProps {
   readonly id: string;
   readonly title: string;
@@ -54,19 +48,6 @@ interface CoachmarkProps {
   readonly progress: CoachmarkProgress | null;
   readonly rootRef: RefObject<HTMLElement | null>;
   readonly selector: string;
-  /**
-   * Where the CARD goes, when that is not "beside the thing it points at".
-   *
-   * The halo always lands on `selector`; this moves only the floater. One step
-   * needs it: on a phone the drawer's task list fills the drawer, so a card
-   * anchored under the first row covers the rows the step is telling the user
-   * to tap. It anchors above the drawer's Settings row instead, and the halo
-   * stays where the instruction is.
-   *
-   * Resolved inside the card's own portal (the drawer, for that step), so a
-   * selector here names an element on the same surface as the target.
-   */
-  readonly cardAnchor: CoachmarkCardAnchor | null;
   readonly onClose: () => void;
   readonly onTarget: ((target: HTMLElement, keyboard: boolean) => void) | null;
   readonly back: (() => void) | null;
@@ -244,18 +225,12 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
       const available =
         portal === document.body ? window.innerWidth : portal.clientWidth;
       floater.style.setProperty("--coachmark-available", `${available}px`);
-      // The card's anchor, which is the step's target unless the step moved it
-      // off the thing it points at (see `cardAnchor`). Resolved per tick rather
-      // than once: it belongs to the same surface as the target, so it appears
-      // and leaves with it.
-      const anchorSpec = props.cardAnchor;
-      const anchor =
-        anchorSpec === null
-          ? target
-          : (portal.querySelector<HTMLElement>(anchorSpec.selector) ?? target);
-      void computePosition(anchor, floater, {
+      // The card sits directly under the thing it points at and overlays
+      // whatever follows: a card parked elsewhere on the surface reads as
+      // unrelated to the halo, and it spends the space it was moved to.
+      void computePosition(target, floater, {
         strategy: "fixed",
-        placement: anchorSpec?.placement ?? "bottom-start",
+        placement: "bottom-start",
         // No arrow: the halo on the target is the connection, and 10px is
         // close enough to read as one gesture with it.
         middleware: [
@@ -267,6 +242,11 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
         if (!floater.isConnected || request !== positionRequest) return;
         floater.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
         paintSpotlight(target, halo, cutoutRef.current, portal);
+        // `autoUpdate` re-runs this on every ancestor scroll, which is what
+        // lets the card leave when its target does.
+        const occluded = String(targetOccluded(target));
+        floater.dataset.occluded = occluded;
+        if (halo !== null) halo.dataset.occluded = occluded;
       });
     };
     reposition();
@@ -276,7 +256,7 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
       stop();
       if (settle !== null) window.clearTimeout(settle);
     };
-  }, [target, portal, safeArea, props.cardAnchor]);
+  }, [target, portal, safeArea]);
 
   if (held === null) return null;
   const exiting = target === null;
@@ -656,6 +636,31 @@ function setGliding(
     if (element === null) continue;
     element.dataset.glide = gliding ? "true" : "false";
   }
+}
+
+/**
+ * Whether the target has left the user's sight while still being in the DOM:
+ * scrolled out of its list, slid under a sticky header, or pushed off screen.
+ *
+ * The card and halo are `position: fixed` and follow the target's rect, so
+ * without this a row scrolled out of the mobile drawer's list dragged its halo
+ * over the status bar and its card over the drawer's header - and a card that
+ * travels with the list reads as a block inside it, not an overlay on it.
+ * Hit-testing both vertical edges is what catches all three cases at once; a
+ * clip-rect walk would miss the sticky header, which clips nothing.
+ */
+function targetOccluded(target: HTMLElement): boolean {
+  const rect = target.getBoundingClientRect();
+  // An unmeasured target is the visibility gate's business, not this one's.
+  if (rect.width === 0 || rect.height === 0) return false;
+  const x = rect.left + rect.width / 2;
+  for (const y of [rect.top + 2, rect.bottom - 2]) {
+    if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight)
+      return true;
+    const hit = document.elementFromPoint(x, y);
+    if (hit !== null && !target.contains(hit)) return true;
+  }
+  return false;
 }
 
 /** Lays the halo, and the dim's cutout, over the target's current rect. */

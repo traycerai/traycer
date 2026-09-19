@@ -40,10 +40,29 @@
   width: max-content;
   z-index: var(--coachmark-z);
 }
+/* A target that scrolled out of sight takes its card and halo with it (see
+   `targetOccluded`). Opacity rather than unmounting: the row is one flick away
+   from coming back, and a remount would replay the entrance each time. */
+.first-task-coachmark-floater {
+  transition:
+    opacity 120ms var(--coachmark-ease),
+    visibility 0s;
+}
+.first-task-coachmark-floater[data-occluded="true"],
+.first-task-coachmark-halo[data-occluded="true"] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 120ms var(--coachmark-ease),
+    visibility 0s 120ms;
+}
 /* Only a step change glides. `autoUpdate` fires on every scroll and resize
    too, and a card that eased after a scrolling target would never catch it. */
 .first-task-coachmark-floater[data-glide="true"] {
-  transition: transform var(--coachmark-glide) var(--coachmark-ease-in-out);
+  transition:
+    transform var(--coachmark-glide) var(--coachmark-ease-in-out),
+    opacity 120ms var(--coachmark-ease);
 }
 
 /* Transitions rather than keyframes: a step change hands the card a new anchor
@@ -103,6 +122,14 @@
   padding: 1rem;
   border-radius: 1rem;
   outline: none;
+}
+
+/* Inside a drawer or sheet the card sits on a surface of its own colour, where
+   `shadow-md` disappears and the plate reads as part of the list under it. */
+.first-task-coachmark-floater[data-over-overlay="true"] .first-task-coachmark {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--foreground) 14%, transparent),
+    0 16px 40px -12px rgb(0 0 0 / 0.6);
 }
 
 .first-task-coachmark-eyebrow-row {

@@ -206,15 +206,14 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     fireEvent(window, new Event("resize"));
     await screen.findByTestId("guide-coachmark");
 
-    const { row, settings } = mountDrawer(OPEN_SHEET);
+    const { row } = mountDrawer(OPEN_SHEET);
     useMobileNavStore.setState({ open: true });
     fireEvent(window, new Event("resize"));
 
-    // The CARD sits above the drawer's Settings row; the halo it draws is
-    // still on the first task, which is what the step points at. Measured, a
-    // card anchored under that row covered the rows it was telling the user to
-    // tap.
-    await waitFor(() => expect(lastAnchor()).toBe(settings));
+    // The card anchors on the row the halo is on and overlays what follows:
+    // parked at the bottom of the drawer it read as unrelated to the task it
+    // was pointing at.
+    await waitFor(() => expect(lastAnchor()).toBe(row));
     expect(screen.getByTestId("guide-coachmark-halo")).toBeTruthy();
     await expectCardTitle("Resume any task");
     // Inside the drawer, not beside it: a modal surface seals every body-level
@@ -249,11 +248,11 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     fireEvent(window, new Event("resize"));
     await screen.findByTestId("guide-coachmark");
 
-    const { row, settings } = mountDrawer({ "data-overlay-surface": "open" });
+    const { row } = mountDrawer({ "data-overlay-surface": "open" });
     useMobileNavStore.setState({ open: true });
     fireEvent(window, new Event("resize"));
 
-    await waitFor(() => expect(lastAnchor()).toBe(settings));
+    await waitFor(() => expect(lastAnchor()).toBe(row));
     expect(
       screen.getByTestId("guide-coachmark").closest("[data-overlay-surface]"),
     ).toBe(row.parentElement);
@@ -342,16 +341,68 @@ describe("FirstTaskLandingGuide mobile tasks branch", () => {
     expect(useFirstTaskGuideStore.getState().status).toBe("finished");
   });
 
-  it("draws nothing while the task query is still outstanding", () => {
+  it("points at the menu at once, while the task query is still outstanding", async () => {
+    // A fresh install waits on cloud authorization and then on the first page
+    // for many seconds. Drawing nothing for that long meant the user had opened
+    // the menu themselves before step 1 ever appeared.
     history.current = { ...TASKS, data: undefined, isPending: true };
     mountTrigger();
     render(<Harness />);
-    // Visible, so a guide that fell through to the folder flow here would
-    // draw a card - which is the flip this step must not do mid-read.
+    // Visible, so falling through to the folder flow would draw ITS card.
     makeVisible(screen.getByTestId("folder-add"));
     fireEvent(window, new Event("resize"));
 
-    expect(screen.queryByTestId("guide-coachmark")).toBeNull();
+    await expectCardTitle("Your tasks live here");
+  });
+
+  it("stays on the menu step while only the cloud page is pending", async () => {
+    history.current = { ...TASKS, data: { items: [] }, cloudPagePending: true };
+    mountTrigger();
+    render(<Harness />);
+    makeVisible(screen.getByTestId("folder-add"));
+    fireEvent(window, new Event("resize"));
+
+    await expectCardTitle("Your tasks live here");
+  });
+
+  it("hides the card and halo while the target is scrolled out of sight", async () => {
+    // Measured on a phone: the highlighted row scrolled out of the drawer's
+    // list, and the fixed halo and card followed its rect over the status bar
+    // and the drawer's header. Hit-testing the target's edges is the gate.
+    const trigger = mountTrigger();
+    Object.defineProperty(trigger, "getBoundingClientRect", {
+      configurable: true,
+      value: () => new DOMRect(16, 60, 44, 44),
+    });
+    const cover = document.createElement("div");
+    document.body.append(cover);
+    const occludedWhenHitting = async (hit: Element): Promise<string> => {
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: () => hit,
+      });
+      try {
+        render(<Harness />);
+        fireEvent(window, new Event("resize"));
+        const card = await screen.findByTestId("guide-coachmark");
+        const floater = card.closest<HTMLElement>(
+          ".first-task-coachmark-floater",
+        );
+        await waitFor(() => expect(floater?.dataset.occluded).toBeDefined());
+        expect(
+          screen.getByTestId("guide-coachmark-halo").dataset.occluded,
+        ).toBe(floater?.dataset.occluded);
+        return floater?.dataset.occluded ?? "";
+      } finally {
+        Reflect.deleteProperty(document, "elementFromPoint");
+        cleanup();
+      }
+    };
+
+    // Something else is on top of the target's edges: it is out of sight.
+    expect(await occludedWhenHitting(cover)).toBe("true");
+    // The target itself answers the hit test: it is on show.
+    expect(await occludedWhenHitting(trigger)).toBe("false");
   });
 
   it("falls through to the folder flow for an account with no tasks", async () => {

@@ -150,9 +150,15 @@ function MobileTasksGuide(props: { readonly fallback: ReactNode }) {
   // scoped to.
   const documentRef = useRef<HTMLElement | null>(document.body);
   const loading = history.isPending || history.cloudPagePending;
-  if (history.error === null && loading) return null;
-  if (history.error !== null || (history.data?.items.length ?? 0) === 0)
-    return props.fallback;
+  // Optimistic while the list loads: on a fresh install the history query
+  // waits on cloud authorization and then on the first page, which is many
+  // seconds, and a guide that draws nothing for that long is one the user has
+  // already walked past by opening the menu themselves. Nearly everyone on
+  // this branch has tasks (they ran the desktop app first), so the menu step
+  // shows at once and only a settled answer of "none" or an error falls back
+  // to the add-folder flow.
+  const settledEmpty = !loading && (history.data?.items.length ?? 0) === 0;
+  if (history.error !== null || settledEmpty) return props.fallback;
   const step = drawerOpen ? "tasks-pick" : "tasks-menu";
   return (
     <FirstTaskCoachmark

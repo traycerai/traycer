@@ -7,6 +7,9 @@ import {
   PanelsTopLeft,
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
@@ -72,6 +75,7 @@ const UNAVAILABLE_ON_THIS_SHELL = "Available in the desktop app";
  * the desktop's and stays true there.
  */
 const MOBILE_APP_TOUR_DESCRIPTION = "A quick tour of your tasks.";
+const MOBILE_APP_TOUR_LABEL = "Guided tour";
 
 /** Everything a card prints, derived once so the markup only reads it. */
 function cardPresentation(
@@ -214,6 +218,18 @@ export function GettingStartedSettingsPanel() {
               }
               onClick={() => {
                 if (card.id === "tour") {
+                  if (isMobileApp()) {
+                    // The phone's tour is the guided one on the start page, so
+                    // the card starts THAT rather than replaying a welcome
+                    // that only leads back to it. A tab intent, not a route
+                    // navigation: Settings is a tab here, and a bare navigate
+                    // to the draft route leaves the user looking at Settings.
+                    const guide = useFirstTaskGuideStore.getState();
+                    guide.prepare();
+                    guide.activate();
+                    activateTabIntent(navigate, openNewEpicIntent(), undefined);
+                    return;
+                  }
                   useOnboardingStore.getState().restart();
                   void navigate({
                     to: "/onboarding",
@@ -229,7 +245,7 @@ export function GettingStartedSettingsPanel() {
                   ),
                 );
               }}
-              aria-label={`${card.row.label}, ${status}${unavailableReason === null ? "" : `, ${unavailableReason}`}`}
+              aria-label={`${card.id === "tour" && isMobileApp() ? MOBILE_APP_TOUR_LABEL : card.row.label}, ${status}${unavailableReason === null ? "" : `, ${unavailableReason}`}`}
               className={cn(
                 "settings-setup-card group flex min-w-0 flex-col items-start overflow-hidden rounded-xl border border-border/60 bg-card/40 p-5 text-left transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-55 motion-reduce:transition-none",
                 done && "border-primary/20",
@@ -255,7 +271,11 @@ export function GettingStartedSettingsPanel() {
                   {status}
                 </span>
               </div>
-              <h2 className="text-ui-sm font-medium">{card.row.label}</h2>
+              <h2 className="text-ui-sm font-medium">
+                {card.id === "tour" && isMobileApp()
+                  ? MOBILE_APP_TOUR_LABEL
+                  : card.row.label}
+              </h2>
               <p className="mt-1 text-ui-sm leading-relaxed text-muted-foreground">
                 {card.id === "tour" && isMobileApp()
                   ? MOBILE_APP_TOUR_DESCRIPTION

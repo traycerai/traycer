@@ -1,8 +1,5 @@
 import { useEffect, type RefObject } from "react";
-import {
-  OnboardingCoachmark,
-  type CoachmarkCardAnchor,
-} from "./onboarding-coachmark";
+import { OnboardingCoachmark } from "./onboarding-coachmark";
 import { interactWithGuideTarget, focusGuideTarget } from "./guide-target";
 import {
   useFirstTaskGuideStore,
@@ -63,32 +60,6 @@ const STEPS = {
     action: "Open task",
   },
 } as const;
-
-/**
- * Where a step's CARD sits, when that cannot be beside the thing it points at.
- *
- * Exhaustive rather than partial: a step with no entry has to say so, because
- * the failure mode is silent - a card that covers the control it is describing
- * still looks like a working card. One step needs one, and this is why:
- * measured on an iPhone 15, the drawer's task list fills the drawer, so a card
- * placed under the first row sat on top of the rows the step tells the user to
- * tap. It goes above the drawer's Settings row instead - the one strip of that
- * surface that is never a task - and the halo stays on the first row.
- */
-const CARD_ANCHORS: Readonly<
-  Record<FirstTaskStep, CoachmarkCardAnchor | null>
-> = {
-  folder: null,
-  workspace: null,
-  prompt: null,
-  imported: null,
-  continue: null,
-  "tasks-menu": null,
-  "tasks-pick": {
-    selector: '[data-testid="mobile-nav-settings"]',
-    placement: "top-start",
-  },
-};
 
 /**
  * The steps the drawer's open state decides, rather than a click on the
@@ -183,7 +154,6 @@ export function FirstTaskCoachmark(props: {
       progress={step.progress}
       rootRef={props.rootRef}
       selector={props.selector}
-      cardAnchor={CARD_ANCHORS[props.step]}
       onClose={dismiss}
       onTarget={props.step === "prompt" ? focusGuideTarget : null}
       back={null}
