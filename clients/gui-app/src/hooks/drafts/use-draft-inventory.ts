@@ -47,9 +47,9 @@ function hostIdsWithSession(
 }
 
 /**
- * The drafts a composer may list, newest first (D05-D13). Keep the consumer
- * SMALL - the control, not the composer body: the landing and composer store
- * slices are replaced on every keystroke anywhere in the app, so anything
+ * The drafts for the start-page picker or avatar dialog, newest first. Keep the
+ * consumer SMALL - the picker or dialog, not the whole page: the landing and
+ * composer store slices are replaced on every keystroke anywhere in the app, so anything
  * that reads this hook re-renders with them.
  */
 export function useDraftInventory(
@@ -74,15 +74,11 @@ export function useDraftInventory(
   );
   // Keyed on the scope's FIELDS, not its identity: every call site builds the
   // scope inline, and an object that is new each render makes the memo a no-op.
-  const surface = scope.surface;
-  const activeDraftId =
-    scope.surface === "landing" ? scope.activeDraftId : null;
-  const scopeEpicId = scope.surface === "landing" ? null : scope.epicId;
-  const scopeChatId = scope.surface === "chat" ? scope.chatId : null;
+  const activeDraftId = scope.activeDraftId;
   return useMemo(
     () =>
       listDraftInventory({
-        scope: rebuildScope(surface, activeDraftId, scopeEpicId, scopeChatId),
+        scope: { surface: "landing", activeDraftId },
         filter,
         landing,
         composer,
@@ -91,10 +87,7 @@ export function useDraftInventory(
         liveSessionHostIds,
       }),
     [
-      surface,
       activeDraftId,
-      scopeEpicId,
-      scopeChatId,
       filter,
       landing,
       composer,
@@ -103,25 +96,4 @@ export function useDraftInventory(
       liveSessionHostIds,
     ],
   );
-}
-
-/** Row count for the pill's badge; hidden at zero by the control (D18). */
-export function useDraftInventoryCount(
-  scope: DraftInventoryScope,
-  filter: DraftInventoryFilter,
-): number {
-  return useDraftInventory(scope, filter).length;
-}
-
-function rebuildScope(
-  surface: DraftInventoryScope["surface"],
-  activeDraftId: string | null,
-  epicId: string | null,
-  chatId: string | null,
-): DraftInventoryScope {
-  if (surface === "landing") return { surface, activeDraftId };
-  if (surface === "chat") {
-    return { surface, epicId: epicId ?? "", chatId: chatId ?? "" };
-  }
-  return { surface, epicId: epicId ?? "" };
 }

@@ -99,7 +99,6 @@ import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-swi
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
-import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -254,21 +253,6 @@ function composerAttachmentPending(
   annotationPreparationPending: boolean,
 ): boolean {
   return pastePending || annotationPreparationPending;
-}
-
-function ComposerUtilityClearanceFill(props: {
-  readonly visible: boolean;
-}): ReactNode {
-  if (!props.visible) return null;
-  return (
-    <div
-      aria-hidden
-      data-composer-utility-clearance-fill=""
-      className="pointer-events-none absolute inset-x-3 top-0 h-3 border-x border-border bg-muted/30"
-    >
-      <div className="size-full bg-muted/30" />
-    </div>
-  );
 }
 
 function ProfileDisabledRecovery(props: {
@@ -704,10 +688,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
-  // The Drafts pill is always rendered (D18), so the trigger-visibility half
-  // of the old predicate is constant-true: what is left to decide is whether
-  // the surface above is close enough to need the clearance strip.
-  const utilityClearanceVisible = topSpacing === "connected";
 
   return (
     <>
@@ -794,16 +774,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
             />
           ) : null}
           {topSlot}
-          <div
-            data-composer-utility-clearance={
-              utilityClearanceVisible ? "" : undefined
-            }
-            className={cn(
-              "relative flex flex-col gap-3",
-              utilityClearanceVisible && "pt-3",
-            )}
-          >
-            <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
+          <div className="relative flex flex-col gap-3">
             <ComposerAttachmentDropZone
               viewTabId={viewTabId}
               hostId={tabHostId}
@@ -816,22 +787,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onDragEnter={onDragEnter}
                 onDragLeave={onDragLeave}
                 dragOverlayVariant={dragOverlayVariant}
-                utilityRail={
-                  <ComposerDraftsControl
-                    // `currentEpicId` is null only for a chat with no epic
-                    // context yet; the read model then lists nothing under
-                    // `current` and the pill still opens on All.
-                    scope={{
-                      surface: "chat",
-                      epicId: currentEpicId ?? "",
-                      chatId: taskId,
-                    }}
-                    hostId={tabHostId}
-                    pickerStore={pickerStore}
-                    editorRef={editorRef}
-                    active={focused}
-                  />
-                }
+                utilityRail={null}
                 attachmentsStrip={
                   <ChatComposerAttachmentsStrip
                     taskId={taskId}

@@ -18,7 +18,13 @@ export type FirstTaskHint =
   | "workspace"
   | "prompt"
   | "imported"
-  | "continue";
+  | "continue"
+  // The mobile branch, for an account that already has tasks. Neither is ever
+  // acknowledged: both are derived from the navigation drawer's open state,
+  // and an acknowledged hint never comes back - which would strand a user who
+  // opened the drawer and closed it again without picking anything.
+  | "tasks-menu"
+  | "tasks-pick";
 
 interface FirstTaskGuideState {
   readonly acknowledgedHints: ReadonlySet<FirstTaskHint>;

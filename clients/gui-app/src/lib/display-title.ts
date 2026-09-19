@@ -73,6 +73,39 @@ const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
 /** User-facing literal for an empty epic title. Single-sourced from the map. */
 export const UNTITLED_EPIC_TITLE = UNTITLED_LABELS.epic;
 
+/**
+ * The host's own empty-title placeholder. The host synthesizes it into the
+ * workspace-context light for an epic that has no title yet, and a since
+ * reverted poll wrote it into tab records on some builds.
+ */
+const HOST_UNTITLED_EPIC_PLACEHOLDER = "Untitled";
+
+/**
+ * Whether an epic title is a REAL name - one a user or the title generator
+ * chose - rather than the absence of one.
+ *
+ * Three spellings of absence reach a tab record or a session's title today,
+ * and each reads as a name to a plain non-empty check:
+ *
+ *  - empty after trim;
+ *  - `UNTITLED_EPIC_TITLE`, the GUI fallback the create paths bake into a tab
+ *    record when the caller had no title;
+ *  - the host placeholder above.
+ *
+ * ONE predicate, because it answers one question in two places that must
+ * agree: whether a hidden tab still has metadata worth holding a session for,
+ * and whether the title that session just observed ends that hold. Two
+ * predicates would let a host-synthesized "Untitled" end a hold the tab's own
+ * record says is still needed.
+ */
+export function isRealEpicTitle(title: string | null | undefined): boolean {
+  if (title === null || title === undefined) return false;
+  const trimmed = title.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed === UNTITLED_EPIC_TITLE) return false;
+  return trimmed !== HOST_UNTITLED_EPIC_PLACEHOLDER;
+}
+
 /** The "Untitled <kind>" fallback label for a given kind. */
 function untitledLabel(kind: DisplayTitleKind): string {
   return UNTITLED_LABELS[kind];
