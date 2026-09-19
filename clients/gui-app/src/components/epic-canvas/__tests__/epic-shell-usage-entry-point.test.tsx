@@ -21,7 +21,7 @@ import {
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __setEpicRuntimeWorkerFactoryForTests,
@@ -329,9 +329,9 @@ function renderShell(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <EpicSessionProvider epicId={EPIC_ID} tabId={TAB_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
           <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -429,9 +429,9 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
     view.rerender(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <EpicSessionProvider epicId={EPIC_ID} tabId={TAB_ID}>
+          <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
             <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
-          </EpicSessionProvider>
+          </TestEpicSessionTab>
         </TooltipProvider>
       </QueryClientProvider>,
     );
